@@ -7,7 +7,6 @@ from sis.policy import (
     classify,
 )
 
-
 # --- classification ---
 
 def test_guardrail_code_is_forbidden() -> None:

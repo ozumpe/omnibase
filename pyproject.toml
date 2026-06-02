@@ -74,7 +74,7 @@ addopts = "-q"
 
 [tool.ruff]
 line-length = 100
-target-version = "py314"
+target-version = "py313"   # ruff 0.6 has no py314 yet; py313 lints are 3.14-safe
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]   # errors, pyflakes, import-sort, pyupgrade, bugbear

@@ -22,7 +22,7 @@ from typing import Any
 
 import ray
 
-from sis.roles import CEO, CTO, PM, QA, SWE, DevOps, Designer, PROPOSAL_SPACE
+from sis.roles import CEO, CTO, PM, PROPOSAL_SPACE, QA, SWE, Designer, DevOps
 from sis.self_model import get_self_model
 from sis.workspace import get_workspace
 

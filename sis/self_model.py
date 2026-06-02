@@ -109,7 +109,7 @@ class SelfModel:
 
 
 def _now() -> str:
-    return datetime.datetime.now(datetime.timezone.utc).isoformat()
+    return datetime.datetime.now(datetime.UTC).isoformat()
 
 
 def get_self_model() -> Any:

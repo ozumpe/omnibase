@@ -102,4 +102,4 @@ def _deploy(candidate_code: str) -> None:
 
 
 def _now() -> str:
-    return datetime.datetime.now(datetime.timezone.utc).isoformat()
+    return datetime.datetime.now(datetime.UTC).isoformat()

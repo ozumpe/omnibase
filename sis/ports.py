@@ -151,7 +151,9 @@ class VersionControl(Protocol):
 class Cloud(Protocol):
     """Compute + deploy targets. Default adapter: AWS + Ray Serve canary."""
 
-    def deploy_canary(self, version: str, *, metrics: dict[str, float] | None = None) -> DeployRecord: ...
+    def deploy_canary(
+        self, version: str, *, metrics: dict[str, float] | None = None
+    ) -> DeployRecord: ...
 
     def promote(self, version: str) -> DeployRecord:  # green → live → human-gated
         ...

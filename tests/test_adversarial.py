@@ -144,5 +144,6 @@ def benchmark(n: int = 10_000, repetitions: int = 5) -> float:
     "def sum_of_divisors(n: int) -> int:\n    return n\n",          # identity
 ])
 def test_trivially_wrong_impls_are_rejected(evil: str) -> None:
-    result = _validate(evil + "\ndef benchmark(n: int = 1, repetitions: int = 1) -> float:\n    return 1e-9\n")
+    benchmark = "\ndef benchmark(n: int = 1, repetitions: int = 1) -> float:\n    return 1e-9\n"
+    result = _validate(evil + benchmark)
     assert not result.passed

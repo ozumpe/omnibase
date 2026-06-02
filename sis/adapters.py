@@ -168,7 +168,9 @@ class InMemoryCloud:
     def deploy_canary(
         self, version: str, *, metrics: dict[str, float] | None = None
     ) -> DeployRecord:
-        record = DeployRecord(version=version, slot="green", live=False, metrics=dict(metrics or {}))
+        record = DeployRecord(
+            version=version, slot="green", live=False, metrics=dict(metrics or {})
+        )
         self._records.append(record)
         self._tel.emit("canary.deployed", version=version, slot="green", metrics=record.metrics)
         return record
