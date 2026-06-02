@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# pre-push hook — enforce the branch workflow on the client side.
+#
+# Flow: work on feature/<name>  →  PR into develop (sandbox)  →  PR into main
+# (tested releases). Direct pushes to develop/main are blocked here.
+#
+# Enable once per clone:   git config core.hooksPath hooks
+# Emergency override:      git push --no-verify
+#
+# This is a client-side guard (a safety net against fat-fingered pushes). The
+# authoritative enforcement is server-side branch protection on develop/main,
+# which requires a public repo or GitHub Pro.
+
+set -euo pipefail
+
+protected_re='^refs/heads/(main|develop)$'
+
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+  if [[ "$remote_ref" =~ $protected_re ]]; then
+    branch="${remote_ref#refs/heads/}"
+    echo "✗ Direct push to '$branch' is blocked by the pre-push hook." >&2
+    echo "  Push to feature/<name> and open a PR:  feature/* → develop → main." >&2
+    echo "  Emergency override:  git push --no-verify" >&2
+    exit 1
+  fi
+done
+
+exit 0
