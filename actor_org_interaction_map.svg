@@ -1,0 +1,118 @@
+<svg width="100%" viewBox="0 0 860 622" xmlns="http://www.w3.org/2000/svg" role="img">
+<title>Actor org and interaction map</title>
+<desc>Spawn hierarchy from CEO down through PM/CTO to the worker roles, each role's real-world subsystem touchpoints, and a report bus feeding the central SelfModel digital twin, above a band of the five external subsystems.</desc>
+<defs>
+<marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1 L9 5 L1 9 z" fill="context-stroke"/></marker>
+<style>
+text { font-family: 'Helvetica Neue', Arial, sans-serif; }
+.title { font-size:14px; font-weight:600; }
+.mandate { font-size:10.5px; }
+.touch { font-size:10px; font-style:italic; }
+.sm-title { font-size:14px; font-weight:600; }
+.sm-sub { font-size:11px; }
+.chip-name { font-size:12.5px; font-weight:600; }
+.chip-ab { font-size:10px; }
+.hdr { font-size:12px; font-weight:600; }
+.leg { font-size:11px; }
+.note { font-size:10.5px; font-style:italic; }
+</style>
+</defs>
+
+<rect x="0" y="0" width="860" height="622" rx="14" fill="#ffffff"/>
+
+<!-- spawn arrows (solid gray) -->
+<g stroke="#5F5E5A" stroke-width="1.6" fill="none">
+<line x1="395" y1="106" x2="188" y2="148" marker-end="url(#ar)"/>
+<line x1="465" y1="106" x2="572" y2="148" marker-end="url(#ar)"/>
+<line x1="160" y1="214" x2="160" y2="266" marker-end="url(#ar)"/>
+<line x1="572" y1="214" x2="488" y2="266" marker-end="url(#ar)"/>
+<line x1="600" y1="214" x2="600" y2="266" marker-end="url(#ar)"/>
+<line x1="628" y1="214" x2="712" y2="266" marker-end="url(#ar)"/>
+</g>
+
+<!-- report bus + stubs + connector to SelfModel (dashed purple) -->
+<g stroke="#534AB7" stroke-width="1.4" fill="none" stroke-dasharray="5 4">
+<line x1="150" y1="355" x2="745" y2="355"/>
+<line x1="160" y1="334" x2="160" y2="355"/>
+<line x1="470" y1="334" x2="470" y2="355"/>
+<line x1="600" y1="334" x2="600" y2="355"/>
+<line x1="730" y1="334" x2="730" y2="355"/>
+<line x1="430" y1="355" x2="430" y2="398" marker-end="url(#ar)"/>
+</g>
+
+<!-- CEO -->
+<rect x="350" y="40" width="160" height="64" rx="8" fill="#FAEEDA" stroke="#BA7517" stroke-width="1"/>
+<text class="title" x="430" y="58" text-anchor="middle" fill="#854F0B">CEO</text>
+<text class="mandate" x="430" y="74" text-anchor="middle" fill="#9A6314">goals &amp; cost &#183; budget gate</text>
+<text class="touch" x="430" y="89" text-anchor="middle" fill="#BA7517">reads J,T &#183; writes C charter</text>
+
+<!-- PM -->
+<rect x="80" y="150" width="160" height="64" rx="8" fill="#FAEEDA" stroke="#BA7517" stroke-width="1"/>
+<text class="title" x="160" y="168" text-anchor="middle" fill="#854F0B">PM</text>
+<text class="mandate" x="160" y="184" text-anchor="middle" fill="#9A6314">UX &amp; specs</text>
+<text class="touch" x="160" y="199" text-anchor="middle" fill="#BA7517">writes C &#183; comments J</text>
+
+<!-- CTO -->
+<rect x="520" y="150" width="160" height="64" rx="8" fill="#FAEEDA" stroke="#BA7517" stroke-width="1"/>
+<text class="title" x="600" y="168" text-anchor="middle" fill="#854F0B">CTO</text>
+<text class="mandate" x="600" y="184" text-anchor="middle" fill="#9A6314">technical execution</text>
+<text class="touch" x="600" y="199" text-anchor="middle" fill="#BA7517">writes J &#183; reads C</text>
+
+<!-- Designer -->
+<rect x="80" y="270" width="160" height="64" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.75"/>
+<text class="title" x="160" y="288" text-anchor="middle" fill="#085041">Designer</text>
+<text class="mandate" x="160" y="304" text-anchor="middle" fill="#0F6E56">UI / outlines</text>
+<text class="touch" x="160" y="319" text-anchor="middle" fill="#0F6E56">writes C</text>
+
+<!-- SWE -->
+<rect x="410" y="270" width="120" height="64" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.75"/>
+<text class="title" x="470" y="288" text-anchor="middle" fill="#085041">SWE</text>
+<text class="mandate" x="470" y="304" text-anchor="middle" fill="#0F6E56">implement, fix</text>
+<text class="touch" x="470" y="319" text-anchor="middle" fill="#0F6E56">Git &#183; J &#183; C</text>
+
+<!-- QA -->
+<rect x="540" y="270" width="120" height="64" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.75"/>
+<text class="title" x="600" y="288" text-anchor="middle" fill="#085041">QA</text>
+<text class="mandate" x="600" y="304" text-anchor="middle" fill="#0F6E56">verify vs spec</text>
+<text class="touch" x="600" y="319" text-anchor="middle" fill="#0F6E56">J &#183; C</text>
+
+<!-- DevOps -->
+<rect x="670" y="270" width="120" height="64" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.75"/>
+<text class="title" x="730" y="288" text-anchor="middle" fill="#085041">DevOps</text>
+<text class="mandate" x="730" y="304" text-anchor="middle" fill="#0F6E56">infra &#183; CI/CD &#183; ops</text>
+<text class="touch" x="730" y="319" text-anchor="middle" fill="#0F6E56">AWS &#183; CI &#183; J &#183; T</text>
+
+<!-- SelfModel -->
+<rect x="290" y="400" width="280" height="72" rx="10" fill="#EEEDFE" stroke="#534AB7" stroke-width="1.25"/>
+<text class="sm-title" x="430" y="420" text-anchor="middle" fill="#3C3489">SelfModel — the digital twin</text>
+<text class="sm-sub" x="430" y="438" text-anchor="middle" fill="#534AB7">tracks every actor, deploy slots, provenance,</text>
+<text class="sm-sub" x="430" y="453" text-anchor="middle" fill="#534AB7">and the hardware it runs on</text>
+<text class="note" x="430" y="488" text-anchor="middle" fill="#534AB7">workers report state here &#183; supervisors query it</text>
+
+<!-- subsystem band -->
+<text class="hdr" x="430" y="512" text-anchor="middle" fill="#444441">Real world — shared substrate (replaceable adapters)</text>
+<g>
+<rect x="60" y="526" width="130" height="40" rx="6" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5"/>
+<text class="chip-name" x="125" y="544" text-anchor="middle" fill="#444441">Confluence</text>
+<text class="chip-ab" x="125" y="559" text-anchor="middle" fill="#5F5E5A">doc store (C)</text>
+<rect x="212" y="526" width="130" height="40" rx="6" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5"/>
+<text class="chip-name" x="277" y="544" text-anchor="middle" fill="#444441">Jira</text>
+<text class="chip-ab" x="277" y="559" text-anchor="middle" fill="#5F5E5A">work tracker (J)</text>
+<rect x="364" y="526" width="130" height="40" rx="6" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5"/>
+<text class="chip-name" x="429" y="544" text-anchor="middle" fill="#444441">GitHub</text>
+<text class="chip-ab" x="429" y="559" text-anchor="middle" fill="#5F5E5A">VCS + review (Git)</text>
+<rect x="516" y="526" width="130" height="40" rx="6" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5"/>
+<text class="chip-name" x="581" y="544" text-anchor="middle" fill="#444441">AWS</text>
+<text class="chip-ab" x="581" y="559" text-anchor="middle" fill="#5F5E5A">cloud / infra</text>
+<rect x="668" y="526" width="130" height="40" rx="6" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5"/>
+<text class="chip-name" x="733" y="544" text-anchor="middle" fill="#444441">Telemetry</text>
+<text class="chip-ab" x="733" y="559" text-anchor="middle" fill="#5F5E5A">logs / metrics (T)</text>
+</g>
+
+<!-- legend -->
+<line x1="150" y1="590" x2="184" y2="590" stroke="#5F5E5A" stroke-width="1.6" marker-end="url(#ar)"/>
+<text class="leg" x="190" y="594" text-anchor="start" fill="#444441">spawns</text>
+<line x1="300" y1="590" x2="334" y2="590" stroke="#534AB7" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#ar)"/>
+<text class="leg" x="340" y="594" text-anchor="start" fill="#444441">reports state to SelfModel</text>
+<text class="leg" x="560" y="594" text-anchor="start" fill="#5F5E5A">C·Confluence  J·Jira  Git·GitHub  T·Telemetry</text>
+</svg>

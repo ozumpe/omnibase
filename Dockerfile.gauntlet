@@ -1,0 +1,23 @@
+# Dockerfile.gauntlet — the locked-down image the gauntlet runs candidate code in.
+#
+# Build once:
+#   docker build -t sis-gauntlet:latest -f Dockerfile.gauntlet .
+# Then run the loop with kernel-enforced isolation:
+#   export SIS_SANDBOX=docker
+#   poetry run python main.py
+#
+# The container is started by sis.gauntlet with --network none, --cap-drop ALL,
+# --read-only, no-new-privileges, and only the per-validation temp dir mounted.
+# This image therefore needs nothing but Python + the gate tools; it never holds
+# credentials or source.
+FROM python:3.14-slim
+
+# Pin the same gate tooling the host uses. No project code is baked in — the
+# candidate, tests, and benchmark are bind-mounted at runtime.
+RUN pip install --no-cache-dir "mypy>=1.8" "pytest>=8.0"
+
+# Run as an unprivileged user (defence in depth alongside --cap-drop ALL).
+RUN useradd --create-home --uid 10001 sandbox
+USER sandbox
+
+# No ENTRYPOINT: sis.gauntlet supplies the exact `python -m mypy|pytest|-c` argv.

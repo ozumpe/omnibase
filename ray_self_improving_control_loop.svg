@@ -1,0 +1,67 @@
+<svg width="100%" viewBox="0 0 680 630" xmlns="http://www.w3.org/2000/svg" role="img">
+<title>Self-improving server control loop, Ray version</title>
+<desc>The cycle adapted for Python and Ray: Ray worker actors emit metrics, supervisor actors gate on budget, an LLM actor proposes Python code, which must clear a validation gauntlet where type-checking and sandboxed execution replace the compiler, then Ray Serve does a weighted canary rollout before promote or rollback. Outcomes feed episodic memory and a circuit breaker.</desc>
+<defs>
+<marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#5F5E5A" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
+<style>
+text { font-family: 'Helvetica Neue', Arial, sans-serif; }
+.t { font-size:14px; }
+.th { font-size:14px; font-weight:500; }
+.ts { font-size:12px; }
+</style>
+</defs>
+
+<rect x="0" y="0" width="680" height="630" rx="14" fill="#ffffff"/>
+
+<rect x="210" y="40" width="260" height="56" rx="8" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5"/>
+<text class="th" x="340" y="59" text-anchor="middle" dominant-baseline="central" fill="#444441">Monitor &amp; detect</text>
+<text class="ts" x="340" y="77" text-anchor="middle" dominant-baseline="central" fill="#5F5E5A">Ray worker actors emit metrics</text>
+<line x1="340" y1="96" x2="340" y2="118" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+<rect x="210" y="120" width="260" height="56" rx="8" fill="#FAEEDA" stroke="#BA7517" stroke-width="1"/>
+<text class="th" x="340" y="139" text-anchor="middle" dominant-baseline="central" fill="#854F0B">Budget &amp; goal gate</text>
+<text class="ts" x="340" y="157" text-anchor="middle" dominant-baseline="central" fill="#BA7517">CEO / CTO supervisor actors</text>
+<line x1="340" y1="176" x2="340" y2="198" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+<rect x="210" y="200" width="260" height="56" rx="8" fill="#EEEDFE" stroke="#534AB7" stroke-width="0.5"/>
+<text class="th" x="340" y="219" text-anchor="middle" dominant-baseline="central" fill="#3C3489">Propose change</text>
+<text class="ts" x="340" y="237" text-anchor="middle" dominant-baseline="central" fill="#534AB7">LLM actor &#8594; Python branch</text>
+<line x1="340" y1="256" x2="340" y2="278" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+<rect x="70" y="280" width="540" height="116" rx="12" fill="none" stroke="#B4B2A9" stroke-width="0.5" stroke-dasharray="5 5"/>
+<text class="th" x="90" y="300" text-anchor="start" dominant-baseline="central" fill="#444441">Validation gauntlet &#183; gate hard, there is no compiler</text>
+
+<rect x="90" y="320" width="88" height="36" rx="6" fill="#E1F5EE" stroke="#0F6E56" stroke-width="1"/>
+<text class="t" x="134" y="338" text-anchor="middle" dominant-baseline="central" fill="#085041">Type check</text>
+<rect x="193" y="320" width="88" height="36" rx="6" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5"/>
+<text class="t" x="237" y="338" text-anchor="middle" dominant-baseline="central" fill="#444441">Tests</text>
+<rect x="296" y="320" width="88" height="36" rx="6" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5"/>
+<text class="t" x="340" y="338" text-anchor="middle" dominant-baseline="central" fill="#444441">Benchmark</text>
+<rect x="399" y="320" width="88" height="36" rx="6" fill="#E1F5EE" stroke="#0F6E56" stroke-width="1"/>
+<text class="t" x="443" y="338" text-anchor="middle" dominant-baseline="central" fill="#085041">Sandbox</text>
+<rect x="502" y="320" width="88" height="36" rx="6" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5"/>
+<text class="t" x="546" y="338" text-anchor="middle" dominant-baseline="central" fill="#444441">Human PR</text>
+<text class="ts" x="90" y="376" text-anchor="start" dominant-baseline="central" fill="#0F6E56">&#8627; Teal gates replace the compiler Python lacks</text>
+<line x1="340" y1="396" x2="340" y2="418" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+<rect x="210" y="420" width="260" height="56" rx="8" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5"/>
+<text class="th" x="340" y="439" text-anchor="middle" dominant-baseline="central" fill="#444441">Ray Serve canary</text>
+<text class="ts" x="340" y="457" text-anchor="middle" dominant-baseline="central" fill="#5F5E5A">weighted rollout, new version</text>
+
+<line x1="340" y1="476" x2="340" y2="490" stroke="#5F5E5A" stroke-width="1.5"/>
+<text class="ts" x="255" y="500" text-anchor="middle" dominant-baseline="central" fill="#5F5E5A">pass</text>
+<line x1="340" y1="490" x2="243" y2="506" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
+<text class="ts" x="425" y="500" text-anchor="middle" dominant-baseline="central" fill="#5F5E5A">fail</text>
+<line x1="340" y1="490" x2="437" y2="506" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+<rect x="170" y="510" width="140" height="56" rx="8" fill="#EAF3DE" stroke="#3B6D11" stroke-width="0.5"/>
+<text class="th" x="240" y="529" text-anchor="middle" dominant-baseline="central" fill="#27500A">Promote</text>
+<text class="ts" x="240" y="547" text-anchor="middle" dominant-baseline="central" fill="#3B6D11">send all traffic</text>
+
+<rect x="370" y="510" width="140" height="56" rx="8" fill="#FCEBEB" stroke="#A32D2D" stroke-width="0.5"/>
+<text class="th" x="440" y="529" text-anchor="middle" dominant-baseline="central" fill="#791F1F">Rollback</text>
+<text class="ts" x="440" y="547" text-anchor="middle" dominant-baseline="central" fill="#A32D2D">kill new version</text>
+
+<text class="ts" x="340" y="590" text-anchor="middle" dominant-baseline="central" fill="#5F5E5A">&#8635; Every outcome, including the failed diffs, is logged to episodic memory</text>
+<text class="ts" x="340" y="608" text-anchor="middle" dominant-baseline="central" fill="#5F5E5A">Repeated failures trip the circuit breaker and freeze the loop</text>
+</svg>

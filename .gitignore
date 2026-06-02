@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Runtime-mutable state produced by the loop.
+# runtime/target.py is the committed naive baseline; the loop overwrites it
+# at runtime, but we keep the pristine version under version control.
+runtime/target.py.bak
+runtime/episodic_log.jsonl
+
+# Editor / tooling
+.idea/
+.vscode/
+.claude/settings.local.json
+
+# Secrets (see DESIGN.md §6). Local dev only — never commit real credentials.
+# secrets.example.yml IS committed (template); secrets.local.yml is NOT.
+.env
+secrets.local.yml
+*.local.yml
+secrets/
+!secrets.example.yml

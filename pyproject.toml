@@ -1,0 +1,80 @@
+# pyproject.toml — Poetry bootstrap for the self-improving server
+# Run: poetry install   (then: poetry run python main.py)
+#
+# NOTE ON PYTHON BUILD: use the STANDARD CPython 3.14, not the free-threaded
+# (python3.14t) build. Ray ships cp314 wheels but not cp314t (free-threaded)
+# wheels yet, so a 3.14t env will fail to install Ray. Revisit free-threading
+# once Ray publishes cp314t wheels.
+#
+# NOTE ON WINDOWS: Ray's published cp314 wheels target Linux and macOS-ARM. On a
+# Windows machine, run this inside WSL2 (Ubuntu) for the smoothest path, or
+# verify a win_amd64 cp314 wheel exists before relying on native Windows.
+
+[tool.poetry]
+name = "self-improving-server"
+version = "0.1.0"
+description = "A self-improving server on a Ray actor hierarchy that generates, validates, and safely deploys its own code."
+authors = ["Olaf <olaf@example.com>"]   # <-- edit this
+license = "Apache-2.0"
+# This is an application, not a library to publish, so we don't package/install it.
+package-mode = false
+
+[tool.poetry.dependencies]
+python = ">=3.14,<3.15"
+ray = { version = "^2.55", extras = ["serve"] }
+# Milestone 1 (the proposer stub) needs no API client. When you reach Milestone 2
+# and want a real Claude call, add the SDK with its current version:
+#   poetry add anthropic
+
+[tool.poetry.group.dev.dependencies]
+mypy = "^1.8"
+pytest = "^8.0"
+ruff = "^0.6"
+
+# Real-world adapters (Confluence/Jira/GitHub/AWS). Optional: the default
+# in-memory adapters need none of these. Install with:
+#   poetry install --with real
+[tool.poetry.group.real]
+optional = true
+
+[tool.poetry.group.real.dependencies]
+requests = "^2.32"      # Atlassian + GitHub REST
+boto3 = "^1.35"         # AWS Secrets Manager + infra
+pyyaml = "^6.0"         # secrets.local.yml parsing
+
+# Real Claude proposer (Milestone 2). Optional: the default stub proposer
+# needs no SDK or API key. Install with: poetry install --with llm
+[tool.poetry.group.llm]
+optional = true
+
+[tool.poetry.group.llm.dependencies]
+anthropic = "^0.69"     # Claude API client for the real proposer
+
+# requests/boto3/yaml/anthropic are optional extras; don't fail mypy when absent.
+[[tool.mypy.overrides]]
+module = ["yaml", "boto3", "requests", "requests.*", "anthropic"]
+ignore_missing_imports = true
+
+[build-system]
+requires = ["poetry-core>=1.9.0"]
+build-backend = "poetry.core.masonry.api"
+
+# --- Tooling config, aligned with the design's "gate hard" rules ---
+
+[tool.mypy]
+python_version = "3.14"
+strict = true                # generated code must be fully typed; this is a gauntlet gate
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]   # errors, pyflakes, import-sort, pyupgrade, bugbear
