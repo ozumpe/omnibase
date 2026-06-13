@@ -53,9 +53,17 @@ optional = true
 [tool.poetry.group.llm.dependencies]
 anthropic = "^0.69"     # Claude API client for the real proposer
 
-# requests/boto3/yaml/anthropic are optional extras; don't fail mypy when absent.
+# Episodic-store analytics backend (DuckDB). Optional: the default jsonl store
+# needs nothing. Install with: poetry install --with analytics
+[tool.poetry.group.analytics]
+optional = true
+
+[tool.poetry.group.analytics.dependencies]
+duckdb = "^1.1"         # embedded analytical store for the episodic log
+
+# Optional extras (only present with their groups); don't fail mypy when absent.
 [[tool.mypy.overrides]]
-module = ["yaml", "boto3", "requests", "requests.*", "anthropic"]
+module = ["yaml", "boto3", "requests", "requests.*", "anthropic", "duckdb"]
 ignore_missing_imports = true
 
 [build-system]

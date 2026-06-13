@@ -18,10 +18,13 @@ and every handoff is recorded in the SelfModel provenance graph.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 import ray
 
+from sis import episodic
+from sis.proposer import MODEL
 from sis.roles import CEO, CTO, PM, PROPOSAL_SPACE, QA, SWE, Designer, DevOps
 from sis.self_model import get_self_model
 from sis.workspace import get_workspace
@@ -71,11 +74,24 @@ def run_cycle(
         handles["Designer"], handles["SWE"], handles["QA"], handles["DevOps"],
     )
 
+    proposer = os.getenv("SIS_PROPOSER", "stub")
+    model = MODEL if proposer == "claude" else None
+    store = episodic.get_episodic_store()
+
+    def _record(res: dict[str, Any], cost: float = 0.0) -> dict[str, Any]:
+        # Episodic logging is auxiliary — it must never break a cycle.
+        try:
+            store.append(episodic.event_from_cycle_result(
+                res, cost_usd=cost, proposer=proposer, model=model))
+        except Exception:  # noqa: BLE001
+            pass
+        return res
+
     # 1. Budget & goal gate (CEO).
     if ray.get(ceo.breaker_open.remote()):
-        return {"status": "circuit_breaker_open"}
+        return _record({"status": "circuit_breaker_open"})
     if not ray.get(ceo.approve_budget.remote(estimate_usd)):
-        return {"status": "budget_denied"}
+        return _record({"status": "budget_denied"})
 
     # 2. Intake: a non-technical user drops a proposal into the proposal space.
     proposal = ray.get(ws.create_page.remote(
@@ -94,10 +110,10 @@ def run_cycle(
     cost_usd = float(impl.get("cost_usd", 0.0))
     if not impl["passed"]:
         ray.get(ceo.report_outcome.remote(success=False, cost_usd=cost_usd))
-        return {"status": "rolled_back", "reason": impl["reason"],
-                "spec_id": spec_id, "story_id": story_id,
-                "economics": ray.get(ceo.economics.remote()),
-                "provenance": ray.get(sm.provenance.remote())}
+        return _record({"status": "rolled_back", "reason": impl["reason"],
+                        "spec_id": spec_id, "story_id": story_id,
+                        "economics": ray.get(ceo.economics.remote()),
+                        "provenance": ray.get(sm.provenance.remote())}, cost_usd)
 
     # 6. Verify (QA + deterministic gauntlet).
     approved = ray.get(qa.review.remote(story_id, impl["pr_id"]))
@@ -110,7 +126,7 @@ def run_cycle(
     ray.get(pm.accept.remote(spec_id, satisfied=approved))
     ray.get(ceo.report_outcome.remote(success=approved, cost_usd=cost_usd))
 
-    return {
+    return _record({
         "status": "verified_awaiting_human_merge" if approved else "qa_rejected",
         "spec_id": spec_id,
         "epic_id": plan["epic_id"],
@@ -121,4 +137,4 @@ def run_cycle(
         "canary": canary,
         "economics": ray.get(ceo.economics.remote()),
         "provenance": ray.get(sm.provenance.remote()),
-    }
+    }, cost_usd)
