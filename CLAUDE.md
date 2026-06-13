@@ -32,6 +32,11 @@ internal target before it models anything external.
   adapters; real adapters in `sis/adapters_real.py` (`SIS_ADAPTERS=real`).
 - SelfModel (digital twin): live actor registry, deploy slots, provenance graph,
   substrate — the first "piece of the world" the system models.
+- Episodic store (`sis/episodic.py`): every cycle's outcome behind a port —
+  spec → diff → gauntlet verdict → outcome, incl. every rejected diff and the
+  gate that caught it. Backends via `SIS_EPISODIC_STORE`: `jsonl` (default),
+  `duckdb` (SQL analytics), `none`. This is the dataset the system learns from;
+  Postgres+pgvector can drop in later as another backend.
 - Control loop: monitor → budget/goal gate → propose Python on a branch → validation
   gauntlet → canary → promote/rollback → log → circuit breaker.
 
@@ -82,11 +87,13 @@ internal target before it models anything external.
 ## Operational quick reference
 - Run a cycle: `poetry run python main.py` (in-memory, no creds). Old micro-loop: `--loop`.
 - Gates: `poetry run pytest` · `poetry run mypy --strict sis/ main.py scripts/` · `poetry run ruff check .`
-- Optional deps: `poetry install --with llm` (anthropic) · `--with real` (requests/boto3/pyyaml).
+- Optional deps: `poetry install --with llm` (anthropic) · `--with real`
+  (requests/boto3/pyyaml) · `--with analytics` (duckdb).
 - Env flags (full table in `README.md`): `SIS_PROPOSER` (stub|claude), `SIS_SANDBOX`
   (subprocess|docker), `SIS_ADAPTERS` (memory|real), `SIS_ENV` (local|aws),
-  `SIS_TARGET_PATHS`, `SIS_ALLOW_STRICT_CHANGES`, `SIS_GAUNTLET_TIMEOUT`,
-  `SIS_SANDBOX_IMAGE`, `ANTHROPIC_API_KEY`.
+  `SIS_EPISODIC_STORE` (jsonl|duckdb|none), `SIS_TARGET_PATHS`,
+  `SIS_ALLOW_STRICT_CHANGES`, `SIS_GAUNTLET_TIMEOUT`, `SIS_SANDBOX_IMAGE`,
+  `ANTHROPIC_API_KEY`.
 - Real adapters: `cp secrets.example.yml secrets.local.yml`; then
   `poetry run python scripts/check_connections.py --deep` before a real cycle.
 - Docker sandbox image: `docker build -t sis-gauntlet:latest -f Dockerfile.gauntlet .`
@@ -102,8 +109,11 @@ The bootstrap skeleton (original "first task") is **done**, plus much more:
   sandbox (default) and kernel-enforced docker sandbox (built + verified on a live daemon).
 - Real Claude proposer behind `SIS_PROPOSER=claude`; default stub is offline.
 - Ports/adapters (in-memory + real Confluence/Jira/GitHub/AWS), secrets layer, CEO spend
-  brakes, change-authorization policy. ~61 tests; `ruff`/`mypy --strict`/`pytest` clean;
-  CI green; the `feature → develop → main` flow is live.
+  brakes, change-authorization policy.
+- Episodic/provenance store (`sis/episodic.py`) behind a port: `jsonl` default +
+  optional `duckdb` SQL analytics + `none`; every cycle outcome recorded.
+- ~68 tests; `ruff`/`mypy --strict`/`pytest` clean; CI green; the
+  `feature → develop → main` flow is live with server-side branch protection.
 
 **Next (needs the user's environment):**
 1. Upgrade to GitHub Pro → apply branch-protection rulesets to `develop` + `main`.

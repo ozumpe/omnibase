@@ -141,6 +141,22 @@ in-process network block) and `docker` (`--network none --cap-drop ALL
 also has a wall-clock timeout (`SIS_GAUNTLET_TIMEOUT`, default 120s) so an
 infinite loop in generated code is killed, not left to hang.
 
+### Provenance / episodic store (`sis/episodic.py`)
+
+Every cycle records an event — spec → diff → gauntlet verdict → outcome,
+**including each rejected diff and the gate that caught it** — so the log is the
+dataset the system learns from, not an afterthought. It sits behind an
+`EpisodicStore` port selected by `SIS_EPISODIC_STORE`:
+
+- `jsonl` (default) — append-only, zero-dependency, durable.
+- `duckdb` — embedded SQL analytics over the events (`poetry install --with
+  analytics`); `summary()` rollups (reject-rate by gate, cost-per-accepted) plus
+  an `sql()` escape hatch.
+- `none` — disabled.
+
+Postgres + pgvector can be added as another backend later (multi-node cluster /
+embedding retrieval) without changing the loop.
+
 ---
 
 ## Project layout
@@ -158,12 +174,15 @@ sis/                     # the engine package (immutable code)
   paths.py               # single source of truth for filesystem paths
   proposer.py            # propose(source, baseline) → candidate (stub → Claude)
   gauntlet.py            # validate(code, baseline) → Result
+  policy.py              # change-authorization tiers (FORBIDDEN/STRICT/SOFT)
+  cost.py                # LLM cost accounting for the CEO spend brakes
+  episodic.py            # provenance/episodic store (jsonl | duckdb | none)
   worker.py supervisor.py memory.py   # the original Milestone-0/1 micro-loop
 runtime/                 # runtime-mutable state (kept apart from the engine)
   target.py              # the live target (naive baseline, committed)
   candidates/            # proposer's hand-written variant
-  episodic_log.jsonl     # append-only episodic memory (gitignored)
-tests/                   # pytest suite (24 tests)
+  episodic.jsonl         # episodic store (gitignored; or episodic.duckdb)
+tests/                   # pytest suite (68 tests)
 scripts/check_connections.py   # read-only credential/connectivity preflight
 main.py                  # entry point
 secrets.example.yml      # secrets template (copy to secrets.local.yml)
@@ -270,6 +289,8 @@ found becomes a permanent regression test (the suite is the moat).
 | 2 | Real Claude proposer (`SIS_PROPOSER=claude`) | ✅ |
 | 3 | Harden the gauntlet: sandboxed run (gate 5) | ✅ subprocess + docker |
 | – | Cost cap + cost-per-accepted SLO (CEO brakes) | ✅ |
+| – | Change-authorization policy (FORBIDDEN/STRICT/SOFT) | ✅ |
+| – | Episodic/provenance store, pluggable (jsonl + duckdb) | ✅ |
 | – | Kernel-enforced docker sandbox + per-gate timeout | ✅ |
 | – | Adversarial regression corpus (wrong/gaming/hanging diffs rejected) | ✅ |
 | – | `--deep` Jira workflow checker | ✅ |
