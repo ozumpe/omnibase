@@ -122,7 +122,12 @@ Read in this order — each builds on the last:
 6. **`sis/workspace.py` + `sis/self_model.py`** — the shared, named actors.
 7. **`sis/roles.py`** — the seven role actors. Each is small and focused.
 8. **`sis/org.py`** — wires it together and runs one cycle. The conductor.
-9. **`main.py`** — the entry point.
+9. **`sis/episodic.py`** — the provenance/episodic store (§7b): what every cycle
+   tried and why it was accepted or rejected.
+10. **`main.py`** — the entry point.
+
+Also worth a look: **`sis/policy.py`** (§7a, what the loop may change) and
+**`sis/cost.py`** (LLM pricing feeding the CEO's spend brakes).
 
 The tests under `tests/` are also excellent documentation — each shows a piece
 in isolation. `tests/test_adversarial.py` in particular shows *what the gauntlet
@@ -249,13 +254,36 @@ accidentally make safety code writable by listing it as a target.
 > over data** (`classify`, `authorize_change`) — no Ray, no I/O — so it's
 > exhaustively unit-tested in `tests/test_policy.py`.
 
+## 7b. The episodic store — what it learns from (`sis/episodic.py`)
+
+The single most valuable output isn't the optimised code; it's the record of
+*what was proposed, why, and what happened* — including **every rejected diff and
+the gate that caught it**. That's the dataset a self-improving system learns
+from, so it's a first-class, queryable output rather than a log file.
+
+`org.run_cycle` writes one `EpisodicEvent` per outcome (guarded — episodic
+logging can never break a cycle). The store is a **port** with swappable backends
+chosen by `SIS_EPISODIC_STORE`:
+
+- `jsonl` (default) — append-only, zero-dependency, durable.
+- `duckdb` — embedded SQL analytics (`summary()` rollups + an `sql()` escape
+  hatch); optional `poetry install --with analytics`.
+- `none` — disabled.
+
+The schema (`EpisodicEvent`) is the point — `outcome`, `reject_gate`,
+`candidate_sha`, `cost_usd`, before/after latency. A shared pure `summarize()`
+makes rollups identical across backends, and the DuckDB column schema is
+*asserted* against the dataclass so it can't drift. Postgres + pgvector can drop
+in later (multi-node cluster / embedding retrieval) without touching the loop —
+the same ports/adapters move as Confluence/Jira/GitHub.
+
 ## 8. How to run and poke at it
 
 ```bash
 poetry install
 poetry run python main.py        # one full org cycle (in-memory, no creds)
-poetry run pytest                # 50 tests
-poetry run mypy --strict sis/    # the type gate
+poetry run pytest                # the full suite
+poetry run mypy --strict sis/ main.py scripts/   # the type gate
 ```
 
 Good first experiments to build intuition:
@@ -266,6 +294,9 @@ Good first experiments to build intuition:
   catches it.
 - Set `SIS_PROPOSER=claude` (with `--with llm` + a key) and read the prompt in
   `sis/proposer.py` — then watch the same gauntlet judge a real LLM's diff.
+- Run a few cycles with `SIS_EPISODIC_STORE=duckdb` (`--with analytics`), then
+  query the log: `get_episodic_store("duckdb").sql("SELECT reject_gate,
+  count(*) FROM episodes GROUP BY reject_gate")`.
 
 ---
 
@@ -276,4 +307,7 @@ Good first experiments to build intuition:
 - **actor** — a Ray object living in its own process, reached via a handle.
 - **artifact** — a durable record (page/issue/PR) the org coordinates through.
 - **the gauntlet** — the deterministic validation pipeline; the safety moat.
-- **provenance** — the recorded chain spec → … → outcome, kept in `SelfModel`.
+- **provenance** — the recorded chain spec → … → outcome (live in `SelfModel`,
+  persisted by the episodic store, `sis/episodic.py`).
+- **episodic store** — the pluggable backend (jsonl/duckdb/none) that persists
+  each cycle's outcome as the dataset to learn from.
