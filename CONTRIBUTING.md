@@ -27,6 +27,30 @@ poetry install --with llm      # + anthropic, for the real proposer
 poetry install --with real     # + requests/boto3/pyyaml, for real adapters
 ```
 
+## Branch workflow
+
+Work flows through three tiers — never push to `develop` or `main` directly:
+
+```
+feature/<name>  →  develop (integration sandbox)  →  main (tested releases)
+```
+
+- **`feature/<name>`** — all work happens here. Push freely.
+- **`develop`** — the default branch and integration sandbox. Feature branches
+  merge in via PR once they work; CI must pass.
+- **`main`** — tested releases only. `develop` merges in via PR when it's been
+  validated.
+
+Enable the client-side guard once per clone (blocks accidental direct pushes to
+`develop`/`main`):
+
+```bash
+git config core.hooksPath hooks
+```
+
+(Server-side branch protection on `develop`/`main` is the authoritative gate —
+enabled when the repo is public or on GitHub Pro.)
+
 ## The checks (all must pass before a PR)
 
 ```bash

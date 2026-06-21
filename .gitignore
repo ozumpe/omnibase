@@ -11,6 +11,8 @@ __pycache__/
 # at runtime, but we keep the pristine version under version control.
 runtime/target.py.bak
 runtime/episodic_log.jsonl
+runtime/episodic.jsonl
+runtime/episodic.duckdb
 
 # Editor / tooling
 .idea/
