@@ -27,7 +27,7 @@ import uuid
 from collections import Counter
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, Protocol
 
 from sis.paths import EPISODIC_DUCKDB, EPISODIC_JSONL
 
@@ -189,7 +189,11 @@ class DuckDBEpisodicStore:
 
     def sql(self, query: str) -> list[tuple[Any, ...]]:
         """Run an ad-hoc analytical query against the `episodes` table."""
-        return cast("list[tuple[Any, ...]]", self._con.execute(query).fetchall())
+        # Annotated local (not cast): duckdb is an optional dep, so its return
+        # type is `Any` when the extra isn't installed (CI) but concrete when it
+        # is (local) — a cast would be "redundant" in one and required in the other.
+        rows: list[tuple[Any, ...]] = self._con.execute(query).fetchall()
+        return rows
 
 
 def get_episodic_store(kind: str | None = None) -> EpisodicStore:
@@ -257,6 +261,7 @@ def event_from_cycle_result(
         spec_id=_opt_str(result.get("spec_id")),
         story_id=_opt_str(result.get("story_id")),
         pr_id=_opt_str(result.get("pr_id")),
+        candidate_sha=_opt_str(result.get("candidate_sha")),
         gauntlet_passed=gauntlet_passed,
         reject_gate=gate_from_reason(reason if isinstance(reason, str) else None),
         reject_reason=reason if isinstance(reason, str) else None,

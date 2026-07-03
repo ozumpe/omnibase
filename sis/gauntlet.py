@@ -302,3 +302,43 @@ def validate(code_str: str, baseline_latency: float) -> Result:
             )
 
         return Result(passed=True, reason="all gates passed", latency_seconds=candidate_latency)
+
+
+def measure_baseline(source: str | None = None) -> float:
+    """Benchmark the current target's ``sum_of_divisors`` **inside the sandbox**.
+
+    Used by the loop for the baseline it reports and shows the proposer. Like
+    every gate, the code runs in the sandbox (scrubbed env + egress block, or
+    docker) — never in the main process. ``validate()`` still measures its own
+    baseline for the authoritative pass/fail decision; this is the advisory
+    number for the prompt and the episodic log. Returns 0.0 if unmeasurable.
+    """
+    code = source if source is not None else TARGET_PATH.read_text(encoding="utf-8")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = pathlib.Path(tmpdir)
+        (tmp / "sitecustomize.py").write_text(_NETWORK_GUARD, encoding="utf-8")
+        module = tmp / "baseline.py"
+        module.write_text(code, encoding="utf-8")
+        env = _sandbox_env(home=tmpdir, pythonpath=tmpdir)
+        script = textwrap.dedent(
+            f"""\
+            import time, importlib.util
+            spec = importlib.util.spec_from_file_location("m", {str(module)!r})
+            m = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(m)
+
+            INPUTS = [3, 97, 997, 5000, 8128, 9973, 10_000, 12345, 16384, 19_999]
+            best = float("inf")
+            for _ in range(5):
+                start = time.perf_counter()
+                for n in INPUTS:
+                    m.sum_of_divisors(n)
+                best = min(best, time.perf_counter() - start)
+            print(best / len(INPUTS))
+            """
+        )
+        result = _run([_PY, "-c", script], tmpdir, env)
+        try:
+            return float(result.stdout.strip())
+        except ValueError:
+            return 0.0
