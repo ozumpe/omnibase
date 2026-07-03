@@ -67,6 +67,18 @@ def benchmark(n: int = 10_000, repetitions: int = 5) -> float:
 '''
 
 
+def test_measure_baseline_runs_in_sandbox() -> None:
+    # The committed target benchmarks to a positive latency, measured in the
+    # gauntlet sandbox — never exec'd in this (main) process.
+    b = gauntlet.measure_baseline()
+    assert isinstance(b, float) and b > 0
+
+
+def test_measure_baseline_unmeasurable_returns_zero() -> None:
+    # Source lacking sum_of_divisors → advisory 0.0, not a crash.
+    assert gauntlet.measure_baseline("x = 1\n") == 0.0
+
+
 def test_sandbox_env_scrubs_credentials(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     from sis.gauntlet import _sandbox_env
 
