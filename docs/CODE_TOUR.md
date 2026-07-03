@@ -159,9 +159,18 @@ Everything the gauntlet needs is written into one temp dir (the candidate, a
 copy of the baseline, the test, an injected `sitecustomize.py`), so the sandbox
 is fully self-contained — nothing reaches the host.
 
+**The invariant: the gauntlet is the *only* place candidate or target code
+runs.** Not just `validate()` — the baseline measurement (`measure_baseline()`,
+used by the SWE before proposing) and the DevOps canary reuse the sandbox or the
+already-sandbox-measured latency. No role ever `exec`s a module in the main
+actor process (where credentials live). If you add a code path that runs a
+generated or target module, route it through the sandbox — this is the rule the
+whole safety model rests on. (Two review passes were needed to make it true
+everywhere: the candidate-execution sites *and* the baseline path.)
+
 > Learning note: read `_run()` to see the subprocess/docker branch and the
-> `TimeoutExpired` handling, and `_docker_args()` for exactly how the container
-> is locked down.
+> `TimeoutExpired` handling, `_docker_args()` for exactly how the container is
+> locked down, and `measure_baseline()` for the sandboxed baseline.
 
 ---
 
