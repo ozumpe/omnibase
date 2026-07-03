@@ -112,6 +112,7 @@ def run_cycle(
         ray.get(ceo.report_outcome.remote(success=False, cost_usd=cost_usd))
         return _record({"status": "rolled_back", "reason": impl["reason"],
                         "spec_id": spec_id, "story_id": story_id,
+                        "candidate_sha": impl.get("candidate_sha"),
                         "economics": ray.get(ceo.economics.remote()),
                         "provenance": ray.get(sm.provenance.remote())}, cost_usd)
 
@@ -119,8 +120,10 @@ def run_cycle(
     approved = ray.get(qa.review.remote(story_id, impl["pr_id"]))
 
     # 7. Canary deploy to the green slot (DevOps). Promotion to live is the
-    #    human PR merge — intentionally NOT performed by the agent.
-    canary = ray.get(devops.canary.remote(impl["pr_id"])) if approved else None
+    #    human PR merge — intentionally NOT performed by the agent. The latency
+    #    was measured inside the gauntlet sandbox; the candidate is not re-run.
+    canary = (ray.get(devops.canary.remote(impl["pr_id"], impl["candidate_latency"]))
+              if approved else None)
 
     # 8. PM acceptance + CEO records the outcome + spend (drives the brakes).
     ray.get(pm.accept.remote(spec_id, satisfied=approved))
@@ -132,6 +135,7 @@ def run_cycle(
         "epic_id": plan["epic_id"],
         "story_id": story_id,
         "pr_id": impl["pr_id"],
+        "candidate_sha": impl.get("candidate_sha"),
         "baseline_latency": impl["baseline"],
         "candidate_latency": impl["candidate_latency"],
         "canary": canary,

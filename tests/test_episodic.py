@@ -81,11 +81,12 @@ def test_gate_from_reason() -> None:
 def test_event_from_cycle_result_maps_fields() -> None:
     ev = event_from_cycle_result(
         {"status": "verified_awaiting_human_merge", "spec_id": "PAGE-2",
-         "story_id": "STORY-3", "pr_id": "PR-2",
+         "story_id": "STORY-3", "pr_id": "PR-2", "candidate_sha": "abc123def456",
          "baseline_latency": 0.0004, "candidate_latency": 0.00002},
         cost_usd=0.0, proposer="stub")
     assert ev.outcome == "verified_awaiting_human_merge"
     assert ev.gauntlet_passed is True
+    assert ev.candidate_sha == "abc123def456"
     assert ev.improvement_pct == 95.0  # (1 - 0.00002/0.0004) * 100
 
     rej = event_from_cycle_result(
