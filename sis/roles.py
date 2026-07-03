@@ -14,10 +14,6 @@ agent (the human PR is mandatory — gauntlet step 6).
 from __future__ import annotations
 
 import hashlib
-import importlib.util
-import pathlib
-import tempfile
-import types
 from typing import Any
 
 import ray
@@ -35,22 +31,6 @@ SPEC_SPACE = "SPECS"
 # --------------------------------------------------------------------------
 # Shared helpers
 # --------------------------------------------------------------------------
-
-
-def _load_module(code: str) -> types.ModuleType:
-    with tempfile.TemporaryDirectory() as d:
-        path = pathlib.Path(d) / "candidate.py"
-        path.write_text(code, encoding="utf-8")
-        spec = importlib.util.spec_from_file_location("candidate", path)
-        assert spec is not None and spec.loader is not None
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        return mod
-
-
-def _benchmark_code(code: str) -> float:
-    """Mean latency of a target-shaped module's sum_of_divisors via its benchmark()."""
-    return float(_load_module(code).benchmark())
 
 
 def evaluate_brakes(
@@ -266,7 +246,7 @@ class SWE(Role):
         ray.get(self._ws.transition.remote(story_id, IssueStatus.IN_PROGRESS, "SWE picked up"))
 
         current_source = TARGET_PATH.read_text(encoding="utf-8")
-        baseline = _benchmark_code(current_source)
+        baseline = gauntlet.measure_baseline(current_source)  # sandboxed, not in-process
         candidate = proposer.propose(current_source, baseline)
         candidate_sha = hashlib.sha256(candidate.encode("utf-8")).hexdigest()[:12]
         cost_usd = proposer.last_cost_usd()  # 0.0 for the stub; real $ for Claude

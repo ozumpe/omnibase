@@ -141,6 +141,10 @@ in-process network block) and `docker` (`--network none --cap-drop ALL
 also has a wall-clock timeout (`SIS_GAUNTLET_TIMEOUT`, default 120s) so an
 infinite loop in generated code is killed, not left to hang.
 
+**Invariant:** the gauntlet is the *only* place candidate or target code runs —
+including the baseline measurement (`measure_baseline()`) and the DevOps canary.
+No role ever executes a module in the main process where credentials live.
+
 ### Provenance / episodic store (`sis/episodic.py`)
 
 Every cycle records an event — spec → diff → gauntlet verdict → outcome,
