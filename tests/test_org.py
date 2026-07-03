@@ -34,6 +34,11 @@ def test_full_cycle_reaches_human_merge_gate(handles) -> None:  # type: ignore[n
     kinds = {e["kind"] for e in result["provenance"]}
     assert {"spec", "epic", "story", "pr", "canary", "outcome"} <= kinds
 
+    # The candidate diff is fingerprinted (12-hex sha) so the episodic log can
+    # dedupe/correlate proposals — the join key of the learning dataset.
+    assert len(result["candidate_sha"]) == 12
+    assert all(c in "0123456789abcdef" for c in result["candidate_sha"])
+
 
 def test_self_model_registry_has_full_org(handles) -> None:  # type: ignore[no-untyped-def]
     roles = {info["role"] for info in ray.get(handles["SelfModel"].registry.remote())}

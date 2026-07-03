@@ -13,6 +13,7 @@ agent (the human PR is mandatory — gauntlet step 6).
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import pathlib
 import tempfile
@@ -267,6 +268,7 @@ class SWE(Role):
         current_source = TARGET_PATH.read_text(encoding="utf-8")
         baseline = _benchmark_code(current_source)
         candidate = proposer.propose(current_source, baseline)
+        candidate_sha = hashlib.sha256(candidate.encode("utf-8")).hexdigest()[:12]
         cost_usd = proposer.last_cost_usd()  # 0.0 for the stub; real $ for Claude
         report = gauntlet.validate(candidate, baseline)
 
@@ -274,7 +276,8 @@ class SWE(Role):
             ray.get(self._ws.transition.remote(
                 story_id, IssueStatus.TBD, f"Gauntlet failed: {report.reason}"))
             ray.get(self._sm.record.remote("outcome", story_id, passed=False, reason=report.reason))
-            return {"passed": False, "reason": report.reason, "pr_id": None, "cost_usd": cost_usd}
+            return {"passed": False, "reason": report.reason, "pr_id": None,
+                    "cost_usd": cost_usd, "candidate_sha": candidate_sha}
 
         # Change-authorization policy: the loop may only write paths its tier
         # permits. The target is SOFT (allowed once checks pass); a mis-pointed
@@ -300,7 +303,7 @@ class SWE(Role):
             baseline=baseline, candidate=report.latency_seconds))
         return {"passed": True, "pr_id": str(pr.id), "branch": branch,
                 "baseline": baseline, "candidate_latency": report.latency_seconds,
-                "cost_usd": cost_usd}
+                "cost_usd": cost_usd, "candidate_sha": candidate_sha}
 
 
 @ray.remote
@@ -317,7 +320,9 @@ class QA(Role):
         # artifact exists, matches the story, and re-runs the gauntlet.
         ok = bool(pr.artifact) and issue.status == IssueStatus.READY_FOR_REVIEW
         if ok:
-            report = gauntlet.validate(pr.artifact, _benchmark_code(TARGET_PATH.read_text()))
+            # Re-run the gauntlet: the candidate executes ONLY inside its sandbox
+            # (baseline is advisory — validate() measures its own in-sandbox).
+            report = gauntlet.validate(pr.artifact, 0.0)
             ok = report.passed
         if ok:
             ray.get(self._ws.transition.remote(story_id, IssueStatus.DONE, "QA verified"))
@@ -334,10 +339,11 @@ class DevOps(Role):
     def __init__(self) -> None:
         super().__init__("DevOps", "DevOps", parent="CTO")
 
-    def canary(self, pr_id: str) -> dict[str, Any]:
+    def canary(self, pr_id: str, candidate_latency: float) -> dict[str, Any]:
+        # candidate_latency was measured inside the gauntlet sandbox by the SWE
+        # step. The candidate is NEVER executed here (main process, holds creds).
         pr = ray.get(self._ws.get_pr.remote(pr_id))
         version = f"{pr.branch}@{pr.id}"
-        candidate_latency = _benchmark_code(pr.artifact)
         record = ray.get(self._ws.deploy_canary.remote(
             version, {"latency_seconds": candidate_latency}))
         ray.get(self._sm.set_slot.remote("green", version))
