@@ -97,6 +97,15 @@ What it does, end to end: drops a proposal page in Confluence → PM writes a sp
 a feature branch → QA verifies → DevOps records a green-slot canary. It **stops
 at the human PR merge** — it never merges to `main` or promotes to live.
 
+**On failure:** a gauntlet rollback or a QA rejection files a bug in the work
+tracker automatically (`DevOps.file_bug`) — check there first, not just the
+episodic log. Three consecutive failures trip the circuit breaker: it files a
+second, distinctly-titled `CIRCUIT BREAKER OPEN` bug and every further cycle
+returns `circuit_breaker_open` without spending anything. The breaker's state
+lives in the CEO actor's memory, not on disk — a fresh `poetry run python
+main.py` (a fresh local Ray cluster) clears it, unless you're connected to a
+persistent one via `RAY_ADDRESS`.
+
 ---
 
 ## Level 3 — kernel-enforced sandbox (optional hardening)

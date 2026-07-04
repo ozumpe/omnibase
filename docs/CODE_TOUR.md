@@ -219,6 +219,13 @@ Two things to notice:
   step 6 (human review) enforced structurally.
 - **Provenance is recorded at every step** in `SelfModel` (spec → epic → story →
   branch → pr → canary → outcome). The returned dict includes the full graph.
+- **Failure is wired to an artifact, not just a log line.** If `SWE.implement`
+  fails the gauntlet, or QA rejects, `run_cycle` calls `DevOps.file_bug` with the
+  story + reason. Three consecutive failures trip `CEO.report_outcome`'s circuit
+  breaker, which files a second, distinct `CIRCUIT BREAKER OPEN` bug — the
+  "page a human" from `ACTORS.md` made concrete rather than left as dead code.
+  `org.bootstrap()` also has the CEO call `set_charter` once, so provenance
+  roots at a goal instead of starting cold at the first spec.
 
 `CEO` holds three brakes (`sis/roles.py`): a hard spend cap, a consecutive-failure
 breaker, and a cost-per-accepted-improvement SLO. The brake decision is a *pure

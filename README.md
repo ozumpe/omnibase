@@ -104,6 +104,9 @@ monitor → budget/goal gate → propose → validation gauntlet → canary → 
               CEO            SWE        gauntlet + QA          DevOps    human PR merge     SelfModel   CEO
 ```
 
+At bootstrap, the **CEO** writes a top-level charter once (idempotent); every
+cycle's provenance then roots at it (`charter → spec → epic → story → outcome`).
+
 One **cycle** (`sis/org.py :: run_cycle`):
 
 1. **CEO** gates on budget; holds circuit-breaker authority.
@@ -119,6 +122,13 @@ One **cycle** (`sis/org.py :: run_cycle`):
 
 Every handoff is an artifact state change; every step is recorded in the
 **SelfModel** provenance graph.
+
+**On failure** (gauntlet rollback at step 5, or QA rejection at step 6), the
+cycle doesn't just log and stop: **DevOps files a bug** in the work tracker
+carrying the story + reason, so a rejected diff is a durable artifact, not just
+an episodic-log line. Three consecutive failures trip the circuit breaker,
+which files a second, distinct `CIRCUIT BREAKER OPEN` bug — the "page a human"
+the design calls for, made concrete.
 
 ### The validation gauntlet (`sis/gauntlet.py`)
 
@@ -186,7 +196,7 @@ runtime/                 # runtime-mutable state (kept apart from the engine)
   target.py              # the live target (naive baseline, committed)
   candidates/            # proposer's hand-written variant
   episodic.jsonl         # episodic store (gitignored; or episodic.duckdb)
-tests/                   # pytest suite (68 tests)
+tests/                   # pytest suite (75 tests)
 scripts/check_connections.py   # read-only credential/connectivity preflight
 main.py                  # entry point
 secrets.example.yml      # secrets template (copy to secrets.local.yml)
@@ -264,7 +274,10 @@ No code changes — only environment.
 - **Three CEO brakes:** a hard total LLM spend cap, a circuit breaker after N
   regressed cycles, and a cost-per-accepted-improvement SLO (so low-value spend
   trips the breaker, not just regressions). Real Claude token usage is priced
-  per cycle and fed into the gate.
+  per cycle and fed into the gate. A trip files a `CIRCUIT BREAKER OPEN` bug via
+  DevOps — an artifact a human sees, not just a telemetry flag.
+- Every rolled-back or QA-rejected cycle files a bug in the work tracker
+  (`DevOps.file_bug`) — failures are durable artifacts, not just log lines.
 - Secrets in gitignored YAML locally / Secrets Manager in cloud — never committed.
 
 ---
@@ -272,7 +285,7 @@ No code changes — only environment.
 ## Development
 
 ```bash
-poetry run pytest            # 50 tests (adapters, settings, gauntlet, org cycle, adversarial corpus, …)
+poetry run pytest            # 75 tests (adapters, settings, gauntlet, org cycle + failures, adversarial corpus, …)
 poetry run mypy --strict sis/ main.py scripts/
 poetry run ruff check .
 ```
