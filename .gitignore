@@ -10,7 +10,6 @@ __pycache__/
 # runtime/target.py is the committed naive baseline; the loop overwrites it
 # at runtime, but we keep the pristine version under version control.
 runtime/target.py.bak
-runtime/episodic_log.jsonl
 runtime/episodic.jsonl
 runtime/episodic.duckdb
 

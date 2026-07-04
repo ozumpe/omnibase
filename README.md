@@ -181,7 +181,7 @@ sis/                     # the engine package (immutable code)
   policy.py              # change-authorization tiers (FORBIDDEN/STRICT/SOFT)
   cost.py                # LLM cost accounting for the CEO spend brakes
   episodic.py            # provenance/episodic store (jsonl | duckdb | none)
-  worker.py supervisor.py memory.py   # the original Milestone-0/1 micro-loop
+  worker.py supervisor.py   # the original Milestone-0/1 micro-loop
 runtime/                 # runtime-mutable state (kept apart from the engine)
   target.py              # the live target (naive baseline, committed)
   candidates/            # proposer's hand-written variant

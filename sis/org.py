@@ -29,6 +29,14 @@ from sis.roles import CEO, CTO, PM, PROPOSAL_SPACE, QA, SWE, Designer, DevOps
 from sis.self_model import get_self_model
 from sis.workspace import get_workspace
 
+CHARTER_TEXT = (
+    "omnibase charter: make the server itself self-improving on a trivial internal "
+    "target — receive a spec, generate code, validate it through the gauntlet, deploy "
+    "it safely, and roll back on regression — before it models anything external. "
+    "Hard constraints: the gauntlet is the only place generated code runs; the loop "
+    "never merges to main or promotes to live; spend stays under the CEO's brakes."
+)
+
 
 def _get_or_create(name: str, cls: Any, *args: Any) -> Any:
     try:
@@ -56,6 +64,10 @@ def bootstrap() -> dict[str, Any]:
         "QA": _get_or_create("QA", QA),
         "DevOps": _get_or_create("DevOps", DevOps),
     }
+
+    # The CEO sets the top-level charter once (idempotent) — the goal the
+    # provenance graph roots at: charter → spec → epic → story → outcome.
+    ray.get(handles["CEO"].set_charter.remote(CHARTER_TEXT))
     return handles
 
 
@@ -109,10 +121,19 @@ def run_cycle(
     impl = ray.get(swe.implement.remote(story_id))
     cost_usd = float(impl.get("cost_usd", 0.0))
     if not impl["passed"]:
-        ray.get(ceo.report_outcome.remote(success=False, cost_usd=cost_usd))
+        trip = ray.get(ceo.report_outcome.remote(success=False, cost_usd=cost_usd))
+        # Failures become artifacts (ACTORS.md: DevOps files bug/defect Jiras).
+        bug_id = ray.get(devops.file_bug.remote(
+            f"Cycle failed for {story_id}: {impl['reason']}"))
+        breaker_bug_id = (
+            ray.get(devops.file_bug.remote(
+                f"CIRCUIT BREAKER OPEN — human attention required: {trip}"))
+            if trip else None
+        )
         return _record({"status": "rolled_back", "reason": impl["reason"],
                         "spec_id": spec_id, "story_id": story_id,
                         "candidate_sha": impl.get("candidate_sha"),
+                        "bug_id": bug_id, "breaker_bug_id": breaker_bug_id,
                         "economics": ray.get(ceo.economics.remote()),
                         "provenance": ray.get(sm.provenance.remote())}, cost_usd)
 
@@ -127,10 +148,19 @@ def run_cycle(
 
     # 8. PM acceptance + CEO records the outcome + spend (drives the brakes).
     ray.get(pm.accept.remote(spec_id, satisfied=approved))
-    ray.get(ceo.report_outcome.remote(success=approved, cost_usd=cost_usd))
+    trip = ray.get(ceo.report_outcome.remote(success=approved, cost_usd=cost_usd))
+    bug_id = (ray.get(devops.file_bug.remote(f"QA rejected {story_id} (PR {impl['pr_id']})"))
+              if not approved else None)
+    breaker_bug_id = (
+        ray.get(devops.file_bug.remote(
+            f"CIRCUIT BREAKER OPEN — human attention required: {trip}"))
+        if trip else None
+    )
 
     return _record({
         "status": "verified_awaiting_human_merge" if approved else "qa_rejected",
+        "bug_id": bug_id,
+        "breaker_bug_id": breaker_bug_id,
         "spec_id": spec_id,
         "epic_id": plan["epic_id"],
         "story_id": story_id,
