@@ -193,8 +193,12 @@ class JiraWorkTracker:
         )
 
     def children(self, parent_id: str) -> list[Issue]:
+        # Enhanced search: the classic GET /rest/api/3/search was removed by
+        # Atlassian; use POST /rest/api/3/search/jql. Only keys are needed —
+        # get_issue() fetches each issue's fields.
         jql = f'parent = "{parent_id}"'
-        data = _json(self._http.get(self._api("/search"), params={"jql": jql}))
+        data = _json(self._http.post(self._api("/search/jql"),
+                                     json={"jql": jql, "fields": ["key"]}))
         return [self.get_issue(str(i["key"])) for i in data.get("issues", [])]
 
     def delete_issue(self, issue_id: str) -> None:
