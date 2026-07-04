@@ -103,6 +103,7 @@ class CEO(Role):
         self._consecutive_failures = 0
         self._accepted = 0
         self._tripped = False
+        self._charter_id: str | None = None
 
     def approve_budget(self, estimate_usd: float) -> bool:
         """Goal/cost gate: refuse if this attempt would breach the hard cap."""
@@ -116,8 +117,13 @@ class CEO(Role):
                                      spent=self._spent, budget=self._budget))
         return True
 
-    def report_outcome(self, *, success: bool, cost_usd: float = 0.0) -> None:
-        """Record real spend + outcome, then evaluate all three brakes."""
+    def report_outcome(self, *, success: bool, cost_usd: float = 0.0) -> str | None:
+        """Record real spend + outcome, then evaluate all three brakes.
+
+        Returns the brake reason **on a fresh trip** (None otherwise) so the
+        caller can raise the alarm — per ACTORS.md, DevOps files the bug that
+        "pages a human".
+        """
         self._spent += cost_usd
         if success:
             self._consecutive_failures = 0
@@ -139,6 +145,8 @@ class CEO(Role):
             self._tripped = True
             ray.get(self._ws.emit.remote("breaker.tripped", reason=reason,
                                          **self.economics()))
+            return reason
+        return None
 
     def _cost_per_accepted(self) -> float:
         # No acceptances yet but money spent → treat as infinite (worst case).
@@ -157,10 +165,18 @@ class CEO(Role):
         }
 
     def set_charter(self, text: str) -> str:
+        """Write the top-level charter page (once — idempotent per CEO lifetime).
+
+        Per ACTORS.md the CEO "writes rarely — sets the high-level charter";
+        the provenance graph roots at this page: charter → spec → epic → story.
+        """
+        if self._charter_id is not None:
+            return self._charter_id
         page = ray.get(self._ws.create_page.remote(
             "CHARTER", "Project Charter", text, None, ["charter"]))
         ray.get(self._sm.record.remote("charter", page.id))
-        return str(page.id)
+        self._charter_id = str(page.id)
+        return self._charter_id
 
 
 @ray.remote
