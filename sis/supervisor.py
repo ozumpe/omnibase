@@ -5,16 +5,30 @@ improvement cycle: benchmark → propose → gauntlet → promote/rollback → l
 """
 
 import datetime
+import os
 import shutil
+from typing import Any
 
 import ray
 
-from sis import gauntlet, memory, proposer
+from sis import episodic, gauntlet, proposer
 from sis.paths import TARGET_BACKUP_PATH, TARGET_PATH
 from sis.worker import WorkerActor
 
 SLO_THRESHOLD_SECONDS = 0.0002  # trigger a cycle if baseline exceeds this (~200 µs)
 MAX_CONSECUTIVE_FAILURES = 3
+
+
+def _log_episode(store: episodic.EpisodicStore, result: dict[str, Any],
+                 cost_usd: float = 0.0) -> None:
+    """Record a micro-loop outcome to the shared episodic store (never fatal)."""
+    try:
+        kind = os.getenv("SIS_PROPOSER", "stub")
+        store.append(episodic.event_from_cycle_result(
+            result, cost_usd=cost_usd, proposer=kind,
+            model=proposer.MODEL if kind == "claude" else None))
+    except Exception:  # noqa: BLE001 - logging must not break the loop
+        pass
 
 
 @ray.remote
@@ -35,6 +49,8 @@ class SupervisorActor:
                 "consecutive_failures": self._failures,
             }
 
+        store = episodic.get_episodic_store()
+
         # --- 1. Measure baseline ---
         baseline: float = ray.get(self._worker.benchmark.remote())
         print(f"[supervisor] baseline latency: {baseline:.6f}s  SLO: {SLO_THRESHOLD_SECONDS}s")
@@ -45,12 +61,13 @@ class SupervisorActor:
                 "baseline_latency": baseline,
                 "timestamp": _now(),
             }
-            memory.append(result)
+            _log_episode(store, result)
             return result
 
         # --- 2. Propose ---
         current_source: str = ray.get(self._worker.get_source.remote())
         candidate_code = proposer.propose(current_source, baseline)
+        cost_usd = proposer.last_cost_usd()
 
         # --- 3. Gauntlet ---
         report = gauntlet.validate(candidate_code, baseline)
@@ -65,7 +82,7 @@ class SupervisorActor:
                 "timestamp": _now(),
                 "consecutive_failures": self._failures,
             }
-            memory.append(result)
+            _log_episode(store, result, cost_usd)
             print(f"[supervisor] rolled back — {report.reason}")
             return result
 
@@ -82,7 +99,7 @@ class SupervisorActor:
             "improvement_pct": round((1 - after / baseline) * 100, 1),
             "timestamp": _now(),
         }
-        memory.append(result)
+        _log_episode(store, result, cost_usd)
         print(
             f"[supervisor] promoted — {baseline:.6f}s → {after:.6f}s"
             f" ({result['improvement_pct']}% faster)"

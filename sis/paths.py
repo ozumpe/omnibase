@@ -15,9 +15,7 @@ PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
 RUNTIME_DIR = PROJECT_ROOT / "runtime"
 TARGET_PATH = RUNTIME_DIR / "target.py"            # the live target module
 TARGET_BACKUP_PATH = RUNTIME_DIR / "target.py.bak"  # backup taken before promotion
-LOG_PATH = RUNTIME_DIR / "episodic_log.jsonl"      # legacy micro-loop log (sis/memory.py)
-
-# First-class episodic store (sis/episodic.py) — backend chosen by SIS_EPISODIC_STORE.
+# Episodic store (sis/episodic.py) — backend chosen by SIS_EPISODIC_STORE.
 EPISODIC_JSONL = RUNTIME_DIR / "episodic.jsonl"
 EPISODIC_DUCKDB = RUNTIME_DIR / "episodic.duckdb"
 
