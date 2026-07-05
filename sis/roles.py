@@ -22,11 +22,8 @@ from sis import gauntlet, policy, proposer
 from sis.paths import TARGET_PATH
 from sis.ports import IssueStatus, IssueType
 from sis.self_model import get_self_model
+from sis.settings import space_keys
 from sis.workspace import get_workspace
-
-PROPOSAL_SPACE = "PROPOSALS"  # intake space for non-technical users
-SPEC_SPACE = "SPECS"
-
 
 # --------------------------------------------------------------------------
 # Shared helpers
@@ -173,7 +170,7 @@ class CEO(Role):
         if self._charter_id is not None:
             return self._charter_id
         page = ray.get(self._ws.create_page.remote(
-            "CHARTER", "Project Charter", text, None, ["charter"]))
+            space_keys()["charter"], "Project Charter", text, None, ["charter"]))
         ray.get(self._sm.record.remote("charter", page.id))
         self._charter_id = str(page.id)
         return self._charter_id
@@ -189,7 +186,7 @@ class Designer(Role):
     def outline(self, spec_page_id: str) -> str:
         spec = ray.get(self._ws.get_page.remote(spec_page_id))
         page = ray.get(self._ws.create_page.remote(
-            SPEC_SPACE, f"Outline — {spec.title}",
+            space_keys()["spec"], f"Outline — {spec.title}",
             "High-level outline and UX notes derived from the spec.",
             spec_page_id, ["outline"]))
         return str(page.id)
@@ -214,7 +211,7 @@ class PM(Role):
             "- Change beats the current baseline\n"
         )
         spec = ray.get(self._ws.create_page.remote(
-            SPEC_SPACE, f"Spec — {proposal.title}", body, proposal_page_id, ["spec"]))
+            space_keys()["spec"], f"Spec — {proposal.title}", body, proposal_page_id, ["spec"]))
         ray.get(self._sm.record.remote("spec", spec.id, source_proposal=proposal_page_id))
         ray.get(self._ws.emit.remote("spec.authored", spec_id=spec.id))
         return str(spec.id)
