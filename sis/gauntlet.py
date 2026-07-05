@@ -31,6 +31,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import uuid
 from dataclasses import dataclass, field
 
 from sis.paths import TARGET_PATH, TARGET_TEST_PATH
@@ -80,20 +81,28 @@ DEFAULT_SANDBOX_IMAGE = "sis-gauntlet:latest"
 _PY = "PYTHON"
 
 
-def _docker_args(tmpdir: str, env: dict[str, str], image: str) -> list[str]:
+def _docker_args(tmpdir: str, env: dict[str, str], image: str, name: str) -> list[str]:
     """Build the ``docker run`` wrapper: no network, no caps, only tmpdir mounted.
 
     Kernel-enforced: ``--network none`` (no egress), ``--cap-drop ALL`` +
     ``--security-opt no-new-privileges``, ``--read-only`` rootfs, and only the
     temp dir bind-mounted. No host credentials or filesystem are visible.
+
+    ``--name`` lets the timeout handler kill the container by name (SIGKILL to
+    the ``docker run`` client does not stop the container). ``--memory`` /
+    ``--cpus`` bound a runaway candidate's resource use (override via
+    ``SIS_SANDBOX_MEMORY`` / ``SIS_SANDBOX_CPUS``).
     """
     args = [
         "docker", "run", "--rm",
+        "--name", name,
         "--network", "none",
         "--cap-drop", "ALL",
         "--security-opt", "no-new-privileges",
         "--read-only",
         "--pids-limit", "256",
+        "--memory", os.getenv("SIS_SANDBOX_MEMORY", "1g"),
+        "--cpus", os.getenv("SIS_SANDBOX_CPUS", "2"),
         "-v", f"{tmpdir}:{tmpdir}:rw",
         "-w", tmpdir,
     ]
@@ -104,9 +113,30 @@ def _docker_args(tmpdir: str, env: dict[str, str], image: str) -> list[str]:
     return args
 
 
+def _docker_kill(name: str) -> None:
+    """Best-effort stop of a container after a timeout.
+
+    ``subprocess.run(timeout=)`` SIGKILLs the ``docker run`` *client*, but the
+    container keeps running detached — so an infinite-loop candidate would burn
+    host CPU forever despite the gate reporting a timeout. Killing it by name
+    stops it (``--rm`` then removes it). Swallows errors: if the container
+    already exited or was never created, there is nothing to clean up.
+    """
+    try:
+        subprocess.run(["docker", "kill", name], capture_output=True, timeout=10)
+    except (subprocess.SubprocessError, OSError):
+        pass
+
+
 def _timeout_seconds() -> float:
     """Wall-clock cap per gate — contains infinite loops in generated code."""
     return float(os.getenv("SIS_GAUNTLET_TIMEOUT", "120"))
+
+
+def _timeout_result(cmd: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
+    return subprocess.CompletedProcess(
+        cmd, 124, "", f"gauntlet sandbox timed out after {timeout:g}s"
+    )
 
 
 def _run(inner: list[str], tmpdir: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
@@ -118,20 +148,23 @@ def _run(inner: list[str], tmpdir: str, env: dict[str, str]) -> subprocess.Compl
     """
     timeout = _timeout_seconds()
     mode = os.getenv("SIS_SANDBOX", "subprocess")
-    try:
-        if mode == "docker":
-            image = os.getenv("SIS_SANDBOX_IMAGE", DEFAULT_SANDBOX_IMAGE)
-            cmd = _docker_args(tmpdir, env, image) + ["python", *inner[1:]]
+    if mode == "docker":
+        image = os.getenv("SIS_SANDBOX_IMAGE", DEFAULT_SANDBOX_IMAGE)
+        name = f"sis-gauntlet-{uuid.uuid4().hex[:12]}"
+        cmd = _docker_args(tmpdir, env, image, name) + ["python", *inner[1:]]
+        try:
             # docker isolates env/cwd itself; don't leak the host's.
             return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        cmd = [sys.executable, *inner[1:]]
+        except subprocess.TimeoutExpired:
+            _docker_kill(name)  # SIGKILL hit the client, not the container
+            return _timeout_result(cmd, timeout)
+    cmd = [sys.executable, *inner[1:]]
+    try:
         return subprocess.run(
             cmd, capture_output=True, text=True, timeout=timeout, cwd=tmpdir, env=env
         )
     except subprocess.TimeoutExpired:
-        return subprocess.CompletedProcess(
-            cmd, 124, "", f"gauntlet sandbox timed out after {timeout:g}s"
-        )
+        return _timeout_result(cmd, timeout)
 
 
 @dataclass

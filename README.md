@@ -52,7 +52,8 @@ credentials, or extra installs. Set these to opt into more.
 | `SIS_PROPOSER` | `stub` | `stub` = offline hand-written candidate. `claude` = real Claude API (needs `poetry install --with llm` + `ANTHROPIC_API_KEY`). |
 | `SIS_SANDBOX` | `subprocess` | Gauntlet isolation. `subprocess` = scrubbed env + in-process egress block. `docker` = kernel-enforced (`--network none`, no creds; needs the image, see below). |
 | `SIS_SANDBOX_IMAGE` | `sis-gauntlet:latest` | Image used when `SIS_SANDBOX=docker`. |
-| `SIS_GAUNTLET_TIMEOUT` | `120` | Per-gate wall-clock cap (seconds) — kills infinite loops. |
+| `SIS_SANDBOX_MEMORY` / `SIS_SANDBOX_CPUS` | `1g` / `2` | Per-container resource caps in `docker` mode. |
+| `SIS_GAUNTLET_TIMEOUT` | `120` | Per-gate wall-clock cap (seconds) — kills infinite loops (and, in docker mode, the container). |
 | `SIS_TARGET_PATHS` | `runtime/target.py` | Comma-separated SOFT-tier paths the loop may optimise. Guardrail code can never be added. |
 | `SIS_ALLOW_STRICT_CHANGES` | `0` | `1` lets the loop propose changes to non-guardrail engine code — still requires approval + justification + checks. |
 | `SIS_EPISODIC_STORE` | `jsonl` | Provenance/episodic backend: `jsonl` (zero-dep), `duckdb` (SQL analytics; `poetry install --with analytics`), or `none`. |

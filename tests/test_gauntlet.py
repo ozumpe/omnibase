@@ -96,12 +96,15 @@ def test_docker_args_are_locked_down() -> None:
     from sis.gauntlet import _docker_args
 
     args = _docker_args("/tmp/sandbox123", {"PYTHONPATH": "/tmp/sandbox123",
-                                            "PATH": "/usr/bin"}, "sis-gauntlet:latest")
+                                            "PATH": "/usr/bin"}, "sis-gauntlet:latest",
+                        "sis-gauntlet-abc123")
     joined = " ".join(args)
     assert "--network none" in joined            # no egress
     assert "--cap-drop ALL" in joined            # no capabilities
     assert "no-new-privileges" in joined
     assert "--read-only" in joined               # immutable rootfs
+    assert "--name sis-gauntlet-abc123" in joined   # killable by name on timeout
+    assert "--memory" in joined and "--cpus" in joined  # bounded resources
     assert "-v /tmp/sandbox123:/tmp/sandbox123:rw" in joined  # only the temp dir
     assert args[-1] == "sis-gauntlet:latest"
     # PATH is left to the image; PYTHONPATH is forwarded for sitecustomize.
@@ -114,8 +117,39 @@ def test_docker_args_forward_no_host_credentials() -> None:
 
     # Only the scrubbed env keys are forwarded — a stray token must not appear.
     env = {"PYTHONPATH": "/t", "HOME": "/t"}  # what _sandbox_env produces
-    joined = " ".join(_docker_args("/t", env, "img"))
+    joined = " ".join(_docker_args("/t", env, "img", "sis-gauntlet-x"))
     assert "TOKEN" not in joined and "SECRET" not in joined and "KEY" not in joined
+
+
+def test_docker_timeout_kills_the_container(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # M1 regression: a SIGKILL to `docker run` leaves the container running, so
+    # on timeout the gauntlet must `docker kill` it by name — otherwise an
+    # infinite-loop candidate burns host CPU forever. Mocked: no real daemon.
+    import subprocess
+
+    from sis import gauntlet
+
+    monkeypatch.setenv("SIS_SANDBOX", "docker")
+    monkeypatch.setenv("SIS_GAUNTLET_TIMEOUT", "1")
+
+    calls: list[list[str]] = []
+
+    def fake_run(
+        cmd: list[str], *args: object, **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(cmd)
+        if cmd[:2] == ["docker", "run"]:
+            raise subprocess.TimeoutExpired(cmd, 1)  # candidate never terminates
+        return subprocess.CompletedProcess(cmd, 0, "", "")  # the docker kill
+
+    monkeypatch.setattr(gauntlet.subprocess, "run", fake_run)
+
+    result = gauntlet._run([gauntlet._PY, "-c", "pass"], "/tmp/x", {"PYTHONPATH": "/tmp/x"})
+
+    assert result.returncode == 124 and "timed out" in result.stderr
+    run_cmd = next(c for c in calls if c[:2] == ["docker", "run"])
+    name = run_cmd[run_cmd.index("--name") + 1]
+    assert ["docker", "kill", name] in calls  # the leaked container was stopped
 
 
 def test_network_egress_is_blocked() -> None:
