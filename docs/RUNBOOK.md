@@ -33,8 +33,7 @@ poetry run python main.py
 ```
 
 Expect: `cycle status: verified_awaiting_human_merge`, a before/after benchmark,
-the provenance graph, and the actor registry. The original single-actor
-micro-loop is `poetry run python main.py --loop`.
+the provenance graph, and the actor registry.
 
 **Verify the project health:**
 ```bash

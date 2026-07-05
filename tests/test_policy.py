@@ -21,7 +21,7 @@ def test_target_is_soft() -> None:
 
 
 def test_other_engine_code_is_strict() -> None:
-    for path in ("sis/roles.py", "sis/org.py", "sis/worker.py", "main.py"):
+    for path in ("sis/roles.py", "sis/org.py", "sis/proposer.py", "main.py"):
         assert classify(path) is ChangeTier.STRICT, path
 
 
