@@ -44,7 +44,7 @@ all of it, mapped to where you'll see it.
 
 | Concept | What it means | Where in the code |
 |---|---|---|
-| `@ray.remote` on a class | Makes it an **actor** — each instance runs in its own worker process | `sis/worker.py`, `sis/roles.py`, `sis/self_model.py`, `sis/workspace.py` |
+| `@ray.remote` on a class | Makes it an **actor** — each instance runs in its own worker process | `sis/roles.py`, `sis/self_model.py`, `sis/workspace.py` |
 | `Actor.remote(...)` | Construct an actor instance (returns a **handle**, not the object) | `org.bootstrap()` |
 | `handle.method.remote(args)` | Call a method **asynchronously** — returns an `ObjectRef` (a future), doesn't block | everywhere a role does work |
 | `ray.get(ref)` | **Block** and fetch the actual return value from an `ObjectRef` | everywhere we need the result |
@@ -96,9 +96,8 @@ This codebase is a tour of current Python on purpose — you said you're learnin
   magic strings.
 - **Context managers** (`with tempfile.TemporaryDirectory()`) — guaranteed
   cleanup; the gauntlet builds a throwaway sandbox dir and it's removed on exit.
-- **`importlib.util`** (`sis/worker.py`, `sis/gauntlet.py`) — load a Python file
-  *by path* at runtime. That's how the worker hot-reloads the target and how the
-  gauntlet executes a candidate it just wrote to disk.
+- **`importlib.util`** (`sis/gauntlet.py`) — load a Python file *by path* at
+  runtime. That's how the gauntlet executes a candidate it just wrote to disk.
 - **`subprocess`** (`sis/gauntlet.py`) — run each gate in a child process so a
   bad candidate can't corrupt or hang the main process.
 - **Lazy imports** (`import anthropic` *inside* a function) — optional
@@ -117,14 +116,14 @@ Read in this order — each builds on the last:
    this closely; it's the heart of the safety story (§5).
 3. **`sis/proposer.py`** — `propose(...) -> code`. Stub by default; real Claude
    behind a flag. Small.
-4. **`sis/worker.py`** — your first Ray actor. Benchmarks the target.
-5. **`sis/ports.py` + `sis/adapters.py`** — the ports/adapters pattern (§6).
-6. **`sis/workspace.py` + `sis/self_model.py`** — the shared, named actors.
-7. **`sis/roles.py`** — the seven role actors. Each is small and focused.
-8. **`sis/org.py`** — wires it together and runs one cycle. The conductor.
-9. **`sis/episodic.py`** — the provenance/episodic store (§7b): what every cycle
+4. **`sis/ports.py` + `sis/adapters.py`** — the ports/adapters pattern (§6).
+5. **`sis/workspace.py` + `sis/self_model.py`** — your first Ray actors: the
+   shared, named substrate every role reads and writes through.
+6. **`sis/roles.py`** — the seven role actors. Each is small and focused.
+7. **`sis/org.py`** — wires it together and runs one cycle. The conductor.
+8. **`sis/episodic.py`** — the provenance/episodic store (§7b): what every cycle
    tried and why it was accepted or rejected.
-10. **`main.py`** — the entry point.
+9. **`main.py`** — the entry point.
 
 Also worth a look: **`sis/policy.py`** (§7a, what the loop may change) and
 **`sis/cost.py`** (LLM pricing feeding the CEO's spend brakes).
@@ -219,6 +218,13 @@ Two things to notice:
   step 6 (human review) enforced structurally.
 - **Provenance is recorded at every step** in `SelfModel` (spec → epic → story →
   branch → pr → canary → outcome). The returned dict includes the full graph.
+- **Failure is wired to an artifact, not just a log line.** If `SWE.implement`
+  fails the gauntlet, or QA rejects, `run_cycle` calls `DevOps.file_bug` with the
+  story + reason. Three consecutive failures trip `CEO.report_outcome`'s circuit
+  breaker, which files a second, distinct `CIRCUIT BREAKER OPEN` bug — the
+  "page a human" from `ACTORS.md` made concrete rather than left as dead code.
+  `org.bootstrap()` also has the CEO call `set_charter` once, so provenance
+  roots at a goal instead of starting cold at the first spec.
 
 `CEO` holds three brakes (`sis/roles.py`): a hard spend cap, a consecutive-failure
 breaker, and a cost-per-accepted-improvement SLO. The brake decision is a *pure

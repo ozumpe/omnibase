@@ -272,8 +272,24 @@ class GitHubVersionControl:
 
     def get_pr(self, pr_id: str) -> PullRequest:
         data = _json(self._http.get(self._api(f"/pulls/{pr_id}")))
-        return PullRequest(id=str(data["number"]), branch=str(data["head"]["ref"]),
-                           title=str(data["title"]), merged=bool(data.get("merged", False)))
+        head_ref = str(data["head"]["ref"])
+        # GitHub's PR API doesn't carry file contents, but QA re-validates the
+        # candidate from pr.artifact — so fetch the proposed target at the head
+        # ref and populate it (mirrors what open_pr() wrote via _put_file).
+        return PullRequest(
+            id=str(data["number"]), branch=head_ref, title=str(data["title"]),
+            artifact=self._get_file(head_ref, TARGET_REPO_PATH),
+            merged=bool(data.get("merged", False)),
+        )
+
+    def _get_file(self, ref: str, path: str) -> str:
+        """Fetch and decode a file's content at *ref* ("" if absent)."""
+        resp = self._http.get(self._api(f"/contents/{path}"), params={"ref": ref})
+        if resp.status_code != 200:
+            return ""
+        content = str(resp.json().get("content", ""))
+        # GitHub base64-encodes with embedded newlines; b64decode ignores them.
+        return base64.b64decode(content).decode("utf-8") if content else ""
 
     def merge_pr(self, pr_id: str) -> PullRequest:
         raise RequiresHumanApproval(

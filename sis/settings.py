@@ -49,6 +49,7 @@ class AtlassianSettings:
     cloud_id: str | None = None
     spec_space: str = "SD"
     proposal_space: str = "PROPOSALS"
+    charter_space: str = "SD"  # top-level charter (CEO.set_charter) lives here
     jira_project: str = "SD"  # Jira project key for created epics/stories
 
     def __repr__(self) -> str:
@@ -189,6 +190,7 @@ def _build_settings(env: str, adapters: str, raw: dict[str, Any]) -> Settings:
             cloud_id=_opt_str(flat.get("atlassian_cloud_id")),
             spec_space=str(flat.get("atlassian_spec_space", "SD")),
             proposal_space=str(flat.get("atlassian_proposal_space", "PROPOSALS")),
+            charter_space=str(flat.get("atlassian_charter_space", "SD")),
             jira_project=str(flat.get("atlassian_jira_project", "SD")),
         )
 
@@ -236,6 +238,35 @@ def load_settings(source: SecretSource | None = None) -> Settings:
     except FileNotFoundError:
         raw = {}
     return _build_settings(env, adapters, raw)
+
+
+# Confluence space keys the org writes to when no Atlassian integration is
+# configured (the in-memory path). Real runs use the AtlassianSettings values,
+# so the space keys are configuration — not constants baked into the roles.
+DEFAULT_SPACES: dict[str, str] = {
+    "proposal": "PROPOSALS",
+    "spec": "SPECS",
+    "charter": "CHARTER",
+}
+
+
+def space_keys(settings: Settings | None = None) -> dict[str, str]:
+    """Confluence space keys the org writes to: proposal / spec / charter.
+
+    Sourced from :class:`AtlassianSettings` so a real tenant's spaces are
+    configurable, not hardcoded. Falls back to :data:`DEFAULT_SPACES` when no
+    Atlassian integration is configured (e.g. the default in-memory run), which
+    keeps the local path credential-free and unchanged.
+    """
+    resolved = settings if settings is not None else load_settings()
+    atl = resolved.atlassian
+    if atl is None:
+        return dict(DEFAULT_SPACES)
+    return {
+        "proposal": atl.proposal_space,
+        "spec": atl.spec_space,
+        "charter": atl.charter_space,
+    }
 
 
 def settings_summary(settings: Settings) -> dict[str, Any]:

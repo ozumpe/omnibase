@@ -48,8 +48,8 @@ Enable the client-side guard once per clone (blocks accidental direct pushes to
 git config core.hooksPath hooks
 ```
 
-(Server-side branch protection on `develop`/`main` is the authoritative gate —
-enabled when the repo is public or on GitHub Pro.)
+(Server-side rulesets on `develop`/`main` are the authoritative gate — active now
+via GitHub Pro; the client-side hook above is belt-and-suspenders.)
 
 ## The checks (all must pass before a PR)
 

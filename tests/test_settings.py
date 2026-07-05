@@ -5,12 +5,14 @@ import json
 import pytest
 
 from sis.settings import (
+    DEFAULT_SPACES,
     AtlassianSettings,
     EnvSecretSource,
     FileSecretSource,
     _build_settings,
     load_settings,
     settings_summary,
+    space_keys,
 )
 
 
@@ -69,3 +71,22 @@ def test_missing_integration_raises_clearly() -> None:
     settings = _build_settings("local", "memory", {})
     with pytest.raises(RuntimeError, match="Atlassian settings missing"):
         settings.require_atlassian()
+
+
+def test_space_keys_fall_back_to_defaults_without_atlassian() -> None:
+    # H1: the in-memory path (no Atlassian config) must keep its own space keys,
+    # so the local run stays credential-free and unchanged.
+    settings = _build_settings("local", "memory", {})
+    assert settings.atlassian is None
+    assert space_keys(settings) == DEFAULT_SPACES
+
+
+def test_space_keys_come_from_atlassian_settings_when_configured() -> None:
+    # H1 regression: the roles must write to the *configured* spaces, not the
+    # hardcoded "PROPOSALS"/"SPECS"/"CHARTER" constants that crash a real tenant.
+    settings = _build_settings("local", "real", {
+        "atlassian_base_url": "https://x", "atlassian_api_token": "t",
+        "atlassian_proposal_space": "INTAKE", "atlassian_spec_space": "DESIGN",
+        "atlassian_charter_space": "GOV",
+    })
+    assert space_keys(settings) == {"proposal": "INTAKE", "spec": "DESIGN", "charter": "GOV"}

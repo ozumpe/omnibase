@@ -25,8 +25,9 @@ import ray
 
 from sis import episodic
 from sis.proposer import MODEL
-from sis.roles import CEO, CTO, PM, PROPOSAL_SPACE, QA, SWE, Designer, DevOps
+from sis.roles import CEO, CTO, PM, QA, SWE, Designer, DevOps
 from sis.self_model import get_self_model
+from sis.settings import space_keys
 from sis.workspace import get_workspace
 
 CHARTER_TEXT = (
@@ -107,7 +108,7 @@ def run_cycle(
 
     # 2. Intake: a non-technical user drops a proposal into the proposal space.
     proposal = ray.get(ws.create_page.remote(
-        PROPOSAL_SPACE, proposal_title, proposal_body, None, ["proposal"]))
+        space_keys()["proposal"], proposal_title, proposal_body, None, ["proposal"]))
 
     # 3. Spec & design (PM + Designer).
     spec_id = ray.get(pm.refine_proposal.remote(proposal.id))

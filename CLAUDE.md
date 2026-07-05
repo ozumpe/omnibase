@@ -71,8 +71,9 @@ internal target before it models anything external.
   fine (0 required approvals).
 - **Never push to `develop`/`main` directly.** Client-side guard: `git config
   core.hooksPath hooks` enables `hooks/pre-push`, which blocks it (emergency override:
-  `git push --no-verify`). Authoritative server-side branch protection is pending a
-  GitHub Pro upgrade — apply rulesets to both branches once Pro is active.
+  `git push --no-verify`). Server-side rulesets are also active on both branches
+  (GitHub Pro; ruleset ids `17153780` main, `17153781` develop) — the client hook
+  is belt-and-suspenders, not the sole enforcement.
 - CI (`.github/workflows/ci.yml`): `ruff` + `mypy --strict` + `pytest` on push/PR to
   `main` and `develop`. The required status-check context is `test`.
 - After ANY `pyproject.toml` change, run `poetry lock` — CI fails on a stale lock file.
@@ -85,7 +86,7 @@ internal target before it models anything external.
 - Small reviewable PRs. Provenance: prompt → commit → PR → ticket → outcome.
 
 ## Operational quick reference
-- Run a cycle: `poetry run python main.py` (in-memory, no creds). Old micro-loop: `--loop`.
+- Run a cycle: `poetry run python main.py` (in-memory, no creds).
 - Gates: `poetry run pytest` · `poetry run mypy --strict sis/ main.py scripts/` · `poetry run ruff check .`
 - Optional deps: `poetry install --with llm` (anthropic) · `--with real`
   (requests/boto3/pyyaml) · `--with analytics` (duckdb).
@@ -102,7 +103,8 @@ internal target before it models anything external.
   Codebase Guide, Guardrails & Operations, Milestone Roadmap, Risks & Next Steps.
 
 ## Current status — where to pick up
-The bootstrap skeleton (original "first task") is **done**, plus much more:
+Released through **v0.1.3**. The bootstrap skeleton (original "first task") is
+**done**, plus much more:
 - Actor org + SelfModel + Workspace; one intake→deploy cycle runs locally and stops at
   the human PR merge.
 - Gauntlet hardened: differential-correctness anti-gaming, per-gate timeout, subprocess
@@ -112,12 +114,15 @@ The bootstrap skeleton (original "first task") is **done**, plus much more:
   brakes, change-authorization policy.
 - Episodic/provenance store (`sis/episodic.py`) behind a port: `jsonl` default +
   optional `duckdb` SQL analytics + `none`; every cycle outcome recorded.
-- ~68 tests; `ruff`/`mypy --strict`/`pytest` clean; CI green; the
-  `feature → develop → main` flow is live with server-side branch protection.
+- Failures become artifacts: every rolled-back/rejected cycle, and every circuit-breaker
+  trip, files a bug via `DevOps.file_bug` — outcomes aren't log-only.
+- The CEO writes the top-level charter once at bootstrap (`CEO.set_charter`);
+  provenance roots at it (`charter → spec → epic → story → outcome`).
+- 75 tests; `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop → main`
+  enforced by both the client-side pre-push hook and active server-side rulesets.
 
 **Next (needs the user's environment):**
-1. Upgrade to GitHub Pro → apply branch-protection rulesets to `develop` + `main`.
-2. One real cycle on a scratch Jira project + throwaway repo (`SIS_ADAPTERS=real`) to
+1. One real cycle on a scratch Jira project + throwaway repo (`SIS_ADAPTERS=real`) to
    validate the real adapters against a live tenant — they are untested there.
-3. A small AWS run (one node, a few cycles); watch the provenance graph and the bill.
-4. Ray Serve weighted canary + atomic actor swap (currently a placeholder).
+2. A small AWS run (one node, a few cycles); watch the provenance graph and the bill.
+3. Ray Serve weighted canary + atomic actor swap (currently a placeholder).

@@ -240,8 +240,7 @@ def event_from_cycle_result(
     """Build an EpisodicEvent from an ``org.run_cycle`` result dict."""
     status = str(result.get("status", "unknown"))
     base = result.get("baseline_latency")
-    # "candidate_latency" (org cycle) or "new_latency" (micro-loop) — same thing.
-    cand = result.get("candidate_latency", result.get("new_latency"))
+    cand = result.get("candidate_latency")
     improvement = (
         round((1 - cand / base) * 100, 1)
         if isinstance(base, int | float) and isinstance(cand, int | float) and base

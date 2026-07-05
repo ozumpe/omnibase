@@ -51,7 +51,7 @@ pyyaml = "^6.0"         # secrets.local.yml parsing
 optional = true
 
 [tool.poetry.group.llm.dependencies]
-anthropic = "^0.69"     # Claude API client for the real proposer
+anthropic = ">=0.69,<1.0"   # Claude API client for the real proposer; ^0.x pins one patch release
 
 # Episodic-store analytics backend (DuckDB). Optional: the default jsonl store
 # needs nothing. Install with: poetry install --with analytics

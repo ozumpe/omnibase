@@ -33,8 +33,7 @@ poetry run python main.py
 ```
 
 Expect: `cycle status: verified_awaiting_human_merge`, a before/after benchmark,
-the provenance graph, and the actor registry. The original single-actor
-micro-loop is `poetry run python main.py --loop`.
+the provenance graph, and the actor registry.
 
 **Verify the project health:**
 ```bash
@@ -97,6 +96,15 @@ What it does, end to end: drops a proposal page in Confluence → PM writes a sp
 a feature branch → QA verifies → DevOps records a green-slot canary. It **stops
 at the human PR merge** — it never merges to `main` or promotes to live.
 
+**On failure:** a gauntlet rollback or a QA rejection files a bug in the work
+tracker automatically (`DevOps.file_bug`) — check there first, not just the
+episodic log. Three consecutive failures trip the circuit breaker: it files a
+second, distinctly-titled `CIRCUIT BREAKER OPEN` bug and every further cycle
+returns `circuit_breaker_open` without spending anything. The breaker's state
+lives in the CEO actor's memory, not on disk — a fresh `poetry run python
+main.py` (a fresh local Ray cluster) clears it, unless you're connected to a
+persistent one via `RAY_ADDRESS`.
+
 ---
 
 ## Level 3 — kernel-enforced sandbox (optional hardening)
@@ -144,7 +152,8 @@ SIS_AWS_SECRET_ID=sis/prod/credentials` (region via `SIS_AWS_REGION`).
 | `SIS_PROPOSER` | `stub` | `claude` = real Claude API (needs `--with llm` + key) |
 | `SIS_SANDBOX` | `subprocess` | `docker` = kernel-enforced (needs the image) |
 | `SIS_SANDBOX_IMAGE` | `sis-gauntlet:latest` | image for docker mode |
-| `SIS_GAUNTLET_TIMEOUT` | `120` | per-gate wall-clock cap (seconds) |
+| `SIS_SANDBOX_MEMORY` / `SIS_SANDBOX_CPUS` | `1g` / `2` | per-container resource caps (docker mode) |
+| `SIS_GAUNTLET_TIMEOUT` | `120` | per-gate wall-clock cap (seconds); docker mode also kills the container |
 | `SIS_ADAPTERS` | `memory` | `real` = Confluence/Jira/GitHub/AWS (needs `--with real` + secrets) |
 | `SIS_ENV` | `local` | `aws` = secrets from AWS Secrets Manager |
 | `SIS_SECRETS_FILE` | `secrets.local.yml` | override local secrets path |
