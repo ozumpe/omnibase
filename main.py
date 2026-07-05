@@ -1,8 +1,7 @@
 """main.py — bootstrap the actor org and run one intake→deploy cycle.
 
 Usage:
-    poetry run python main.py          # run the full org cycle (default)
-    poetry run python main.py --loop   # run the original self-improvement micro-loop
+    poetry run python main.py
 
 The org cycle exercises the whole hierarchy on a simulated intake: a
 non-technical user drops a proposal into Confluence → PM writes a spec →
@@ -13,10 +12,6 @@ intentionally left pending.
 """
 
 from __future__ import annotations
-
-import pprint
-import sys
-from typing import cast
 
 import ray
 
@@ -54,26 +49,8 @@ def run_org_cycle() -> None:
               f" parent={info['parent']}")
 
 
-def run_micro_loop() -> None:
-    """The original single-actor self-improvement loop (Milestone 0/1)."""
-    from sis.supervisor import SupervisorActor
-
-    ray.init(ignore_reinit_error=True)
-    try:
-        supervisor = ray.get_actor("CTO-loop")
-    except ValueError:
-        supervisor = SupervisorActor.options(  # type: ignore[attr-defined]
-            name="CTO-loop", lifetime="detached"
-        ).remote()
-    result = cast("dict[str, object]", ray.get(supervisor.run_cycle.remote()))
-    pprint.pprint(result)
-
-
 def main() -> None:
-    if "--loop" in sys.argv:
-        run_micro_loop()
-    else:
-        run_org_cycle()
+    run_org_cycle()
 
 
 if __name__ == "__main__":

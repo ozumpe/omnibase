@@ -28,7 +28,6 @@ GitHub), with a SelfModel digital twin tracking the running system.
 poetry install
 poetry run python main.py          # run one full org cycle (in-memory, no creds)
 poetry run pytest                  # run the test suite
-poetry run python main.py --loop   # run the original single-actor micro-loop
 ```
 
 `python main.py` simulates an intake proposal and drives it all the way to a
@@ -192,7 +191,6 @@ sis/                     # the engine package (immutable code)
   policy.py              # change-authorization tiers (FORBIDDEN/STRICT/SOFT)
   cost.py                # LLM cost accounting for the CEO spend brakes
   episodic.py            # provenance/episodic store (jsonl | duckdb | none)
-  worker.py supervisor.py   # the original Milestone-0/1 micro-loop
 runtime/                 # runtime-mutable state (kept apart from the engine)
   target.py              # the live target (naive baseline, committed)
   candidates/            # proposer's hand-written variant

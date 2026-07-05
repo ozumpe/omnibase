@@ -86,7 +86,7 @@ internal target before it models anything external.
 - Small reviewable PRs. Provenance: prompt → commit → PR → ticket → outcome.
 
 ## Operational quick reference
-- Run a cycle: `poetry run python main.py` (in-memory, no creds). Old micro-loop: `--loop`.
+- Run a cycle: `poetry run python main.py` (in-memory, no creds).
 - Gates: `poetry run pytest` · `poetry run mypy --strict sis/ main.py scripts/` · `poetry run ruff check .`
 - Optional deps: `poetry install --with llm` (anthropic) · `--with real`
   (requests/boto3/pyyaml) · `--with analytics` (duckdb).
