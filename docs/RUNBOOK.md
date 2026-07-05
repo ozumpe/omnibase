@@ -153,7 +153,8 @@ SIS_AWS_SECRET_ID=sis/prod/credentials` (region via `SIS_AWS_REGION`).
 | `SIS_PROPOSER` | `stub` | `claude` = real Claude API (needs `--with llm` + key) |
 | `SIS_SANDBOX` | `subprocess` | `docker` = kernel-enforced (needs the image) |
 | `SIS_SANDBOX_IMAGE` | `sis-gauntlet:latest` | image for docker mode |
-| `SIS_GAUNTLET_TIMEOUT` | `120` | per-gate wall-clock cap (seconds) |
+| `SIS_SANDBOX_MEMORY` / `SIS_SANDBOX_CPUS` | `1g` / `2` | per-container resource caps (docker mode) |
+| `SIS_GAUNTLET_TIMEOUT` | `120` | per-gate wall-clock cap (seconds); docker mode also kills the container |
 | `SIS_ADAPTERS` | `memory` | `real` = Confluence/Jira/GitHub/AWS (needs `--with real` + secrets) |
 | `SIS_ENV` | `local` | `aws` = secrets from AWS Secrets Manager |
 | `SIS_SECRETS_FILE` | `secrets.local.yml` | override local secrets path |
