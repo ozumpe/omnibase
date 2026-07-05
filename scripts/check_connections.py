@@ -26,7 +26,7 @@ import sys
 # Allow running as a plain script: put the repo root (parent of scripts/) on the path.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-from sis.settings import Settings, load_settings, settings_summary  # noqa: E402
+from sis.settings import Settings, load_settings, settings_summary, space_keys  # noqa: E402
 
 OK = "✓"      # ✓
 FAIL = "✗"    # ✗
@@ -38,22 +38,33 @@ def _line(mark: str, name: str, detail: str) -> None:
 
 
 def check_confluence(settings: Settings) -> bool | None:
-    """List the spec space (GET /wiki/api/v2/spaces?keys=KEY). Read-only."""
+    """Verify every space the org writes to exists (GET /wiki/api/v2/spaces). Read-only.
+
+    The roles create pages in the proposal, spec, and charter spaces; a missing
+    one crashes the first real cycle (ConfluenceDocumentStore raises on an
+    unknown space), so all of them are checked here — not just the spec space.
+    """
     if settings.atlassian is None:
         _line(SKIP, "Confluence", "not configured")
         return None
     s = settings.atlassian
+    keys = sorted(set(space_keys(settings).values()))
     try:
         from sis.adapters_real import _session
 
         http = _session(s.email, s.api_token)
-        resp = http.get(f"{s.base_url}/wiki/api/v2/spaces", params={"keys": s.spec_space})
-        resp.raise_for_status()
-        results = resp.json().get("results", [])
-        if not results:
-            _line(FAIL, "Confluence", f"reachable, but space {s.spec_space!r} not found")
+        missing: list[str] = []
+        for key in keys:
+            resp = http.get(f"{s.base_url}/wiki/api/v2/spaces", params={"keys": key})
+            resp.raise_for_status()
+            if not resp.json().get("results", []):
+                missing.append(key)
+        if missing:
+            _line(FAIL, "Confluence",
+                  f"spaces not found: {', '.join(missing)} "
+                  "(create them, or set atlassian_{proposal,spec,charter}_space)")
             return False
-        _line(OK, "Confluence", f"space {s.spec_space!r} → id {results[0]['id']}")
+        _line(OK, "Confluence", f"all org spaces present: {', '.join(keys)}")
         return True
     except Exception as exc:  # noqa: BLE001 - report any failure, don't crash the check
         _line(FAIL, "Confluence", _summarise(exc))
