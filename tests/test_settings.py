@@ -1,6 +1,7 @@
 """Tests for the secrets/config layer (no network, no Ray)."""
 
 import json
+import pathlib
 
 import pytest
 
@@ -79,6 +80,22 @@ def test_space_keys_fall_back_to_defaults_without_atlassian() -> None:
     settings = _build_settings("local", "memory", {})
     assert settings.atlassian is None
     assert space_keys(settings) == DEFAULT_SPACES
+
+
+def test_shipped_example_template_leaves_aws_unconfigured_for_local_runs() -> None:
+    # Regression: secrets.example.yml shipped `secret_id: sis/prod/credentials`.
+    # check_connections.py skips AWS only when
+    #   env != "aws" and (aws is None or not aws.secret_id)
+    # so that non-empty placeholder made a plain `cp`-ed template attempt a real
+    # STS call — every first-time Level 2 preflight reported a spurious AWS
+    # failure (ModuleNotFoundError: boto3) for a service Level 2 never uses.
+    example = pathlib.Path(__file__).resolve().parent.parent / "secrets.example.yml"
+    settings = load_settings(FileSecretSource(example))
+    assert settings.env != "aws"
+    assert not (settings.aws and settings.aws.secret_id), (
+        "secrets.example.yml must ship an empty aws.secret_id, otherwise copying "
+        "the template falsely marks AWS as configured for local runs"
+    )
 
 
 def test_space_keys_come_from_atlassian_settings_when_configured() -> None:

@@ -70,7 +70,18 @@ Required:
    cp secrets.example.yml secrets.local.yml
    ```
    Fill in: `atlassian.base_url`, `.email`, `.api_token`, `.cloud_id`,
-   `.jira_project`; `github.token` (PAT, Contents: read/write), `.owner`, `.repo`.
+   `.jira_project`; `github.token`, `.owner`, `.repo`.
+
+   The GitHub PAT should be **fine-grained, scoped to the single target repo**,
+   with **Contents: read/write** (branch + file writes) *and* **Pull requests:
+   read/write** (`open_pr`/`get_pr`). Contents alone is not enough — opening the
+   PR will 403. `merge_pr` always raises `RequiresHumanApproval`, so the token
+   can never merge regardless of its scopes.
+
+   The target repo must be **non-empty**: `create_branch` resolves its base SHA
+   via `GET /git/ref/heads/<default_base>`, which 404s on a freshly-created repo
+   with no commits. Seed it with an initial commit first. (`runtime/target.py`
+   does *not* need to pre-exist — the adapter creates it.)
 2. Install the real adapters and switch them on:
    ```bash
    poetry install --with real
