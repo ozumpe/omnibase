@@ -195,7 +195,7 @@ runtime/                 # runtime-mutable state (kept apart from the engine)
   target.py              # the live target (naive baseline, committed)
   candidates/            # proposer's hand-written variant
   episodic.jsonl         # episodic store (gitignored; or episodic.duckdb)
-tests/                   # pytest suite (75 tests)
+tests/                   # pytest suite (86 tests)
 scripts/check_connections.py   # read-only credential/connectivity preflight
 main.py                  # entry point
 secrets.example.yml      # secrets template (copy to secrets.local.yml)
@@ -284,7 +284,7 @@ No code changes — only environment.
 ## Development
 
 ```bash
-poetry run pytest            # 75 tests (adapters, settings, gauntlet, org cycle + failures, adversarial corpus, …)
+poetry run pytest            # 86 tests (adapters, settings, gauntlet, org cycle + failures, adversarial corpus, …)
 poetry run mypy --strict sis/ main.py scripts/
 poetry run ruff check .
 ```
@@ -301,7 +301,7 @@ found becomes a permanent regression test (the suite is the moat).
 | 0 | Bootstrap skeleton (supervisor+worker, gauntlet, episodic log) | ✅ |
 | 1 | Stub proposer end-to-end | ✅ |
 | – | Actor org + ports/adapters + SelfModel | ✅ |
-| – | Real Confluence/Jira/GitHub adapters + secrets layer | ✅ (needs live validation) |
+| – | Real Confluence/Jira/GitHub adapters + secrets layer | ✅ |
 | 2 | Real Claude proposer (`SIS_PROPOSER=claude`) | ✅ |
 | 3 | Harden the gauntlet: sandboxed run (gate 5) | ✅ subprocess + docker |
 | – | Cost cap + cost-per-accepted SLO (CEO brakes) | ✅ |
@@ -310,7 +310,9 @@ found becomes a permanent regression test (the suite is the moat).
 | – | Kernel-enforced docker sandbox + per-gate timeout | ✅ |
 | – | Adversarial regression corpus (wrong/gaming/hanging diffs rejected) | ✅ |
 | – | `--deep` Jira workflow checker | ✅ |
-| – | Live-tenant adapter validation (real scratch cycle) | needs creds |
+| – | Live-tenant adapter validation (real scratch cycles, incl. re-runs) | ✅ |
+| – | Cycles build on the merged target (`live_target_source`) | ✅ |
+| – | Benchmark noise gate (identical-source short-circuit / latency floor) | planned |
 | 4 | Ray Serve weighted canary + atomic actor swap | planned |
 | 7 | Model an external slice of the real world | vision |
 

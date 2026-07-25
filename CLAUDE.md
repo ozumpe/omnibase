@@ -103,7 +103,7 @@ internal target before it models anything external.
   Codebase Guide, Guardrails & Operations, Milestone Roadmap, Risks & Next Steps.
 
 ## Current status — where to pick up
-Released through **v0.1.3**. The bootstrap skeleton (original "first task") is
+Released through **v0.1.4**. The bootstrap skeleton (original "first task") is
 **done**, plus much more:
 - Actor org + SelfModel + Workspace; one intake→deploy cycle runs locally and stops at
   the human PR merge.
@@ -118,11 +118,19 @@ Released through **v0.1.3**. The bootstrap skeleton (original "first task") is
   trip, files a bug via `DevOps.file_bug` — outcomes aren't log-only.
 - The CEO writes the top-level charter once at bootstrap (`CEO.set_charter`);
   provenance roots at it (`charter → spec → epic → story → outcome`).
-- 75 tests; `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop → main`
+- **Level 2 validated (2026-07-25): real cycles ran end-to-end against a live tenant**
+  (scratch Jira project `TES` + throwaway repo `ozumpe/testrun`), including re-runs.
+  Live-tenant fixes, each with a regression test: Confluence duplicate-title 400 →
+  `create_page` updates the existing page in place; cross-space parent 404 → parent
+  dropped (provenance lives in the SelfModel); cycles start from the target as merged
+  on the base branch (`VersionControl.live_target_source`) instead of the stale local
+  file, so a merged optimisation is built upon, not re-proposed.
+- 86 tests; `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop → main`
   enforced by both the client-side pre-push hook and active server-side rulesets.
 
 **Next (needs the user's environment):**
-1. One real cycle on a scratch Jira project + throwaway repo (`SIS_ADAPTERS=real`) to
-   validate the real adapters against a live tenant — they are untested there.
+1. Benchmark noise gate: with the merged-target baseline, a byte-identical re-proposed
+   candidate can "win" on microsecond timing jitter (≥10% of ~2µs is noise). Add an
+   identical-source short-circuit or an absolute latency floor to the benchmark gate.
 2. A small AWS run (one node, a few cycles); watch the provenance graph and the bill.
 3. Ray Serve weighted canary + atomic actor swap (currently a placeholder).

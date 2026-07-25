@@ -182,7 +182,12 @@ This is the pattern that lets the whole org run locally with zero credentials
   `VersionControl`, `Cloud`, `Telemetry` — the *capabilities* the org needs.
 - **`adapters.py`** implements them in memory (the default — an artifact bus
   that needs nothing external).
-- **`adapters_real.py`** implements the same Protocols against real REST APIs.
+- **`adapters_real.py`** implements the same Protocols against real REST APIs
+  (validated live at runbook Level 2). Two live-tenant behaviours worth knowing:
+  `create_page` is idempotent across runs (Confluence rejects duplicate titles
+  per space, so it updates the existing page in place) and drops a cross-space
+  `parentId` rather than fail (Confluence can't represent it; provenance is in
+  the SelfModel).
 - **`workspace.py`** picks which set to use based on config (`SIS_ADAPTERS`).
 
 Because a `Protocol` is satisfied structurally, the roles just call
@@ -204,6 +209,10 @@ PM.refine_proposal(proposal)         # → a spec page (Confluence)
 Designer.outline(spec)               # → a design outline
 CTO.plan(spec)                       # → a Jira epic + stories
 SWE.implement(story)                 # → propose() + gauntlet.validate()
+  │                                  #   source = live_target_source() (the target
+  │                                  #   as merged on the base branch), falling
+  │                                  #   back to the local runtime/target.py —
+  │                                  #   so cycles build on merged improvements
   │                                  #   on pass: branch + commit + PR
   └─ (records cost from the proposer)
 QA.review(story, pr)                 # → re-runs the gauntlet, verifies

@@ -5,10 +5,10 @@ Each level lists exactly what's required and the commands. Start at Level 0 and
 climb only as far as you need.
 
 > TL;DR: **Level 0 needs nothing** (`poetry install && poetry run python main.py`).
-> The first *real* run is **Level 2** (your Confluence/Jira/GitHub), and its only
-> real unknown is that the live adapters are untested against a real tenant.
-> Running it as a continuous **autonomous server (Level 4)** is still
-> development work, not just configuration.
+> The first *real* run is **Level 2** (your Confluence/Jira/GitHub) — validated
+> end-to-end against a live tenant, including re-runs. Running it as a continuous
+> **autonomous server (Level 4)** is still development work, not just
+> configuration.
 
 ---
 
@@ -96,16 +96,29 @@ Required:
    the likeliest first-run failure.
 4. Run a cycle: `poetry run python main.py`
 
-⚠️ **The genuine unknown:** the real REST adapters in `sis/adapters_real.py` have
-**not** been exercised against a live tenant. Do the first run against a
-**scratch Jira project + throwaway repo**, and expect to fix edge cases
-(transition names, Confluence storage-body quirks, GitHub Contents API). Each fix
-should become a regression test.
+The real REST adapters in `sis/adapters_real.py` **have been validated against a
+live tenant** (scratch Jira project + throwaway repo), including repeated runs.
+Still use a **scratch project and throwaway repo** — the cycle creates real pages,
+issues, branches, and PRs. Live-tenant edge cases found so far are handled and
+covered by regression tests:
+- **Re-runs are idempotent for fixed-title pages.** Confluence enforces unique
+  titles per space; on the duplicate-title 400, `create_page` finds the existing
+  page and updates it in place (the charter/spec pages keep their IDs across runs).
+- **Cross-space parents are dropped.** Confluence can't parent a page across
+  spaces (spec page ← proposal page); the adapter retries without the parent and
+  emits `page.parent_dropped` (provenance stays in the SelfModel).
 
 What it does, end to end: drops a proposal page in Confluence → PM writes a spec
 → CTO creates a Jira epic/story → SWE opens a **PR** with the validated change on
 a feature branch → QA verifies → DevOps records a green-slot canary. It **stops
 at the human PR merge** — it never merges to `main` or promotes to live.
+
+**After you merge the cycle's PR**, the next cycle pulls the target as merged on
+the base branch (`live_target_source`) and measures its baseline from that — it
+builds on the improvement instead of re-proposing it. Known limitation: the stub
+proposer then re-proposes byte-identical code, and at microsecond latencies the
+≥10% benchmark margin can be cleared by timing jitter, so a no-op change may
+still open a PR. A noise gate (identical-source short-circuit) is on the roadmap.
 
 **On failure:** a gauntlet rollback or a QA rejection files a bug in the work
 tracker automatically (`DevOps.file_bug`) — check there first, not just the
