@@ -128,9 +128,17 @@ Released through **v0.1.4**. The bootstrap skeleton (original "first task") is
 - 86 tests; `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop → main`
   enforced by both the client-side pre-push hook and active server-side rulesets.
 
-**Next (needs the user's environment):**
-1. Benchmark noise gate: with the merged-target baseline, a byte-identical re-proposed
-   candidate can "win" on microsecond timing jitter (≥10% of ~2µs is noise). Add an
-   identical-source short-circuit or an absolute latency floor to the benchmark gate.
-2. A small AWS run (one node, a few cycles); watch the provenance graph and the bill.
-3. Ray Serve weighted canary + atomic actor swap (currently a placeholder).
+**Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L
+severity) from the 2026-07-25 full review — reference the IDs in commits/PRs.
+
+**Next (sequencing detail in `docs/KNOWN_ISSUES.md`):**
+1. Fix **H1** — `gauntlet.validate()` baselines against the stale local
+   `runtime/target.py` instead of the cycle's merged source, so post-merge cycles
+   ship no-op PRs (this, not timing jitter, is why PR #3 passed). Plus **M3**
+   (identical-source short-circuit), **M4** (hardcoded branch base), and the
+   **M1** guard (require the docker sandbox with a real proposer).
+2. First real-life test: `SIS_ADAPTERS=real SIS_PROPOSER=claude SIS_SANDBOX=docker`
+   on the scratch tenant, tiny CEO budget, verify `cost.py` pricing (L3) first.
+3. A small AWS run (one node, a few cycles); fix **M2** (anonymous Ray namespace)
+   first; watch the provenance graph and the bill.
+4. Ray Serve weighted canary + atomic actor swap (currently a placeholder).

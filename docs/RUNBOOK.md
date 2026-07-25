@@ -60,6 +60,12 @@ poetry run python main.py
 Model is `claude-opus-4-8` (adaptive thinking, cached system prompt). Default
 without the flag stays the offline stub.
 
+⚠️ With a real LLM writing the code, prefer the **docker sandbox** (Level 3):
+the default `subprocess` sandbox scrubs credentials from the env and blocks
+egress, but candidate code can still *read* host files like
+`secrets.local.yml` (M1 in `docs/KNOWN_ISSUES.md`). Docker mounts only the
+temp dir, so there is nothing to read.
+
 ---
 
 ## Level 2 — real Confluence / Jira / GitHub (first *real* run)
@@ -114,11 +120,13 @@ a feature branch → QA verifies → DevOps records a green-slot canary. It **st
 at the human PR merge** — it never merges to `main` or promotes to live.
 
 **After you merge the cycle's PR**, the next cycle pulls the target as merged on
-the base branch (`live_target_source`) and measures its baseline from that — it
-builds on the improvement instead of re-proposing it. Known limitation: the stub
-proposer then re-proposes byte-identical code, and at microsecond latencies the
-≥10% benchmark margin can be cleared by timing jitter, so a no-op change may
-still open a PR. A noise gate (identical-source short-circuit) is on the roadmap.
+the base branch (`live_target_source`) and shows *that* to the proposer — it
+builds on the improvement instead of starting from scratch. ⚠️ **Known bug
+(H1, `docs/KNOWN_ISSUES.md`):** the gauntlet's internal benchmark still
+baselines against the *local* `runtime/target.py`, so after a merge a
+byte-identical candidate "beats" the stale file and a no-op PR passes every
+gate. Until H1 (+ the M3 identical-source short-circuit) is fixed, expect
+post-merge cycles to open PRs that change nothing — don't merge them.
 
 **On failure:** a gauntlet rollback or a QA rejection files a bug in the work
 tracker automatically (`DevOps.file_bug`) — check there first, not just the
