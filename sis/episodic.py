@@ -251,7 +251,7 @@ def event_from_cycle_result(
     reason = result.get("reason")
     gauntlet_passed = (
         True if status in ACCEPTED_OUTCOMES
-        else False if status == "rolled_back"
+        else False if status in ("rolled_back", "no_change")
         else None
     )
     return EpisodicEvent(

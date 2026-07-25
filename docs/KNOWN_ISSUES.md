@@ -105,3 +105,10 @@ any long-lived cluster exists.
   `no change` (episodic `reject_gate="noop"`), before the µs-scale benchmark
   race. Local in-memory demo still promotes; the H1/M3 behaviour is covered by
   new regression tests in `tests/test_gauntlet.py`.
+- **"No change" was treated as a failure** *(2026-07-25)* Once M3 lands, a
+  cycle against an already-optimal target ended in `rolled_back` — filing a bug
+  and counting toward the circuit breaker, so three "nothing to improve" cycles
+  falsely paged a human. Fixed: `run_cycle` returns a benign `no_change` status
+  (no bug, no breaker increment); the CEO's new `record_neutral` records spend
+  (so the hard spend cap + cost-per-accepted SLO still apply) but leaves the
+  failure/accept counters untouched. Covered by `tests/test_org_no_change.py`.
