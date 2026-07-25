@@ -127,20 +127,30 @@ Released through **v0.1.4**. The bootstrap skeleton (original "first task") is
   dropped (provenance lives in the SelfModel); cycles start from the target as merged
   on the base branch (`VersionControl.live_target_source`) instead of the stale local
   file, so a merged optimisation is built upon, not re-proposed.
-- 86 tests; `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop → main`
+- **Post-Level-2 hardening (on `develop`): the full-review High/Medium list is closed.**
+  H1 — `gauntlet.validate()` now benchmarks against the cycle's baseline source, not
+  the stale local file, so a post-merge no-op can't pass every gate. A candidate
+  identical to the baseline is rejected as a benign `no_change` outcome — no bug filed,
+  no breaker increment (the CEO's `record_neutral` still records spend). A real
+  (non-stub) proposer now REQUIRES `SIS_SANDBOX=docker` (M1), the SWE forks from the
+  configured base branch (M4), and the `cost.py` pricing table is verified against
+  published rates (L3).
+- 99 tests; `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop → main`
   enforced by both the client-side pre-push hook and active server-side rulesets.
 
 **Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L
 severity) from the 2026-07-25 full review — reference the IDs in commits/PRs.
+High + Medium are all closed; only Low items and **M2** (deferred to the AWS
+step) remain.
 
 **Next (sequencing detail in `docs/KNOWN_ISSUES.md`):**
-1. Fix **H1** — `gauntlet.validate()` baselines against the stale local
-   `runtime/target.py` instead of the cycle's merged source, so post-merge cycles
-   ship no-op PRs (this, not timing jitter, is why PR #3 passed). Plus **M3**
-   (identical-source short-circuit), **M4** (hardcoded branch base), and the
-   **M1** guard (require the docker sandbox with a real proposer).
-2. First real-life test: `SIS_ADAPTERS=real SIS_PROPOSER=claude SIS_SANDBOX=docker`
-   on the scratch tenant, tiny CEO budget, verify `cost.py` pricing (L3) first.
-3. A small AWS run (one node, a few cycles); fix **M2** (anonymous Ray namespace)
+1. First real-life test (unblocked): build the sandbox image
+   (`docker build -t sis-gauntlet:latest -f Dockerfile.gauntlet .`), set a tiny CEO
+   budget, then run `SIS_ADAPTERS=real SIS_PROPOSER=claude SIS_SANDBOX=docker` after a
+   `--deep` preflight; compare the episodic log against the Anthropic bill. Note: the
+   `testrun` target is already optimal, so a real Claude cycle there ends benignly as
+   `no_change` — seed a fresh throwaway repo with the naive `runtime/target.py` to demo
+   a *successful* cycle.
+2. A small AWS run (one node, a few cycles); fix **M2** (anonymous Ray namespace)
    first; watch the provenance graph and the bill.
-4. Ray Serve weighted canary + atomic actor swap (currently a placeholder).
+3. Ray Serve weighted canary + atomic actor swap (currently a placeholder).

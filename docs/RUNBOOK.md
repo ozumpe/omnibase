@@ -132,17 +132,19 @@ a feature branch → QA verifies → DevOps records a green-slot canary. It **st
 at the human PR merge** — it never merges to `main` or promotes to live.
 
 **After you merge the cycle's PR**, the next cycle pulls the target as merged on
-the base branch (`live_target_source`) and shows *that* to the proposer — it
-builds on the improvement instead of starting from scratch. ⚠️ **Known bug
-(H1, `docs/KNOWN_ISSUES.md`):** the gauntlet's internal benchmark still
-baselines against the *local* `runtime/target.py`, so after a merge a
-byte-identical candidate "beats" the stale file and a no-op PR passes every
-gate. Until H1 (+ the M3 identical-source short-circuit) is fixed, expect
-post-merge cycles to open PRs that change nothing — don't merge them.
+the base branch (`live_target_source`), and the gauntlet benchmarks the
+candidate against *that* — not the stale local file (this was H1, now fixed).
+Once the target is already optimal, the stub re-proposes identical code and the
+cycle ends benignly as **`no_change`** — no PR, no bug ticket, no circuit-breaker
+increment. So a stub run against an already-optimised target is a clean no-op,
+and to demo a *successful* cycle you need a target with real headroom (a fresh
+repo seeded with the naive `runtime/target.py`).
 
-**On failure:** a gauntlet rollback or a QA rejection files a bug in the work
-tracker automatically (`DevOps.file_bug`) — check there first, not just the
-episodic log. Three consecutive failures trip the circuit breaker: it files a
+**On failure:** a gauntlet rollback (wrong/slower/untyped candidate) or a QA
+rejection files a bug in the work tracker automatically (`DevOps.file_bug`) —
+check there first, not just the episodic log. (A `no_change` outcome is *not* a
+failure: it files no bug and doesn't count toward the breaker.) Three
+consecutive real failures trip the circuit breaker: it files a
 second, distinctly-titled `CIRCUIT BREAKER OPEN` bug and every further cycle
 returns `circuit_breaker_open` without spending anything. The breaker's state
 lives in the CEO actor's memory, not on disk — a fresh `poetry run python
