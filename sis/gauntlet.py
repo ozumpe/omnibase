@@ -175,19 +175,29 @@ class Result:
     errors: list[str] = field(default_factory=list)
 
 
-def validate(code_str: str, baseline_latency: float) -> Result:
+def validate(
+    code_str: str, baseline_latency: float, *, baseline_source: str | None = None
+) -> Result:
     """Validate *code_str* and return a Result.
 
     The candidate must:
     1. Parse as valid Python.
-    2. Pass mypy --strict.
-    3. Pass the target test suite.
-    4a. Agree with an independent reference on randomised inputs (anti-gaming).
-    4b. Beat the freshly-measured baseline by ``IMPROVEMENT_MARGIN``.
+    2. Not be identical to the baseline (a no-op is not an improvement).
+    3. Pass mypy --strict.
+    4. Pass the target test suite.
+    5a. Agree with an independent reference on randomised inputs (anti-gaming).
+    5b. Beat the freshly-measured baseline by ``IMPROVEMENT_MARGIN``.
 
-    *baseline_latency* is advisory only (kept for logging/compat); the
-    pass/fail comparison uses a baseline measured in-sandbox over the same
-    workload as the candidate, which is far less noisy.
+    *baseline_source* is the code the candidate must beat — the code the cycle
+    is actually based on (the merged target), which the loop passes in. It is
+    written into the sandbox and benchmarked against; the candidate never
+    competes with a stale copy on disk (see docs/KNOWN_ISSUES.md H1). When
+    omitted, it falls back to the local ``runtime/target.py`` so direct callers
+    and tests still work.
+
+    *baseline_latency* is advisory only (kept for logging/compat); the pass/fail
+    comparison uses a baseline measured in-sandbox over the same workload as the
+    candidate, which is far less noisy.
     """
     if os.getenv("SIS_SANDBOX") == "docker" and shutil.which("docker") is None:
         raise RuntimeError(
@@ -196,11 +206,26 @@ def validate(code_str: str, baseline_latency: float) -> Result:
             "Dockerfile.gauntlet .), or unset SIS_SANDBOX for the subprocess sandbox."
         )
 
+    # The code the candidate must beat: what the caller says the cycle is based
+    # on (the merged target), NOT whatever happens to be on disk. Fall back to
+    # the local target only when no source is supplied. See KNOWN_ISSUES.md H1.
+    baseline_code = (
+        baseline_source if baseline_source is not None
+        else TARGET_PATH.read_text(encoding="utf-8")
+    )
+
     # --- Gate 1: syntax ---
     try:
         ast.parse(code_str)
     except SyntaxError as exc:
         return Result(passed=False, reason=f"SyntaxError: {exc}")
+
+    # --- Gate 2: no-op — a candidate identical to the baseline can never be an
+    # improvement, so reject it before the benchmark. Without this, an identical
+    # re-proposal (e.g. the stub after its own optimisation has merged) would
+    # race the ≥10% margin on µs-scale timing noise. See KNOWN_ISSUES.md M3.
+    if code_str.strip() == baseline_code.strip():
+        return Result(passed=False, reason="no change: candidate is identical to the baseline")
 
     # Everything lives under the temp dir so the sandbox is self-contained
     # (in docker mode only this dir is mounted — nothing reaches the host).
@@ -209,10 +234,10 @@ def validate(code_str: str, baseline_latency: float) -> Result:
         candidate = tmp / "target.py"
         candidate.write_text(code_str, encoding="utf-8")
 
-        # The current live target, copied in as the baseline to benchmark
-        # against — loaded from the mount, never from an external host path.
+        # The baseline the candidate must beat, copied into the sandbox — loaded
+        # from the mount, never from an external host path.
         baseline_mod = tmp / "baseline.py"
-        baseline_mod.write_text(TARGET_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+        baseline_mod.write_text(baseline_code, encoding="utf-8")
 
         # --- Gate 5 (sandbox): network-egress block + scrubbed env ---
         # sitecustomize.py runs at interpreter startup in every gate that has
