@@ -292,6 +292,9 @@ poetry run ruff check .
 `mypy --strict` and `pytest` are both CI gates *and* gauntlet gates. Every bug
 found becomes a permanent regression test (the suite is the moat).
 
+Open bugs and limitations are tracked with stable IDs in
+[`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md) — check it before starting work.
+
 ---
 
 ## Roadmap
@@ -312,7 +315,7 @@ found becomes a permanent regression test (the suite is the moat).
 | – | `--deep` Jira workflow checker | ✅ |
 | – | Live-tenant adapter validation (real scratch cycles, incl. re-runs) | ✅ |
 | – | Cycles build on the merged target (`live_target_source`) | ✅ |
-| – | Benchmark noise gate (identical-source short-circuit / latency floor) | planned |
+| – | Fix the benchmark baseline (H1) + no-op short-circuit (M3) — see `docs/KNOWN_ISSUES.md` | planned |
 | 4 | Ray Serve weighted canary + atomic actor swap | planned |
 | 7 | Model an external slice of the real world | vision |
 
