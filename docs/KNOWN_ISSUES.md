@@ -18,13 +18,6 @@ issue is fixed, move it to the "Resolved" section at the bottom with the PR.
 
 ## Medium
 
-- **M1 — Subprocess sandbox permits host filesystem reads.** Under
-  `SIS_SANDBOX=subprocess`, candidate code can read any host path
-  (`secrets.local.yml`, `~/.aws`, `~/.ssh`); the env scrub and egress block
-  limit exfiltration but don't prevent the read, and UDP (`socket.sendto`)
-  isn't blocked by the monkeypatch. Docker mode closes all of this (only the
-  temp dir mounted, kernel-enforced no-network). **Fix:** require (or loudly
-  warn on) `SIS_SANDBOX=docker` whenever `SIS_PROPOSER=claude`.
 - **M2 — Detached actors live in an anonymous Ray namespace.** Harmless
   locally (the cluster dies with the process), but on a persistent cluster
   each run creates a new namespace: `ray.get_actor` finds nothing, so
@@ -75,7 +68,9 @@ sandbox** on the scratch tenant — the first run where untrusted generated code
 and real money meet.
 
 1. ~~Fix **H1** (+ **M3**) with regression tests.~~ **Done** — see Resolved.
-2. Enforce **M1** (docker sandbox with a real proposer); rebuild the image.
+2. ~~Enforce **M1** (docker sandbox with a real proposer).~~ **Done** — see
+   Resolved. Still: build the image once (`docker build -t sis-gauntlet:latest
+   -f Dockerfile.gauntlet .`) before the first real run.
 3. Fix **M4** (one-liner).
 4. Verify **L3** and set a deliberately tiny CEO budget for the first run to
    watch the brakes trip rather than trusting them.
@@ -112,3 +107,10 @@ any long-lived cluster exists.
   (no bug, no breaker increment); the CEO's new `record_neutral` records spend
   (so the hard spend cap + cost-per-accepted SLO still apply) but leaves the
   failure/accept counters untouched. Covered by `tests/test_org_no_change.py`.
+- **M1** *(2026-07-25)* Subprocess sandbox let untrusted LLM code read host
+  files. Fixed: `gauntlet.ensure_sandbox_allows_proposer()` raises when a
+  non-stub `SIS_PROPOSER` runs without `SIS_SANDBOX=docker` — enforced fail-fast
+  in `run_cycle` (before any spend/artifacts) and as a backstop in `validate()`.
+  Loud, explicit override `SIS_ALLOW_UNSANDBOXED_LLM=1`. The stub (trusted,
+  hand-written candidate) still runs in the subprocess sandbox. Covered by
+  `tests/test_gauntlet.py`.

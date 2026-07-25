@@ -23,7 +23,7 @@ from typing import Any
 
 import ray
 
-from sis import episodic
+from sis import episodic, gauntlet
 from sis.proposer import MODEL
 from sis.roles import CEO, CTO, PM, QA, SWE, Designer, DevOps
 from sis.self_model import get_self_model
@@ -80,6 +80,11 @@ def run_cycle(
     estimate_usd: float = 0.5,
 ) -> dict[str, Any]:
     """Run one full intake→spec→epic→story→implement→review→canary cycle."""
+    # Fail fast, before any spend or artifacts: an untrusted (non-stub) proposer
+    # requires the kernel-enforced docker sandbox so its code can't read host
+    # credentials (KNOWN_ISSUES.md M1). validate() re-checks as a backstop.
+    gauntlet.ensure_sandbox_allows_proposer()
+
     ws = handles["Workspace"]
     sm = handles["SelfModel"]
     ceo, pm, cto, designer, swe, qa, devops = (

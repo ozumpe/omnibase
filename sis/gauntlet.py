@@ -175,6 +175,40 @@ class Result:
     errors: list[str] = field(default_factory=list)
 
 
+def ensure_sandbox_allows_proposer() -> None:
+    """Refuse to run an untrusted proposer's code without kernel isolation.
+
+    The stub proposer returns a trusted, hand-written candidate, so the soft
+    ``subprocess`` sandbox is fine. A real LLM (``SIS_PROPOSER=claude``) writes
+    **untrusted** code: it must run in the ``docker`` sandbox, whose only mount
+    is the per-gate temp dir, so a malicious diff cannot read host credentials
+    (``secrets.local.yml``, ``~/.aws``, ...). The subprocess sandbox scrubs the
+    env and blocks egress, but the egress block is a monkeypatch untrusted code
+    could undo, and the host filesystem stays readable — see KNOWN_ISSUES.md M1.
+
+    Raises unless the sandbox is kernel-enforced. Explicit, loud override for
+    when you accept the risk: ``SIS_ALLOW_UNSANDBOXED_LLM=1``.
+    """
+    proposer = os.getenv("SIS_PROPOSER", "stub")
+    if proposer == "stub" or os.getenv("SIS_SANDBOX") == "docker":
+        return
+    if os.getenv("SIS_ALLOW_UNSANDBOXED_LLM") == "1":
+        print(
+            f"WARNING: SIS_PROPOSER={proposer!r} is running untrusted LLM code in the "
+            "soft subprocess sandbox (SIS_ALLOW_UNSANDBOXED_LLM=1). It can read host "
+            "files such as secrets.local.yml. Use SIS_SANDBOX=docker for any real run.",
+            file=sys.stderr,
+        )
+        return
+    raise RuntimeError(
+        f"SIS_PROPOSER={proposer!r} writes untrusted code, which must run in the "
+        "kernel-enforced docker sandbox so it cannot read host credentials. Set "
+        "SIS_SANDBOX=docker (build it once: docker build -t sis-gauntlet:latest -f "
+        "Dockerfile.gauntlet .), or set SIS_ALLOW_UNSANDBOXED_LLM=1 to accept the "
+        "risk (not recommended)."
+    )
+
+
 def validate(
     code_str: str, baseline_latency: float, *, baseline_source: str | None = None
 ) -> Result:
@@ -199,6 +233,9 @@ def validate(
     comparison uses a baseline measured in-sandbox over the same workload as the
     candidate, which is far less noisy.
     """
+    # Backstop: never execute untrusted proposer code in a soft sandbox (M1).
+    ensure_sandbox_allows_proposer()
+
     if os.getenv("SIS_SANDBOX") == "docker" and shutil.which("docker") is None:
         raise RuntimeError(
             "SIS_SANDBOX=docker but the docker CLI was not found. Install Docker "
