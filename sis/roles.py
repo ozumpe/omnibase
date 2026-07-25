@@ -127,7 +127,23 @@ class CEO(Role):
             self._accepted += 1
         else:
             self._consecutive_failures += 1
+        return self._evaluate_brakes()
 
+    def record_neutral(self, *, cost_usd: float = 0.0) -> str | None:
+        """Record a neutral cycle — the loop found nothing to improve (a no-op).
+
+        Not a failure (no regression) and not an acceptance (nothing shipped),
+        so the failure and accept counters are left untouched — a no-op must
+        never trip the consecutive-failure breaker. Spend is still recorded, so
+        the hard spend cap and the cost-per-accepted SLO still apply: many
+        paid-for no-op cycles that accept nothing are exactly what the SLO
+        catches. Returns the brake reason on a fresh trip, else None.
+        """
+        self._spent += cost_usd
+        return self._evaluate_brakes()
+
+    def _evaluate_brakes(self) -> str | None:
+        """Evaluate all three brakes against current state; trip once."""
         reason = evaluate_brakes(
             spent=self._spent,
             budget=self._budget,
@@ -137,7 +153,6 @@ class CEO(Role):
             max_cost_per_accepted=self._max_cost_per_accepted,
             slo_min_spend=self._slo_min_spend,
         )
-
         if reason and not self._tripped:
             self._tripped = True
             ray.get(self._ws.emit.remote("breaker.tripped", reason=reason,

@@ -121,6 +121,25 @@ def run_cycle(
     # 5. Implement (SWE → validated change on a feature branch + PR).
     impl = ray.get(swe.implement.remote(story_id))
     cost_usd = float(impl.get("cost_usd", 0.0))
+
+    # A "no change" outcome — the candidate is identical to the current baseline
+    # — is not a failure: the loop correctly found nothing to improve. Record
+    # the spend, but don't file a bug or count it against the circuit breaker
+    # (three "nothing to do" cycles must not page a human). See KNOWN_ISSUES M3.
+    if not impl["passed"] and episodic.gate_from_reason(impl.get("reason")) == "noop":
+        trip = ray.get(ceo.record_neutral.remote(cost_usd=cost_usd))
+        breaker_bug_id = (
+            ray.get(devops.file_bug.remote(
+                f"CIRCUIT BREAKER OPEN — human attention required: {trip}"))
+            if trip else None
+        )
+        return _record({"status": "no_change", "reason": impl["reason"],
+                        "spec_id": spec_id, "story_id": story_id,
+                        "candidate_sha": impl.get("candidate_sha"),
+                        "breaker_bug_id": breaker_bug_id,
+                        "economics": ray.get(ceo.economics.remote()),
+                        "provenance": ray.get(sm.provenance.remote())}, cost_usd)
+
     if not impl["passed"]:
         trip = ray.get(ceo.report_outcome.remote(success=False, cost_usd=cost_usd))
         # Failures become artifacts (ACTORS.md: DevOps files bug/defect Jiras).
