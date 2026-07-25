@@ -14,6 +14,7 @@ from sis.settings import (
     load_settings,
     settings_summary,
     space_keys,
+    version_control_base,
 )
 
 
@@ -107,3 +108,21 @@ def test_space_keys_come_from_atlassian_settings_when_configured() -> None:
         "atlassian_charter_space": "GOV",
     })
     assert space_keys(settings) == {"proposal": "INTAKE", "spec": "DESIGN", "charter": "GOV"}
+
+
+def test_version_control_base_falls_back_to_main_without_github() -> None:
+    # In-memory path (no GitHub config) forks from "main", unchanged.
+    settings = _build_settings("local", "memory", {})
+    assert settings.github is None
+    assert version_control_base(settings) == "main"
+
+
+def test_version_control_base_comes_from_github_settings() -> None:
+    # M4 regression: the loop must fork feature branches from the configured
+    # default base — the same branch live_target_source reads the merged target
+    # from — not a hardcoded "main".
+    settings = _build_settings("local", "real", {
+        "github_token": "t", "github_owner": "o", "github_repo": "r",
+        "github_default_base": "develop",
+    })
+    assert version_control_base(settings) == "develop"

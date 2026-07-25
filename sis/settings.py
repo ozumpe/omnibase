@@ -269,6 +269,18 @@ def space_keys(settings: Settings | None = None) -> dict[str, str]:
     }
 
 
+def version_control_base(settings: Settings | None = None) -> str:
+    """The branch the loop forks feature branches from — GitHub's default base.
+
+    Sourced from :class:`GitHubSettings` so it stays consistent with what
+    ``VersionControl.live_target_source`` reads the merged target from. Falls
+    back to ``"main"`` when no GitHub integration is configured (the in-memory
+    path), which keeps the local run unchanged. See KNOWN_ISSUES.md M4.
+    """
+    resolved = settings if settings is not None else load_settings()
+    return resolved.github.default_base if resolved.github else "main"
+
+
 def settings_summary(settings: Settings) -> dict[str, Any]:
     """A safe, log-friendly view of which integrations are configured (no secrets)."""
     return {
