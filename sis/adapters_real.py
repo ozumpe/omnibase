@@ -104,10 +104,49 @@ class ConfluenceDocumentStore:
         }
         if parent_id:
             payload["parentId"] = parent_id
-        data = _json(self._http.post(self._api("/pages"), json=payload))
+        resp = self._http.post(self._api("/pages"), json=payload)
+        if resp.status_code == 404 and parent_id:
+            # Confluence cannot parent a page across spaces (e.g. a spec in the
+            # spec space under its proposal in the intake space) — it 404s on
+            # the parent. The provenance link lives in the SelfModel anyway, so
+            # drop the parent rather than fail the cycle.
+            payload.pop("parentId")
+            resp = self._http.post(self._api("/pages"), json=payload)
+            self._tel.emit("page.parent_dropped", space=space, title=title,
+                           parent_id=parent_id)
+        if resp.status_code == 400 and "already exists" in resp.text.lower():
+            # Confluence enforces unique titles per space, so a re-run against a
+            # live tenant 400s on every fixed-title page (charter, specs, …).
+            # Reuse the existing page and refresh its content instead.
+            page_id = self._page_id_by_title(space, title)
+            self._update_body(page_id, title, body)
+            self._tel.emit("page.updated", page_id=page_id, space=space, title=title)
+            return Page(id=page_id, space=space, title=title, body=body,
+                        labels=list(labels or []), parent_id=parent_id)
+        data = _json(resp)
         self._tel.emit("page.created", page_id=data["id"], space=space, title=title)
         return Page(id=str(data["id"]), space=space, title=title, body=body,
                     labels=list(labels or []), parent_id=parent_id)
+
+    def _page_id_by_title(self, space: str, title: str) -> str:
+        data = _json(self._http.get(
+            self._api(f"/spaces/{self._space_id(space)}/pages"),
+            params={"title": title}))
+        results = data.get("results", [])
+        if not results:
+            raise RuntimeError(f"Confluence page {title!r} not found in space {space!r}")
+        return str(results[0]["id"])
+
+    def _update_body(self, page_id: str, title: str, body: str) -> None:
+        current = _json(self._http.get(self._api(f"/pages/{page_id}")))
+        version = int(current.get("version", {}).get("number", 0))
+        _json(self._http.put(self._api(f"/pages/{page_id}"), json={
+            "id": page_id,
+            "status": "current",
+            "title": title,
+            "body": {"representation": "storage", "value": body},
+            "version": {"number": version + 1},
+        }))
 
     def get_page(self, page_id: str) -> Page:
         data = _json(self._http.get(self._api(f"/pages/{page_id}"),

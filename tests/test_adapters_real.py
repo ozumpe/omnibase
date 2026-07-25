@@ -9,15 +9,17 @@ import base64
 from typing import Any
 
 from sis.adapters import InMemoryTelemetry
-from sis.adapters_real import GitHubVersionControl, JiraWorkTracker
+from sis.adapters_real import ConfluenceDocumentStore, GitHubVersionControl, JiraWorkTracker
 from sis.ports import IssueStatus
 from sis.settings import AtlassianSettings, GitHubSettings
 
 
 class _Resp:
-    def __init__(self, payload: dict[str, Any], status_code: int = 200) -> None:
+    def __init__(self, payload: dict[str, Any], status_code: int = 200,
+                 text: str = "") -> None:
         self._payload = payload
         self.status_code = status_code
+        self.text = text
 
     def raise_for_status(self) -> None:
         return None
@@ -169,3 +171,89 @@ def test_live_target_source_empty_when_base_has_no_target() -> None:
     gh._http.get = _no_file  # type: ignore[method-assign]
     # No target on the base yet (first cycle) — empty, so the SWE uses the local file.
     assert gh.live_target_source() == ""
+
+
+class _FakeConfluence:
+    """Simulates a tenant where the page title is already taken (a re-run)."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, Any]] = []
+
+    def post(self, url: str, json: Any = None) -> _Resp:
+        self.calls.append(("POST", url, json))
+        return _Resp(
+            {"errors": [{"status": 400, "code": "BAD_REQUEST"}]}, status_code=400,
+            text="A page with this title already exists: A page already exists "
+                 "with the same TITLE in this space",
+        )
+
+    def get(self, url: str, params: Any = None) -> _Resp:
+        self.calls.append(("GET", url, params))
+        if url.endswith("/spaces"):
+            return _Resp({"results": [{"id": 999, "key": "TESTRUN"}]})
+        if url.endswith("/spaces/999/pages"):
+            return _Resp({"results": [{"id": 42, "title": "Project Charter"}]})
+        if url.endswith("/pages/42"):
+            return _Resp({"id": 42, "title": "Project Charter",
+                          "version": {"number": 3}})
+        return _Resp({}, status_code=404)
+
+    def put(self, url: str, json: Any = None) -> _Resp:
+        self.calls.append(("PUT", url, json))
+        return _Resp({"id": 42})
+
+
+def _docs() -> tuple[ConfluenceDocumentStore, _FakeConfluence]:
+    docs = object.__new__(ConfluenceDocumentStore)  # bypass __init__ (builds a session)
+    docs._s = AtlassianSettings(base_url="https://x.atlassian.net", email="a@b.c",
+                                api_token="tok", jira_project="SD")
+    docs._tel = InMemoryTelemetry()
+    docs._space_ids = {}
+    http = _FakeConfluence()
+    docs._http = http
+    return docs, http
+
+
+def test_create_page_reuses_existing_page_on_duplicate_title() -> None:
+    # Level-2 regression: Confluence enforces unique titles per space, so a
+    # second run against a live tenant 400s on every fixed-title page (the
+    # charter was the first casualty). create_page must fall back to updating
+    # the existing page instead of crashing the cycle.
+    docs, http = _docs()
+    page = docs.create_page("TESTRUN", "Project Charter", "new charter text",
+                            labels=["charter"])
+
+    assert page.id == "42"
+    assert page.body == "new charter text"
+
+    put_calls = [c for c in http.calls if c[0] == "PUT"]
+    assert len(put_calls) == 1
+    _, url, body = put_calls[0]
+    assert url.endswith("/pages/42")
+    assert body["version"] == {"number": 4}  # bumped past the live version 3
+    assert body["body"]["value"] == "new charter text"
+
+
+def test_create_page_drops_cross_space_parent_on_404() -> None:
+    # Level-2 regression: Confluence cannot parent a page across spaces (the
+    # spec page in the spec space pointed at its proposal in the intake space)
+    # and 404s on the create. The adapter must retry without the parent — the
+    # provenance link is tracked in the SelfModel, not the page tree.
+    docs, http = _docs()
+
+    def _post(url: str, json: Any = None) -> _Resp:
+        http.calls.append(("POST", url, dict(json)))  # snapshot: adapter mutates payload
+        if "parentId" in json:
+            return _Resp({"errors": [{"status": 404, "code": "NOT_FOUND"}]},
+                         status_code=404,
+                         text="Cannot find content with id [5406897] in space key [999]")
+        return _Resp({"id": 77})
+
+    http.post = _post  # type: ignore[method-assign]
+    page = docs.create_page("TESTRUN", "Spec — X", "spec body", parent_id="5406897")
+
+    assert page.id == "77"
+    post_calls = [c for c in http.calls if c[0] == "POST"]
+    assert len(post_calls) == 2
+    assert "parentId" in post_calls[0][2]
+    assert "parentId" not in post_calls[1][2]
