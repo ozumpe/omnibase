@@ -199,7 +199,7 @@ runtime/                 # runtime-mutable state (kept apart from the engine)
   target.py              # the live target (naive baseline, committed)
   candidates/            # proposer's hand-written variant
   episodic.jsonl         # episodic store (gitignored; or episodic.duckdb)
-tests/                   # pytest suite (86 tests)
+tests/                   # pytest suite (99 tests)
 scripts/check_connections.py   # read-only credential/connectivity preflight
 main.py                  # entry point
 secrets.example.yml      # secrets template (copy to secrets.local.yml)
@@ -288,7 +288,7 @@ No code changes — only environment.
 ## Development
 
 ```bash
-poetry run pytest            # 86 tests (adapters, settings, gauntlet, org cycle + failures, adversarial corpus, …)
+poetry run pytest            # 99 tests (adapters, settings, gauntlet, org cycle + failures, adversarial corpus, …)
 poetry run mypy --strict sis/ main.py scripts/
 poetry run ruff check .
 ```
@@ -319,7 +319,8 @@ Open bugs and limitations are tracked with stable IDs in
 | – | `--deep` Jira workflow checker | ✅ |
 | – | Live-tenant adapter validation (real scratch cycles, incl. re-runs) | ✅ |
 | – | Cycles build on the merged target (`live_target_source`) | ✅ |
-| – | Fix the benchmark baseline (H1) + no-op short-circuit (M3) — see `docs/KNOWN_ISSUES.md` | planned |
+| – | Post-review hardening: gauntlet baseline (H1), benign no-op outcome, docker required for a real proposer (M1), branch base (M4), pricing (L3) | ✅ |
+| – | First real-life run: real Claude + real adapters + docker sandbox | next |
 | 4 | Ray Serve weighted canary + atomic actor swap | planned |
 | 7 | Model an external slice of the real world | vision |
 
