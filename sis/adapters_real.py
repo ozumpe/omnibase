@@ -17,9 +17,10 @@ Secrets Manager in the cloud) — never hard-coded here.
 deps. The destructive/irreversible guardrails (no commits to main, no PR
 merge, no canary promotion without a human) are preserved.
 
-NOTE: these issue live API calls and have not been exercised against a real
-tenant in this repo's tests — validate against a scratch space/project/repo
-before pointing them at anything that matters.
+NOTE: these issue live API calls. They have been validated end-to-end against
+a live tenant (runbook Level 2, incl. re-runs), but still point them at a
+scratch space/project/repo before anything that matters — a cycle creates
+real pages, issues, branches, and PRs.
 """
 
 from __future__ import annotations
