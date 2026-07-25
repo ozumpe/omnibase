@@ -27,3 +27,11 @@ def test_cost_from_usage_duck_typed() -> None:
 
 def test_unknown_model_falls_back_to_opus() -> None:
     assert cost_usd(1_000_000, 0, model="not-a-model") == 5.0
+
+
+def test_pricing_table_matches_published_rates() -> None:
+    # L3: verified against published $/MTok on 2026-07-25. The loop prices its
+    # spend with proposer.MODEL (claude-opus-4-8) — guard that one especially.
+    assert cost_usd(1_000_000, 1_000_000, model="claude-opus-4-8") == 30.0    # $5 + $25
+    assert cost_usd(1_000_000, 1_000_000, model="claude-sonnet-5") == 18.0    # $3 + $15
+    assert cost_usd(1_000_000, 1_000_000, model="claude-haiku-4-5") == 6.0    # $1 + $5

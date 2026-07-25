@@ -25,10 +25,6 @@ issue is fixed, move it to the "Resolved" section at the bottom with the PR.
   breaker/budget state silently resets. **Fix before any AWS/persistent
   cluster:** `ray.init(namespace="sis")` + a deliberate decision on
   breaker-state lifetime.
-- **M4 — SWE hardcodes the branch base.** `SWE.implement` calls
-  `create_branch(branch, "main")` while `live_target_source()` reads
-  `settings.default_base` — a target repo with a different default branch
-  would read one branch and fork from another. Use `default_base` in both.
 
 ## Low
 
@@ -39,9 +35,6 @@ issue is fixed, move it to the "Resolved" section at the bottom with the PR.
 - **L2 — Idempotent `create_page` bumps a version even when unchanged.** The
   duplicate-title fallback PUTs a new version every run; skip the update when
   the body is identical to avoid version churn on fixed-title pages.
-- **L3 — `cost.py` pricing is hardcoded.** The CEO spend brakes are only as
-  good as the `PRICING` table; verify against currently published API rates
-  before any run with real spend.
 - **L4 — `policy._rel()` uses `lstrip("./")`,** which strips characters, not
   a prefix (`"../x"` → `"x"`). Benign today because `_put_file` only receives
   the fixed `TARGET_REPO_PATH`; tighten before paths become dynamic.
@@ -71,9 +64,10 @@ and real money meet.
 2. ~~Enforce **M1** (docker sandbox with a real proposer).~~ **Done** — see
    Resolved. Still: build the image once (`docker build -t sis-gauntlet:latest
    -f Dockerfile.gauntlet .`) before the first real run.
-3. Fix **M4** (one-liner).
-4. Verify **L3** and set a deliberately tiny CEO budget for the first run to
-   watch the brakes trip rather than trusting them.
+3. ~~Fix **M4** (one-liner).~~ **Done** — see Resolved.
+4. ~~Verify **L3**.~~ **Done** — the `PRICING` table matches published rates
+   (see Resolved). Still: set a deliberately tiny CEO budget for the first run
+   to watch the brakes trip rather than trusting them.
 5. Run: `SIS_ADAPTERS=real SIS_PROPOSER=claude SIS_SANDBOX=docker` after a
    `--deep` preflight; then compare the episodic log against the Anthropic
    console bill.
@@ -114,3 +108,14 @@ any long-lived cluster exists.
   Loud, explicit override `SIS_ALLOW_UNSANDBOXED_LLM=1`. The stub (trusted,
   hand-written candidate) still runs in the subprocess sandbox. Covered by
   `tests/test_gauntlet.py`.
+- **M4** *(2026-07-25)* `SWE.implement` forked feature branches from a
+  hardcoded `"main"` while `live_target_source` read `settings.default_base` —
+  inconsistent on a repo whose default branch isn't `main`. Fixed: the new
+  `settings.version_control_base()` (mirrors `space_keys()`) is the single
+  source; the SWE forks from it. In-memory path still forks from `"main"`.
+  Covered by `tests/test_settings.py`.
+- **L3** *(2026-07-25)* Verified `cost.py`'s `PRICING` against published rates:
+  `claude-opus-4-8` $5/$25 (the model the loop prices spend with),
+  `claude-sonnet-4-6` $3/$15, `claude-haiku-4-5` $1/$5, cache 1.25×/0.1× — all
+  correct. Added `claude-sonnet-5` ($3/$15 standard, the conservative choice
+  over the intro rate). Guarded by `tests/test_cost.py`.

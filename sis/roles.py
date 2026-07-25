@@ -22,7 +22,7 @@ from sis import gauntlet, policy, proposer
 from sis.paths import TARGET_PATH
 from sis.ports import IssueStatus, IssueType
 from sis.self_model import get_self_model
-from sis.settings import space_keys
+from sis.settings import space_keys, version_control_base
 from sis.workspace import get_workspace
 
 # --------------------------------------------------------------------------
@@ -309,8 +309,10 @@ class SWE(Role):
             return {"passed": False, "reason": f"policy: {decision.reason}",
                     "pr_id": None, "cost_usd": cost_usd}
 
+        # Fork from the same base the merged target was read from, not a
+        # hardcoded "main" — see KNOWN_ISSUES.md M4.
         branch = f"feature/{story_id.lower()}"
-        ray.get(self._ws.create_branch.remote(branch, "main"))
+        ray.get(self._ws.create_branch.remote(branch, version_control_base()))
         ray.get(self._ws.commit.remote(branch, f"Optimise target for {story_id}"))
         pr = ray.get(self._ws.open_pr.remote(branch, f"Optimise target ({story_id})", candidate))
         ray.get(self._ws.transition.remote(
