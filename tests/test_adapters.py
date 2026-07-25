@@ -59,6 +59,12 @@ def test_never_commit_to_main() -> None:
         vcs.commit("main", "nope")
 
 
+def test_live_target_source_empty_in_memory() -> None:
+    # The in-memory path keeps no merged base, so the SWE falls back to the
+    # local target file (a non-empty return would shadow it).
+    assert InMemoryVersionControl(_tel()).live_target_source() == ""
+
+
 def test_destructive_actions_are_gated() -> None:
     tel = _tel()
     docs = InMemoryDocumentStore(tel)

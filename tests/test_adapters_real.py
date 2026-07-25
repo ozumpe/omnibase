@@ -142,3 +142,30 @@ def test_get_pr_artifact_empty_when_file_absent() -> None:
     http.get = _no_file  # type: ignore[method-assign]
     # A 404 on the file must not raise — artifact is simply empty.
     assert gh.get_pr("7").artifact == ""
+
+
+def test_live_target_source_reads_the_base_branch() -> None:
+    # A cycle following a merge must start from the merged target, so
+    # live_target_source fetches the file at the default base (main), not a
+    # feature ref — otherwise it would keep re-proposing the stale source.
+    gh, http = _github()
+    gh._s = GitHubSettings(token="tok", owner="o", repo="r", default_base="main")
+
+    assert gh.live_target_source() == "OPTIMISED SOURCE"
+
+    content_calls = [c for c in http.calls if "/contents/" in c[1]]
+    assert len(content_calls) == 1
+    _, url, params = content_calls[0]
+    assert url.endswith("/contents/runtime/target.py")  # TARGET_REPO_PATH
+    assert params == {"ref": "main"}  # the live base, not a feature branch
+
+
+def test_live_target_source_empty_when_base_has_no_target() -> None:
+    gh, _ = _github()
+
+    def _no_file(url: str, params: Any = None) -> _Resp:
+        return _Resp({}, status_code=404)
+
+    gh._http.get = _no_file  # type: ignore[method-assign]
+    # No target on the base yet (first cycle) — empty, so the SWE uses the local file.
+    assert gh.live_target_source() == ""

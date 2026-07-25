@@ -151,6 +151,11 @@ class InMemoryVersionControl:
     def get_pr(self, pr_id: str) -> PullRequest:
         return self._prs[pr_id]
 
+    def live_target_source(self) -> str:
+        # No merged base branch in memory; the local file is the source of
+        # truth, so the SWE falls back to it.
+        return ""
+
     def merge_pr(self, pr_id: str) -> PullRequest:
         raise RequiresHumanApproval(
             f"merging {pr_id} to main is the mandatory human-review gate (gauntlet step 6)"

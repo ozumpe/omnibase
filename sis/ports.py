@@ -143,6 +143,16 @@ class VersionControl(Protocol):
 
     def get_pr(self, pr_id: str) -> PullRequest: ...
 
+    def live_target_source(self) -> str:
+        """The current target source on the live base branch ("" if none).
+
+        Lets a cycle start from a previously-merged optimisation instead of
+        the stale local file, so it builds on prior work rather than
+        re-proposing it. Empty when the base has no target yet (or for the
+        in-memory adapter, which keeps no merged state).
+        """
+        ...
+
     def merge_pr(self, pr_id: str) -> PullRequest:  # to main → human-gated
         ...
 
