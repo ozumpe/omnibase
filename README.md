@@ -49,7 +49,8 @@ credentials, or extra installs. Set these to opt into more.
 | Variable | Default | Values / effect |
 |----------|---------|-----------------|
 | `SIS_PROPOSER` | `stub` | `stub` = offline hand-written candidate. `claude` = real Claude API (needs `poetry install --with llm` + `ANTHROPIC_API_KEY`). |
-| `SIS_SANDBOX` | `subprocess` | Gauntlet isolation. `subprocess` = scrubbed env + in-process egress block. `docker` = kernel-enforced (`--network none`, no creds; needs the image, see below). |
+| `SIS_SANDBOX` | `subprocess` | Gauntlet isolation. `subprocess` = scrubbed env + in-process egress block. `docker` = kernel-enforced (`--network none`, no creds; needs the image, see below). **Required** when `SIS_PROPOSER` is not `stub` — untrusted LLM code can read host files in `subprocess` mode. |
+| `SIS_ALLOW_UNSANDBOXED_LLM` | `0` | `1` lets a real proposer run in the soft `subprocess` sandbox (loud warning). Unsafe — the candidate can read local files; never use it with real credentials. |
 | `SIS_SANDBOX_IMAGE` | `sis-gauntlet:latest` | Image used when `SIS_SANDBOX=docker`. |
 | `SIS_SANDBOX_MEMORY` / `SIS_SANDBOX_CPUS` | `1g` / `2` | Per-container resource caps in `docker` mode. |
 | `SIS_GAUNTLET_TIMEOUT` | `120` | Per-gate wall-clock cap (seconds) — kills infinite loops (and, in docker mode, the container). |
@@ -68,12 +69,15 @@ credentials, or extra installs. Set these to opt into more.
 # 1. Default — fully local, offline, no credentials
 poetry run python main.py
 
-# 2. Real Claude proposer (LLM writes the optimisation; gauntlet still gates it)
+# 2. Real Claude proposer (LLM writes the optimisation; gauntlet still gates it).
+#    An LLM writes untrusted code, so the kernel-enforced docker sandbox (below)
+#    is REQUIRED — the loop refuses SIS_PROPOSER=claude without SIS_SANDBOX=docker.
 poetry install --with llm
-export SIS_PROPOSER=claude ANTHROPIC_API_KEY=sk-ant-...
+docker build -t sis-gauntlet:latest -f Dockerfile.gauntlet .   # once
+export SIS_PROPOSER=claude SIS_SANDBOX=docker ANTHROPIC_API_KEY=sk-ant-...
 poetry run python main.py
 
-# 3. Kernel-enforced sandbox (build the image once, then opt in)
+# 3. Kernel-enforced sandbox on its own (e.g. with the stub proposer)
 docker build -t sis-gauntlet:latest -f Dockerfile.gauntlet .
 export SIS_SANDBOX=docker
 poetry run python main.py

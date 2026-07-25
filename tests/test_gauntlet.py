@@ -1,5 +1,7 @@
 """Tests for the gauntlet validator."""
 
+import pytest
+
 from sis import gauntlet
 from sis.paths import OPTIMISED_CANDIDATE_PATH, TARGET_PATH
 
@@ -188,3 +190,44 @@ def test_mypy_failure_fails() -> None:
     result = gauntlet.validate(bad_typed, 1.0)
     assert not result.passed
     assert "mypy" in result.reason
+
+
+def test_stub_proposer_allows_subprocess_sandbox(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # The stub returns a trusted, hand-written candidate → soft sandbox is fine.
+    monkeypatch.setenv("SIS_PROPOSER", "stub")
+    monkeypatch.delenv("SIS_SANDBOX", raising=False)
+    gauntlet.ensure_sandbox_allows_proposer()  # must not raise
+
+
+def test_llm_proposer_requires_docker_sandbox(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # M1 regression: untrusted LLM code must not run in the soft subprocess
+    # sandbox, where it can read host files like secrets.local.yml.
+    monkeypatch.setenv("SIS_PROPOSER", "claude")
+    monkeypatch.delenv("SIS_SANDBOX", raising=False)  # subprocess (default)
+    monkeypatch.delenv("SIS_ALLOW_UNSANDBOXED_LLM", raising=False)
+    with pytest.raises(RuntimeError, match="docker sandbox"):
+        gauntlet.ensure_sandbox_allows_proposer()
+
+
+def test_llm_proposer_ok_in_docker_sandbox(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("SIS_PROPOSER", "claude")
+    monkeypatch.setenv("SIS_SANDBOX", "docker")
+    gauntlet.ensure_sandbox_allows_proposer()  # must not raise
+
+
+def test_unsandboxed_llm_override_warns_but_allows(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("SIS_PROPOSER", "claude")
+    monkeypatch.delenv("SIS_SANDBOX", raising=False)
+    monkeypatch.setenv("SIS_ALLOW_UNSANDBOXED_LLM", "1")
+    gauntlet.ensure_sandbox_allows_proposer()  # allowed under explicit override
+    assert "untrusted" in capsys.readouterr().err.lower()  # ...but loudly
+
+
+def test_validate_refuses_llm_without_docker(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # The backstop: validate() itself refuses to run untrusted code unsandboxed,
+    # so no caller can bypass the guard.
+    monkeypatch.setenv("SIS_PROPOSER", "claude")
+    monkeypatch.delenv("SIS_SANDBOX", raising=False)
+    monkeypatch.delenv("SIS_ALLOW_UNSANDBOXED_LLM", raising=False)
+    with pytest.raises(RuntimeError, match="docker sandbox"):
+        gauntlet.validate(_GOOD_CODE, _BASELINE)

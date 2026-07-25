@@ -44,7 +44,9 @@ internal target before it models anything external.
 - Generated/untrusted code NEVER runs in the main process. The gauntlet sandboxes every
   gate: `SIS_SANDBOX=subprocess` (scrubbed env + in-process egress block, default) or
   `docker` (kernel-enforced `--network none`, no creds, only the temp dir mounted). A
-  per-gate timeout kills infinite loops.
+  per-gate timeout kills infinite loops. A real (non-stub) proposer writes untrusted code
+  and REQUIRES `SIS_SANDBOX=docker` — the loop refuses otherwise (override:
+  `SIS_ALLOW_UNSANDBOXED_LLM=1`); the subprocess sandbox leaves host files readable (M1).
 - Gauntlet gates hard (`sis/gauntlet.py`): `ast.parse` → `mypy --strict` → `pytest` →
   differential correctness on random inputs (anti-gaming) + benchmark vs a freshly
   measured baseline (must be ≥10% faster) → human PR. Generated code MUST be fully typed.
@@ -94,7 +96,7 @@ internal target before it models anything external.
   (subprocess|docker), `SIS_ADAPTERS` (memory|real), `SIS_ENV` (local|aws),
   `SIS_EPISODIC_STORE` (jsonl|duckdb|none), `SIS_TARGET_PATHS`,
   `SIS_ALLOW_STRICT_CHANGES`, `SIS_GAUNTLET_TIMEOUT`, `SIS_SANDBOX_IMAGE`,
-  `ANTHROPIC_API_KEY`.
+  `SIS_ALLOW_UNSANDBOXED_LLM`, `ANTHROPIC_API_KEY`.
 - Real adapters: `cp secrets.example.yml secrets.local.yml`; then
   `poetry run python scripts/check_connections.py --deep` before a real cycle.
 - Docker sandbox image: `docker build -t sis-gauntlet:latest -f Dockerfile.gauntlet .`

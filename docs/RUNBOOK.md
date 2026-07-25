@@ -60,11 +60,23 @@ poetry run python main.py
 Model is `claude-opus-4-8` (adaptive thinking, cached system prompt). Default
 without the flag stays the offline stub.
 
-⚠️ With a real LLM writing the code, prefer the **docker sandbox** (Level 3):
-the default `subprocess` sandbox scrubs credentials from the env and blocks
-egress, but candidate code can still *read* host files like
-`secrets.local.yml` (M1 in `docs/KNOWN_ISSUES.md`). Docker mounts only the
-temp dir, so there is nothing to read.
+⚠️ With a real LLM writing the code, the **docker sandbox (Level 3) is
+required**, not just recommended: `SIS_PROPOSER=claude` now refuses to run
+unless `SIS_SANDBOX=docker`. The default `subprocess` sandbox scrubs
+credentials from the env and blocks egress, but candidate code can still *read*
+host files like `secrets.local.yml` (M1 in `docs/KNOWN_ISSUES.md`); docker
+mounts only the temp dir, so there is nothing to read. So Level 1 in practice
+means Level 1 **+ Level 3**:
+
+```bash
+docker build -t sis-gauntlet:latest -f Dockerfile.gauntlet .   # once
+export SIS_PROPOSER=claude SIS_SANDBOX=docker ANTHROPIC_API_KEY=sk-ant-...
+poetry run python main.py
+```
+
+The guard has a loud, explicit escape hatch — `SIS_ALLOW_UNSANDBOXED_LLM=1` —
+for a quick throwaway test where you accept that untrusted code can read local
+files. Never use it against anything with real credentials.
 
 ---
 
@@ -182,7 +194,8 @@ SIS_AWS_SECRET_ID=sis/prod/credentials` (region via `SIS_AWS_REGION`).
 | Variable | Default | Effect |
 |---|---|---|
 | `SIS_PROPOSER` | `stub` | `claude` = real Claude API (needs `--with llm` + key) |
-| `SIS_SANDBOX` | `subprocess` | `docker` = kernel-enforced (needs the image) |
+| `SIS_SANDBOX` | `subprocess` | `docker` = kernel-enforced (needs the image); **required** when `SIS_PROPOSER` is not `stub` |
+| `SIS_ALLOW_UNSANDBOXED_LLM` | `0` | `1` = let a real proposer run in the soft subprocess sandbox (loud warning; unsafe — see M1) |
 | `SIS_SANDBOX_IMAGE` | `sis-gauntlet:latest` | image for docker mode |
 | `SIS_SANDBOX_MEMORY` / `SIS_SANDBOX_CPUS` | `1g` / `2` | per-container resource caps (docker mode) |
 | `SIS_GAUNTLET_TIMEOUT` | `120` | per-gate wall-clock cap (seconds); docker mode also kills the container |
