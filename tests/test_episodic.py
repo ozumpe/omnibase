@@ -73,6 +73,7 @@ def test_gate_from_reason() -> None:
     assert gate_from_reason("pytest failed") == "pytest"
     assert gate_from_reason("correctness mismatch (...)") == "correctness"
     assert gate_from_reason("no improvement: ...") == "benchmark"
+    assert gate_from_reason("no change: candidate is identical to the baseline") == "noop"
     assert gate_from_reason("Policy blocked: ...") == "policy"
     assert gate_from_reason("gauntlet sandbox timed out after 2s") == "timeout"
     assert gate_from_reason(None) is None

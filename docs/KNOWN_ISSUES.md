@@ -8,20 +8,13 @@ issue is fixed, move it to the "Resolved" section at the bottom with the PR.
 > **Supersedes:** the "benchmark noise gate / timing jitter" item documented in
 > v0.1.4 (CLAUDE.md next-steps, README roadmap, runbook Level 2, Confluence
 > Risk 6). The jitter explanation was the wrong mechanism: post-merge no-op PRs
-> pass the benchmark gate because of **H1** (stale baseline), not noise. Jitter
-> only becomes relevant *after* H1 is fixed, and is covered by **M3**.
+> passed the benchmark gate because of **H1** (stale baseline), not noise. Both
+> **H1** and its coupled no-op short-circuit **M3** were fixed together (see
+> Resolved).
 
 ## High
 
-- **H1 — `validate()` benchmarks against the stale local target, not the
-  cycle's baseline source.** `sis/gauntlet.py` (`validate()`) copies the local
-  `runtime/target.py` as its baseline; the SWE's merged-target source
-  (`live_target_source`) never reaches it, and QA's re-validation
-  (`sis/roles.py::QA.review`) has the same flaw. After the first merged PR, a
-  byte-identical candidate "beats" the naive local file by ~100× and every
-  gate approves a no-op PR — the "≥10% faster" invariant is fiction from the
-  second cycle on. **Fix:** pass the baseline source into `validate()` (SWE
-  and QA paths) + regression test. **Blocks the first real-life test.**
+*(none open)*
 
 ## Medium
 
@@ -39,10 +32,6 @@ issue is fixed, move it to the "Resolved" section at the bottom with the PR.
   breaker/budget state silently resets. **Fix before any AWS/persistent
   cluster:** `ray.init(namespace="sis")` + a deliberate decision on
   breaker-state lifetime.
-- **M3 — No identical-source short-circuit in the benchmark gate.** Once H1
-  is fixed, a re-proposed byte-identical candidate sits at the timing-noise
-  floor and the ±10% margin becomes a coin toss. Reject
-  `candidate == baseline_source` explicitly as "no change" before benchmarking.
 - **M4 — SWE hardcodes the branch base.** `SWE.implement` calls
   `create_branch(branch, "main")` while `live_target_source()` reads
   `settings.default_base` — a target repo with a different default branch
@@ -85,8 +74,7 @@ The first real-life test = **real Claude proposer + real adapters + docker
 sandbox** on the scratch tenant — the first run where untrusted generated code
 and real money meet.
 
-1. Fix **H1** (+ **M3** while in there) with regression tests; correct the
-   superseded jitter wording in runbook/Confluence.
+1. ~~Fix **H1** (+ **M3**) with regression tests.~~ **Done** — see Resolved.
 2. Enforce **M1** (docker sandbox with a real proposer); rebuild the image.
 3. Fix **M4** (one-liner).
 4. Verify **L3** and set a deliberately tiny CEO budget for the first run to
@@ -106,4 +94,14 @@ any long-lived cluster exists.
   parent dropped, provenance in the SelfModel.
 - *(2026-07-25, PR #31)* Cycles baselined on the stale local file for the
   *proposer input* → `live_target_source()` pulls the merged target. (The
-  gauntlet-internal half of this is **H1**, still open.)
+  gauntlet-internal half of this was **H1**, fixed below.)
+- **H1** *(2026-07-25)* `gauntlet.validate()` benchmarked against the local
+  `runtime/target.py` instead of the cycle's baseline → after a merge a no-op
+  candidate passed every gate. Fixed: `validate()` takes an explicit
+  `baseline_source` (the merged target), passed by the SWE and QA; falls back
+  to the local file only for direct callers/tests.
+- **M3** *(2026-07-25)* No identical-source short-circuit. Fixed alongside H1:
+  a candidate byte-identical to the baseline is rejected up front as
+  `no change` (episodic `reject_gate="noop"`), before the µs-scale benchmark
+  race. Local in-memory demo still promotes; the H1/M3 behaviour is covered by
+  new regression tests in `tests/test_gauntlet.py`.

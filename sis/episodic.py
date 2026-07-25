@@ -51,7 +51,7 @@ class EpisodicEvent:
     pr_id: str | None = None
     candidate_sha: str | None = None
     gauntlet_passed: bool | None = None
-    # reject_gate: ast | mypy | pytest | correctness | benchmark | policy | timeout
+    # reject_gate: ast | noop | mypy | pytest | correctness | benchmark | policy | timeout
     reject_gate: str | None = None
     reject_reason: str | None = None
     baseline_latency: float | None = None
@@ -218,6 +218,8 @@ def gate_from_reason(reason: str | None) -> str | None:
     r = reason.lower()
     if "syntaxerror" in r:
         return "ast"
+    if "no change" in r:  # candidate identical to the baseline (no-op)
+        return "noop"
     if "mypy" in r:
         return "mypy"
     if "timed out" in r or "timeout" in r:

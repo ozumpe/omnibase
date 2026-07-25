@@ -271,7 +271,9 @@ class SWE(Role):
         candidate = proposer.propose(current_source, baseline)
         candidate_sha = hashlib.sha256(candidate.encode("utf-8")).hexdigest()[:12]
         cost_usd = proposer.last_cost_usd()  # 0.0 for the stub; real $ for Claude
-        report = gauntlet.validate(candidate, baseline)
+        # Benchmark the candidate against the source the cycle is based on (the
+        # merged target), not the stale local file — see KNOWN_ISSUES.md H1.
+        report = gauntlet.validate(candidate, baseline, baseline_source=current_source)
 
         if not report.passed:
             ray.get(self._ws.transition.remote(
@@ -321,9 +323,12 @@ class QA(Role):
         # artifact exists, matches the story, and re-runs the gauntlet.
         ok = bool(pr.artifact) and issue.status == IssueStatus.READY_FOR_REVIEW
         if ok:
-            # Re-run the gauntlet: the candidate executes ONLY inside its sandbox
-            # (baseline is advisory — validate() measures its own in-sandbox).
-            report = gauntlet.validate(pr.artifact, 0.0)
+            # Re-run the gauntlet: the candidate executes ONLY inside its sandbox.
+            # Benchmark against the same merged baseline the SWE used (the target
+            # as merged on the base branch), not the stale local file — H1.
+            merged = ray.get(self._ws.live_target_source.remote())
+            baseline_source = merged or TARGET_PATH.read_text(encoding="utf-8")
+            report = gauntlet.validate(pr.artifact, 0.0, baseline_source=baseline_source)
             ok = report.passed
         if ok:
             ray.get(self._ws.transition.remote(story_id, IssueStatus.DONE, "QA verified"))

@@ -37,12 +37,36 @@ def test_syntax_error_fails() -> None:
     assert "SyntaxError" in result.reason
 
 
-def test_no_improvement_fails() -> None:
-    # The current naive target can't beat itself by the required margin.
-    naive_source = TARGET_PATH.read_text(encoding="utf-8")
-    result = gauntlet.validate(naive_source, _BASELINE)
+def test_identical_candidate_rejected_as_noop() -> None:
+    # M3 regression: a candidate byte-identical to the baseline is a no-op —
+    # rejected before the benchmark, where at the µs floor the ≥10% margin is
+    # pure timing noise. (The stub re-proposes identical code once its own
+    # optimisation has merged; that must not open a no-op PR.)
+    fast = OPTIMISED_CANDIDATE_PATH.read_text(encoding="utf-8")
+    result = gauntlet.validate(fast, _BASELINE, baseline_source=fast)
+    assert not result.passed
+    assert "no change" in result.reason
+
+
+def test_validate_benchmarks_against_provided_baseline() -> None:
+    # H1 regression: the candidate must be benchmarked against the baseline the
+    # caller supplies (the merged target), not the local runtime/target.py. A
+    # naive O(n) candidate measured against an O(√n) baseline_source is reliably
+    # ~100× slower → rejected as "no improvement". If validate fell back to the
+    # (also naive) local file, naive-vs-naive would be a coin-flip instead.
+    naive = TARGET_PATH.read_text(encoding="utf-8")
+    fast_baseline = OPTIMISED_CANDIDATE_PATH.read_text(encoding="utf-8")
+    result = gauntlet.validate(naive, _BASELINE, baseline_source=fast_baseline)
     assert not result.passed
     assert "no improvement" in result.reason
+
+
+def test_improvement_over_provided_baseline_passes() -> None:
+    # The optimised candidate beats an explicit naive baseline_source and passes.
+    naive = TARGET_PATH.read_text(encoding="utf-8")
+    fast = OPTIMISED_CANDIDATE_PATH.read_text(encoding="utf-8")
+    result = gauntlet.validate(fast, _BASELINE, baseline_source=naive)
+    assert result.passed, f"Expected pass, got: {result.reason}\n{result.errors}"
 
 
 def test_benchmark_gaming_is_rejected() -> None:
