@@ -321,6 +321,10 @@ class GitHubVersionControl:
             merged=bool(data.get("merged", False)),
         )
 
+    def live_target_source(self) -> str:
+        """The target file as merged on the live base branch ("" if absent)."""
+        return self._get_file(self._s.default_base, TARGET_REPO_PATH)
+
     def _get_file(self, ref: str, path: str) -> str:
         """Fetch and decode a file's content at *ref* ("" if absent)."""
         resp = self._http.get(self._api(f"/contents/{path}"), params={"ref": ref})

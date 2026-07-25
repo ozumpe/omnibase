@@ -258,7 +258,15 @@ class SWE(Role):
     def implement(self, story_id: str) -> dict[str, Any]:
         ray.get(self._ws.transition.remote(story_id, IssueStatus.IN_PROGRESS, "SWE picked up"))
 
-        current_source = TARGET_PATH.read_text(encoding="utf-8")
+        # Start from the target as merged on the base branch, so a cycle that
+        # follows a merged optimisation builds on it instead of re-proposing
+        # against the stale local file. Falls back to the local file when
+        # version control has no merged source (the in-memory path, or a target
+        # not yet committed to the base).
+        merged_source = ray.get(self._ws.live_target_source.remote())
+        origin = "merged_base" if merged_source else "local_file"
+        current_source = merged_source or TARGET_PATH.read_text(encoding="utf-8")
+        ray.get(self._ws.emit.remote("target.source", story_id=story_id, origin=origin))
         baseline = gauntlet.measure_baseline(current_source)  # sandboxed, not in-process
         candidate = proposer.propose(current_source, baseline)
         candidate_sha = hashlib.sha256(candidate.encode("utf-8")).hexdigest()[:12]

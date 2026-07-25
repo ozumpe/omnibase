@@ -113,6 +113,9 @@ class Workspace:
     def get_pr(self, pr_id: str) -> PullRequest:
         return self.vcs.get_pr(pr_id)
 
+    def live_target_source(self) -> str:
+        return self.vcs.live_target_source()
+
     # --- Cloud (AWS + Ray Serve canary) ---
     def deploy_canary(self, version: str, metrics: dict[str, float] | None = None) -> DeployRecord:
         return self.cloud.deploy_canary(version, metrics=metrics)
