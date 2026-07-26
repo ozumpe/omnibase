@@ -32,7 +32,10 @@ issue is fixed, move it to the "Resolved" section at the bottom with the PR.
   reference and benchmark inputs are baked into the bench script, so widening
   `SIS_TARGET_PATHS` is illusory — any other target fails the benchmark gate.
   Fine for bootstrap; a real constraint before omnitrack (a target-contract
-  redesign, not a quick fix).
+  redesign, not a quick fix). L5 is the Class-1 (optimization) slice of a larger
+  "contract" idea — see [`docs/CLASS2_CONTRACT.md`](CLASS2_CONTRACT.md) for how the
+  same abstraction extends to verifying built *features*, and the suggested
+  sequencing (do L5 first).
 - **L9 — Breaker/budget state is in-memory per CEO lifetime** (documented in
   the runbook): a fresh local run clears it. Acceptable locally; revisit
   together with M2 for persistent clusters.
