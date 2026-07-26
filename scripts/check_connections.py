@@ -105,6 +105,12 @@ def check_github(settings: Settings) -> bool | None:
         resp.raise_for_status()
         data = resp.json()
         perms = data.get("permissions", {})
+        # This confirms repo *access* only, not that the PAT carries the write
+        # scopes a real cycle needs (Contents + Pull requests). GitHub exposes no
+        # reliable read-only way to check fine-grained-token scopes, and a
+        # side-effect-free preflight must not attempt a write — so an under-scoped
+        # token surfaces as a loud 403 at open_pr instead. See KNOWN_ISSUES.md L6
+        # (won't fix); the runbook tells you which scopes to grant up front.
         _line(OK, "GitHub", f"{data.get('full_name')} (push={perms.get('push', '?')})")
         return True
     except Exception as exc:  # noqa: BLE001
