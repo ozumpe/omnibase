@@ -120,8 +120,9 @@ class ConfluenceDocumentStore:
             # live tenant 400s on every fixed-title page (charter, specs, …).
             # Reuse the existing page and refresh its content instead.
             page_id = self._page_id_by_title(space, title)
-            self._update_body(page_id, title, body)
-            self._tel.emit("page.updated", page_id=page_id, space=space, title=title)
+            changed = self._update_body(page_id, title, body)
+            self._tel.emit("page.updated" if changed else "page.unchanged",
+                           page_id=page_id, space=space, title=title)
             return Page(id=page_id, space=space, title=title, body=body,
                         labels=list(labels or []), parent_id=parent_id)
         data = _json(resp)
@@ -138,8 +139,15 @@ class ConfluenceDocumentStore:
             raise RuntimeError(f"Confluence page {title!r} not found in space {space!r}")
         return str(results[0]["id"])
 
-    def _update_body(self, page_id: str, title: str, body: str) -> None:
-        current = _json(self._http.get(self._api(f"/pages/{page_id}")))
+    def _update_body(self, page_id: str, title: str, body: str) -> bool:
+        """Refresh a page's body in place. Returns whether a new version was
+        written — a no-op body is skipped so re-runs don't churn the version
+        history on fixed-title pages (L2)."""
+        current = _json(self._http.get(self._api(f"/pages/{page_id}"),
+                                       params={"body-format": "storage"}))
+        stored = str(current.get("body", {}).get("storage", {}).get("value", ""))
+        if stored == body:
+            return False
         version = int(current.get("version", {}).get("number", 0))
         _json(self._http.put(self._api(f"/pages/{page_id}"), json={
             "id": page_id,
@@ -148,6 +156,7 @@ class ConfluenceDocumentStore:
             "body": {"representation": "storage", "value": body},
             "version": {"number": version + 1},
         }))
+        return True
 
     def get_page(self, page_id: str) -> Page:
         data = _json(self._http.get(self._api(f"/pages/{page_id}"),
@@ -266,6 +275,11 @@ class GitHubVersionControl:
         sha = ref["object"]["sha"]
         resp = self._http.post(self._api("/git/refs"),
                                json={"ref": f"refs/heads/{name}", "sha": sha})
+        if resp.status_code == 422 and "already exists" in resp.text.lower():
+            # L8: a retry of the same story — the branch is already there. Reuse
+            # it; open_pr's _put_file updates the target on it either way.
+            self._tel.emit("branch.exists", name=name, base=base)
+            return Branch(name=name, base=base)
         resp.raise_for_status()
         self._tel.emit("branch.created", name=name, base=base)
         return Branch(name=name, base=base)

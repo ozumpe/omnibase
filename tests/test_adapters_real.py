@@ -257,3 +257,48 @@ def test_create_page_drops_cross_space_parent_on_404() -> None:
     assert len(post_calls) == 2
     assert "parentId" in post_calls[0][2]
     assert "parentId" not in post_calls[1][2]
+
+
+def test_create_page_skips_version_bump_when_body_unchanged() -> None:
+    # L2: on a re-run the duplicate-title fallback must NOT PUT a new version if
+    # the stored body already matches — otherwise fixed-title pages churn a new
+    # version every cycle.
+    docs, http = _docs()
+
+    def _get(url: str, params: Any = None) -> _Resp:
+        http.calls.append(("GET", url, params))
+        if url.endswith("/spaces"):
+            return _Resp({"results": [{"id": 999, "key": "TESTRUN"}]})
+        if url.endswith("/spaces/999/pages"):
+            return _Resp({"results": [{"id": 42, "title": "Project Charter"}]})
+        if url.endswith("/pages/42"):
+            return _Resp({"id": 42, "version": {"number": 3},
+                          "body": {"storage": {"value": "same charter text"}}})
+        return _Resp({}, status_code=404)
+
+    http.get = _get  # type: ignore[method-assign]
+    page = docs.create_page("TESTRUN", "Project Charter", "same charter text")
+
+    assert page.id == "42"
+    assert not [c for c in http.calls if c[0] == "PUT"]  # no version bump
+    assert any(e["event"] == "page.unchanged" for e in docs._tel.events())
+
+
+def test_create_branch_reuses_existing_branch_on_422() -> None:
+    # L8: a retry of the same story hits GitHub's "Reference already exists"
+    # (422). create_branch must reuse the branch, not raise.
+    gh, _ = _github()
+
+    def _get(url: str, params: Any = None) -> _Resp:
+        return _Resp({"object": {"sha": "abc123"}})  # base ref
+
+    def _post(url: str, json: Any = None) -> _Resp:
+        return _Resp({"message": "Reference already exists"}, status_code=422,
+                     text="Reference already exists")
+
+    gh._http.get = _get  # type: ignore[method-assign]
+    gh._http.post = _post  # type: ignore[attr-defined]
+    branch = gh.create_branch("feature/tes-9", base="main")
+
+    assert branch.name == "feature/tes-9" and branch.base == "main"
+    assert any(e["event"] == "branch.exists" for e in gh._tel.events())

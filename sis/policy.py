@@ -121,7 +121,9 @@ def _rel(path: str | pathlib.Path) -> str:
     try:
         return candidate.resolve().relative_to(PROJECT_ROOT).as_posix()
     except (ValueError, OSError):
-        return str(path).replace("\\", "/").lstrip("./")
+        # Strip a leading "./" *prefix* — not `.`/`/` *characters*, which
+        # lstrip("./") does (mangling e.g. "../x" → "x", ".github/x" → "github/x").
+        return str(path).replace("\\", "/").removeprefix("./")
 
 
 def classify(path: str | pathlib.Path) -> ChangeTier:

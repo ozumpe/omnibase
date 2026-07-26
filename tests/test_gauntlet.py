@@ -100,9 +100,11 @@ def test_measure_baseline_runs_in_sandbox() -> None:
     assert isinstance(b, float) and b > 0
 
 
-def test_measure_baseline_unmeasurable_returns_zero() -> None:
-    # Source lacking sum_of_divisors → advisory 0.0, not a crash.
+def test_measure_baseline_unmeasurable_returns_zero(capsys) -> None:  # type: ignore[no-untyped-def]
+    # Source lacking sum_of_divisors → advisory 0.0, not a crash — but it must
+    # say so loudly rather than silently feeding a bogus number downstream (L7).
     assert gauntlet.measure_baseline("x = 1\n") == 0.0
+    assert "measure_baseline" in capsys.readouterr().err
 
 
 def test_sandbox_env_scrubs_credentials(monkeypatch) -> None:  # type: ignore[no-untyped-def]
