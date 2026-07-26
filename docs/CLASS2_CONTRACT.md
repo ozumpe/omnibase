@@ -4,6 +4,10 @@
 verifies *feature construction* — the work omnitrack actually needs — as an
 extension of the existing `validate()` gate stack, not a redesign.
 
+> Mirrored in Confluence (SD space) as a child of **The Validation Gauntlet**:
+> <https://olafzumpe.atlassian.net/wiki/spaces/SD/pages/6357056>. This repo copy is
+> the version-controlled source that evolves with the code; keep the two in sync.
+
 ## Motivation: two task classes, one gauntlet built for the first
 
 The bootstrap gauntlet (`sis/gauntlet.py`) is tuned for one class of problem, and
