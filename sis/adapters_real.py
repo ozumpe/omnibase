@@ -123,12 +123,32 @@ class ConfluenceDocumentStore:
             changed = self._update_body(page_id, title, body)
             self._tel.emit("page.updated" if changed else "page.unchanged",
                            page_id=page_id, space=space, title=title)
+            self._apply_labels(page_id, labels)
             return Page(id=page_id, space=space, title=title, body=body,
                         labels=list(labels or []), parent_id=parent_id)
         data = _json(resp)
-        self._tel.emit("page.created", page_id=data["id"], space=space, title=title)
-        return Page(id=str(data["id"]), space=space, title=title, body=body,
+        page_id = str(data["id"])
+        self._tel.emit("page.created", page_id=page_id, space=space, title=title)
+        self._apply_labels(page_id, labels)
+        return Page(id=page_id, space=space, title=title, body=body,
                     labels=list(labels or []), parent_id=parent_id)
+
+    def _apply_labels(self, page_id: str, labels: list[str] | None) -> None:
+        """Attach labels to a page (best-effort, so a failure never breaks a
+        cycle — labels are cosmetic). Confluence v2 has no label *write*, so
+        this uses the v1 content-label endpoint; the rest of the adapter is v2.
+        Adding an existing label is a no-op, so this is idempotent on re-runs."""
+        if not labels:
+            return
+        url = f"{self._s.base_url}/wiki/rest/api/content/{page_id}/label"
+        try:
+            resp = self._http.post(
+                url, json=[{"prefix": "global", "name": name} for name in labels])
+            resp.raise_for_status()
+            self._tel.emit("page.labels_applied", page_id=page_id, labels=labels)
+        except Exception as exc:  # noqa: BLE001 - cosmetic; never fail a cycle on a label
+            self._tel.emit("page.labels_failed", page_id=page_id, labels=labels,
+                           error=type(exc).__name__)
 
     def _page_id_by_title(self, space: str, title: str) -> str:
         data = _json(self._http.get(
@@ -166,6 +186,9 @@ class ConfluenceDocumentStore:
                     body=str(data.get("body", {}).get("storage", {}).get("value", "")))
 
     def list_pages(self, *, space: str | None = None, label: str | None = None) -> list[Page]:
+        # `label` is accepted for protocol conformance but not applied: v2
+        # GET /pages has no label filter (that needs a CQL search), and no
+        # caller in the loop filters by label. See KNOWN_ISSUES.md L1.
         params: dict[str, Any] = {}
         if space:
             params["space-id"] = self._space_id(space)

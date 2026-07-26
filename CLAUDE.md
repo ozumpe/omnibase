@@ -135,7 +135,7 @@ Released through **v0.1.4**. The bootstrap skeleton (original "first task") is
   (non-stub) proposer now REQUIRES `SIS_SANDBOX=docker` (M1), the SWE forks from the
   configured base branch (M4), and the `cost.py` pricing table is verified against
   published rates (L3).
-- 102 tests; `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop → main`
+- 104 tests; `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop → main`
   enforced by both the client-side pre-push hook and active server-side rulesets.
 
 **Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L
