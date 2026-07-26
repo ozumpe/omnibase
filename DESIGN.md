@@ -18,9 +18,12 @@ target first. Everything else is built on top of it.
 
 ## 2. Stack decisions (and why)
 
-- **Python 3.14**, free-threaded build (`python3.14t`). Manage with `uv`. Keep this
-  env fully separate from the unrelated work project that pins Python 3.11 + py4j
-  for Spark — different `uv venv`, no overlap.
+- **Python 3.14, standard CPython — not free-threaded.** The original plan was the
+  free-threaded build (`python3.14t`), but Ray ships `cp314` wheels and not `cp314t`,
+  so a `python3.14t` env can't install Ray — the free-threaded build is off the table
+  until those wheels exist. Managed with **Poetry** (`uv` works too). Keep this env
+  fully separate from the unrelated work project that pins Python 3.11 + py4j for
+  Spark — different virtualenv, no overlap.
 - **Ray** for the actor system; **Ray Serve** for serving/canary rollouts.
   - Chosen over **Akka/Pekko** to avoid Akka's BSL licensing entirely and to stay
     in the Python AI ecosystem (every LLM SDK, MCP, etc. is Python-native). Pekko is
