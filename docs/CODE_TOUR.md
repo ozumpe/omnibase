@@ -139,18 +139,28 @@ refuses*, which is the clearest statement of the safety contract.
 `validate()` runs cheapest-first; the first failure short-circuits.
 
 1. **`ast.parse`** — does it even parse? (No code runs yet.)
-2. **`mypy --strict`** — fully type-checked. Generated code must be annotated.
-3. **`pytest`** — the target's test suite must pass (fixed correctness cases).
-4. **Differential correctness + benchmark** — the candidate is run against an
+2. **No-op check** — a candidate byte-identical to the baseline is rejected up
+   front as `no_change` (episodic `reject_gate="noop"`). It's *not* a failure —
+   nothing to improve — so it files no bug and doesn't count toward the breaker
+   (`run_cycle` returns a benign `no_change`; the CEO's `record_neutral` still
+   books spend). The baseline it compares against is the source the caller
+   passes (`baseline_source` — the target as merged on the base branch), not the
+   local file.
+3. **`mypy --strict`** — fully type-checked. Generated code must be annotated.
+4. **`pytest`** — the target's test suite must pass (fixed correctness cases).
+5. **Differential correctness + benchmark** — the candidate is run against an
    *independent* reference on **random** inputs (catches code that special-cases
    the known test inputs but is wrong elsewhere — "benchmark gaming"), then timed
-   against the current baseline; it must be ≥10% faster.
+   against that same `baseline_source`; it must be ≥10% faster.
 
 Two cross-cutting protections wrap every gate that runs candidate code:
 
 - **Sandbox** (`SIS_SANDBOX`): `subprocess` (default — credential-scrubbed env +
   an injected `sitecustomize.py` that blocks network sockets) or `docker`
-  (kernel-enforced `--network none`, no creds, only the temp dir mounted).
+  (kernel-enforced `--network none`, no creds, only the temp dir mounted). A
+  real proposer (`SIS_PROPOSER=claude`) writes untrusted code and **requires**
+  `docker` — the loop refuses the soft sandbox otherwise (override
+  `SIS_ALLOW_UNSANDBOXED_LLM=1`).
 - **Timeout** (`SIS_GAUNTLET_TIMEOUT`) — an infinite loop is killed, not left to
   hang.
 
@@ -228,10 +238,12 @@ Two things to notice:
 - **Provenance is recorded at every step** in `SelfModel` (spec → epic → story →
   branch → pr → canary → outcome). The returned dict includes the full graph.
 - **Failure is wired to an artifact, not just a log line.** If `SWE.implement`
-  fails the gauntlet, or QA rejects, `run_cycle` calls `DevOps.file_bug` with the
-  story + reason. Three consecutive failures trip `CEO.report_outcome`'s circuit
-  breaker, which files a second, distinct `CIRCUIT BREAKER OPEN` bug — the
-  "page a human" from `ACTORS.md` made concrete rather than left as dead code.
+  fails the gauntlet (wrong/slower/untyped), or QA rejects, `run_cycle` calls
+  `DevOps.file_bug` with the story + reason. Three consecutive failures trip
+  `CEO.report_outcome`'s circuit breaker, which files a second, distinct
+  `CIRCUIT BREAKER OPEN` bug — the "page a human" from `ACTORS.md` made concrete
+  rather than left as dead code. (A `no_change` no-op is *not* a failure — no
+  bug, no breaker increment.)
   `org.bootstrap()` also has the CEO call `set_charter` once, so provenance
   roots at a goal instead of starting cold at the first spec.
 

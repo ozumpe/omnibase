@@ -106,9 +106,10 @@ type-annotated.
 - When working on the real adapters, validate against a **scratch** Jira
   project / throwaway repo first — run `python scripts/check_connections.py
   --deep` to confirm connectivity and the Jira workflow before a real cycle.
-- Run the loop with `SIS_SANDBOX=docker` once a real LLM is writing code, so
-  candidate execution is kernel-isolated (build the image from
-  `Dockerfile.gauntlet`).
+- A real proposer (`SIS_PROPOSER=claude`) writes untrusted code and **requires**
+  `SIS_SANDBOX=docker` — the loop refuses the soft subprocess sandbox otherwise
+  (build the image from `Dockerfile.gauntlet`; explicit override
+  `SIS_ALLOW_UNSANDBOXED_LLM=1`, unsafe).
 
 ## Reporting issues
 
