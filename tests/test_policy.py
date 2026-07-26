@@ -3,6 +3,7 @@
 from sis.policy import (
     ChangeTier,
     Justification,
+    _rel,
     authorize_change,
     classify,
 )
@@ -23,6 +24,14 @@ def test_target_is_soft() -> None:
 def test_other_engine_code_is_strict() -> None:
     for path in ("sis/roles.py", "sis/org.py", "sis/proposer.py", "main.py"):
         assert classify(path) is ChangeTier.STRICT, path
+
+
+def test_rel_strips_a_leading_dot_slash_prefix_not_characters() -> None:
+    # L4: the fallback (for paths outside the repo root) must strip a leading
+    # "./" *prefix*, not `.`/`/` *characters* — otherwise "../x" → "x" and a
+    # dotfile like "../.github/ci.yml" gets its leading dot eaten.
+    assert _rel("../x") == "../x"
+    assert _rel("../.github/ci.yml") == "../.github/ci.yml"
 
 
 def test_target_paths_are_configurable(monkeypatch) -> None:  # type: ignore[no-untyped-def]

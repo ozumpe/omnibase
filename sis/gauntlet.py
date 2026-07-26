@@ -436,4 +436,13 @@ def measure_baseline(source: str | None = None) -> float:
         try:
             return float(result.stdout.strip())
         except ValueError:
+            # Advisory only (validate() measures its own baseline), so a failure
+            # falls back to 0.0 — but say so loudly instead of silently feeding a
+            # bogus number into prompts and the episodic log (L7).
+            print(
+                "WARNING: measure_baseline() could not parse a latency from the "
+                f"sandbox (returncode={result.returncode}); returning 0.0. "
+                f"stderr: {result.stderr.strip()[:200]}",
+                file=sys.stderr,
+            )
             return 0.0

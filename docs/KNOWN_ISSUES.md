@@ -31,25 +31,18 @@ issue is fixed, move it to the "Resolved" section at the bottom with the PR.
 - **L1 — Confluence labels are never written.** `create_page` accepts labels
   and returns them on the `Page`, but they're not sent to the API (create or
   update), and the real `list_pages` ignores its `label` filter. Nothing in
-  the cycle relies on labels today.
-- **L2 — Idempotent `create_page` bumps a version even when unchanged.** The
-  duplicate-title fallback PUTs a new version every run; skip the update when
-  the body is identical to avoid version churn on fixed-title pages.
-- **L4 — `policy._rel()` uses `lstrip("./")`,** which strips characters, not
-  a prefix (`"../x"` → `"x"`). Benign today because `_put_file` only receives
-  the fixed `TARGET_REPO_PATH`; tighten before paths become dynamic.
+  the cycle relies on labels today. (Needs a separate content-label API call,
+  not just a payload field — bigger than the L2/L4/L7/L8 batch.)
 - **L5 — The gauntlet is hardwired to `sum_of_divisors`.** The independent
   reference and benchmark inputs are baked into the bench script, so widening
   `SIS_TARGET_PATHS` is illusory — any other target fails the benchmark gate.
-  Fine for bootstrap; a real constraint before omnitrack.
+  Fine for bootstrap; a real constraint before omnitrack (a target-contract
+  redesign, not a quick fix).
 - **L6 — Preflight doesn't verify the PAT's Pull-requests scope.**
   `check_connections.py` confirms repo access, but the
   "Contents-only token 403s on `open_pr`" failure the runbook warns about
-  would still only surface mid-cycle.
-- **L7 — `measure_baseline()` fails silently to 0.0,** which then flows into
-  proposer prompts and the episodic log as a plausible-looking number.
-- **L8 — Re-running a cycle for an existing story 422s on `create_branch`**
-  (branch already exists on the remote). Only matters for retry flows.
+  would still only surface mid-cycle. (GitHub reports fine-grained-token scopes
+  inconsistently — needs care.)
 - **L9 — Breaker/budget state is in-memory per CEO lifetime** (documented in
   the runbook): a fresh local run clears it. Acceptable locally; revisit
   together with M2 for persistent clusters.
@@ -119,3 +112,17 @@ any long-lived cluster exists.
   `claude-sonnet-4-6` $3/$15, `claude-haiku-4-5` $1/$5, cache 1.25×/0.1× — all
   correct. Added `claude-sonnet-5` ($3/$15 standard, the conservative choice
   over the intro rate). Guarded by `tests/test_cost.py`.
+- **L2** *(2026-07-25)* The idempotent `create_page` fallback PUT a new version
+  every run. Fixed: `_update_body` now fetches the stored body and skips the
+  write (and version bump) when unchanged, emitting `page.unchanged`. Covered
+  by `tests/test_adapters_real.py`.
+- **L4** *(2026-07-25)* `policy._rel()` used `lstrip("./")`, which strips
+  `.`/`/` characters rather than a `"./"` prefix (mangling `"../x"` → `"x"`).
+  Fixed with `removeprefix("./")`. Covered by `tests/test_policy.py`.
+- **L7** *(2026-07-25)* `measure_baseline()` fell back to `0.0` silently. Fixed:
+  it now prints a warning to stderr (returncode + stderr) before returning the
+  advisory `0.0`. Covered by `tests/test_gauntlet.py`.
+- **L8** *(2026-07-25)* Re-running a cycle for an existing story 422'd on
+  `create_branch`. Fixed: on "Reference already exists" the real GitHub adapter
+  reuses the branch (emits `branch.exists`). Covered by
+  `tests/test_adapters_real.py`.
