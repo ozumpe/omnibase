@@ -28,11 +28,6 @@ issue is fixed, move it to the "Resolved" section at the bottom with the PR.
 
 ## Low
 
-- **L1 — Confluence labels are never written.** `create_page` accepts labels
-  and returns them on the `Page`, but they're not sent to the API (create or
-  update), and the real `list_pages` ignores its `label` filter. Nothing in
-  the cycle relies on labels today. (Needs a separate content-label API call,
-  not just a payload field — bigger than the L2/L4/L7/L8 batch.)
 - **L5 — The gauntlet is hardwired to `sum_of_divisors`.** The independent
   reference and benchmark inputs are baked into the bench script, so widening
   `SIS_TARGET_PATHS` is illusory — any other target fails the benchmark gate.
@@ -139,4 +134,12 @@ any long-lived cluster exists.
 - **L8** *(2026-07-25)* Re-running a cycle for an existing story 422'd on
   `create_branch`. Fixed: on "Reference already exists" the real GitHub adapter
   reuses the branch (emits `branch.exists`). Covered by
+  `tests/test_adapters_real.py`.
+- **L1** *(2026-07-25)* The labels the roles tag pages with (charter/spec/
+  proposal/outline) were never written. Fixed (the write half): `create_page`
+  now attaches them on both the create and update-in-place paths via the v1
+  content-label endpoint (v2 has no label write), best-effort so a label
+  failure never breaks a cycle (`page.labels_applied` / `page.labels_failed`).
+  The `list_pages` `label` filter stays a no-op — v2 has no label filter and no
+  caller uses it (documented in the adapter). Covered by
   `tests/test_adapters_real.py`.
