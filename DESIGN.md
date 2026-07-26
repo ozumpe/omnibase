@@ -18,9 +18,12 @@ target first. Everything else is built on top of it.
 
 ## 2. Stack decisions (and why)
 
-- **Python 3.14**, free-threaded build (`python3.14t`). Manage with `uv`. Keep this
-  env fully separate from the unrelated work project that pins Python 3.11 + py4j
-  for Spark — different `uv venv`, no overlap.
+- **Python 3.14, standard CPython — not free-threaded.** The original plan was the
+  free-threaded build (`python3.14t`), but Ray ships `cp314` wheels and not `cp314t`,
+  so a `python3.14t` env can't install Ray — the free-threaded build is off the table
+  until those wheels exist. Managed with **Poetry** (`uv` works too). Keep this env
+  fully separate from the unrelated work project that pins Python 3.11 + py4j for
+  Spark — different virtualenv, no overlap.
 - **Ray** for the actor system; **Ray Serve** for serving/canary rollouts.
   - Chosen over **Akka/Pekko** to avoid Akka's BSL licensing entirely and to stay
     in the Python AI ecosystem (every LLM SDK, MCP, etc. is Python-native). Pekko is
@@ -150,35 +153,41 @@ rate). Define each as an SLO with an error budget.
 
 ## 8. Bootstrap skeleton (the first task)
 
-Goal: a few files, runnable locally with Ray, that exercise the whole loop on a
-trivial internal target — something to run and read while relearning Python.
+Goal: a small set of files, runnable locally with Ray, that exercise the whole loop
+on a trivial internal target — something to run and read while relearning Python.
 
-Suggested shape:
+This is **done**; the single-file sketch grew into the `sis/` package. The realized
+shape:
 
-- `pyproject.toml` — `uv`-managed; deps: `ray[serve]`, `mypy`, `pytest`,
-  optionally `anthropic`.
-- `target.py` — the thing being optimized: a small, deliberately slow pure function
-  with a baseline benchmark (e.g. a naive implementation of something with an obvious
+- `pyproject.toml` — Poetry-managed; deps: `ray[serve]`, `mypy`, `pytest`,
+  optionally `anthropic` (`--with llm`) and the real adapters (`--with real`).
+- `runtime/target.py` — the thing being optimized: a small, deliberately slow pure
+  function with a baseline benchmark (a naive `sum_of_divisors` with an obvious
   faster form).
-- `worker.py` — a Ray actor that runs `target` and reports latency metrics.
-- `supervisor.py` — a Ray **named, detached** actor (the "CTO"): holds the SLO and a
-  cost budget, spawns the worker, and drives one cycle.
-- `gauntlet.py` — `validate(code_str) -> Result`: runs `ast.parse` → writes a temp
-  module → `mypy --strict` → `pytest` → benchmark, all inside an isolated subprocess
-  (graduate to a Ray `runtime_env` / container later). Returns pass/fail + metrics.
-- `proposer.py` — `propose(state) -> code_str`. **Milestone 1:** a stub that returns
-  a hand-written optimized variant of `target`, so the loop runs end-to-end with zero
-  API calls. **Milestone 2:** swap the stub for a real Claude API call that gets the
-  current source + the benchmark and returns a typed, optimized version.
-- `memory.py` — append-only JSONL episodic log of every attempt (prompt → diff →
-  metrics → promoted/rolled-back).
-- `main.py` — wire it: detect a simulated SLO breach → `propose` → `gauntlet.validate`
-  → if it passes and beats baseline, swap the worker's implementation; else keep
-  baseline and log → record outcome → enforce the circuit breaker.
+- `sis/roles.py` — the seven Ray actors (CEO/CTO/PM/SWE/QA/DevOps/Designer); the SWE
+  runs the target, QA + the gauntlet review, DevOps handles deploy/rollback. Leadership
+  (CEO/CTO/PM) plus `Workspace` + `SelfModel` are **named, detached** actors holding
+  the SLO, cost budget, and shared state.
+- `sis/org.py` — `bootstrap()` + `run_cycle()`: wires the actors and drives one cycle
+  (the "supervisor" of the original sketch).
+- `sis/gauntlet.py` — `validate(code_str, baseline_latency, *, baseline_source=None)
+  -> Result`: runs `ast.parse` → no-op check → `mypy --strict` → `pytest` →
+  differential correctness + benchmark, all inside a sandbox (`SIS_SANDBOX=subprocess`
+  default, or kernel-enforced `docker`). Returns pass/fail + metrics.
+- `sis/proposer.py` — `propose(current_source, baseline_latency) -> code_str`. Both
+  milestones landed: the default stub returns a hand-written optimized variant (zero
+  API calls), and `SIS_PROPOSER=claude` swaps in a real Claude call that gets the
+  current source + benchmark and returns a typed, optimized version.
+- `sis/episodic.py` — the append-only episodic log of every attempt (spec → diff →
+  gauntlet verdict → outcome) behind a port: `jsonl` default, optional `duckdb`, or
+  `none`.
+- `main.py` — wires it: detect a simulated SLO breach → `propose` → `gauntlet.validate`
+  → if it passes and beats baseline, promote the change; else keep baseline and log →
+  record outcome → enforce the circuit breaker.
 
-Acceptance: `uv run python main.py` starts Ray locally, runs one full cycle, and
-prints whether the proposed change was promoted or rolled back, with the before/after
-benchmark and a line appended to the episodic log.
+Acceptance (met): `poetry run python main.py` starts Ray locally, runs one full cycle,
+and prints whether the proposed change was promoted or rolled back, with the
+before/after benchmark and a line appended to the episodic log.
 
 ## 9. Open decisions (revisit later)
 
