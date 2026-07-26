@@ -302,3 +302,42 @@ def test_create_branch_reuses_existing_branch_on_422() -> None:
 
     assert branch.name == "feature/tes-9" and branch.base == "main"
     assert any(e["event"] == "branch.exists" for e in gh._tel.events())
+
+
+def test_create_page_writes_labels_via_v1_endpoint() -> None:
+    # L1: labels the roles tag pages with (charter/spec/proposal/outline) are
+    # now written — via the v1 content-label endpoint (v2 has no label write).
+    docs, http = _docs()
+    posts: list[tuple[str, Any]] = []
+
+    def _post(url: str, json: Any = None) -> _Resp:
+        posts.append((url, json))
+        return _Resp({"id": 77}) if url.endswith("/pages") else _Resp({})
+
+    http.post = _post  # type: ignore[method-assign]
+    page = docs.create_page("TESTRUN", "Project Charter", "body",
+                            labels=["charter", "gov"])
+
+    assert page.id == "77"
+    label_posts = [p for p in posts if p[0].endswith("/content/77/label")]
+    assert len(label_posts) == 1
+    _, body = label_posts[0]
+    assert body == [{"prefix": "global", "name": "charter"},
+                    {"prefix": "global", "name": "gov"}]
+    assert any(e["event"] == "page.labels_applied" for e in docs._tel.events())
+
+
+def test_create_page_survives_a_label_failure() -> None:
+    # Labels are cosmetic — a failing label API must not break the cycle.
+    docs, http = _docs()
+
+    def _post(url: str, json: Any = None) -> _Resp:
+        if url.endswith("/pages"):
+            return _Resp({"id": 77})
+        raise RuntimeError("label API unavailable")
+
+    http.post = _post  # type: ignore[method-assign]
+    page = docs.create_page("TESTRUN", "Project Charter", "body", labels=["charter"])
+
+    assert page.id == "77"  # cycle survived despite the label failure
+    assert any(e["event"] == "page.labels_failed" for e in docs._tel.events())
