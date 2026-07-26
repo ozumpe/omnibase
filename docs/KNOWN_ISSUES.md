@@ -38,11 +38,6 @@ issue is fixed, move it to the "Resolved" section at the bottom with the PR.
   `SIS_TARGET_PATHS` is illusory — any other target fails the benchmark gate.
   Fine for bootstrap; a real constraint before omnitrack (a target-contract
   redesign, not a quick fix).
-- **L6 — Preflight doesn't verify the PAT's Pull-requests scope.**
-  `check_connections.py` confirms repo access, but the
-  "Contents-only token 403s on `open_pr`" failure the runbook warns about
-  would still only surface mid-cycle. (GitHub reports fine-grained-token scopes
-  inconsistently — needs care.)
 - **L9 — Breaker/budget state is in-memory per CEO lifetime** (documented in
   the runbook): a fresh local run clears it. Acceptable locally; revisit
   together with M2 for persistent clusters.
@@ -67,6 +62,25 @@ and real money meet.
 
 **M2** can wait until the AWS step (persistent-cluster problem); do it before
 any long-lived cluster exists.
+
+## Won't fix
+
+- **L6 — Preflight doesn't verify the PAT's Pull-requests scope.** Not fixable
+  in our code. `check_connections.py::check_github` confirms repo access
+  (`GET /repos/{owner}/{repo}`), but a real cycle needs two distinct
+  fine-grained-PAT permissions — **Contents: read/write** (`_put_file`) and
+  **Pull requests: read/write** (`POST /pulls`) — and GitHub gives no reliable,
+  read-only way to check them: the classic `X-OAuth-Scopes` header isn't
+  populated for fine-grained tokens, and the `permissions` block on
+  `GET /repos` reports only coarse `admin/push/pull` booleans that don't map to
+  the Contents-vs-PR split. The only definitive test is to attempt a write,
+  which a side-effect-free preflight must not do (no branches/commits/PRs). A
+  probe-write hack (e.g. a deliberately-invalid `POST /pulls` and discriminating
+  403-vs-422) is more fragile than the failure it guards against. **Disposition:**
+  leave it — an under-scoped PAT fails loudly at `open_pr` with a 403 that
+  points straight at the token, once, on first setup. Mitigation stays in the
+  runbook: grant the PAT **Contents: read/write + Pull requests: read/write** up
+  front.
 
 ## Resolved
 
