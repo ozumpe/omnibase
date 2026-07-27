@@ -182,6 +182,52 @@ main process. New `reject_gate` values (`interface`, `acceptance`, `invariant`,
 `backtest`, `slo`) slot alongside the existing
 `ast/noop/mypy/pytest/correctness/benchmark/policy/timeout` in the episodic log.
 
+## Reuse: engine vs library vs contract — not per-project reimplementation
+
+A natural worry: *"do I implement a bespoke Class-2 checker for every kind of
+project?"* No. There are three layers, and only the thinnest is per-feature. The
+"Class-2 checks" as *mechanism* are written **once**.
+
+| Layer | Scope | What it is |
+|---|---|---|
+| **Gate engine** — `InterfaceGate`, `AcceptanceGate`, `InvariantGate`, `BacktestGate`, `SloGate` | **write once** | Domain-agnostic runners: import a module, run a pytest file, generate inputs from a strategy and check a predicate, load a fixture and compare within tolerance. Zero domain knowledge. |
+| **Invariant / strategy libraries** | **per *domain*, and shared** | Reusable predicate + generator *kinds*. A new project picks and parameterizes; it rarely writes these from scratch. |
+| **The contract** — acceptance cases, chosen invariants, fixtures | **per *feature*** | Mostly *declared data* + a handful of small predicates — the spec made executable. |
+
+**Analogy — it's a test framework.** You don't reimplement pytest per project; you
+write *tests* on top of it. Here the invariant/backtest gates **are** the framework,
+and a project's contract is its test suite. Just as projects share fixtures and
+plugins, domains share **invariant libraries**.
+
+**Invariants cluster into reusable kinds**, so the per-domain part is far smaller
+than "bespoke checks per project":
+
+- **Conservation / flow laws** — resources moving: logistics (cargo), energy (power),
+  traffic (vehicles), finance (money). *"Nothing created or destroyed."*
+- **Capacity / bounds** — no edge exceeds its limit. Universal to networks.
+- **Monotonicity / sensitivity** — adding a resource never worsens the optimum; more
+  disruption never lowers cost. Any optimization.
+- **Non-negativity, round-trip, determinism, idempotence** — fully domain-agnostic.
+
+A logistics project and a traffic project *share* conservation and capacity,
+parameterized differently. You assemble a contract from a catalog far more than you
+author one.
+
+**What's genuinely irreducible — and it's not code:** *stating the domain laws*
+("cargo is conserved," "removing a supplier can't lower the optimal cost"). That's
+domain *expertise*, supplied by the PM/domain expert in the spec — a few sentences of
+domain truth the write-once `InvariantGate` then enforces, not a checking mechanism
+to build. In the target architecture the **contract-author actor** drafts the
+acceptance tests + invariants from the spec (human-reviewed), so the human input
+converges toward *"here are the laws of my domain"* rather than *"here is checking
+code."*
+
+So onboarding a new domain is **declaring a contract** (assisted, mostly data +
+library invariants), not **implementing a checker**. Adding a genuinely new invariant
+*kind* is a one-time addition to the shared library that every future project can
+reuse. That reuse is exactly what makes "one server that builds features for many
+domains" tractable rather than a per-domain rewrite.
+
 ## Where this is genuinely hard (open problems)
 
 - **Someone must supply the domain laws.** "Cargo is conserved," "removing a supplier
