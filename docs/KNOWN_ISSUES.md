@@ -27,17 +27,6 @@ bottom with the PR.
   breaker/budget state silently resets. **Fix before any AWS/persistent
   cluster:** `ray.init(namespace="sis")` + a deliberate decision on
   breaker-state lifetime.
-- **M5 — The CEO budget/brakes have no configuration knob.** `CEO.__init__`
-  defaults (`budget_usd=5.0`, `breaker_threshold=3`,
-  `max_cost_per_accepted_usd=2.0`, `slo_min_spend_usd=0.50`) are the *only* way
-  the actor is ever built — `org.bootstrap()` calls `_get_or_create("CEO", CEO)`
-  with no args. Yet the runbook/CLAUDE.md instruct "set a deliberately tiny CEO
-  budget for the first run" — which is **impossible without editing source**.
-  The 2026-07-28 Level-3 run silently ran under the hardcoded $5 cap. Fix: read
-  `SIS_BUDGET_USD` (and optionally `SIS_BREAKER_THRESHOLD` /
-  `SIS_MAX_COST_PER_ACCEPTED_USD`) at construction and thread through
-  `bootstrap()`; document in the env table. The spend control is the whole point
-  of the budget gate — it should be settable without a code change.
 - **M6 — No HTTP timeouts on any real-adapter call.** `_session()` builds a
   `requests.Session` with no default timeout, and no Confluence/Jira/GitHub call
   in `adapters_real.py` passes one — so `requests` waits **forever**. The
@@ -151,6 +140,14 @@ any long-lived cluster exists.
 
 ## Resolved
 
+- **M5** *(2026-07-28)* The CEO budget/brakes had no config knob — the docs said
+  "set a tiny budget for the first run" but the only path was editing source, so
+  the L3 run used the hardcoded $5 cap. Fixed: `roles.ceo_config_from_env()` (a
+  pure, unit-tested helper) reads `SIS_BUDGET_USD`, `SIS_BREAKER_THRESHOLD`,
+  `SIS_MAX_COST_PER_ACCEPTED_USD`, `SIS_SLO_MIN_SPEND_USD` (defaults unchanged;
+  an unparseable/negative value fails loudly), threaded through `org.bootstrap()`
+  into the CEO. Documented in the env tables. (A detached CEO on a persistent
+  cluster still ignores new args — tied to M2.)
 - **First real-life test — PASSED** *(2026-07-28)* Real Claude proposer
   (`claude-opus-4-8`) + real adapters + kernel-enforced docker sandbox, on the
   scratch tenant. Cycle `cb4f6fe13ed7`: Claude proposed the O(√n) `isqrt` form

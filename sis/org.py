@@ -25,7 +25,7 @@ import ray
 
 from sis import episodic, gauntlet
 from sis.proposer import MODEL
-from sis.roles import CEO, CTO, PM, QA, SWE, Designer, DevOps
+from sis.roles import CEO, CTO, PM, QA, SWE, Designer, DevOps, ceo_config_from_env
 from sis.self_model import get_self_model
 from sis.settings import space_keys
 from sis.workspace import get_workspace
@@ -54,10 +54,18 @@ def bootstrap() -> dict[str, Any]:
     workspace = get_workspace()
     self_model = get_self_model()
 
+    # CEO spend brakes are env-configurable (KNOWN_ISSUES.md M5) so a run can set
+    # a deliberately tiny budget without editing source. Note: if a detached CEO
+    # already exists (a persistent cluster), _get_or_create returns it and these
+    # args are ignored — tied to M2, harmless while the cluster dies per run.
+    ceo_cfg = ceo_config_from_env()
+
     handles = {
         "Workspace": workspace,
         "SelfModel": self_model,
-        "CEO": _get_or_create("CEO", CEO),
+        "CEO": _get_or_create(
+            "CEO", CEO, ceo_cfg.budget_usd, ceo_cfg.breaker_threshold,
+            ceo_cfg.max_cost_per_accepted_usd, ceo_cfg.slo_min_spend_usd),
         "PM": _get_or_create("PM", PM),
         "CTO": _get_or_create("CTO", CTO),
         "Designer": _get_or_create("Designer", Designer),

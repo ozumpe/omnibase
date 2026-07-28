@@ -14,6 +14,9 @@ agent (the human PR is mandatory — gauntlet step 6).
 from __future__ import annotations
 
 import hashlib
+import os
+from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 import ray
@@ -25,9 +28,62 @@ from sis.self_model import get_self_model
 from sis.settings import space_keys, version_control_base
 from sis.workspace import get_workspace
 
+# CEO spend-brake defaults — the single source of truth, shared by CEO.__init__
+# and ceo_config_from_env so an env-configured run and a default run agree.
+DEFAULT_BUDGET_USD = 5.0
+DEFAULT_BREAKER_THRESHOLD = 3
+DEFAULT_MAX_COST_PER_ACCEPTED_USD = 2.0
+DEFAULT_SLO_MIN_SPEND_USD = 0.50
+
 # --------------------------------------------------------------------------
 # Shared helpers
 # --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CEOConfig:
+    """The CEO's spend brakes — the hard cap and the two SLO thresholds."""
+
+    budget_usd: float = DEFAULT_BUDGET_USD
+    breaker_threshold: int = DEFAULT_BREAKER_THRESHOLD
+    max_cost_per_accepted_usd: float = DEFAULT_MAX_COST_PER_ACCEPTED_USD
+    slo_min_spend_usd: float = DEFAULT_SLO_MIN_SPEND_USD
+
+
+def _env_number(env: Mapping[str, str], name: str, default: float, *, cast: Any) -> Any:
+    """Parse an env var as a number, or fail loudly. A bad spend cap must never
+    silently fall back to the permissive default (a typo'd '0.1O' that becomes
+    $5 defeats the whole point of the budget gate) — so raise, don't shrug."""
+    raw = env.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        value = cast(raw)
+    except ValueError:
+        raise ValueError(f"{name}={raw!r} is not a valid number") from None
+    if value < 0:
+        raise ValueError(f"{name}={raw!r} must not be negative")
+    return value
+
+
+def ceo_config_from_env(env: Mapping[str, str] | None = None) -> CEOConfig:
+    """Build the CEO's spend brakes from the environment (pure — unit-testable).
+
+    Lets a run set a deliberately tiny budget without editing source
+    (KNOWN_ISSUES.md M5): ``SIS_BUDGET_USD``, ``SIS_BREAKER_THRESHOLD``,
+    ``SIS_MAX_COST_PER_ACCEPTED_USD``, ``SIS_SLO_MIN_SPEND_USD``. Each falls back
+    to its ``DEFAULT_*`` when unset; an unparseable/negative value raises.
+    """
+    e = os.environ if env is None else env
+    return CEOConfig(
+        budget_usd=_env_number(e, "SIS_BUDGET_USD", DEFAULT_BUDGET_USD, cast=float),
+        breaker_threshold=_env_number(
+            e, "SIS_BREAKER_THRESHOLD", DEFAULT_BREAKER_THRESHOLD, cast=int),
+        max_cost_per_accepted_usd=_env_number(
+            e, "SIS_MAX_COST_PER_ACCEPTED_USD", DEFAULT_MAX_COST_PER_ACCEPTED_USD, cast=float),
+        slo_min_spend_usd=_env_number(
+            e, "SIS_SLO_MIN_SPEND_USD", DEFAULT_SLO_MIN_SPEND_USD, cast=float),
+    )
 
 
 def evaluate_brakes(
@@ -86,10 +142,10 @@ class CEO(Role):
 
     def __init__(
         self,
-        budget_usd: float = 5.0,
-        breaker_threshold: int = 3,
-        max_cost_per_accepted_usd: float = 2.0,
-        slo_min_spend_usd: float = 0.50,
+        budget_usd: float = DEFAULT_BUDGET_USD,
+        breaker_threshold: int = DEFAULT_BREAKER_THRESHOLD,
+        max_cost_per_accepted_usd: float = DEFAULT_MAX_COST_PER_ACCEPTED_USD,
+        slo_min_spend_usd: float = DEFAULT_SLO_MIN_SPEND_USD,
     ) -> None:
         super().__init__("CEO", "CEO")
         self._budget = budget_usd

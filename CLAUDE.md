@@ -96,7 +96,8 @@ internal target before it models anything external.
   (subprocess|docker), `SIS_ADAPTERS` (memory|real), `SIS_ENV` (local|aws),
   `SIS_EPISODIC_STORE` (jsonl|duckdb|none), `SIS_TARGET_PATHS`,
   `SIS_ALLOW_STRICT_CHANGES`, `SIS_GAUNTLET_TIMEOUT`, `SIS_SANDBOX_IMAGE`,
-  `SIS_ALLOW_UNSANDBOXED_LLM`, `ANTHROPIC_API_KEY`.
+  `SIS_ALLOW_UNSANDBOXED_LLM`, `SIS_BUDGET_USD` (CEO hard cap; + the other
+  brakes), `ANTHROPIC_API_KEY`.
 - Real adapters: `cp secrets.example.yml secrets.local.yml`; then
   `poetry run python scripts/check_connections.py --deep` before a real cycle.
 - Docker sandbox image: `docker build -t sis-gauntlet:latest -f Dockerfile.gauntlet .`
