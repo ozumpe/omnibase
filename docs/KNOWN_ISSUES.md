@@ -46,6 +46,26 @@ bottom with the PR.
   `sum_of_divisors` with its own timer and ignores the candidate's `benchmark()`.
   Both are concrete, observed-in-production arguments for the target-contract
   redesign (a per-target reference + inputs, not a hardwired one).
+
+  *Stronger field evidence — non-deterministic verdicts (2026-07-28, runs 4 & 5
+  on `testrun`).* Over five real cycles the loop compounded four genuine
+  improvements (naive → O(√n) → prime-factorisation → 6k±1-wheel), driving the
+  target to sub-microsecond. Then the noise floor flipped the gate's **decision**,
+  not just its magnitude:
+  - **Run 4** (`c177ddc71747`) — same merged factorisation target, benchmarked at
+    ~**1.0µs**; the candidate couldn't clear ≥10% → `rolled_back` (`reject_gate=
+    benchmark`), which filed bug `TES-36`.
+  - **Run 5** (`6778371f9fd7`) — the *same* target benchmarked at **0.76µs** (a
+    ~30% swing from pure jitter); a candidate at 0.58µs scored "23.5% faster" →
+    **accepted** (PR #9).
+
+  So on a target within measurement noise of optimal the gate both **false-rejects**
+  and **accepts on an untrustworthy magnitude** — its verdict is now partly a coin
+  flip, and because an accept resets the consecutive-failure counter the circuit
+  breaker may never trip on a converged target. This is the decisive argument that
+  a fixed-input wall-clock benchmark cannot be the correctness oracle past a point;
+  the target contract needs per-target inputs sized to stay above the timer's
+  resolution (and/or an operation-count / statistical-significance gate).
 - **L9 — Breaker/budget state is in-memory per CEO lifetime** (documented in
   the runbook): a fresh local run clears it. Acceptable locally; revisit
   together with M2 for persistent clusters.
