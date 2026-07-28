@@ -159,6 +159,11 @@ Runs every gauntlet gate inside `docker run --network none --cap-drop ALL
 --read-only`, only the temp dir mounted, no credentials. Recommended once a real
 LLM is writing code.
 
+> **✅ Validated end-to-end (2026-07-28).** A full real cycle (`claude-opus-4-8` +
+> real adapters + this sandbox) proposed and verified an O(√n) optimisation on the
+> scratch tenant, filing Confluence/Jira/`testrun` PR #4 and stopping at the human
+> merge gate. See `docs/KNOWN_ISSUES.md` (Resolved) for the run details.
+
 Required: a **running Docker daemon**, then:
 ```bash
 docker build -t sis-gauntlet:latest -f Dockerfile.gauntlet .
