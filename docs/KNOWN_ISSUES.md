@@ -46,17 +46,19 @@ The first real-life test = **real Claude proposer + real adapters + docker
 sandbox** on the scratch tenant — the first run where untrusted generated code
 and real money meet.
 
+> **✅ Passed (2026-07-28).** All five steps below are done — see the Resolved
+> entry for the validated cycle (`cb4f6fe13ed7`).
+
 1. ~~Fix **H1** (+ **M3**) with regression tests.~~ **Done** — see Resolved.
 2. ~~Enforce **M1** (docker sandbox with a real proposer).~~ **Done** — see
-   Resolved. Still: build the image once (`docker build -t sis-gauntlet:latest
-   -f Dockerfile.gauntlet .`) before the first real run.
+   Resolved. Image built (`docker build -t sis-gauntlet:latest
+   -f Dockerfile.gauntlet .`) and the kernel sandbox smoke-tested with the stub.
 3. ~~Fix **M4** (one-liner).~~ **Done** — see Resolved.
 4. ~~Verify **L3**.~~ **Done** — the `PRICING` table matches published rates
-   (see Resolved). Still: set a deliberately tiny CEO budget for the first run
-   to watch the brakes trip rather than trusting them.
-5. Run: `SIS_ADAPTERS=real SIS_PROPOSER=claude SIS_SANDBOX=docker` after a
-   `--deep` preflight; then compare the episodic log against the Anthropic
-   console bill.
+   (see Resolved).
+5. ~~Run `SIS_ADAPTERS=real SIS_PROPOSER=claude SIS_SANDBOX=docker` after a
+   `--deep` preflight; compare the episodic log against the Anthropic bill.~~
+   **Done** — see Resolved.
 
 **M2** can wait until the AWS step (persistent-cluster problem); do it before
 any long-lived cluster exists.
@@ -82,6 +84,16 @@ any long-lived cluster exists.
 
 ## Resolved
 
+- **First real-life test — PASSED** *(2026-07-28)* Real Claude proposer
+  (`claude-opus-4-8`) + real adapters + kernel-enforced docker sandbox, on the
+  scratch tenant. Cycle `cb4f6fe13ed7`: Claude proposed the O(√n) `isqrt` form
+  against the naive O(n) baseline (re-seeded on `testrun/main` for the demo),
+  the full gauntlet passed **inside the docker sandbox** (192.4µs → 1.6µs,
+  99.2% faster), and it filed real artifacts — Confluence spec `6356994`, Jira
+  `TES-20`, GitHub `testrun` PR #4 — then stopped at
+  `verified_awaiting_human_merge`. Episodic-logged cost **$0.014375**,
+  reconciled against the Anthropic console. Every stage of the loop fired
+  end-to-end against live systems with real money for the first time.
 - *(2026-07-25, PR #32)* Confluence duplicate-title 400 crashed re-runs →
   `create_page` updates the existing page in place.
 - *(2026-07-25, PR #32)* Cross-space `parentId` 404 crashed the spec page →

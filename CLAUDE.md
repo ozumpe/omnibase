@@ -143,14 +143,16 @@ severity) from the 2026-07-25 full review — reference the IDs in commits/PRs.
 High + Medium are all closed; only Low items and **M2** (deferred to the AWS
 step) remain.
 
+- **First real-life test PASSED (2026-07-28): the full loop ran end-to-end with a
+  real Claude proposer + real adapters + the kernel-enforced docker sandbox.** Cycle
+  `cb4f6fe13ed7`: `claude-opus-4-8` proposed the O(√n) `isqrt` form against the naive
+  baseline (re-seeded on `testrun/main`), the gauntlet passed **inside docker**
+  (192.4µs → 1.6µs, 99.2% faster), and it filed Confluence spec `6356994`, Jira
+  `TES-20`, GitHub `testrun` PR #4, stopping at `verified_awaiting_human_merge`. Cost
+  $0.014375, reconciled against the Anthropic console. Details in
+  `docs/KNOWN_ISSUES.md` (Resolved).
+
 **Next (sequencing detail in `docs/KNOWN_ISSUES.md`):**
-1. First real-life test (unblocked): build the sandbox image
-   (`docker build -t sis-gauntlet:latest -f Dockerfile.gauntlet .`), set a tiny CEO
-   budget, then run `SIS_ADAPTERS=real SIS_PROPOSER=claude SIS_SANDBOX=docker` after a
-   `--deep` preflight; compare the episodic log against the Anthropic bill. Note: the
-   `testrun` target is already optimal, so a real Claude cycle there ends benignly as
-   `no_change` — seed a fresh throwaway repo with the naive `runtime/target.py` to demo
-   a *successful* cycle.
-2. A small AWS run (one node, a few cycles); fix **M2** (anonymous Ray namespace)
+1. A small AWS run (one node, a few cycles); fix **M2** (anonymous Ray namespace)
    first; watch the provenance graph and the bill.
-3. Ray Serve weighted canary + atomic actor swap (currently a placeholder).
+2. Ray Serve weighted canary + atomic actor swap (currently a placeholder).
