@@ -366,22 +366,47 @@ class GitHubVersionControl:
     def open_pr(self, branch: str, title: str, *, artifact: str = "") -> PullRequest:
         if artifact:
             self._put_file(branch, TARGET_REPO_PATH, artifact, f"{title} (candidate)")
-        data = _json(self._http.post(
+        resp = self._http.post(
             self._api("/pulls"),
             json={"title": title, "head": branch, "base": self._s.default_base,
                   "body": "Automated proposal. Human review + merge required."},
-        ))
+        )
+        if resp.status_code == 422 and "already exists" in resp.text.lower():
+            # L11 (L8's sibling): a retry of the same story — a PR for this head is
+            # already open. create_branch already reuses the branch; reuse the PR
+            # too instead of dying, so a re-run is idempotent end to end.
+            return self._existing_pr(branch, title, artifact)
+        data = _json(resp)
         pr_id = str(data["number"])
         self._tel.emit("pr.opened", pr_id=pr_id, branch=branch, title=title)
         return PullRequest(id=pr_id, branch=branch, title=title, artifact=artifact)
 
+    def _existing_pr(self, branch: str, title: str, artifact: str) -> PullRequest:
+        """Find the open PR already opened for *branch* (used on a 422 re-run)."""
+        listing = self._http.get(
+            self._api("/pulls"),
+            params={"head": f"{self._s.owner}:{branch}", "state": "open"})
+        listing.raise_for_status()
+        prs = listing.json()
+        if not prs:  # 422 for some other reason — surface it
+            raise RuntimeError(f"open_pr got 422 but no open PR exists for {branch}")
+        pr_id = str(prs[0]["number"])
+        self._tel.emit("pr.exists", pr_id=pr_id, branch=branch)
+        return PullRequest(id=pr_id, branch=branch,
+                           title=str(prs[0].get("title", title)), artifact=artifact)
+
     def _put_file(self, branch: str, path: str, content: str, message: str) -> None:
-        # Hard stop: never write guardrail/safety code, whatever the caller asked.
+        # Hard stop at the write boundary: the loop's GitHub writes are limited to
+        # SOFT optimisation target(s). This refuses FORBIDDEN guardrail code *and*
+        # STRICT engine code — defence in depth beyond the SWE's authorize_change,
+        # so a future caller passing a non-target path can't reach the API (L14).
         from sis.policy import ChangeTier, classify
 
-        if classify(path) is ChangeTier.FORBIDDEN:
+        tier = classify(path)
+        if tier is not ChangeTier.SOFT:
             raise RequiresHumanApproval(
-                f"{path} is guardrail code; the loop must never write it"
+                f"{path} is {tier.value}-tier; the loop's writes are limited to the "
+                "SOFT optimisation target(s)"
             )
         existing = self._http.get(self._api(f"/contents/{path}"), params={"ref": branch})
         sha = existing.json().get("sha") if existing.status_code == 200 else None

@@ -19,7 +19,7 @@ from sis.adapters_real import (
     _http_timeout,
     _TimeoutHTTP,
 )
-from sis.ports import IssueStatus
+from sis.ports import IssueStatus, RequiresHumanApproval
 from sis.settings import AtlassianSettings, GitHubSettings
 
 
@@ -405,3 +405,47 @@ def test_create_page_survives_a_label_failure() -> None:
 
     assert page.id == "77"  # cycle survived despite the label failure
     assert any(e["event"] == "page.labels_failed" for e in docs._tel.events())
+
+
+# --- L11: a same-story retry reuses the existing open PR (L8's sibling) ----
+
+
+def test_open_pr_reuses_existing_pr_on_422() -> None:
+    # create_branch already reuses the branch on a retry (L8); open_pr must reuse
+    # the PR too — GitHub 422s "a pull request already exists" for the head.
+    gh, _ = _github()
+
+    def _post(url: str, json: Any = None) -> _Resp:
+        return _Resp({"message": "already exists"}, status_code=422,
+                     text="A pull request already exists for o:feature/tes-9.")
+
+    def _get(url: str, params: Any = None) -> _Resp:
+        if url.endswith("/pulls"):
+            assert params == {"head": "o:feature/tes-9", "state": "open"}
+            return _Resp([{"number": 9, "title": "Optimise target (TES-9)"}])  # type: ignore[arg-type]
+        return _Resp({}, status_code=404)
+
+    gh._http.post = _post  # type: ignore[attr-defined]
+    gh._http.get = _get    # type: ignore[method-assign]
+    pr = gh.open_pr("feature/tes-9", "Optimise target (TES-9)")
+
+    assert pr.id == "9"
+    assert any(e["event"] == "pr.exists" for e in gh._tel.events())
+
+
+# --- L14: the GitHub write boundary allows only SOFT target(s) -------------
+
+
+def test_put_file_refuses_non_target_paths() -> None:
+    # L14: _put_file is the last-line write guard. It must refuse a STRICT engine
+    # path *and* a FORBIDDEN guardrail path — not just FORBIDDEN — before any API
+    # call (defence in depth beyond the SWE's authorize_change).
+    gh, http = _github()
+
+    with pytest.raises(RequiresHumanApproval):
+        gh._put_file("feature/x", "sis/org.py", "code", "msg")       # STRICT
+    with pytest.raises(RequiresHumanApproval):
+        gh._put_file("feature/x", "sis/gauntlet.py", "code", "msg")  # FORBIDDEN
+
+    # The refusal happens before any HTTP call.
+    assert not http.calls

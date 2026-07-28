@@ -46,6 +46,14 @@ def test_guardrail_wins_even_if_listed_as_target(monkeypatch) -> None:  # type: 
     assert classify("sis/gauntlet.py") is ChangeTier.FORBIDDEN
 
 
+def test_target_paths_prefix_strip_is_not_char_strip(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # L10: a "./" *prefix* is stripped, but leading dot chars must survive —
+    # lstrip("./") would mangle ".github/x" → "github/x". removeprefix must not.
+    from sis.policy import target_paths
+    monkeypatch.setenv("SIS_TARGET_PATHS", "./runtime/target.py, .github/x.py")
+    assert target_paths() == ("runtime/target.py", ".github/x.py")
+
+
 # --- authorization: FORBIDDEN has no override ---
 
 def test_forbidden_denied_even_with_everything() -> None:

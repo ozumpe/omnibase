@@ -216,14 +216,16 @@ def gate_from_reason(reason: str | None) -> str | None:
     if not reason:
         return None
     r = reason.lower()
+    # Timeout first: a timed-out gate's reason names the gate ("mypy gate timed
+    # out"), so this must win over the gate-name checks below (L12).
+    if "timed out" in r or "timeout" in r:
+        return "timeout"
     if "syntaxerror" in r:
         return "ast"
     if "no change" in r:  # candidate identical to the baseline (no-op)
         return "noop"
     if "mypy" in r:
         return "mypy"
-    if "timed out" in r or "timeout" in r:
-        return "timeout"
     if "pytest" in r:
         return "pytest"
     if "correctness mismatch" in r:

@@ -49,35 +49,6 @@ bottom with the PR.
 - **L9 — Breaker/budget state is in-memory per CEO lifetime** (documented in
   the runbook): a fresh local run clears it. Acceptable locally; revisit
   together with M2 for persistent clusters.
-- **L10 — L4 was only half-applied: `policy.target_paths()` still uses
-  `lstrip("./")`.** The exact bug fixed in `_rel()` (2026-07-25, L4) survives one
-  screen above it in the `SIS_TARGET_PATHS` parser: `lstrip("./")` strips `.`/`/`
-  *characters*, not a `"./"` prefix, so `.github/x` → `github/x` and `../x` → `x`.
-  The L4 regression test covers `_rel` only. Same one-word fix (`removeprefix`).
-- **L11 — L8's sibling: a same-story retry still 422s at `open_pr`.**
-  `create_branch` now reuses an existing branch (L8), but `POST /pulls` for a
-  head that already has an open PR returns 422 "A pull request already exists" —
-  unhandled in `open_pr`. The retry scenario L8 fixed dies one step later. Fix:
-  on that 422, find and return the existing open PR for the head branch.
-- **L12 — Episodic `reject_gate="timeout"` is unreachable.** A timed-out gate
-  returns returncode 124 with the "timed out" text in `stderr`, but `validate()`
-  reports the gate's generic reason (`"mypy --strict failed"` / `"pytest failed"`
-  / `"benchmark script crashed"`) and puts the timeout text in `errors` — which
-  `gate_from_reason()` never inspects. So a timeout is misattributed to the gate
-  it timed out in, and the documented `timeout` value can never appear in the
-  dataset the loop learns from. Fix: detect returncode 124 in `validate()` and
-  set an explicit timeout reason.
-- **L13 — The soft-sandbox network guard misses UDP + DNS.** `_NETWORK_GUARD`
-  patches `connect`/`connect_ex`/`create_connection`, leaving `socket.sendto()`/
-  `sendmsg()` (connectionless UDP) and `getaddrinfo` open. Docker mode
-  (`--network none`) blocks all egress in the kernel, and the stub is trusted —
-  so this only bites under `SIS_ALLOW_UNSANDBOXED_LLM=1`. Cheap defence-in-depth:
-  patch the UDP send methods too.
-- **L14 — `_put_file` refuses only FORBIDDEN, not STRICT.** The GitHub adapter's
-  last-line write guard blocks only guardrail (FORBIDDEN) paths, so a future
-  caller passing a STRICT engine path (e.g. `sis/org.py`) would be written —
-  STRICT enforcement lives solely in the SWE's `authorize_change`. Defence in
-  depth: require SOFT (or run the full `authorize_change`) at the write boundary.
 
 **Minor (noted in the 2026-07-28 review; not separately tracked):** the policy
 block path in `SWE.implement` omits `candidate_sha` from its return dict
@@ -132,6 +103,21 @@ any long-lived cluster exists.
 
 ## Resolved
 
+- **L10–L14** *(2026-07-28, one batch)* Five low-severity fixes, each with a
+  regression test:
+  - **L10** — `policy.target_paths()` used `lstrip("./")` (strips `.`/`/`
+    *characters*, mangling `.github/x` → `github/x`); now `removeprefix("./")`,
+    matching the L4 fix in `_rel()`.
+  - **L11** — a same-story retry 422'd at `open_pr` (L8's sibling); it now finds
+    and reuses the existing open PR for the head (emits `pr.exists`).
+  - **L12** — a timed-out gate was misreported as that gate's generic failure;
+    `validate()` now detects returncode 124 and returns a timeout reason, and
+    `gate_from_reason()` checks timeout first so `reject_gate="timeout"` is
+    reachable.
+  - **L13** — the soft-sandbox network guard now also blocks UDP
+    (`sendto`/`sendmsg`) and DNS (`getaddrinfo`), not just TCP connect.
+  - **L14** — `_put_file` now requires the path be **SOFT** (refusing STRICT
+    engine code too, not only FORBIDDEN) — defence in depth at the write boundary.
 - **M6** *(2026-07-28)* No HTTP timeouts on real-adapter calls — `requests`
   defaults to *no* timeout, so a wedged Confluence/Jira/GitHub API would hang a
   whole cycle with no breaker/bug/log. Fixed: `_session()` now returns a

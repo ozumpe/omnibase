@@ -55,9 +55,15 @@ _NETWORK_GUARD = textwrap.dedent(
     def _deny(*args, **kwargs):
         raise OSError("network egress blocked in gauntlet sandbox")
 
+    # TCP connect paths.
     socket.socket.connect = _deny          # type: ignore[method-assign,assignment]
     socket.socket.connect_ex = _deny       # type: ignore[method-assign,assignment]
     socket.create_connection = _deny       # type: ignore[assignment]
+    # UDP has no connect, so sendto/sendmsg would otherwise slip past (L13).
+    socket.socket.sendto = _deny           # type: ignore[method-assign,assignment]
+    socket.socket.sendmsg = _deny          # type: ignore[method-assign,assignment]
+    # DNS resolution is itself egress (a UDP query, and a data-exfil channel).
+    socket.getaddrinfo = _deny             # type: ignore[assignment]
     """
 )
 
@@ -209,6 +215,21 @@ def ensure_sandbox_allows_proposer() -> None:
     )
 
 
+def _timed_out(result: subprocess.CompletedProcess[str], gate: str) -> Result | None:
+    """If *result* is a gate timeout (returncode 124 from _timeout_result), return
+    a Result whose reason maps to the ``timeout`` episodic gate; else None.
+
+    Without this, a timed-out gate returns the gate's *generic* failure reason
+    ("mypy --strict failed", "pytest failed", …) and the timeout only survives in
+    ``errors`` — so ``reject_gate`` is misattributed and the documented ``timeout``
+    value never appears in the episodic dataset (KNOWN_ISSUES.md L12).
+    """
+    if result.returncode == 124:
+        return Result(passed=False, reason=f"{gate} gate timed out",
+                      errors=result.stderr.splitlines())
+    return None
+
+
 def validate(
     code_str: str, baseline_latency: float, *, baseline_source: str | None = None
 ) -> Result:
@@ -286,6 +307,8 @@ def validate(
 
         # --- Gate 2: mypy --strict ---
         mypy_result = _run([_PY, "-m", "mypy", "--strict", str(candidate)], tmpdir, env)
+        if timed_out := _timed_out(mypy_result, "mypy"):
+            return timed_out
         if mypy_result.returncode != 0:
             return Result(
                 passed=False,
@@ -309,6 +332,8 @@ def validate(
         pytest_result = _run(
             [_PY, "-m", "pytest", str(tmp / "tests"), "-q", "--tb=short"], tmpdir, env
         )
+        if timed_out := _timed_out(pytest_result, "pytest"):
+            return timed_out
         if pytest_result.returncode != 0:
             return Result(
                 passed=False,
@@ -364,6 +389,8 @@ def validate(
             """
         )
         bench_result = _run([_PY, "-c", bench_script], tmpdir, env)
+        if timed_out := _timed_out(bench_result, "benchmark"):
+            return timed_out
         if bench_result.returncode == 3:
             return Result(
                 passed=False,

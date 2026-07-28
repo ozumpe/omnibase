@@ -137,6 +137,10 @@ def benchmark(n: int = 10_000, repetitions: int = 5) -> float:
     result = _validate(code)
     assert not result.passed
     assert any("timed out" in line for line in result.errors)
+    # L12: the timeout must be attributed to the `timeout` episodic gate, not
+    # misreported as the generic failure of whichever gate happened to run.
+    from sis import episodic
+    assert episodic.gate_from_reason(result.reason) == "timeout"
 
 
 @pytest.mark.parametrize("evil", [

