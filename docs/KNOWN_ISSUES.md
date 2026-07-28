@@ -27,14 +27,6 @@ bottom with the PR.
   breaker/budget state silently resets. **Fix before any AWS/persistent
   cluster:** `ray.init(namespace="sis")` + a deliberate decision on
   breaker-state lifetime.
-- **M6 — No HTTP timeouts on any real-adapter call.** `_session()` builds a
-  `requests.Session` with no default timeout, and no Confluence/Jira/GitHub call
-  in `adapters_real.py` passes one — so `requests` waits **forever**. The
-  gauntlet timeout contains *candidate* code, but nothing contains a wedged
-  tenant API: a hung `transition()`/`create_page()`/`open_pr()` freezes the
-  cycle with no breaker, no bug, no log. Fix before unattended/AWS runs (pairs
-  with M2): a session-level default timeout (e.g. an `HTTPAdapter`/wrapper) or a
-  `timeout=` on every call.
 
 ## Low
 
@@ -140,6 +132,12 @@ any long-lived cluster exists.
 
 ## Resolved
 
+- **M6** *(2026-07-28)* No HTTP timeouts on real-adapter calls — `requests`
+  defaults to *no* timeout, so a wedged Confluence/Jira/GitHub API would hang a
+  whole cycle with no breaker/bug/log. Fixed: `_session()` now returns a
+  `_TimeoutHTTP` wrapper that applies a default `timeout` (30s, override
+  `SIS_HTTP_TIMEOUT`; a bad value fails loudly) to every get/post/put, while an
+  explicit per-call `timeout=` still wins. Covered by `tests/test_adapters_real.py`.
 - **M5** *(2026-07-28)* The CEO budget/brakes had no config knob — the docs said
   "set a tiny budget for the first run" but the only path was editing source, so
   the L3 run used the hardcoded $5 cap. Fixed: `roles.ceo_config_from_env()` (a

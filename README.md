@@ -59,6 +59,7 @@ credentials, or extra installs. Set these to opt into more.
 | `SIS_BUDGET_USD` | `5.0` | CEO hard spend cap (USD). Set a **tiny** value for a first real run so the brakes trip early. Also: `SIS_BREAKER_THRESHOLD` (`3`), `SIS_MAX_COST_PER_ACCEPTED_USD` (`2.0`), `SIS_SLO_MIN_SPEND_USD` (`0.50`). A bad value fails loudly. |
 | `SIS_EPISODIC_STORE` | `jsonl` | Provenance/episodic backend: `jsonl` (zero-dep), `duckdb` (SQL analytics; `poetry install --with analytics`), or `none`. |
 | `SIS_ADAPTERS` | `memory` | `memory` = in-memory artifact bus (no creds). `real` = Confluence/Jira/GitHub/AWS (needs `--with real` + secrets). |
+| `SIS_HTTP_TIMEOUT` | `30` | Per-request timeout (seconds) for every real-adapter call, so a wedged tenant API can't hang a cycle. A bad value fails loudly. |
 | `SIS_ENV` | `local` | Secret source. `local` = `secrets.local.yml` → `SIS_*` env vars. `aws` = AWS Secrets Manager. |
 | `SIS_SECRETS_FILE` | `secrets.local.yml` | Override the local secrets file path. |
 | `SIS_AWS_SECRET_ID` / `SIS_AWS_REGION` | — | Secrets Manager secret id + region (when `SIS_ENV=aws`). |
@@ -95,8 +96,9 @@ export SIS_PROPOSER=claude SIS_SANDBOX=docker SIS_ADAPTERS=real
 ```
 
 The CEO's spend brakes (hard cap + cost-per-accepted SLO) apply automatically
-once `SIS_PROPOSER=claude` is spending real tokens; tune them via `CEO(...)`
-constructor args (`budget_usd`, `max_cost_per_accepted_usd`).
+once `SIS_PROPOSER=claude` is spending real tokens; tune them via the
+environment (`SIS_BUDGET_USD`, `SIS_MAX_COST_PER_ACCEPTED_USD`, …) — set a tiny
+`SIS_BUDGET_USD` for a first real run so the brakes trip early.
 
 ---
 
@@ -200,7 +202,7 @@ runtime/                 # runtime-mutable state (kept apart from the engine)
   target.py              # the live target (naive baseline, committed)
   candidates/            # proposer's hand-written variant
   episodic.jsonl         # episodic store (gitignored; or episodic.duckdb)
-tests/                   # pytest suite (108 tests)
+tests/                   # pytest suite (112 tests)
 scripts/check_connections.py   # read-only credential/connectivity preflight
 main.py                  # entry point
 secrets.example.yml      # secrets template (copy to secrets.local.yml)
@@ -289,7 +291,7 @@ No code changes — only environment.
 ## Development
 
 ```bash
-poetry run pytest            # 108 tests (adapters, settings, gauntlet, org cycle + failures, brakes, adversarial corpus, …)
+poetry run pytest            # 112 tests (adapters, settings, gauntlet, org cycle + failures, brakes, adversarial corpus, …)
 poetry run mypy --strict sis/ main.py scripts/
 poetry run ruff check .
 ```

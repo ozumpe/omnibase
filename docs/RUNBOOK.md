@@ -208,6 +208,7 @@ SIS_AWS_SECRET_ID=sis/prod/credentials` (region via `SIS_AWS_REGION`).
 | `SIS_SANDBOX_MEMORY` / `SIS_SANDBOX_CPUS` | `1g` / `2` | per-container resource caps (docker mode) |
 | `SIS_GAUNTLET_TIMEOUT` | `120` | per-gate wall-clock cap (seconds); docker mode also kills the container |
 | `SIS_ADAPTERS` | `memory` | `real` = Confluence/Jira/GitHub/AWS (needs `--with real` + secrets) |
+| `SIS_HTTP_TIMEOUT` | `30` | per-request timeout (s) for real-adapter calls, so a wedged tenant API can't hang a cycle; a bad value fails loudly |
 | `SIS_ENV` | `local` | `aws` = secrets from AWS Secrets Manager |
 | `SIS_SECRETS_FILE` | `secrets.local.yml` | override local secrets path |
 | `SIS_AWS_SECRET_ID` / `SIS_AWS_REGION` | — | Secrets Manager secret id + region |

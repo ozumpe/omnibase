@@ -8,8 +8,17 @@ wire behaviour (endpoints, request bodies, parsing) with recorded responses.
 import base64
 from typing import Any
 
+import pytest
+
 from sis.adapters import InMemoryTelemetry
-from sis.adapters_real import ConfluenceDocumentStore, GitHubVersionControl, JiraWorkTracker
+from sis.adapters_real import (
+    DEFAULT_HTTP_TIMEOUT,
+    ConfluenceDocumentStore,
+    GitHubVersionControl,
+    JiraWorkTracker,
+    _http_timeout,
+    _TimeoutHTTP,
+)
 from sis.ports import IssueStatus
 from sis.settings import AtlassianSettings, GitHubSettings
 
@@ -302,6 +311,61 @@ def test_create_branch_reuses_existing_branch_on_422() -> None:
 
     assert branch.name == "feature/tes-9" and branch.base == "main"
     assert any(e["event"] == "branch.exists" for e in gh._tel.events())
+
+
+# --- M6: every real-adapter call carries a timeout ------------------------
+
+
+class _RecordingSession:
+    """Stands in for a requests.Session; records the kwargs of each call."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    def get(self, url: str, **kw: Any) -> None:
+        self.calls.append(("get", kw))
+
+    def post(self, url: str, **kw: Any) -> None:
+        self.calls.append(("post", kw))
+
+    def put(self, url: str, **kw: Any) -> None:
+        self.calls.append(("put", kw))
+
+
+def test_timeout_http_injects_a_default_timeout() -> None:
+    # M6: requests has no default timeout, so the wrapper must add one to every
+    # verb — otherwise a hung tenant API blocks the cycle forever.
+    rec = _RecordingSession()
+    http = _TimeoutHTTP(rec, 12.5)  # type: ignore[arg-type]
+    http.get("u")
+    http.post("u", json={"x": 1})
+    http.put("u", json={"x": 1})
+    assert [kw["timeout"] for _, kw in rec.calls] == [12.5, 12.5, 12.5]
+
+
+def test_timeout_http_respects_an_explicit_timeout() -> None:
+    # An explicit per-call timeout wins over the default.
+    rec = _RecordingSession()
+    http = _TimeoutHTTP(rec, 12.5)  # type: ignore[arg-type]
+    http.get("u", timeout=1.0)
+    assert rec.calls[0][1]["timeout"] == 1.0
+
+
+def test_http_timeout_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SIS_HTTP_TIMEOUT", raising=False)
+    assert _http_timeout() == DEFAULT_HTTP_TIMEOUT
+    monkeypatch.setenv("SIS_HTTP_TIMEOUT", "5")
+    assert _http_timeout() == 5.0
+
+
+def test_http_timeout_rejects_bad_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A garbled/non-positive timeout must fail loudly, never revert to "forever".
+    monkeypatch.setenv("SIS_HTTP_TIMEOUT", "soon")
+    with pytest.raises(ValueError, match="SIS_HTTP_TIMEOUT"):
+        _http_timeout()
+    monkeypatch.setenv("SIS_HTTP_TIMEOUT", "0")
+    with pytest.raises(ValueError, match="must be positive"):
+        _http_timeout()
 
 
 def test_create_page_writes_labels_via_v1_endpoint() -> None:

@@ -97,7 +97,7 @@ internal target before it models anything external.
   `SIS_EPISODIC_STORE` (jsonl|duckdb|none), `SIS_TARGET_PATHS`,
   `SIS_ALLOW_STRICT_CHANGES`, `SIS_GAUNTLET_TIMEOUT`, `SIS_SANDBOX_IMAGE`,
   `SIS_ALLOW_UNSANDBOXED_LLM`, `SIS_BUDGET_USD` (CEO hard cap; + the other
-  brakes), `ANTHROPIC_API_KEY`.
+  brakes), `SIS_HTTP_TIMEOUT` (real-adapter request timeout), `ANTHROPIC_API_KEY`.
 - Real adapters: `cp secrets.example.yml secrets.local.yml`; then
   `poetry run python scripts/check_connections.py --deep` before a real cycle.
 - Docker sandbox image: `docker build -t sis-gauntlet:latest -f Dockerfile.gauntlet .`
@@ -139,14 +139,13 @@ Released through **v0.1.4**. The bootstrap skeleton (original "first task") is
 - The CEO spend brakes are env-configurable (`SIS_BUDGET_USD` + the other
   thresholds), so a first real run can set a deliberately tiny cap without
   editing source (M5).
-- 108 tests; `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop → main`
+- 112 tests; `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop → main`
   enforced by both the client-side pre-push hook and active server-side rulesets.
 
 **Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L
 severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
-the IDs in commits/PRs. High is clear; the remaining **Medium** items are **M2**
-(anonymous Ray namespace — do before any persistent/AWS cluster) and **M6** (no
-HTTP timeouts on real-adapter calls — do before unattended runs), plus the Low
+the IDs in commits/PRs. High is clear; the only remaining **Medium** is **M2**
+(anonymous Ray namespace — do before any persistent/AWS cluster), plus the Low
 list (L5, L9–L14).
 
 - **First real-life test PASSED (2026-07-28): the full loop ran end-to-end with a
