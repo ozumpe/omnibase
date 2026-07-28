@@ -26,6 +26,7 @@ real pages, issues, branches, and PRs.
 from __future__ import annotations
 
 import base64
+import os
 from typing import TYPE_CHECKING, Any, cast
 
 from sis.adapters import InMemoryTelemetry
@@ -46,8 +47,55 @@ if TYPE_CHECKING:
 
 TARGET_REPO_PATH = "runtime/target.py"  # the file the loop optimises
 
+# Default per-request timeout (seconds), applied to every real-adapter call so a
+# wedged tenant API can't hang a whole cycle forever — there is no gauntlet-style
+# timeout around adapter I/O (KNOWN_ISSUES.md M6). Override via SIS_HTTP_TIMEOUT.
+DEFAULT_HTTP_TIMEOUT = 30.0
 
-def _session(email: str | None, token: str) -> requests.Session:
+
+def _http_timeout() -> float:
+    """The per-request timeout, from SIS_HTTP_TIMEOUT or the default. A bad value
+    fails loudly rather than silently reverting to "wait forever"."""
+    raw = os.getenv("SIS_HTTP_TIMEOUT")
+    if not raw:
+        return DEFAULT_HTTP_TIMEOUT
+    try:
+        value = float(raw)
+    except ValueError:
+        raise ValueError(f"SIS_HTTP_TIMEOUT={raw!r} is not a valid number") from None
+    if value <= 0:
+        raise ValueError(f"SIS_HTTP_TIMEOUT={raw!r} must be positive")
+    return value
+
+
+class _TimeoutHTTP:
+    """Wraps a ``requests.Session`` to apply a default ``timeout`` to every call.
+
+    ``requests`` defaults to *no* timeout, so any missed call site would block a
+    cycle indefinitely on a hung tenant API. Routing the adapters through this
+    wrapper makes the timeout the default for every request while still letting a
+    caller pass an explicit ``timeout=`` (it wins). Only the verbs the adapters
+    use are exposed — a deliberately small surface.
+    """
+
+    def __init__(self, session: requests.Session, timeout: float) -> None:
+        self._s = session
+        self._timeout = timeout
+
+    def get(self, url: str, **kwargs: Any) -> requests.Response:
+        kwargs.setdefault("timeout", self._timeout)
+        return self._s.get(url, **kwargs)
+
+    def post(self, url: str, **kwargs: Any) -> requests.Response:
+        kwargs.setdefault("timeout", self._timeout)
+        return self._s.post(url, **kwargs)
+
+    def put(self, url: str, **kwargs: Any) -> requests.Response:
+        kwargs.setdefault("timeout", self._timeout)
+        return self._s.put(url, **kwargs)
+
+
+def _session(email: str | None, token: str) -> _TimeoutHTTP:
     import requests
     from requests.auth import HTTPBasicAuth
 
@@ -61,7 +109,7 @@ def _session(email: str | None, token: str) -> requests.Session:
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
         })
-    return session
+    return _TimeoutHTTP(session, _http_timeout())
 
 
 def _json(response: requests.Response) -> dict[str, Any]:
