@@ -76,6 +76,11 @@ def test_gate_from_reason() -> None:
     assert gate_from_reason("no change: candidate is identical to the baseline") == "noop"
     assert gate_from_reason("Policy blocked: ...") == "policy"
     assert gate_from_reason("gauntlet sandbox timed out after 2s") == "timeout"
+    # L12: a gate-timeout reason names the gate ("mypy gate timed out") — the
+    # timeout check must win over the "mypy"/"pytest" substring checks.
+    assert gate_from_reason("mypy gate timed out") == "timeout"
+    assert gate_from_reason("pytest gate timed out") == "timeout"
+    assert gate_from_reason("benchmark gate timed out") == "timeout"
     assert gate_from_reason(None) is None
 
 

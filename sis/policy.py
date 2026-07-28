@@ -69,7 +69,9 @@ def target_paths() -> tuple[str, ...]:
     if not raw:
         return DEFAULT_TARGET_PATHS
     return tuple(
-        part.strip().replace("\\", "/").lstrip("./")
+        # removeprefix, not lstrip("./") — lstrip strips `.`/`/` *characters*
+        # (mangling ".github/x" → "github/x", "../x" → "x"). Mirrors _rel (L4/L10).
+        part.strip().replace("\\", "/").removeprefix("./")
         for part in raw.split(",")
         if part.strip()
     )
