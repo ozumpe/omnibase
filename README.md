@@ -200,7 +200,7 @@ runtime/                 # runtime-mutable state (kept apart from the engine)
   target.py              # the live target (naive baseline, committed)
   candidates/            # proposer's hand-written variant
   episodic.jsonl         # episodic store (gitignored; or episodic.duckdb)
-tests/                   # pytest suite (104 tests)
+tests/                   # pytest suite (108 tests)
 scripts/check_connections.py   # read-only credential/connectivity preflight
 main.py                  # entry point
 secrets.example.yml      # secrets template (copy to secrets.local.yml)
@@ -289,7 +289,7 @@ No code changes — only environment.
 ## Development
 
 ```bash
-poetry run pytest            # 104 tests (adapters, settings, gauntlet, org cycle + failures, adversarial corpus, …)
+poetry run pytest            # 108 tests (adapters, settings, gauntlet, org cycle + failures, brakes, adversarial corpus, …)
 poetry run mypy --strict sis/ main.py scripts/
 poetry run ruff check .
 ```
@@ -321,8 +321,9 @@ Open bugs and limitations are tracked with stable IDs in
 | – | Live-tenant adapter validation (real scratch cycles, incl. re-runs) | ✅ |
 | – | Cycles build on the merged target (`live_target_source`) | ✅ |
 | – | Post-review hardening: gauntlet baseline (H1), benign no-op outcome, docker required for a real proposer (M1), branch base (M4), pricing (L3) | ✅ |
-| – | First real-life run: real Claude + real adapters + docker sandbox | next |
-| 4 | Ray Serve weighted canary + atomic actor swap | planned |
+| – | First real-life run: real Claude + real adapters + docker sandbox | ✅ (2026-07-28) |
+| – | Env-configurable CEO spend brakes (`SIS_BUDGET_USD`, …) (M5) | ✅ |
+| 4 | Ray Serve weighted canary + atomic actor swap | next |
 | 7 | Model an external slice of the real world | vision |
 
 See the **Milestone Roadmap** Confluence page for detail.

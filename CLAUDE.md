@@ -136,13 +136,18 @@ Released through **v0.1.4**. The bootstrap skeleton (original "first task") is
   (non-stub) proposer now REQUIRES `SIS_SANDBOX=docker` (M1), the SWE forks from the
   configured base branch (M4), and the `cost.py` pricing table is verified against
   published rates (L3).
-- 104 tests; `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop → main`
+- The CEO spend brakes are env-configurable (`SIS_BUDGET_USD` + the other
+  thresholds), so a first real run can set a deliberately tiny cap without
+  editing source (M5).
+- 108 tests; `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop → main`
   enforced by both the client-side pre-push hook and active server-side rulesets.
 
 **Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L
-severity) from the 2026-07-25 full review — reference the IDs in commits/PRs.
-High + Medium are all closed; only Low items and **M2** (deferred to the AWS
-step) remain.
+severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
+the IDs in commits/PRs. High is clear; the remaining **Medium** items are **M2**
+(anonymous Ray namespace — do before any persistent/AWS cluster) and **M6** (no
+HTTP timeouts on real-adapter calls — do before unattended runs), plus the Low
+list (L5, L9–L14).
 
 - **First real-life test PASSED (2026-07-28): the full loop ran end-to-end with a
   real Claude proposer + real adapters + the kernel-enforced docker sandbox.** Cycle
