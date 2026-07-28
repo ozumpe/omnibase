@@ -56,6 +56,7 @@ credentials, or extra installs. Set these to opt into more.
 | `SIS_GAUNTLET_TIMEOUT` | `120` | Per-gate wall-clock cap (seconds) — kills infinite loops (and, in docker mode, the container). |
 | `SIS_TARGET_PATHS` | `runtime/target.py` | Comma-separated SOFT-tier paths the loop may optimise. Guardrail code can never be added. |
 | `SIS_ALLOW_STRICT_CHANGES` | `0` | `1` lets the loop propose changes to non-guardrail engine code — still requires approval + justification + checks. |
+| `SIS_BUDGET_USD` | `5.0` | CEO hard spend cap (USD). Set a **tiny** value for a first real run so the brakes trip early. Also: `SIS_BREAKER_THRESHOLD` (`3`), `SIS_MAX_COST_PER_ACCEPTED_USD` (`2.0`), `SIS_SLO_MIN_SPEND_USD` (`0.50`). A bad value fails loudly. |
 | `SIS_EPISODIC_STORE` | `jsonl` | Provenance/episodic backend: `jsonl` (zero-dep), `duckdb` (SQL analytics; `poetry install --with analytics`), or `none`. |
 | `SIS_ADAPTERS` | `memory` | `memory` = in-memory artifact bus (no creds). `real` = Confluence/Jira/GitHub/AWS (needs `--with real` + secrets). |
 | `SIS_ENV` | `local` | Secret source. `local` = `secrets.local.yml` → `SIS_*` env vars. `aws` = AWS Secrets Manager. |

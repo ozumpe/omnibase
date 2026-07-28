@@ -71,6 +71,7 @@ means Level 1 **+ Level 3**:
 ```bash
 docker build -t sis-gauntlet:latest -f Dockerfile.gauntlet .   # once
 export SIS_PROPOSER=claude SIS_SANDBOX=docker ANTHROPIC_API_KEY=sk-ant-...
+export SIS_BUDGET_USD=0.25   # tiny cap for a first real run — brakes trip early
 poetry run python main.py
 ```
 
@@ -212,6 +213,8 @@ SIS_AWS_SECRET_ID=sis/prod/credentials` (region via `SIS_AWS_REGION`).
 | `SIS_AWS_SECRET_ID` / `SIS_AWS_REGION` | — | Secrets Manager secret id + region |
 | `SIS_TARGET_PATHS` | `runtime/target.py` | SOFT-tier paths the loop may optimize |
 | `SIS_ALLOW_STRICT_CHANGES` | `0` | `1` lets the loop touch non-guardrail engine code (still needs approval + justification) |
+| `SIS_BUDGET_USD` | `5.0` | CEO hard spend cap (USD) — set **tiny** for a first real run so the brakes trip early |
+| `SIS_BREAKER_THRESHOLD` / `SIS_MAX_COST_PER_ACCEPTED_USD` / `SIS_SLO_MIN_SPEND_USD` | `3` / `2.0` / `0.50` | the other CEO brakes; a bad value fails loudly |
 | `SIS_EPISODIC_STORE` | `jsonl` | provenance log backend: `jsonl` \| `duckdb` (needs `--with analytics`) \| `none` |
 | `ANTHROPIC_API_KEY` | — | required when `SIS_PROPOSER=claude` |
 
