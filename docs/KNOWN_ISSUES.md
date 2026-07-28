@@ -1,9 +1,11 @@
 # Known issues & limitations
 
-Canonical list, from the 2026-07-25 full-project review, merged with the items
-previously tracked in `CLAUDE.md` / `README.md` / the runbook / Confluence.
-IDs are stable — reference them in commits and PRs (e.g. "Fix H1"). When an
-issue is fixed, move it to the "Resolved" section at the bottom with the PR.
+Canonical list, from the 2026-07-25 full-project review (and a second pass on
+2026-07-28 after the Level-3 validation — added **M5**, **M6**, **L10**–**L14**),
+merged with the items previously tracked in `CLAUDE.md` / `README.md` / the
+runbook / Confluence. IDs are stable — reference them in commits and PRs (e.g.
+"Fix H1"). When an issue is fixed, move it to the "Resolved" section at the
+bottom with the PR.
 
 > **Supersedes:** the "benchmark noise gate / timing jitter" item documented in
 > v0.1.4 (CLAUDE.md next-steps, README roadmap, runbook Level 2, Confluence
@@ -25,6 +27,25 @@ issue is fixed, move it to the "Resolved" section at the bottom with the PR.
   breaker/budget state silently resets. **Fix before any AWS/persistent
   cluster:** `ray.init(namespace="sis")` + a deliberate decision on
   breaker-state lifetime.
+- **M5 — The CEO budget/brakes have no configuration knob.** `CEO.__init__`
+  defaults (`budget_usd=5.0`, `breaker_threshold=3`,
+  `max_cost_per_accepted_usd=2.0`, `slo_min_spend_usd=0.50`) are the *only* way
+  the actor is ever built — `org.bootstrap()` calls `_get_or_create("CEO", CEO)`
+  with no args. Yet the runbook/CLAUDE.md instruct "set a deliberately tiny CEO
+  budget for the first run" — which is **impossible without editing source**.
+  The 2026-07-28 Level-3 run silently ran under the hardcoded $5 cap. Fix: read
+  `SIS_BUDGET_USD` (and optionally `SIS_BREAKER_THRESHOLD` /
+  `SIS_MAX_COST_PER_ACCEPTED_USD`) at construction and thread through
+  `bootstrap()`; document in the env table. The spend control is the whole point
+  of the budget gate — it should be settable without a code change.
+- **M6 — No HTTP timeouts on any real-adapter call.** `_session()` builds a
+  `requests.Session` with no default timeout, and no Confluence/Jira/GitHub call
+  in `adapters_real.py` passes one — so `requests` waits **forever**. The
+  gauntlet timeout contains *candidate* code, but nothing contains a wedged
+  tenant API: a hung `transition()`/`create_page()`/`open_pr()` freezes the
+  cycle with no breaker, no bug, no log. Fix before unattended/AWS runs (pairs
+  with M2): a session-level default timeout (e.g. an `HTTPAdapter`/wrapper) or a
+  `timeout=` on every call.
 
 ## Low
 
@@ -36,9 +57,55 @@ issue is fixed, move it to the "Resolved" section at the bottom with the PR.
   "contract" idea — see [`docs/CLASS2_CONTRACT.md`](CLASS2_CONTRACT.md) for how the
   same abstraction extends to verifying built *features*, and the suggested
   sequencing (do L5 first).
+  *Field evidence (2026-07-28, cycle `e86cf568c524`):* the second real cycle
+  benchmarked **1.73µs vs 0.67µs** — the fixed 10-input workload is now at the
+  timer's noise floor, where the ≥10% margin approaches jitter (the target has
+  outgrown the benchmark). Separately, Claude edited the `benchmark()` harness
+  itself (hoisting `perf_counter`) — inert only because the gauntlet drives
+  `sum_of_divisors` with its own timer and ignores the candidate's `benchmark()`.
+  Both are concrete, observed-in-production arguments for the target-contract
+  redesign (a per-target reference + inputs, not a hardwired one).
 - **L9 — Breaker/budget state is in-memory per CEO lifetime** (documented in
   the runbook): a fresh local run clears it. Acceptable locally; revisit
   together with M2 for persistent clusters.
+- **L10 — L4 was only half-applied: `policy.target_paths()` still uses
+  `lstrip("./")`.** The exact bug fixed in `_rel()` (2026-07-25, L4) survives one
+  screen above it in the `SIS_TARGET_PATHS` parser: `lstrip("./")` strips `.`/`/`
+  *characters*, not a `"./"` prefix, so `.github/x` → `github/x` and `../x` → `x`.
+  The L4 regression test covers `_rel` only. Same one-word fix (`removeprefix`).
+- **L11 — L8's sibling: a same-story retry still 422s at `open_pr`.**
+  `create_branch` now reuses an existing branch (L8), but `POST /pulls` for a
+  head that already has an open PR returns 422 "A pull request already exists" —
+  unhandled in `open_pr`. The retry scenario L8 fixed dies one step later. Fix:
+  on that 422, find and return the existing open PR for the head branch.
+- **L12 — Episodic `reject_gate="timeout"` is unreachable.** A timed-out gate
+  returns returncode 124 with the "timed out" text in `stderr`, but `validate()`
+  reports the gate's generic reason (`"mypy --strict failed"` / `"pytest failed"`
+  / `"benchmark script crashed"`) and puts the timeout text in `errors` — which
+  `gate_from_reason()` never inspects. So a timeout is misattributed to the gate
+  it timed out in, and the documented `timeout` value can never appear in the
+  dataset the loop learns from. Fix: detect returncode 124 in `validate()` and
+  set an explicit timeout reason.
+- **L13 — The soft-sandbox network guard misses UDP + DNS.** `_NETWORK_GUARD`
+  patches `connect`/`connect_ex`/`create_connection`, leaving `socket.sendto()`/
+  `sendmsg()` (connectionless UDP) and `getaddrinfo` open. Docker mode
+  (`--network none`) blocks all egress in the kernel, and the stub is trusted —
+  so this only bites under `SIS_ALLOW_UNSANDBOXED_LLM=1`. Cheap defence-in-depth:
+  patch the UDP send methods too.
+- **L14 — `_put_file` refuses only FORBIDDEN, not STRICT.** The GitHub adapter's
+  last-line write guard blocks only guardrail (FORBIDDEN) paths, so a future
+  caller passing a STRICT engine path (e.g. `sis/org.py`) would be written —
+  STRICT enforcement lives solely in the SWE's `authorize_change`. Defence in
+  depth: require SOFT (or run the full `authorize_change`) at the write boundary.
+
+**Minor (noted in the 2026-07-28 review; not separately tracked):** the policy
+block path in `SWE.implement` omits `candidate_sha` from its return dict
+(episodic gets `None`); a missing `tests/test_target.py` fails candidates with a
+misleading "pytest failed"; `space_keys()`/`version_control_base()` re-read the
+secrets file on every call; Jira `children()` builds JQL by f-string (internal
+keys only); `transition()` raises if the *comment* POST fails after the
+transition already succeeded; two gates are both commented "Gate 2" in
+`gauntlet.py`.
 
 ## Sequencing for the first real-life test
 
