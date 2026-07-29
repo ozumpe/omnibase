@@ -20,15 +20,7 @@ bottom with the PR.
 
 ## Medium
 
-- **M2 — Detached actors live in an anonymous Ray namespace.** Harmless
-  locally (the cluster dies with the process), but on a persistent cluster
-  each run creates a new namespace: `ray.get_actor` finds nothing, so
-  CEO/Workspace/SelfModel duplicate every run and accumulate forever, and
-  breaker/budget state silently resets. **Fix before any AWS/persistent
-  cluster:** `ray.init(namespace="sis")` + a deliberate decision on
-  breaker-state lifetime. Design in
-  [`docs/BRAKE_STATE_AND_ORACLE.md`](BRAKE_STATE_AND_ORACLE.md) (M2 + L9 + the
-  oracle-versioned breaker).
+*(none open)*
 
 ## Low
 
@@ -68,11 +60,6 @@ bottom with the PR.
   a fixed-input wall-clock benchmark cannot be the correctness oracle past a point;
   the target contract needs per-target inputs sized to stay above the timer's
   resolution (and/or an operation-count / statistical-significance gate).
-- **L9 — Breaker/budget state is in-memory per CEO lifetime** (documented in
-  the runbook): a fresh local run clears it. Acceptable locally; revisit
-  together with M2 for persistent clusters — design in
-  [`docs/BRAKE_STATE_AND_ORACLE.md`](BRAKE_STATE_AND_ORACLE.md), including the
-  oracle-hashed auto-reset (persist across runs, reset when the oracle changes).
 
 **Minor (noted in the 2026-07-28 review; not separately tracked):** the policy
 block path in `SWE.implement` omits `candidate_sha` from its return dict
@@ -127,6 +114,18 @@ any long-lived cluster exists.
 
 ## Resolved
 
+- **M2 + L9** *(2026-07-29)* Detached actors now share the `sis` Ray namespace and
+  are created with atomic `get_if_exists=True`, so a persistent/AWS cluster reuses
+  the one CEO/Workspace/SelfModel across runs instead of duplicating them into
+  fresh anonymous namespaces. The CEO's brake/spend state is persisted to the
+  episodic store (new `save_state`/`load_state` on the port + jsonl/duckdb/null
+  backends) after every cycle and rehydrated on a *fresh* bootstrap — so the spend
+  cap and breaker survive a cluster/actor restart (L9). A `CEO.reset_breaker()`
+  admin RPC clears the trip **without** resetting spend (no budget bypass). Design:
+  [`docs/BRAKE_STATE_AND_ORACLE.md`](BRAKE_STATE_AND_ORACLE.md); covered by
+  `tests/test_ceo_state.py` + `tests/test_episodic.py`. *Deferred* (next steps in
+  that doc): the breaker-cause split (goal-exhaustion vs quality) and the
+  oracle-hashed auto-reset, which need the L5 target contract to hash against.
 - **L10–L14** *(2026-07-28, one batch)* Five low-severity fixes, each with a
   regression test:
   - **L10** — `policy.target_paths()` used `lstrip("./")` (strips `.`/`/`

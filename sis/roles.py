@@ -146,6 +146,7 @@ class CEO(Role):
         breaker_threshold: int = DEFAULT_BREAKER_THRESHOLD,
         max_cost_per_accepted_usd: float = DEFAULT_MAX_COST_PER_ACCEPTED_USD,
         slo_min_spend_usd: float = DEFAULT_SLO_MIN_SPEND_USD,
+        state: dict[str, Any] | None = None,
     ) -> None:
         super().__init__("CEO", "CEO")
         self._budget = budget_usd
@@ -157,6 +158,14 @@ class CEO(Role):
         self._accepted = 0
         self._tripped = False
         self._charter_id: str | None = None
+        # Rehydrate persisted brake/spend state (L9) — only on a *fresh* actor.
+        # A detached CEO that already exists (get_if_exists) keeps its live state;
+        # this path runs on first bootstrap or after a cluster/actor restart.
+        if state:
+            self._spent = float(state.get("spent_usd", 0.0))
+            self._consecutive_failures = int(state.get("consecutive_failures", 0))
+            self._accepted = int(state.get("accepted", 0))
+            self._tripped = bool(state.get("tripped", False))
 
     def approve_budget(self, estimate_usd: float) -> bool:
         """Goal/cost gate: refuse if this attempt would breach the hard cap."""
@@ -231,6 +240,27 @@ class CEO(Role):
             "accepted": float(self._accepted),
             "cost_per_accepted_usd": cpa if cpa != float("inf") else -1.0,
         }
+
+    def state_snapshot(self) -> dict[str, Any]:
+        """The persistable brake/spend state (L9) — what the driver writes to the
+        episodic store after each cycle and rehydrates on a fresh bootstrap."""
+        return {
+            "spent_usd": self._spent,
+            "consecutive_failures": self._consecutive_failures,
+            "accepted": self._accepted,
+            "tripped": self._tripped,
+        }
+
+    def reset_breaker(self) -> bool:
+        """Admin reset of the circuit breaker (clears the tripped flag + failure
+        streak). Spend is deliberately **not** reset — it is a financial guardrail,
+        so clearing the breaker can't bypass the hard cap (see
+        docs/BRAKE_STATE_AND_ORACLE.md §4.1). A spend-cap trip therefore re-trips on
+        the next evaluation until the budget is raised."""
+        self._tripped = False
+        self._consecutive_failures = 0
+        ray.get(self._ws.emit.remote("breaker.reset", **self.economics()))
+        return True
 
     def set_charter(self, text: str) -> str:
         """Write the top-level charter page (once — idempotent per CEO lifetime).

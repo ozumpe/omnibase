@@ -132,10 +132,11 @@ class Workspace:
 
 
 def get_workspace() -> Any:
-    """Return the named Workspace handle (a Ray ActorHandle), creating it if necessary."""
-    try:
-        return ray.get_actor(WORKSPACE_NAME)
-    except ValueError:
-        return Workspace.options(  # type: ignore[attr-defined]
-            name=WORKSPACE_NAME, lifetime="detached"
-        ).remote()
+    """Return the named Workspace handle (a Ray ActorHandle), creating it if necessary.
+
+    Shares the ``sis`` namespace and uses atomic get-or-create so a persistent
+    cluster reuses the one Workspace across runs instead of duplicating it (M2).
+    """
+    return Workspace.options(  # type: ignore[attr-defined]
+        name=WORKSPACE_NAME, namespace="sis", lifetime="detached", get_if_exists=True
+    ).remote()
