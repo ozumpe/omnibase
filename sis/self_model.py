@@ -113,10 +113,11 @@ def _now() -> str:
 
 
 def get_self_model() -> Any:
-    """Return the named SelfModel handle (a Ray ActorHandle), creating it if necessary."""
-    try:
-        return ray.get_actor(SELF_MODEL_NAME)
-    except ValueError:
-        return SelfModel.options(  # type: ignore[attr-defined]
-            name=SELF_MODEL_NAME, lifetime="detached"
-        ).remote()
+    """Return the named SelfModel handle (a Ray ActorHandle), creating it if necessary.
+
+    Shares the ``sis`` namespace and uses atomic get-or-create so a persistent
+    cluster reuses the one SelfModel across runs instead of duplicating it (M2).
+    """
+    return SelfModel.options(  # type: ignore[attr-defined]
+        name=SELF_MODEL_NAME, namespace="sis", lifetime="detached", get_if_exists=True
+    ).remote()
