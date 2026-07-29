@@ -39,33 +39,41 @@ CHARTER_TEXT = (
 )
 
 
+# All detached actors share one namespace so a persistent/AWS cluster finds them
+# across runs instead of duplicating them into fresh anonymous namespaces (M2).
+NAMESPACE = "sis"
+
+
 def _get_or_create(name: str, cls: Any, *args: Any) -> Any:
-    try:
-        return ray.get_actor(name)
-    except ValueError:
-        return cls.options(name=name, lifetime="detached").remote(*args)
+    # get_if_exists is atomic: it returns the existing detached actor or creates
+    # it, closing the race where two concurrent bootstraps both create (M2). On an
+    # existing actor the constructor *args are ignored — it keeps its live state.
+    return cls.options(
+        name=name, namespace=NAMESPACE, lifetime="detached", get_if_exists=True
+    ).remote(*args)
 
 
 def bootstrap() -> dict[str, Any]:
     """Start Ray, the shared substrate, and the named role actors."""
-    ray.init(ignore_reinit_error=True, logging_level=logging.ERROR)
+    ray.init(namespace=NAMESPACE, ignore_reinit_error=True, logging_level=logging.ERROR)
 
     # Shared substrate first, so role __init__ can register against it.
     workspace = get_workspace()
     self_model = get_self_model()
 
-    # CEO spend brakes are env-configurable (KNOWN_ISSUES.md M5) so a run can set
-    # a deliberately tiny budget without editing source. Note: if a detached CEO
-    # already exists (a persistent cluster), _get_or_create returns it and these
-    # args are ignored — tied to M2, harmless while the cluster dies per run.
+    # CEO spend brakes are env-configurable (M5). On a *fresh* CEO we also rehydrate
+    # persisted brake/spend state from the episodic store (L9), so the spend cap and
+    # breaker survive a cluster/actor restart; an already-running detached CEO keeps
+    # its live state (get_if_exists ignores these args).
     ceo_cfg = ceo_config_from_env()
+    ceo_state = episodic.get_episodic_store().load_state("ceo")
 
     handles = {
         "Workspace": workspace,
         "SelfModel": self_model,
         "CEO": _get_or_create(
             "CEO", CEO, ceo_cfg.budget_usd, ceo_cfg.breaker_threshold,
-            ceo_cfg.max_cost_per_accepted_usd, ceo_cfg.slo_min_spend_usd),
+            ceo_cfg.max_cost_per_accepted_usd, ceo_cfg.slo_min_spend_usd, ceo_state),
         "PM": _get_or_create("PM", PM),
         "CTO": _get_or_create("CTO", CTO),
         "Designer": _get_or_create("Designer", Designer),
@@ -105,10 +113,16 @@ def run_cycle(
     store = episodic.get_episodic_store()
 
     def _record(res: dict[str, Any], cost: float = 0.0) -> dict[str, Any]:
-        # Episodic logging is auxiliary — it must never break a cycle.
+        # Episodic logging + CEO-state persistence are auxiliary — they must never
+        # break a cycle. The driver is the single writer (keeps DuckDB happy).
         try:
             store.append(episodic.event_from_cycle_result(
                 res, cost_usd=cost, proposer=proposer, model=model))
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            # Persist the CEO's brake/spend state so it survives a restart (L9).
+            store.save_state("ceo", ray.get(ceo.state_snapshot.remote()))
         except Exception:  # noqa: BLE001
             pass
         return res

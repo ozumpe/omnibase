@@ -139,14 +139,15 @@ Released through **v0.1.4**. The bootstrap skeleton (original "first task") is
 - The CEO spend brakes are env-configurable (`SIS_BUDGET_USD` + the other
   thresholds), so a first real run can set a deliberately tiny cap without
   editing source (M5).
-- 117 tests; `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop → main`
+- 123 tests; `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop → main`
   enforced by both the client-side pre-push hook and active server-side rulesets.
 
 **Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L
 severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
-the IDs in commits/PRs. High is clear; the only remaining **Medium** is **M2**
-(anonymous Ray namespace — do before any persistent/AWS cluster), plus a short
-Low list (L5, L9).
+the IDs in commits/PRs. High and Medium are clear (M2 + L9 fixed 2026-07-29:
+shared `sis` namespace + CEO brake/spend state persisted to the episodic store
+and rehydrated on restart). The only open items are Low: **L5** (the target
+contract / benchmark oracle).
 
 - **First real-life test PASSED (2026-07-28): the full loop ran end-to-end with a
   real Claude proposer + real adapters + the kernel-enforced docker sandbox.** Cycle

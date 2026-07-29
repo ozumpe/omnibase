@@ -147,10 +147,13 @@ check there first, not just the episodic log. (A `no_change` outcome is *not* a
 failure: it files no bug and doesn't count toward the breaker.) Three
 consecutive real failures trip the circuit breaker: it files a
 second, distinctly-titled `CIRCUIT BREAKER OPEN` bug and every further cycle
-returns `circuit_breaker_open` without spending anything. The breaker's state
-lives in the CEO actor's memory, not on disk — a fresh `poetry run python
-main.py` (a fresh local Ray cluster) clears it, unless you're connected to a
-persistent one via `RAY_ADDRESS`.
+returns `circuit_breaker_open` without spending anything. The breaker + spend
+state is **persisted to the episodic store** and rehydrated on bootstrap (unless
+`SIS_EPISODIC_STORE=none`), so it survives a restart and spans a persistent/AWS
+cluster (detached actors share the `sis` Ray namespace). To clear a trip
+deliberately, call the CEO's `reset_breaker()` RPC — it clears the failure streak
+but **not** the accumulated spend (the hard cap can't be bypassed by a reset). See
+`docs/BRAKE_STATE_AND_ORACLE.md`.
 
 ---
 

@@ -37,6 +37,32 @@ def test_jsonl_skips_malformed_and_legacy_lines(tmp_path) -> None:  # type: igno
     assert all(isinstance(e, EpisodicEvent) for e in store.events())
 
 
+def test_jsonl_state_round_trip(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    # L9: latest-wins key/value state persists next to the event log and reads back.
+    store = JsonlEpisodicStore(tmp_path / "ep.jsonl")
+    assert store.load_state("ceo") is None
+    store.save_state("ceo", {"spent_usd": 0.5, "tripped": False})
+    store.save_state("ceo", {"spent_usd": 1.5, "tripped": True})  # latest wins
+    assert store.load_state("ceo") == {"spent_usd": 1.5, "tripped": True}
+    # A second store on the same path sees it (survives a "restart").
+    assert JsonlEpisodicStore(tmp_path / "ep.jsonl").load_state("ceo")["tripped"] is True
+
+
+def test_duckdb_state_round_trip(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    pytest.importorskip("duckdb")
+    store = DuckDBEpisodicStore(tmp_path / "ep.duckdb")
+    assert store.load_state("ceo") is None
+    store.save_state("ceo", {"spent_usd": 0.5})
+    store.save_state("ceo", {"spent_usd": 2.0})  # upsert, latest wins
+    assert store.load_state("ceo") == {"spent_usd": 2.0}
+
+
+def test_null_store_state_is_noop() -> None:
+    store = NullEpisodicStore()
+    store.save_state("ceo", {"spent_usd": 9.9})
+    assert store.load_state("ceo") is None
+
+
 def test_summary_rollups() -> None:
     events = [
         _ev("verified_awaiting_human_merge", cost_usd=2.0),

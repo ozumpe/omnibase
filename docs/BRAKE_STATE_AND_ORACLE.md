@@ -1,9 +1,16 @@
 # Brake state & the oracle-versioned circuit breaker (design)
 
-**Status:** design sketch (not implemented). Captures the fix for **M2** + **L9**
-and the breaker-classification idea that connects them to **L5**. See
+**Status:** **Parts 1–2 & 6 implemented (2026-07-29)** — the `sis` namespace +
+`get_if_exists` (M2) and CEO brake/spend state persisted to the episodic store and
+rehydrated on restart (L9), with a `reset_breaker()` RPC. **Parts 3–5 remain a
+design sketch** — the breaker-cause split and the oracle-versioned auto-reset need
+the L5 target contract to hash against (see the sequencing note at the end). See
 `docs/KNOWN_ISSUES.md` for the issue IDs and `docs/CLASS2_CONTRACT.md` for the
 target/oracle contract this builds on.
+
+> Mirrored in Confluence (SD space) as a child of **Guardrails & Operations**:
+> <https://olafzumpe.atlassian.net/wiki/spaces/SD/pages/6946818>. This repo copy is
+> the version-controlled source that evolves with the code; keep the two in sync.
 
 ## Why these three interlock
 

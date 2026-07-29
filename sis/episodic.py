@@ -99,6 +99,11 @@ class EpisodicStore(Protocol):
     def append(self, event: EpisodicEvent) -> None: ...
     def events(self) -> list[EpisodicEvent]: ...
     def summary(self) -> dict[str, Any]: ...
+    # Small latest-wins key/value state alongside the append-only event log —
+    # e.g. the CEO's persisted brake/spend state (L9). Distinct from events so
+    # it survives cluster/actor restart and rehydrates on bootstrap.
+    def save_state(self, key: str, value: dict[str, Any]) -> None: ...
+    def load_state(self, key: str) -> dict[str, Any] | None: ...
 
 
 class NullEpisodicStore:
@@ -113,17 +118,47 @@ class NullEpisodicStore:
     def summary(self) -> dict[str, Any]:
         return summarize([])
 
+    def save_state(self, key: str, value: dict[str, Any]) -> None:
+        return None
+
+    def load_state(self, key: str) -> dict[str, Any] | None:
+        return None
+
 
 class JsonlEpisodicStore:
     """Append-only JSON lines — the durable, zero-dependency default."""
 
     def __init__(self, path: Path = EPISODIC_JSONL) -> None:
         self.path = path
+        # Latest-wins state sits next to the event log (…/episodic_state.json),
+        # so constructing the store on a tmp path isolates both in tests.
+        self._state_path = path.with_name(f"{path.stem}_state.json")
 
     def append(self, event: EpisodicEvent) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(asdict(event)) + "\n")
+
+    def save_state(self, key: str, value: dict[str, Any]) -> None:
+        self._state_path.parent.mkdir(parents=True, exist_ok=True)
+        blob: dict[str, Any] = {}
+        if self._state_path.exists():
+            try:
+                blob = json.loads(self._state_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                blob = {}  # corrupt/legacy → overwrite rather than crash
+        blob[key] = value
+        self._state_path.write_text(json.dumps(blob, indent=2), encoding="utf-8")
+
+    def load_state(self, key: str) -> dict[str, Any] | None:
+        if not self._state_path.exists():
+            return None
+        try:
+            blob = json.loads(self._state_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return None
+        value = blob.get(key)
+        return value if isinstance(value, dict) else None
 
     def events(self) -> list[EpisodicEvent]:
         if not self.path.exists():
@@ -170,6 +205,9 @@ class DuckDBEpisodicStore:
         self._con = duckdb.connect(str(path))
         cols = ", ".join(f"{name} {dtype}" for name, dtype in _DUCK_TYPES.items())
         self._con.execute(f"CREATE TABLE IF NOT EXISTS episodes ({cols})")
+        # Latest-wins key/value state (e.g. persisted CEO brake state, L9).
+        self._con.execute(
+            "CREATE TABLE IF NOT EXISTS kv_state (key VARCHAR PRIMARY KEY, value VARCHAR)")
 
     def append(self, event: EpisodicEvent) -> None:
         cols = ", ".join(_FIELD_NAMES)
@@ -186,6 +224,21 @@ class DuckDBEpisodicStore:
 
     def summary(self) -> dict[str, Any]:
         return summarize(self.events())
+
+    def save_state(self, key: str, value: dict[str, Any]) -> None:
+        self._con.execute(
+            "INSERT INTO kv_state (key, value) VALUES (?, ?) "
+            "ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            [key, json.dumps(value)],
+        )
+
+    def load_state(self, key: str) -> dict[str, Any] | None:
+        row = self._con.execute(
+            "SELECT value FROM kv_state WHERE key = ?", [key]).fetchone()
+        if row is None:
+            return None
+        parsed: Any = json.loads(row[0])
+        return parsed if isinstance(parsed, dict) else None
 
     def sql(self, query: str) -> list[tuple[Any, ...]]:
         """Run an ad-hoc analytical query against the `episodes` table."""
