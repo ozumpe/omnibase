@@ -228,6 +228,46 @@ library invariants), not **implementing a checker**. Adding a genuinely new inva
 reuse. That reuse is exactly what makes "one server that builds features for many
 domains" tractable rather than a per-domain rewrite.
 
+## Language genericity — the ToolchainAdapter (a wanted feature)
+
+The same reuse argument has a second axis: **language**. The engine can target *any*
+language — "even Java" — because the target code only ever runs behind commands the
+sandbox executes; the target's language is a contract detail, not an engine one.
+
+**Important distinction:** the *engine* stays Python (Ray, the actors). "omnibase
+builds Java" means the Python engine *orchestrates* building/testing Java **inside
+the sandbox** — it targets Java, it does not become Java.
+
+Today the only Python-specific wiring is the gauntlet's **gate commands**. Since the
+sandbox already runs arbitrary commands, going language-generic is not a rewrite — it
+is making those commands **adapter-declared** instead of hardcoded:
+
+| Gate | Hardcoded (Python) | Generic form (per-language) |
+|---|---|---|
+| syntax / compile | `ast.parse` | `javac` / `tsc` / `cargo check` |
+| types | `mypy --strict` | the language's static check |
+| tests | `pytest` | `junit`/`gradle`, `jest`, `cargo test` |
+| benchmark | Python harness | a per-language bench harness |
+
+So the reuse model gains a middle layer — a **`ToolchainAdapter`** port sitting next
+to the existing ports (Confluence/Jira/GitHub/AWS):
+
+| Layer | Scope | What it is |
+|---|---|---|
+| **Engine** | write once | actor org · control loop · sandbox · episodic · policy · brakes |
+| **`ToolchainAdapter`** | per *language*, shared | how to build / typecheck / test / benchmark in X (Python, Java, TS, Rust); each pairs with a per-toolchain docker image |
+| **Contract** | per *target* | entry point · acceptance tests · invariants · inputs · margin |
+
+Crucially, **invariants are language-independent**: `round-trip`, `sorted-permutation`,
+`conservation`, `monotonicity` hold regardless of the implementation language, so the
+same invariant library and the same contract can be pointed at a Python *or* a Java
+implementation — differing only in the toolchain adapter. That is the strongest form
+of the genericity claim: the correctness contract is reused *across languages*.
+
+**Status:** wanted feature, not built. Depends on the `Contract` abstraction (L5
+Layer 1) existing first. Scope: a `ToolchainAdapter` port + one adapter per language
++ a docker image per toolchain.
+
 ## Where this is genuinely hard (open problems)
 
 - **Someone must supply the domain laws.** "Cargo is conserved," "removing a supplier
@@ -254,13 +294,43 @@ domains" tractable rather than a per-domain rewrite.
   classification. What's new is (a) the `FeatureContract` shape, (b) three new gates
   (interface/invariant/backtest), and (c) the contract-author step in the actor flow.
 
+## Example first-target projects ("easy but not too easy")
+
+Good first targets to point the generalized engine at have a **strong property
+oracle** and a **small, closed domain** — so they exercise invariants and
+feature-construction, not just speed, without a leap into full domain modelling.
+Each has a property that makes it a clean contract demo:
+
+| Target | Property that makes it a good contract | Notes |
+|---|---|---|
+| **Roman numeral ⇄ int** | round-trip: `to_roman(from_roman(s)) == s` | total function, tiny, unambiguous — the sweet spot |
+| **A sort** | output is a sorted permutation of the input | the canonical invariant; many valid impls |
+| **JSON / CSV transformer** | round-trip + schema conformance | realistic I/O; edge cases |
+| **Expression evaluator** | matches a reference grammar | recursion → genuine edge cases |
+| **LRU cache** | capacity never exceeded; hit/miss semantics | stateful; ordering invariants |
+| **Rate limiter** | safety (never exceeds the limit) + liveness (eventually allows) | a taste of temporal properties |
+
+**Recommended progression** (proves the whole thesis, cheaply, in two steps):
+
+1. **Roman numerals in Python** — L5 Layer 1 (the `OptimizationContract`/`Contract`)
+   + the `round-trip` invariant. No new toolchain; proves the contract generalises
+   beyond `sum_of_divisors` and introduces the invariant mechanism.
+2. **Re-point the *same contract* at a second language** (Java / TS / Rust) via a
+   new `ToolchainAdapter` + image. Because the contract is literally reused across
+   languages, this is the most convincing possible demonstration — the moment
+   omnibase stops being "a Python optimiser" and becomes a language-agnostic
+   software factory.
+
 ## Suggested sequencing
 
 1. **L5 first** — introduce the `Contract` abstraction + `OptimizationContract`,
    migrate `sum_of_divisors` into a policy-`FORBIDDEN` spec, add a second
-   optimization target (e.g. `is_prime`) to prove generalization.
+   optimization target (e.g. `is_prime`, or **roman numerals** with a round-trip
+   invariant) to prove generalization.
 2. **`FeatureContract` + interface/acceptance gates** — the minimum to build and
    verify a first trivial feature end-to-end (no invariants/backtests yet).
 3. **Invariant gate** (property-based, Hypothesis) — the anti-gaming layer for features.
-4. **Backtest gate + domain SLO** — once a domain with historical data exists.
-5. **Contract-author actor step** — automate spec → contract with human review.
+4. **`ToolchainAdapter`** — make the gate commands adapter-declared; add a second
+   language (the "even Java" step) reusing the same contract.
+5. **Backtest gate + domain SLO** — once a domain with historical data exists.
+6. **Contract-author actor step** — automate spec → contract with human review.
