@@ -26,7 +26,9 @@ bottom with the PR.
   CEO/Workspace/SelfModel duplicate every run and accumulate forever, and
   breaker/budget state silently resets. **Fix before any AWS/persistent
   cluster:** `ray.init(namespace="sis")` + a deliberate decision on
-  breaker-state lifetime.
+  breaker-state lifetime. Design in
+  [`docs/BRAKE_STATE_AND_ORACLE.md`](BRAKE_STATE_AND_ORACLE.md) (M2 + L9 + the
+  oracle-versioned breaker).
 
 ## Low
 
@@ -68,7 +70,9 @@ bottom with the PR.
   resolution (and/or an operation-count / statistical-significance gate).
 - **L9 — Breaker/budget state is in-memory per CEO lifetime** (documented in
   the runbook): a fresh local run clears it. Acceptable locally; revisit
-  together with M2 for persistent clusters.
+  together with M2 for persistent clusters — design in
+  [`docs/BRAKE_STATE_AND_ORACLE.md`](BRAKE_STATE_AND_ORACLE.md), including the
+  oracle-hashed auto-reset (persist across runs, reset when the oracle changes).
 
 **Minor (noted in the 2026-07-28 review; not separately tracked):** the policy
 block path in `SWE.implement` omits `candidate_sha` from its return dict
