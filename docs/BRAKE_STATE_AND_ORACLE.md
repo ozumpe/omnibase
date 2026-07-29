@@ -8,6 +8,10 @@ the L5 target contract to hash against (see the sequencing note at the end). See
 `docs/KNOWN_ISSUES.md` for the issue IDs and `docs/CLASS2_CONTRACT.md` for the
 target/oracle contract this builds on.
 
+> Mirrored in Confluence (SD space) as a child of **Guardrails & Operations**:
+> <https://olafzumpe.atlassian.net/wiki/spaces/SD/pages/6946818>. This repo copy is
+> the version-controlled source that evolves with the code; keep the two in sync.
+
 ## Why these three interlock
 
 - **M2** — detached actors live in an anonymous Ray namespace, so a persistent
