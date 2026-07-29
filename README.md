@@ -326,6 +326,8 @@ Open bugs and limitations are tracked with stable IDs in
 | – | First real-life run: real Claude + real adapters + docker sandbox | ✅ (2026-07-28) |
 | – | Env-configurable CEO spend brakes (`SIS_BUDGET_USD`, …) (M5) | ✅ |
 | 4 | Ray Serve weighted canary + atomic actor swap | next |
+| 5 | Target/oracle contract (L5) + Class-2 feature verification | planned |
+| 6 | Language-agnostic `ToolchainAdapter` (build/verify non-Python targets, e.g. Java) | wanted |
 | 7 | Model an external slice of the real world | vision |
 
 See the **Milestone Roadmap** Confluence page for detail.
