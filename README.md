@@ -48,7 +48,9 @@ credentials, or extra installs. Set these to opt into more.
 
 | Variable | Default | Values / effect |
 |----------|---------|-----------------|
-| `SIS_PROPOSER` | `stub` | `stub` = offline hand-written candidate. `claude` = real Claude API (needs `poetry install --with llm` + `ANTHROPIC_API_KEY`). |
+| `SIS_PROPOSER` | `stub` | `stub` = offline hand-written candidate. Any other value = a real LLM via `sis.llm` (needs `poetry install --with llm` + a provider key). |
+| `SIS_LLM_PROVIDER` | `anthropic` | Which LLM backend the proposer uses. Adapters live in `sis/llm.py`; add a vendor with a small adapter + registry line. |
+| `SIS_LLM_MODEL` | provider default | Override the model within a provider (e.g. `claude-sonnet-5`). |
 | `SIS_SANDBOX` | `subprocess` | Gauntlet isolation. `subprocess` = scrubbed env + in-process egress block. `docker` = kernel-enforced (`--network none`, no creds; needs the image, see below). **Required** when `SIS_PROPOSER` is not `stub` — untrusted LLM code can read host files in `subprocess` mode. |
 | `SIS_ALLOW_UNSANDBOXED_LLM` | `0` | `1` lets a real proposer run in the soft `subprocess` sandbox (loud warning). Unsafe — the candidate can read local files; never use it with real credentials. |
 | `SIS_SANDBOX_IMAGE` | `sis-gauntlet:latest` | Image used when `SIS_SANDBOX=docker`. |
@@ -63,7 +65,7 @@ credentials, or extra installs. Set these to opt into more.
 | `SIS_ENV` | `local` | Secret source. `local` = `secrets.local.yml` → `SIS_*` env vars. `aws` = AWS Secrets Manager. |
 | `SIS_SECRETS_FILE` | `secrets.local.yml` | Override the local secrets file path. |
 | `SIS_AWS_SECRET_ID` / `SIS_AWS_REGION` | — | Secrets Manager secret id + region (when `SIS_ENV=aws`). |
-| `ANTHROPIC_API_KEY` | — | Required when `SIS_PROPOSER=claude`. |
+| `ANTHROPIC_API_KEY` | — | Required for the `anthropic` provider (the default when `SIS_PROPOSER` isn't `stub`). Other providers read their own key. |
 
 ### Common workflows
 
@@ -202,7 +204,7 @@ runtime/                 # runtime-mutable state (kept apart from the engine)
   target.py              # the live target (naive baseline, committed)
   candidates/            # proposer's hand-written variant
   episodic.jsonl         # episodic store (gitignored; or episodic.duckdb)
-tests/                   # pytest suite (123 tests)
+tests/                   # pytest suite (127 tests)
 scripts/check_connections.py   # read-only credential/connectivity preflight
 main.py                  # entry point
 secrets.example.yml      # secrets template (copy to secrets.local.yml)
@@ -291,7 +293,7 @@ No code changes — only environment.
 ## Development
 
 ```bash
-poetry run pytest            # 123 tests (adapters, settings, gauntlet, org cycle + failures, brakes, adversarial corpus, …)
+poetry run pytest            # 127 tests (adapters, settings, gauntlet, org cycle + failures, brakes, adversarial corpus, …)
 poetry run mypy --strict sis/ main.py scripts/
 poetry run ruff check .
 ```
@@ -325,6 +327,8 @@ Open bugs and limitations are tracked with stable IDs in
 | – | Post-review hardening: gauntlet baseline (H1), benign no-op outcome, docker required for a real proposer (M1), branch base (M4), pricing (L3) | ✅ |
 | – | First real-life run: real Claude + real adapters + docker sandbox | ✅ (2026-07-28) |
 | – | Env-configurable CEO spend brakes (`SIS_BUDGET_USD`, …) (M5) | ✅ |
+| – | Shared Ray namespace + persisted CEO brake/spend state (M2/L9) | ✅ |
+| – | Provider-agnostic LLM interface (`sis/llm.py`; not locked to one vendor) | ✅ |
 | 4 | Ray Serve weighted canary + atomic actor swap | next |
 | 5 | Target/oracle contract (L5) + Class-2 feature verification | planned |
 | 6 | Language-agnostic `ToolchainAdapter` (build/verify non-Python targets, e.g. Java) | wanted |

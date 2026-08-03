@@ -10,8 +10,8 @@ def test_defaults_to_stub(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     assert result == OPTIMISED_CANDIDATE_PATH.read_text(encoding="utf-8")
 
 
-def test_claude_mode_dispatches(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    # SIS_PROPOSER=claude routes to _claude_proposal — stub it so no API call.
+def test_non_stub_mode_dispatches_to_llm(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # Any non-stub SIS_PROPOSER routes to _llm_proposal — stub it so no API call.
     monkeypatch.setenv("SIS_PROPOSER", "claude")
     captured: dict[str, object] = {}
 
@@ -20,7 +20,7 @@ def test_claude_mode_dispatches(monkeypatch) -> None:  # type: ignore[no-untyped
         captured["baseline"] = baseline
         return "def sum_of_divisors(n: int) -> int: return n\n"
 
-    monkeypatch.setattr(proposer, "_claude_proposal", fake)
+    monkeypatch.setattr(proposer, "_llm_proposal", fake)
     out = proposer.propose("CURRENT", 0.5)
     assert out.startswith("def sum_of_divisors")
     assert captured == {"source": "CURRENT", "baseline": 0.5}
