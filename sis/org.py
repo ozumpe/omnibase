@@ -23,8 +23,7 @@ from typing import Any
 
 import ray
 
-from sis import episodic, gauntlet
-from sis.proposer import MODEL
+from sis import episodic, gauntlet, llm
 from sis.roles import CEO, CTO, PM, QA, SWE, Designer, DevOps, ceo_config_from_env
 from sis.self_model import get_self_model
 from sis.settings import space_keys
@@ -109,7 +108,9 @@ def run_cycle(
     )
 
     proposer = os.getenv("SIS_PROPOSER", "stub")
-    model = MODEL if proposer == "claude" else None
+    # The model recorded in the episodic log = whichever provider/model is
+    # configured (sis.llm), not a hardcoded vendor. None for the stub.
+    model = llm.configured_model() if proposer != "stub" else None
     store = episodic.get_episodic_store()
 
     def _record(res: dict[str, Any], cost: float = 0.0) -> dict[str, Any]:

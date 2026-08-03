@@ -204,7 +204,8 @@ SIS_AWS_SECRET_ID=sis/prod/credentials` (region via `SIS_AWS_REGION`).
 
 | Variable | Default | Effect |
 |---|---|---|
-| `SIS_PROPOSER` | `stub` | `claude` = real Claude API (needs `--with llm` + key) |
+| `SIS_PROPOSER` | `stub` | non-stub = a real LLM via `sis.llm` (needs `--with llm` + a provider key) |
+| `SIS_LLM_PROVIDER` / `SIS_LLM_MODEL` | `anthropic` / provider default | which LLM backs the proposer (adapters in `sis/llm.py`) |
 | `SIS_SANDBOX` | `subprocess` | `docker` = kernel-enforced (needs the image); **required** when `SIS_PROPOSER` is not `stub` |
 | `SIS_ALLOW_UNSANDBOXED_LLM` | `0` | `1` = let a real proposer run in the soft subprocess sandbox (loud warning; unsafe — see M1) |
 | `SIS_SANDBOX_IMAGE` | `sis-gauntlet:latest` | image for docker mode |
