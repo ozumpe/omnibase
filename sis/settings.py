@@ -229,7 +229,11 @@ def _select_source() -> SecretSource:
 
 
 def load_settings(source: SecretSource | None = None) -> Settings:
-    """Load typed settings from the chosen secret source (auto-selected if None)."""
+    """Load typed settings from the chosen secret source (auto-selected if None).
+
+    Always reads the source. The convenience accessors below go through
+    :func:`cached_settings` instead — see the note there.
+    """
     env = os.getenv("SIS_ENV", "local")
     adapters = os.getenv("SIS_ADAPTERS", "memory")
     src = source if source is not None else _select_source()
@@ -238,6 +242,36 @@ def load_settings(source: SecretSource | None = None) -> Settings:
     except FileNotFoundError:
         raw = {}
     return _build_settings(env, adapters, raw)
+
+
+_CACHED: Settings | None = None
+
+
+def cached_settings() -> Settings:
+    """Process-wide cached settings, for accessors called on the hot path.
+
+    ``space_keys()`` and ``version_control_base()`` are invoked several times
+    per cycle from inside the Ray actors, and each call used to re-read and
+    re-parse the whole secrets source — a redundant file read locally, and a
+    redundant **Secrets Manager round-trip** under ``SIS_ENV=aws``. ``Settings``
+    is frozen and a process's credentials do not change under it, so one load
+    per process is enough.
+
+    Only the no-argument path is cached: ``load_settings(source)`` still reads
+    every time, so explicit-source callers (tests, ``check_connections.py``) are
+    unaffected. Call :func:`reset_settings_cache` if you mutate the environment
+    and need the next read to pick it up.
+    """
+    global _CACHED
+    if _CACHED is None:
+        _CACHED = load_settings()
+    return _CACHED
+
+
+def reset_settings_cache() -> None:
+    """Drop the cached settings — for tests/tools that change the environment."""
+    global _CACHED
+    _CACHED = None
 
 
 # Confluence space keys the org writes to when no Atlassian integration is
@@ -258,7 +292,7 @@ def space_keys(settings: Settings | None = None) -> dict[str, str]:
     Atlassian integration is configured (e.g. the default in-memory run), which
     keeps the local path credential-free and unchanged.
     """
-    resolved = settings if settings is not None else load_settings()
+    resolved = settings if settings is not None else cached_settings()
     atl = resolved.atlassian
     if atl is None:
         return dict(DEFAULT_SPACES)
@@ -277,7 +311,7 @@ def version_control_base(settings: Settings | None = None) -> str:
     back to ``"main"`` when no GitHub integration is configured (the in-memory
     path), which keeps the local run unchanged. See KNOWN_ISSUES.md M4.
     """
-    resolved = settings if settings is not None else load_settings()
+    resolved = settings if settings is not None else cached_settings()
     return resolved.github.default_base if resolved.github else "main"
 
 

@@ -393,7 +393,7 @@ class SWE(Role):
             ray.get(self._sm.record.remote(
                 "outcome", story_id, passed=False, reason=f"policy: {decision.reason}"))
             return {"passed": False, "reason": f"policy: {decision.reason}",
-                    "pr_id": None, "cost_usd": cost_usd}
+                    "pr_id": None, "cost_usd": cost_usd, "candidate_sha": candidate_sha}
 
         # Fork from the same base the merged target was read from, not a
         # hardcoded "main" — see KNOWN_ISSUES.md M4.

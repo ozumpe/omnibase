@@ -102,14 +102,8 @@ bottom with the PR.
     the mechanism per target (Serve/HTTP → this doc; actor-to-actor only → the
     not-yet-written atomic-swap doc).
 
-**Minor (noted in the 2026-07-28 review; not separately tracked):** the policy
-block path in `SWE.implement` omits `candidate_sha` from its return dict
-(episodic gets `None`); a missing `tests/test_target.py` fails candidates with a
-misleading "pytest failed"; `space_keys()`/`version_control_base()` re-read the
-secrets file on every call; Jira `children()` builds JQL by f-string (internal
-keys only); `transition()` raises if the *comment* POST fails after the
-transition already succeeded; two gates are both commented "Gate 2" in
-`gauntlet.py`.
+**Minor (noted in the 2026-07-28 review; not separately tracked):** all six
+fixed 2026-08-05 — see the **Minor batch** entry under Resolved.
 
 ## Sequencing for the first real-life test
 
@@ -155,6 +149,46 @@ any long-lived cluster exists.
 
 ## Resolved
 
+- **Minor batch** *(2026-08-05)* The six unnumbered items from the 2026-07-28
+  review, each with a regression test that fails without its fix:
+  - **`candidate_sha` dropped on the policy-block path** — `SWE.implement`'s
+    gauntlet-fail and success returns carried it, the policy-block return did
+    not, so a policy-blocked cycle was logged with `candidate_sha=None`: the one
+    field tying that episode to the exact diff, missing from precisely the
+    rejection you most want to audit. Covered structurally by
+    `tests/test_roles_contract.py` (every exit path must carry the key —
+    reaching that branch for real needs a cluster plus a mispointed target).
+  - **A missing `tests/test_target.py` was blamed on the candidate.** The gate
+    fell through to `pytest <a directory that was never created>`, which exits
+    non-zero and surfaced as `"pytest failed"` — a valid candidate rejected with
+    a reason pointing at the wrong side of the fence. Now fails closed (an unrun
+    correctness gate is not a pass) with a `harness:` reason naming the real
+    cause, and `gate_from_reason()` maps it to a new `harness` gate *before* the
+    gate-name substring checks — otherwise a broken harness reads in the
+    analytics as "candidates keep failing pytest".
+  - **Settings re-read per call.** `space_keys()`/`version_control_base()` are
+    called several times per cycle from inside the Ray actors, and each call
+    re-read and re-parsed the whole secrets source — a redundant file read
+    locally, a redundant **Secrets Manager round-trip** under `SIS_ENV=aws`. New
+    `settings.cached_settings()` (+ `reset_settings_cache()` for tests) caches
+    the **no-argument** path only; `load_settings(source)` still reads every
+    time, so explicit-source callers are unaffected.
+  - **Jira `children()` built JQL by f-string.** `/search/jql` takes JQL as a
+    string with no parameter binding. Only internal keys reach it today — but
+    that is a property of the callers, not an enforced one, and Confluence
+    intake exists to let outside text into the org. `parent_id` is now validated
+    against Jira's key grammar at the boundary, before any request goes out.
+  - **`transition()` was undone by a failed comment.** The comment POST was
+    chained onto the transition with `raise_for_status()`, so a 500 on the
+    *comment* raised after the transition had already been applied and could not
+    be rolled back. The caller saw the whole transition fail and retried, but
+    the issue had moved — the retry found no matching transition and hard-failed
+    the cycle. Now best-effort (mirroring `_apply_labels`), emitting
+    `issue.comment_failed`: an audit note must not cost the state change it
+    annotates.
+  - **Duplicate gate numbering** in `gauntlet.py` — the no-op check and mypy
+    were both commented "Gate 2". The no-op check is now "Gate 1b", keeping the
+    rest aligned with `DESIGN.md` §5.
 - **M2 + L9** *(2026-07-29)* Detached actors now share the `sis` Ray namespace and
   are created with atomic `get_if_exists=True`, so a persistent/AWS cluster reuses
   the one CEO/Workspace/SelfModel across runs instead of duplicating them into
