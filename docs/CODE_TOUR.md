@@ -7,6 +7,12 @@ one full cycle end to end. Read it top to bottom once; after that it's a map.
 
 > New to the project? Read [`README.md`](../README.md) first for what the system
 > *does*; this doc is about how the *code* is built.
+>
+> **Prefer pictures?** [`DIAGRAMS.md`](DIAGRAMS.md) has the same material as UML:
+> a [class diagram of the ports, adapters and the contract](DIAGRAMS.md#1-class--ports-adapters-and-the-contract)
+> for §6 below, and an
+> [activity diagram of the gauntlet](DIAGRAMS.md#3-activity--the-validation-gauntlet)
+> for §5.
 
 ---
 
