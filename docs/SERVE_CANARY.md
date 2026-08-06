@@ -108,9 +108,23 @@ setting on the contract, not a global constant. Under `SPLIT`,
 `baseline_response` is `None`, the response-agreement gate is skipped, and the
 invariant + percentile gates carry the verdict unchanged.
 
-**`evaluate_canary` takes `Sequence[Invariant]`, not `Contract`.** It uses
-nothing else from the contract, and depending on the narrower type is what lets
-it land *before* the L5 `Contract` abstraction exists (see sequencing).
+**`evaluate_canary` takes `Sequence[BoundInvariant]`, not `Contract`.** It uses
+nothing else from the contract, and depending on the narrower type is what let it
+land *before* the L5 `Contract` abstraction exists (see sequencing).
+
+`BoundInvariant` is the *resolved* form: `CLASS2_CONTRACT.md`'s `Invariant`
+carries `strategy`/`check` as **strings**, names resolved inside the sandbox
+because the offline gate executes untrusted candidate code there. The canary is
+the mirror case — it judges responses that have already crossed the network, in
+the main process, with predicates from the POLICY-FORBIDDEN contract module
+(trusted) — so it wants the bound callable. L5 Layer 1 owns the resolution step;
+the distinct name keeps the two from colliding when the contract data class lands.
+
+**Percentile floors are a property of the window size, not a tuning knob.** With
+100 samples the nearest-rank p99 *is* the 99th value, so a single slow request is
+a p100 event and legitimately invisible at p99 — it takes more than 1% of the
+window to move the tail. Worth knowing before sizing a canary window against a
+p99 SLO: a window of N can only resolve tail events more frequent than 1/N.
 
 Kept as a pure function on purpose — same project convention as `evaluate_brakes`
 and `gauntlet.validate`'s gate functions: decision logic testable without Ray, time,
@@ -290,9 +304,15 @@ step 1 (already done):
    end-to-end, no invariants yet. *(CLASS2_CONTRACT.md)*
 4. **`InvariantGate`** (property-based/Hypothesis) — the offline anti-gaming layer;
    this is also the predicate library the canary reuses. *(CLASS2_CONTRACT.md)*
-5. **`sis/canary.py`: `evaluate_canary()` + `CanaryVerdict`** — pure function, unit
-   tested with fakes (no Ray/Serve). This doc, step 1. Takes
-   `Sequence[Invariant]`, so it does **not** wait on step 2.
+5. ~~**`sis/canary.py`: `evaluate_canary()` + `CanaryVerdict`**~~ — **done**
+   (2026-08-05). Pure, no Ray/Serve/network/clock. Takes
+   `Sequence[BoundInvariant]`, so it did **not** wait on step 2. Four gates:
+   evidence floor → invariants (hard) → response agreement (hard, `SHADOW` only)
+   → p95 *and* p99 within `max_latency_ratio` (default `1.0` = "not worse"; pass
+   `0.9` for the offline gate's 10% margin). Everything fails closed — a
+   predicate that raises counts as a violation rather than propagating, and a
+   `SHADOW` window that lost its baselines returns a `harness:` reason instead of
+   being recorded as the candidate disagreeing.
 6. **First served target: a sort** (decided 2026-08-05; supersedes the earlier
    "JSON/CSV transformer or sort" recommendation). Stateless, request/response,
    and the two properties that actually matter here: its **input size scales
