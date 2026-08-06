@@ -16,10 +16,11 @@ from sis.adapters_real import (
     ConfluenceDocumentStore,
     GitHubVersionControl,
     JiraWorkTracker,
+    RealCloud,
     _http_timeout,
     _TimeoutHTTP,
 )
-from sis.ports import IssueStatus, RequiresHumanApproval
+from sis.ports import Cloud, IssueStatus, RequiresHumanApproval
 from sis.settings import AtlassianSettings, GitHubSettings
 
 
@@ -497,3 +498,27 @@ def test_put_file_refuses_non_target_paths() -> None:
 
     # The refusal happens before any HTTP call.
     assert not http.calls
+
+
+# --- The Cloud port: both adapters must satisfy it, always -----------------
+
+
+def test_real_cloud_still_satisfies_the_cloud_port() -> None:
+    # Cloud is @runtime_checkable, so growing the port (shift_traffic /
+    # live_metrics, docs/SERVE_CANARY.md step 7) silently drops any adapter that
+    # doesn't grow with it. RealCloud is the one that gets forgotten — it lives
+    # in a different module from InMemoryCloud, which already had a conformance
+    # test. This is that test for the other side.
+    assert isinstance(RealCloud(InMemoryTelemetry()), Cloud)
+
+
+def test_real_cloud_refuses_to_fake_a_canary() -> None:
+    # RealCloud records deployments; it has no traffic to split and no metrics
+    # source. It must say so loudly rather than no-op — a silent no-op would let
+    # a real run report a "passing canary" that never routed a request or
+    # measured anything, which is the exact failure a canary exists to prevent.
+    cloud = RealCloud(InMemoryTelemetry())
+    with pytest.raises(NotImplementedError, match="ServeCloud"):
+        cloud.shift_traffic("v1", 0.05)
+    with pytest.raises(NotImplementedError, match="ServeCloud"):
+        cloud.live_metrics("v1", 60.0)

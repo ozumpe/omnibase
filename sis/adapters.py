@@ -16,7 +16,10 @@ rather than performing them, per the project's hard rules.
 from __future__ import annotations
 
 import itertools
+import time
+from collections.abc import Callable
 
+from sis.metrics import summarise
 from sis.ports import (
     Branch,
     DeployRecord,
@@ -163,12 +166,29 @@ class InMemoryVersionControl:
 
 
 class InMemoryCloud:
-    """AWS + Ray Serve canary stand-in. Blue is live; green is the canary."""
+    """AWS + Ray Serve canary stand-in. Blue is live; green is the canary.
 
-    def __init__(self, telemetry: InMemoryTelemetry) -> None:
+    Unlike the other in-memory adapters this one is a working *model* of a
+    weighted canary, not just a recorder: it tracks a traffic weight per version
+    and summarises observed requests into percentile windows. That is deliberate
+    — it is what lets the canary flow (``DevOps.canary`` and the load generator)
+    be built and tested with no Ray Serve running at all, the same "fake first,
+    real adapter after" pattern as every other port here. ``ServeCloud`` later
+    implements the same two methods against real Serve metrics.
+
+    ``clock`` is injectable so window filtering is testable without sleeping.
+    """
+
+    def __init__(
+        self, telemetry: InMemoryTelemetry, *, clock: Callable[[], float] | None = None
+    ) -> None:
         self._tel = telemetry
         self._live: str | None = None
         self._records: list[DeployRecord] = []
+        self._clock = clock if clock is not None else time.monotonic
+        self._weights: dict[str, float] = {}
+        # version -> [(observed_at, latency_seconds, is_error)]
+        self._observations: dict[str, list[tuple[float, float, bool]]] = {}
 
     def deploy_canary(
         self, version: str, *, metrics: dict[str, float] | None = None
@@ -177,8 +197,36 @@ class InMemoryCloud:
             version=version, slot="green", live=False, metrics=dict(metrics or {})
         )
         self._records.append(record)
+        self._weights.setdefault(version, 0.0)
         self._tel.emit("canary.deployed", version=version, slot="green", metrics=record.metrics)
         return record
+
+    def shift_traffic(self, version: str, fraction: float) -> None:
+        if not 0.0 <= fraction <= 1.0:
+            raise ValueError(f"traffic fraction must be in 0.0..1.0, got {fraction}")
+        self._weights[version] = fraction
+        self._tel.emit("canary.traffic_shifted", version=version, fraction=fraction)
+
+    def traffic_weights(self) -> dict[str, float]:
+        """Current split (test/inspection helper — not part of the Cloud port)."""
+        return dict(self._weights)
+
+    def observe(self, version: str, latency_seconds: float, *, error: bool = False) -> None:
+        """Record one served request (test/load-gen helper, not on the port).
+
+        This is the seam the load generator writes through, so ``live_metrics``
+        summarises real observations rather than numbers a test made up.
+        """
+        self._observations.setdefault(version, []).append(
+            (self._clock(), latency_seconds, error)
+        )
+
+    def live_metrics(self, version: str, window_s: float) -> dict[str, float]:
+        cutoff = self._clock() - window_s
+        recent = [(lat, err) for at, lat, err in self._observations.get(version, [])
+                  if at >= cutoff]
+        return summarise([lat for lat, _ in recent],
+                         errors=sum(1 for _, err in recent if err)).as_metrics()
 
     def promote(self, version: str) -> DeployRecord:
         raise RequiresHumanApproval(
@@ -186,6 +234,7 @@ class InMemoryCloud:
         )
 
     def rollback(self, version: str) -> None:
+        self._weights[version] = 0.0
         self._tel.emit("canary.rolledback", version=version)
 
     def live_version(self) -> str | None:

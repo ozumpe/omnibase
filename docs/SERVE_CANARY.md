@@ -61,44 +61,72 @@ capacity, monotonicity, non-negativity) applies unchanged.
 
 ```python
 # sis/canary.py (new)
+class CanaryMode(str, Enum):
+    SHADOW = "shadow"   # default: dispatch each sampled request to BOTH versions
+    SPLIT = "split"     # weighted split only; each request reaches one version
+
 @dataclass(frozen=True)
 class LiveSample:
     request: Any
-    baseline_response: Any     # what the live (blue) version returned
-    candidate_response: Any    # what the canary (green) version returned
+    candidate_response: Any        # what the canary (green) version returned
+    baseline_response: Any | None  # SHADOW only — None under a weighted split
 
 @dataclass(frozen=True)
 class CanaryVerdict:
     version: str
     samples: int
     invariant_violations: int          # hard gate: must be 0
+    response_disagreements: int        # SHADOW only; 0 under SPLIT
     baseline_p95: float; baseline_p99: float
     candidate_p95: float; candidate_p99: float
     passed: bool
     reason: str
 
-def evaluate_canary(contract: Contract, samples: Sequence[LiveSample],
+def evaluate_canary(invariants: Sequence[Invariant], samples: Sequence[LiveSample],
                      baseline_latencies: Sequence[float],
-                     candidate_latencies: Sequence[float]) -> CanaryVerdict:
+                     candidate_latencies: Sequence[float],
+                     *, mode: CanaryMode = CanaryMode.SHADOW) -> CanaryVerdict:
     """Pure — no Ray, no Serve, no network. Same shape as gauntlet.validate()'s
     Result, so it slots into the existing episodic/provenance plumbing."""
     violations = sum(
-        1 for s in samples for inv in contract.invariants
+        1 for s in samples for inv in invariants
         if not inv.check(s.request, s.candidate_response)
     )
-    ...  # percentile compare; both gates must pass to promote
+    ...  # percentile compare; all applicable gates must pass to promote
 ```
+
+**Why `mode`, and why `baseline_response` is optional.** These two are one
+decision. A weighted split routes each request to exactly *one* version, so it
+can never populate both responses for the same request — a `LiveSample` carrying
+both only makes sense under **shadow/mirror** dispatch, where a sampled request
+goes to blue *and* green and only blue's answer is returned to the caller.
+Shadow is the default: it buys a paired latency comparison (same request, same
+instant, so the split's traffic-mix confounder disappears) and a direct
+response-agreement check. It costs double compute on sampled requests, and it is
+only sound for targets with a unique correct answer — so it is a per-target
+setting on the contract, not a global constant. Under `SPLIT`,
+`baseline_response` is `None`, the response-agreement gate is skipped, and the
+invariant + percentile gates carry the verdict unchanged.
+
+**`evaluate_canary` takes `Sequence[Invariant]`, not `Contract`.** It uses
+nothing else from the contract, and depending on the narrower type is what lets
+it land *before* the L5 `Contract` abstraction exists (see sequencing).
 
 Kept as a pure function on purpose — same project convention as `evaluate_brakes`
 and `gauntlet.validate`'s gate functions: decision logic testable without Ray, time,
 or a live cluster. `serve()` (the Ray/network-touching shell) calls it, mirroring how
 `sis/loop.py` separates `decide()` from `run_loop()`/`serve()`.
 
-**Two independent gates to promote, both required:**
+**Gates to promote, all applicable ones required:**
 1. **Correctness (hard):** `invariant_violations == 0` over the sampled window. Any
    violation → immediate rollback, no negotiation — this is the same "candidate can't
    game it" property the differential-correctness gate protects offline.
-2. **Performance (graded):** candidate's live `p95`/`p99` not worse than baseline's
+2. **Response agreement (hard, `SHADOW` only):** `response_disagreements == 0` —
+   blue and green answered the same sampled request identically. Skipped under
+   `SPLIT` (there is no paired baseline response to compare), and inapplicable to
+   targets with several valid answers, which is the second reason the mode is
+   per-target.
+3. **Performance (graded):** candidate's live `p95`/`p99` not worse than baseline's
    (or ≥ the target's margin, matching the offline `min_speedup` philosophy) —
    computed over hundreds/thousands of real calls, so it doesn't inherit the
    synthetic 10-input jitter problem.
@@ -218,11 +246,22 @@ same style as `decide()`:
 def serve_breach(metrics: dict[str, float], slo_p99_s: float,
                   breach_window_ticks: int, consecutive: int) -> bool:
     """Sustained breach only — CLAUDE.md/DESIGN.md §4: 'never a single spike.'"""
+
+def breach_trigger(cloud: Cloud, version: str, *, slo_p99_s: float,
+                    window_s: float, breach_window_ticks: int,
+                    title: str, body: str) -> Callable[[], Work | None]:
+    """The impure shell: reads live_metrics, keeps the consecutive-breach count,
+    and returns Work when serve_breach() says the breach is sustained."""
 ```
 
-`loop.serve()`'s `trigger` parameter already accepts any `Callable[[], Work | None]`
-— this is a drop-in replacement for `repeat(...)`, no `run_loop`/`decide` changes
-needed. That's the last piece that makes `main.py --loop` a genuine self-improving
+**Two functions, not one.** `loop.serve()`'s `trigger` takes
+`Callable[[], Work | None]`, so `serve_breach` — a `bool`-returning predicate over
+a metrics snapshot — is not itself a drop-in for `repeat(...)`, despite being the
+decision at the heart of one. Splitting it keeps the project's pure/impure line
+where `decide()`/`run_loop()` already put it: `serve_breach` is pure and
+table-testable (sustained breach vs single spike), `breach_trigger` owns the
+`live_metrics` read and the consecutive-tick counter that `serve_breach` is given.
+`run_loop`/`decide` still need no changes. That's the last piece that makes `main.py --loop` a genuine self-improving
 *server* rather than a scheduler replaying one canned proposal.
 
 **One canary in flight at a time.** This is the first design where the trigger
@@ -252,17 +291,30 @@ step 1 (already done):
 4. **`InvariantGate`** (property-based/Hypothesis) — the offline anti-gaming layer;
    this is also the predicate library the canary reuses. *(CLASS2_CONTRACT.md)*
 5. **`sis/canary.py`: `evaluate_canary()` + `CanaryVerdict`** — pure function, unit
-   tested with fakes (no Ray/Serve). This doc, step 1.
-6. **Pick the first served target: stateless only.** Recommend the JSON/CSV
-   transformer or the sort — naturally request/response-shaped, no state-handoff
-   design needed. *Not* LRU cache / rate limiter yet (see above).
-7. **`Cloud.shift_traffic` / `Cloud.live_metrics`** on the port — this grows the
-   `@runtime_checkable Cloud` Protocol, so `InMemoryCloud` *and* `RealCloud` both
-   need a stub in this same step or they stop satisfying `Cloud` at all.
-   `InMemoryCloud`'s fakes are what let `DevOps.canary()` be built and tested
-   without Ray Serve running at all — same "fake first, real adapter after"
-   pattern as every other port in the project; `RealCloud`'s stub can keep
-   raising/no-op'ing until `ServeCloud` replaces it in step 9.
+   tested with fakes (no Ray/Serve). This doc, step 1. Takes
+   `Sequence[Invariant]`, so it does **not** wait on step 2.
+6. **First served target: a sort** (decided 2026-08-05; supersedes the earlier
+   "JSON/CSV transformer or sort" recommendation). Stateless, request/response,
+   and the two properties that actually matter here: its **input size scales
+   freely**, so per-request work can be made to dominate Serve's own
+   ~ms overhead — without that the p95 comparison measures the framework, not
+   the candidate, which is the online rerun of exactly the noise-floor failure
+   L5 documented offline — and its **output is unique for a given input**, so
+   `SHADOW` response-agreement is a strict check. Deliberately *not* reusing
+   L5's roman-numeral target: bounded 1–3999 means the input can't be scaled to
+   clear Serve overhead, and its self-contained round-trip invariant never reads
+   `baseline_response`, so it would leave the shadow path unexercised. *Not* LRU
+   cache / rate limiter yet (see above).
+7. ~~**`Cloud.shift_traffic` / `Cloud.live_metrics`** on the port~~ — **done**
+   (2026-08-05). The port grew both; `InMemoryCloud` implements them for real
+   (weight map + `observe()` → windowed percentiles via the new `sis/metrics.py`),
+   which is what lets `DevOps.canary()` and the load generator be built and tested
+   with no Ray Serve running — the same "fake first, real adapter after" pattern as
+   every other port here. `RealCloud` **raises** `NotImplementedError` rather than
+   no-op'ing until `ServeCloud` replaces it in step 9: a silent no-op would let a
+   real run report a passing canary that never routed a request or measured
+   anything. Both adapters have `isinstance(x, Cloud)` conformance tests now, so
+   the next port change can't silently drop one.
 8. **`sis/loadgen.py`** — reuse the contract's invariant `strategy` to generate valid
    concurrent traffic locally.
 9. **`ServeCloud`** — the real Ray Serve adapter: deploy, weighted split, atomic
@@ -288,8 +340,25 @@ this doc adds, and none of it can start meaningfully before 4, because 5 to 10 a
 all "the same invariant/contract mechanism, pointed at live traffic" — which is the
 whole point of writing this as one doc instead of two.
 
+## Decisions taken (2026-08-05)
+
+Recorded here so the sequencing above reads against settled ground:
+
+| Decision | Choice | Consequence |
+|---|---|---|
+| Paired samples | **Shadow by default**, `CanaryMode` per target | `LiveSample.baseline_response` is optional; the response-agreement gate is shadow-only |
+| First served target | **A sort** | scalable input (real latency signal) + unique output (strict shadow check) |
+| Ray Serve in CI | **Yes** — CI runs Serve | `ServeCloud` (step 9) gets real coverage, not skipped integration tests; the CI job grows a Serve-capable stage in that step |
+| Property testing | **Hypothesis**, added as an optional dep group | lands with step 5/8, its first actual use — not added ahead of a caller |
+
 ## Open problems
 
+- **Nothing calls `promote()` today.** This doc says the human PR merge triggers
+  promotion, but `merge_pr` raises `RequiresHumanApproval` in *every* adapter, so
+  there is no post-merge code path to hang it on — the loop stops at
+  `verified_awaiting_human_merge` and nothing resumes after a human merges. Whoever
+  builds step 9 has to decide what observes the merge (a poll, a webhook, an
+  explicit operator command) before `ServeCloud.promote` has a caller.
 - **Sampling rate for live invariant checks.** Checking every response is safest but
   may not be free depending on invariant cost; needs a documented sampling policy
   (start at 100% for a low-traffic bootstrap load-gen; revisit under real volume).
