@@ -72,8 +72,8 @@ class CanaryVerdict:
     version: str
     samples: int
     invariant_violations: int          # hard gate: must be 0
-    baseline_p50: float; baseline_p99: float
-    candidate_p50: float; candidate_p99: float
+    baseline_p95: float; baseline_p99: float
+    candidate_p95: float; candidate_p99: float
     passed: bool
     reason: str
 
@@ -137,8 +137,12 @@ class ServeCloud:
         # shift_traffic(version, 0.0), kill the deployment.
 ```
 
-`shift_traffic`/`live_metrics` are genuinely new `Cloud` port methods — `InMemoryCloud`
-implements them as in-memory fakes (for tests), `ServeCloud` as the real thing.
+`shift_traffic`/`live_metrics` are genuinely new `Cloud` port methods — and because
+`Cloud` is `@runtime_checkable`, adding them means *both* existing adapters need a
+stub the same day the port grows, not just one of them: `InMemoryCloud` implements
+them as in-memory fakes (for tests), and `RealCloud` (today's `SIS_ADAPTERS=real`
+placeholder) needs its own stub too or it silently stops satisfying `Cloud` until
+`ServeCloud` replaces it. `ServeCloud` implements both for real.
 `SelfModel`'s blue/green slot fields (`set_slot`, `live_version`) already exist and
 need no change — they just start reflecting a real Serve deployment instead of a
 recorded string.
@@ -175,6 +179,33 @@ migration vs. cold-start-behind-the-split), not a Ray Serve detail. Recommendati
 canary mechanics can be proven independent of the state-handoff problem. Revisit
 LRU cache / rate limiter once atomic swap + traffic split works cleanly.
 
+## Scope: which canary mechanism applies (reconciling with DESIGN.md §4)
+
+DESIGN.md §4 names two canary mechanisms, not one: *"Ray Serve canary — deploy the
+new version alongside the old, shift weighted traffic, compare against baseline.
+For an internal (non-served) actor, the equivalent is: spin up the new actor
+version, shadow-run real traffic, then atomically swap the named-actor handle."*
+This doc designs only the first — the Ray-Serve/HTTP-fronted path. Disposition, so
+the two docs don't drift:
+
+- **Applies here:** any target reachable as a request/response call through Ray
+  Serve — including the bootstrap target once it's wrapped behind a `ServeCloud`
+  deployment for canary purposes (see "Where the traffic comes from" above), even
+  before anything calls it over real HTTP.
+- **Out of scope here, not superseded:** a genuinely internal Ray actor that is
+  never Serve-fronted (e.g. a future domain actor other actors call directly by
+  handle) still needs DESIGN.md's shadow-run-then-atomic-handle-swap mechanism.
+  That mechanism has no design doc yet and isn't blocked by anything in this one —
+  `evaluate_canary()`'s two gates (invariant violations, live percentile
+  comparison) are the reusable part; only the traffic-splitting and
+  promote/rollback mechanics differ (weighted HTTP split + Serve deployment swap,
+  vs. shadow calls + a named-actor-handle swap).
+- **Decision rule for a new target:** called over Serve/HTTP (or wrapped behind
+  Serve for testing, per the bootstrap path) → this doc's `ServeCloud`. Called
+  only actor-to-actor by Ray handle → this doc's mechanics don't apply; write the
+  atomic-swap doc when the first such target exists, reusing `evaluate_canary()`
+  for the correctness/performance gates.
+
 ## The other payoff: the loop's trigger stops being simulated
 
 `sis/loop.py`'s `once()`/`repeat()` are stand-ins acknowledged in their own
@@ -194,6 +225,19 @@ def serve_breach(metrics: dict[str, float], slo_p99_s: float,
 needed. That's the last piece that makes `main.py --loop` a genuine self-improving
 *server* rather than a scheduler replaying one canned proposal.
 
+**One canary in flight at a time.** This is the first design where the trigger
+source and the thing under evaluation share the same live-metrics stream: a
+cycle's own canary traffic feeds the very `live_metrics()` window `serve_breach()`
+reads, and "collect a window" (sequencing steps 6/10) is minutes-scale, not
+instantaneous. Rule: the impure wrapper that calls `serve_breach()`
+(`loop.serve()`/`run_loop()` — not `serve_breach()` itself, which stays pure) must
+check `SelfModel`'s existing green-slot state before calling `propose()` again; if
+a green canary is already deployed, hold the next cycle rather than starting one
+concurrently. No new state needed — `SelfModel.set_slot`/deploy-record tracking
+already exists (`sis/roles.py`) — this just adds a read-before-propose gate,
+keeping the loop's existing one-cycle-at-a-time assumption (one CEO budget gate,
+one breaker) true under the real trigger, not just the simulated one.
+
 ## Concrete sequencing
 
 Extends `CLASS2_CONTRACT.md`'s sequencing (steps 1–3 there are unchanged prerequisites;
@@ -212,18 +256,28 @@ step 1 (already done):
 6. **Pick the first served target: stateless only.** Recommend the JSON/CSV
    transformer or the sort — naturally request/response-shaped, no state-handoff
    design needed. *Not* LRU cache / rate limiter yet (see above).
-7. **`Cloud.shift_traffic` / `Cloud.live_metrics`** on the port; `InMemoryCloud` fake
-   implementations first (so `DevOps.canary()` can be built and tested without Ray
-   Serve running at all) — same "fake first, real adapter after" pattern as every
-   other port in the project.
+7. **`Cloud.shift_traffic` / `Cloud.live_metrics`** on the port — this grows the
+   `@runtime_checkable Cloud` Protocol, so `InMemoryCloud` *and* `RealCloud` both
+   need a stub in this same step or they stop satisfying `Cloud` at all.
+   `InMemoryCloud`'s fakes are what let `DevOps.canary()` be built and tested
+   without Ray Serve running at all — same "fake first, real adapter after"
+   pattern as every other port in the project; `RealCloud`'s stub can keep
+   raising/no-op'ing until `ServeCloud` replaces it in step 9.
 8. **`sis/loadgen.py`** — reuse the contract's invariant `strategy` to generate valid
    concurrent traffic locally.
 9. **`ServeCloud`** — the real Ray Serve adapter: deploy, weighted split, atomic
    promote/rollback, `live_metrics` backed by real Serve metrics.
-10. **Wire `DevOps.canary()`** to the real flow: deploy at low weight → collect a
-    window → `evaluate_canary()` → rollback+bug or verified-awaiting-merge.
+10. **Rework `DevOps.canary()`** for the real flow — a signature change, not a
+    rewire: today it's `canary(pr_id, candidate_latency: float)`, one scalar
+    measured in the gauntlet sandbox (`sis/roles.py`). It needs the target's
+    `Contract` plus live samples and baseline/candidate latency arrays instead,
+    and nothing today associates a PR/target with a `Contract` to fetch — that
+    lookup has to land in `Workspace`/`SelfModel` first. Then: deploy at low
+    weight → collect a window → `evaluate_canary()` → rollback+bug or
+    verified-awaiting-merge.
 11. **`serve_breach()` replaces `repeat()`** as `main.py --loop`'s trigger — the real
-    monitor.
+    monitor. Paired with the one-canary-in-flight gate above (a `loop.serve()`
+    check against `SelfModel`'s slot state, not a `serve_breach()` change).
 12. **`ToolchainAdapter`** (language genericity) and **backtest/SLO gates** — orthogonal
     to this doc, can interleave per `CLASS2_CONTRACT.md`'s own sequencing.
 13. **Stateful served targets** (LRU cache, rate limiter) — once state-handoff-on-swap

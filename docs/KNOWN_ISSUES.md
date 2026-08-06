@@ -61,6 +61,47 @@ bottom with the PR.
   the target contract needs per-target inputs sized to stay above the timer's
   resolution (and/or an operation-count / statistical-significance gate).
 
+  *Design-review findings on [`docs/SERVE_CANARY.md`](SERVE_CANARY.md) (2026-08-05,
+  design sketch — nothing here is implemented yet), checked against the current
+  `sis/ports.py` / `sis/roles.py` / `sis/policy.py` / `sis/adapters.py`. First four
+  fixed same-day by correcting the design text (still nothing to implement — no
+  `Contract`/`Cloud.shift_traffic`/etc. exist in code yet); last two still open:*
+  - ~~**`Cloud` Protocol break.**~~ **Fixed in the doc.** `shift_traffic`/
+    `live_metrics` would've broken the `@runtime_checkable Cloud` Protocol for
+    `InMemoryCloud` (`sis/adapters.py:165`) *and* `RealCloud`
+    (`sis/adapters_real.py:459`), not just the one the doc called out. Sequencing
+    step 7 and the `ServeCloud` section now say both adapters need a stub in the
+    same step.
+  - ~~**`specs/` isn't actually FORBIDDEN yet.**~~ **Fixed in the doc**, and a
+    sharper gap than first written: `classify()` matches `GUARDRAIL_PATHS` by
+    *exact* string equality, not directory prefix, so even adding a bare
+    `"specs/"` entry would silently protect nothing. `CLASS2_CONTRACT.md` now
+    states this as two required changes for L5 Layer 1 — add the contract paths
+    *and* teach `classify()` directory-prefix matching (or enumerate contract
+    modules individually) — instead of claiming present-tense enforcement.
+  - ~~**`DevOps.canary()`'s signature doesn't stretch to this design.**~~ **Fixed
+    in the doc.** Sequencing step 10 now says "rework," not "wire," and spells out
+    that today's one-scalar `canary(pr_id, candidate_latency)` needs a `Contract` +
+    live samples + latency arrays instead, plus a PR/target→`Contract` lookup that
+    doesn't exist yet in `Workspace`/`SelfModel`.
+  - ~~**`CanaryVerdict` field mismatch.**~~ **Fixed in the doc** — the dataclass
+    sketch now uses `baseline_p95`/`candidate_p95` (matching the gate 2 prose)
+    instead of `p50`.
+  - ~~**No stated concurrency rule once `serve_breach()` lands (step 11).**~~
+    **Fixed in the doc.** New rule: the impure wrapper around `serve_breach()`
+    (`loop.serve()`/`run_loop()`, not the pure function itself) checks
+    `SelfModel`'s existing green-slot state before calling `propose()` again — a
+    canary already in flight holds the next cycle rather than starting one
+    concurrently. Reuses existing slot-tracking state; no new field.
+  - ~~**Doesn't reconcile with the "atomic actor swap" path.**~~ **Fixed in the
+    doc.** New "Scope" section: this doc covers only the Ray-Serve/HTTP-fronted
+    half of `DESIGN.md` §4; the shadow-run-then-atomic-handle-swap path for
+    internal, never-served actors is out of scope here, not superseded, and has
+    no design doc yet — `evaluate_canary()`'s two gates are reusable for it,
+    only the traffic-splitting/promote mechanics differ. A decision rule picks
+    the mechanism per target (Serve/HTTP → this doc; actor-to-actor only → the
+    not-yet-written atomic-swap doc).
+
 **Minor (noted in the 2026-07-28 review; not separately tracked):** the policy
 block path in `SWE.implement` omits `candidate_sha` from its return dict
 (episodic gets `None`); a missing `tests/test_target.py` fails candidates with a
