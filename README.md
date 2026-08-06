@@ -206,7 +206,7 @@ runtime/                 # runtime-mutable state (kept apart from the engine)
   target.py              # the live target (naive baseline, committed)
   candidates/            # proposer's hand-written variant
   episodic.jsonl         # episodic store (gitignored; or episodic.duckdb)
-tests/                   # pytest suite (183 tests)
+tests/                   # pytest suite (194 tests)
 scripts/check_connections.py   # read-only credential/connectivity preflight
 main.py                  # entry point
 secrets.example.yml      # secrets template (copy to secrets.local.yml)
@@ -295,7 +295,7 @@ No code changes — only environment.
 ## Development
 
 ```bash
-poetry run pytest            # 183 tests (adapters, settings, gauntlet, org cycle + failures, brakes, adversarial corpus, …)
+poetry run pytest            # 194 tests (adapters, settings, gauntlet, org cycle + failures, brakes, adversarial corpus, …)
 poetry run mypy --strict sis/ main.py scripts/
 poetry run ruff check .
 ```

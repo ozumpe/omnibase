@@ -22,6 +22,10 @@ EPISODIC_DUCKDB = RUNTIME_DIR / "episodic.duckdb"
 CANDIDATES_DIR = RUNTIME_DIR / "candidates"
 OPTIMISED_CANDIDATE_PATH = CANDIDATES_DIR / "optimised_target.py"
 
-# Tests (the gauntlet copies the target test into its sandbox).
 TESTS_DIR = PROJECT_ROOT / "tests"
-TARGET_TEST_PATH = TESTS_DIR / "test_target.py"
+
+# Contracts: the reference oracle + acceptance tests per target. POLICY-FORBIDDEN
+# (sis.policy.GUARDRAIL_DIRS) — the implementer must not edit its own exam. The
+# gauntlet copies a contract's oracle and tests into its sandbox; the concrete
+# paths live on the contract, not here, since there is one set per target.
+SPECS_DIR = PROJECT_ROOT / "specs"

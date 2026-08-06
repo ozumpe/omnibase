@@ -34,11 +34,16 @@ import textwrap
 import uuid
 from dataclasses import dataclass, field
 
-from sis.paths import TARGET_PATH, TARGET_TEST_PATH
+from sis.contract import (
+    DEFAULT_MAX_LATENCY_RATIO,
+    OptimizationContract,
+    default_contract,
+)
 
-# A candidate must run in at most this fraction of the baseline's time
-# (i.e. be at least 10% faster) — "beat the baseline by a defined margin".
-IMPROVEMENT_MARGIN = 0.90
+# Back-compat alias: the margin is now per-contract
+# (``OptimizationContract.max_latency_ratio``), because what counts as a
+# meaningful win is a property of the target, not of the engine.
+IMPROVEMENT_MARGIN = DEFAULT_MAX_LATENCY_RATIO
 
 # Only these env vars survive into the sandbox. Everything else — crucially
 # every credential — is dropped, so generated code can't read or exfiltrate a
@@ -231,29 +236,42 @@ def _timed_out(result: subprocess.CompletedProcess[str], gate: str) -> Result | 
 
 
 def validate(
-    code_str: str, baseline_latency: float, *, baseline_source: str | None = None
+    code_str: str,
+    baseline_latency: float = 0.0,
+    *,
+    baseline_source: str | None = None,
+    contract: OptimizationContract | None = None,
 ) -> Result:
-    """Validate *code_str* and return a Result.
+    """Validate *code_str* against *contract* and return a Result.
 
     The candidate must:
     1. Parse as valid Python.
     2. Not be identical to the baseline (a no-op is not an improvement).
     3. Pass mypy --strict.
-    4. Pass the target test suite.
-    5a. Agree with an independent reference on randomised inputs (anti-gaming).
-    5b. Beat the freshly-measured baseline by ``IMPROVEMENT_MARGIN``.
+    4. Pass the contract's acceptance tests.
+    5a. Export the contract's ``entry`` function (interface).
+    5b. Agree with the contract's independent reference on randomised inputs
+        (anti-gaming).
+    5c. Beat the freshly-measured baseline by the contract's
+        ``max_latency_ratio``.
+
+    *contract* says what "correct" and "better" mean for this target — the
+    reference, the inputs, the margin (see :mod:`sis.contract`). Omitting it
+    falls back to the bootstrap ``sum_of_divisors`` contract, so existing
+    callers and tests keep working unchanged.
 
     *baseline_source* is the code the candidate must beat — the code the cycle
     is actually based on (the merged target), which the loop passes in. It is
     written into the sandbox and benchmarked against; the candidate never
     competes with a stale copy on disk (see docs/KNOWN_ISSUES.md H1). When
-    omitted, it falls back to the local ``runtime/target.py`` so direct callers
-    and tests still work.
+    omitted, it falls back to the contract's target file on disk so direct
+    callers and tests still work.
 
     *baseline_latency* is advisory only (kept for logging/compat); the pass/fail
     comparison uses a baseline measured in-sandbox over the same workload as the
     candidate, which is far less noisy.
     """
+    spec = contract if contract is not None else default_contract()
     # Backstop: never execute untrusted proposer code in a soft sandbox (M1).
     ensure_sandbox_allows_proposer()
 
@@ -269,7 +287,7 @@ def validate(
     # the local target only when no source is supplied. See KNOWN_ISSUES.md H1.
     baseline_code = (
         baseline_source if baseline_source is not None
-        else TARGET_PATH.read_text(encoding="utf-8")
+        else pathlib.Path(spec.target_file).read_text(encoding="utf-8")
     )
 
     # --- Gate 1: syntax ---
@@ -297,6 +315,21 @@ def validate(
         baseline_mod = tmp / "baseline.py"
         baseline_mod.write_text(baseline_code, encoding="utf-8")
 
+        # The contract's oracle: reference implementation, benchmark inputs and
+        # random-input generator. It is *code* and has to run beside the
+        # candidate, so it is copied in as a module rather than interpolated
+        # into the benchmark script as literals (which is what tied the whole
+        # gauntlet to one target — L5).
+        oracle_src = pathlib.Path(spec.oracle_file)
+        if not oracle_src.exists():
+            return Result(
+                passed=False,
+                reason=f"harness: contract oracle missing at {spec.oracle_path} "
+                       "— correctness and benchmark gates cannot run",
+            )
+        oracle_mod = tmp / "oracle.py"
+        oracle_mod.write_text(oracle_src.read_text(encoding="utf-8"), encoding="utf-8")
+
         # --- Gate 5 (sandbox): network-egress block + scrubbed env ---
         # sitecustomize.py runs at interpreter startup in every gate that has
         # tmp on PYTHONPATH, installing the network guard before any candidate
@@ -316,10 +349,42 @@ def validate(
                 errors=mypy_result.stdout.splitlines() + mypy_result.stderr.splitlines(),
             )
 
-        # --- Gate 3: pytest — run test_target.py against the candidate.
-        # Only the target test goes into the sandbox: it does `import target`,
-        # which resolves to the candidate written above. The harness's own
-        # tests import sis modules not present here and are not the subject of
+        # --- Gate 2b: interface — the candidate must export the contract's
+        # entry point. Cheap (one import), and it fails with a statement about
+        # the *shape* of the diff; without it a wrong-API candidate surfaces as
+        # a wall of acceptance-test failures that never names the actual
+        # problem. Ordered before acceptance per docs/CLASS2_CONTRACT.md's gate
+        # stack — "fails fast if the LLM built the wrong shape".
+        iface_script = textwrap.dedent(
+            f"""\
+            import sys, importlib.util
+            s = importlib.util.spec_from_file_location("candidate", {str(candidate)!r})
+            m = importlib.util.module_from_spec(s)
+            s.loader.exec_module(m)
+            if not callable(getattr(m, {spec.entry!r}, None)):
+                sys.exit(4)
+            """
+        )
+        iface_result = _run([_PY, "-c", iface_script], tmpdir, env)
+        if timed_out := _timed_out(iface_result, "interface"):
+            return timed_out
+        if iface_result.returncode == 4:
+            return Result(
+                passed=False,
+                reason=f"interface: candidate does not export a callable "
+                       f"{spec.entry!r} (required by contract {spec.name!r})",
+            )
+        if iface_result.returncode != 0:
+            return Result(
+                passed=False,
+                reason="interface: candidate could not be imported",
+                errors=iface_result.stderr.splitlines(),
+            )
+
+        # --- Gate 3: pytest — the contract's acceptance tests, against the
+        # candidate. Only they go into the sandbox: they do `import target`,
+        # which resolves to the candidate written above. The harness's own tests
+        # import sis modules not present here and are not the subject of
         # validation.
         #
         # The suite is required, not optional. When it was missing this used to
@@ -327,17 +392,18 @@ def validate(
         # was reported as "pytest failed" — blaming the candidate for a broken
         # harness. Still fails closed (an unrun correctness gate must never read
         # as a pass), but now says which side is at fault.
-        if not TARGET_TEST_PATH.exists():
+        tests_src = pathlib.Path(spec.tests_file)
+        if not tests_src.exists():
             return Result(
                 passed=False,
-                reason=f"harness: target test suite missing at {TARGET_TEST_PATH} "
+                reason=f"harness: contract acceptance tests missing at {spec.tests_path} "
                        "— the pytest gate cannot run",
             )
         tests_dst = tmp / "tests"
         tests_dst.mkdir()
         (tests_dst / "__init__.py").write_text("", encoding="utf-8")
         (tests_dst / "test_target.py").write_text(
-            TARGET_TEST_PATH.read_text(encoding="utf-8"), encoding="utf-8"
+            tests_src.read_text(encoding="utf-8"), encoding="utf-8"
         )
 
         pytest_result = _run(
@@ -374,34 +440,46 @@ def validate(
 
             cand = _load({str(candidate)!r}, "candidate")
             base = _load({str(baseline_mod)!r}, "baseline")
+            oracle = _load({str(oracle_mod)!r}, "oracle")
 
-            def reference(n):  # trusted, independent O(n) implementation
-                return sum(i for i in range(1, n + 1) if n % i == 0)
+            entry = {spec.entry!r}
+            if not hasattr(cand, entry):
+                print("NOENTRY", entry)
+                sys.exit(4)
+            cand_fn = getattr(cand, entry)
+            base_fn = getattr(base, entry)
 
             rng = random.Random()  # system entropy: inputs are unpredictable
-            for _ in range(300):
-                n = rng.randint(2, 20_000)
-                if cand.sum_of_divisors(n) != reference(n):
-                    print("MISMATCH", n)
+            for _ in range({spec.diff_trials}):
+                args = oracle.random_input(rng)
+                if cand_fn(*args) != oracle.reference(*args):
+                    print("MISMATCH", args)
                     sys.exit(3)
 
-            INPUTS = [3, 97, 997, 5000, 8128, 9973, 10_000, 12345, 16384, 19_999]
+            INPUTS = oracle.BENCH_INPUTS
 
             def bench(fn):
                 best = float("inf")
                 for _ in range(5):
                     start = time.perf_counter()
-                    for n in INPUTS:
-                        fn(n)
+                    for args in INPUTS:
+                        fn(*args)
                     best = min(best, time.perf_counter() - start)
                 return best / len(INPUTS)
 
-            print(bench(cand.sum_of_divisors), bench(base.sum_of_divisors))
+            print(bench(cand_fn), bench(base_fn))
             """
         )
         bench_result = _run([_PY, "-c", bench_script], tmpdir, env)
         if timed_out := _timed_out(bench_result, "benchmark"):
             return timed_out
+        if bench_result.returncode == 4:
+            return Result(
+                passed=False,
+                reason=f"interface: candidate does not export {spec.entry!r} "
+                       f"(required by contract {spec.name!r})",
+                errors=bench_result.stdout.splitlines(),
+            )
         if bench_result.returncode == 3:
             return Result(
                 passed=False,
@@ -423,13 +501,13 @@ def validate(
         except ValueError:
             return Result(passed=False, reason="benchmark produced non-numeric output")
 
-        # Must beat the freshly-measured baseline by a defined margin.
-        if candidate_latency > measured_baseline * IMPROVEMENT_MARGIN:
+        # Must beat the freshly-measured baseline by the contract's margin.
+        if candidate_latency > measured_baseline * spec.max_latency_ratio:
             return Result(
                 passed=False,
                 reason=(
                     f"no improvement: candidate {candidate_latency:.6f}s vs baseline "
-                    f"{measured_baseline:.6f}s (need ≤ {IMPROVEMENT_MARGIN:.0%})"
+                    f"{measured_baseline:.6f}s (need ≤ {spec.max_latency_ratio:.0%})"
                 ),
                 latency_seconds=candidate_latency,
             )
@@ -437,8 +515,10 @@ def validate(
         return Result(passed=True, reason="all gates passed", latency_seconds=candidate_latency)
 
 
-def measure_baseline(source: str | None = None) -> float:
-    """Benchmark the current target's ``sum_of_divisors`` **inside the sandbox**.
+def measure_baseline(
+    source: str | None = None, *, contract: OptimizationContract | None = None
+) -> float:
+    """Benchmark the contract's entry function **inside the sandbox**.
 
     Used by the loop for the baseline it reports and shows the proposer. Like
     every gate, the code runs in the sandbox (scrubbed env + egress block, or
@@ -446,28 +526,48 @@ def measure_baseline(source: str | None = None) -> float:
     baseline for the authoritative pass/fail decision; this is the advisory
     number for the prompt and the episodic log. Returns 0.0 if unmeasurable.
     """
-    code = source if source is not None else TARGET_PATH.read_text(encoding="utf-8")
+    spec = contract if contract is not None else default_contract()
+    code = (
+        source if source is not None
+        else pathlib.Path(spec.target_file).read_text(encoding="utf-8")
+    )
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = pathlib.Path(tmpdir)
         (tmp / "sitecustomize.py").write_text(_NETWORK_GUARD, encoding="utf-8")
         module = tmp / "baseline.py"
         module.write_text(code, encoding="utf-8")
+        oracle_src = pathlib.Path(spec.oracle_file)
+        if not oracle_src.exists():
+            print(
+                f"WARNING: measure_baseline() found no contract oracle at "
+                f"{spec.oracle_path}; returning 0.0.",
+                file=sys.stderr,
+            )
+            return 0.0
+        oracle_mod = tmp / "oracle.py"
+        oracle_mod.write_text(oracle_src.read_text(encoding="utf-8"), encoding="utf-8")
         env = _sandbox_env(home=tmpdir, pythonpath=tmpdir)
         script = textwrap.dedent(
             f"""\
             import time, importlib.util
-            spec = importlib.util.spec_from_file_location("m", {str(module)!r})
-            m = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(m)
 
-            INPUTS = [3, 97, 997, 5000, 8128, 9973, 10_000, 12345, 16384, 19_999]
+            def _load(path, name):
+                s = importlib.util.spec_from_file_location(name, path)
+                mod = importlib.util.module_from_spec(s)
+                s.loader.exec_module(mod)
+                return mod
+
+            m = _load({str(module)!r}, "m")
+            oracle = _load({str(oracle_mod)!r}, "oracle")
+
+            fn = getattr(m, {spec.entry!r})
             best = float("inf")
             for _ in range(5):
                 start = time.perf_counter()
-                for n in INPUTS:
-                    m.sum_of_divisors(n)
+                for args in oracle.BENCH_INPUTS:
+                    fn(*args)
                 best = min(best, time.perf_counter() - start)
-            print(best / len(INPUTS))
+            print(best / len(oracle.BENCH_INPUTS))
             """
         )
         result = _run([_PY, "-c", script], tmpdir, env)

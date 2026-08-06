@@ -6,6 +6,7 @@ models*. It tracks:
 
 - the actor registry (role, state, parent/child, restarts),
 - deployment state (blue/green slots, the live version),
+- the contract registry (what "correct" and "better" mean, per target),
 - the provenance graph (spec → epic/story → branch/PR → deploy → outcome),
 - the runtime substrate (Ray cluster resources, platform).
 
@@ -21,6 +22,8 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 import ray
+
+from sis.contract import OptimizationContract
 
 SELF_MODEL_NAME = "SelfModel"
 
@@ -51,6 +54,7 @@ class SelfModel:
         self._provenance: list[ProvenanceEvent] = []
         self._slots: dict[str, str | None] = {"blue": None, "green": None}  # slot → version
         self._live_version: str | None = None
+        self._contracts: dict[str, OptimizationContract] = {}  # target_path → contract
 
     # --- actor registry ---
     def register(self, name: str, role: str, parent: str | None = None) -> None:
@@ -77,6 +81,21 @@ class SelfModel:
 
     def deployment(self) -> dict[str, Any]:
         return {"slots": dict(self._slots), "live_version": self._live_version}
+
+    # --- contract registry ---
+    # The SelfModel already knows what is deployed where; knowing what each
+    # target is *judged by* belongs with it rather than in an env var, and it is
+    # the same lookup the canary needs to fetch a PR's contract later
+    # (docs/SERVE_CANARY.md step 10).
+    def register_contract(self, contract: OptimizationContract) -> None:
+        self._contracts[contract.target_path] = contract
+
+    def contract_for(self, target_path: str) -> OptimizationContract | None:
+        """The contract governing *target_path*, or None if it has none."""
+        return self._contracts.get(target_path)
+
+    def contracts(self) -> list[OptimizationContract]:
+        return list(self._contracts.values())
 
     # --- provenance graph ---
     def record(self, kind: str, ref: str, **detail: Any) -> None:

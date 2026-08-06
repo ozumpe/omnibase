@@ -24,6 +24,7 @@ from typing import Any
 import ray
 
 from sis import episodic, gauntlet, llm
+from sis.contract import DEFAULT_CONTRACTS
 from sis.roles import CEO, CTO, PM, QA, SWE, Designer, DevOps, ceo_config_from_env
 from sis.self_model import get_self_model
 from sis.settings import space_keys
@@ -84,6 +85,11 @@ def bootstrap() -> dict[str, Any]:
     # The CEO sets the top-level charter once (idempotent) — the goal the
     # provenance graph roots at: charter → spec → epic → story → outcome.
     ray.get(handles["CEO"].set_charter.remote(CHARTER_TEXT))
+
+    # Register what each target is judged by. Idempotent, keyed by target path,
+    # so a detached SelfModel surviving a restart just re-learns the same map.
+    for contract in DEFAULT_CONTRACTS:
+        ray.get(self_model.register_contract.remote(contract))
     return handles
 
 

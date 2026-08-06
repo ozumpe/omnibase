@@ -111,7 +111,7 @@ def test_gate_from_reason() -> None:
     # must win over the gate-name substring checks, or "the suite is missing"
     # is counted in the analytics as "candidates keep failing pytest".
     assert gate_from_reason(
-        "harness: target test suite missing at tests/test_target.py "
+        "harness: contract acceptance tests missing at specs/x/tests.py "
         "— the pytest gate cannot run"
     ) == "harness"
     assert gate_from_reason(None) is None
