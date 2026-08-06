@@ -141,7 +141,7 @@ Released through **v0.1.4**. The bootstrap skeleton (original "first task") is
 - The CEO spend brakes are env-configurable (`SIS_BUDGET_USD` + the other
   thresholds), so a first real run can set a deliberately tiny cap without
   editing source (M5).
-- 183 tests; `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop → main`
+- 191 tests; `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop → main`
   enforced by both the client-side pre-push hook and active server-side rulesets.
 
 **Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L
