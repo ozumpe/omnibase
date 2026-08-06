@@ -327,9 +327,24 @@ step 1 (already done):
     lookup has to land in `Workspace`/`SelfModel` first. Then: deploy at low
     weight → collect a window → `evaluate_canary()` → rollback+bug or
     verified-awaiting-merge.
-11. **`serve_breach()` replaces `repeat()`** as `main.py --loop`'s trigger — the real
-    monitor. Paired with the one-canary-in-flight gate above (a `loop.serve()`
-    check against `SelfModel`'s slot state, not a `serve_breach()` change).
+11. ~~**`serve_breach()` replaces `repeat()`** as `main.py --loop`'s trigger~~ —
+    **done** (2026-08-05), ahead of steps 8–10 because none of it needs the L5
+    `Contract`. `window_in_breach`/`serve_breach` are pure (sample floor, sustained
+    streak, single spikes rejected); `breach_trigger` is the shell that reads
+    `live_metrics` and owns the consecutive-tick counter, resetting both on a
+    healthy tick and after firing so a long outage yields one cycle per window
+    rather than one per tick. `loop.serve(one_canary_in_flight=True)` (default)
+    holds the next cycle while `canary_in_flight()` reports green occupied.
+
+    **Consequence, deliberate:** `DevOps.canary()` sets green and nothing ever
+    cleared it, so with the gate on, `main.py --loop` now runs one successful
+    cycle and then idles instead of cycling continuously. That is the correct
+    reading of "stop at the human gate" — the old behaviour stacked PRs against
+    an unmerged predecessor, and since cycles baseline from the *merged* target
+    each one re-proposed the same change and spent again for it. The new
+    `DevOps.retire_canary()` is the release (rollback now, promotion once
+    something observes the merge — see Open problems); `one_canary_in_flight=False`
+    restores the old behaviour.
 12. **`ToolchainAdapter`** (language genericity) and **backtest/SLO gates** — orthogonal
     to this doc, can interleave per `CLASS2_CONTRACT.md`'s own sequencing.
 13. **Stateful served targets** (LRU cache, rate limiter) — once state-handoff-on-swap

@@ -461,6 +461,20 @@ class DevOps(Role):
         return {"version": version, "slot": record.slot,
                 "latency_seconds": candidate_latency, "live": record.live}
 
+    def retire_canary(self, version: str) -> dict[str, Any]:
+        """Take the canary out of the green slot and stop its traffic.
+
+        The release half of ``canary()``. Without it the one-canary-in-flight
+        gate (``loop.serve``) has no exit: green is set when a canary deploys and
+        nothing else ever clears it, so the loop would idle forever after its
+        first successful cycle. Called on rollback, and — once something observes
+        the human PR merge (docs/SERVE_CANARY.md open problem) — on promotion.
+        """
+        ray.get(self._ws.rollback.remote(version))
+        ray.get(self._sm.set_slot.remote("green", None))
+        ray.get(self._sm.record.remote("canary_retired", version))
+        return {"version": version, "slot": "green", "released": True}
+
     def file_bug(self, summary: str) -> str:
         issue = ray.get(self._ws.create_issue.remote(IssueType.BUG, summary, None))
         ray.get(self._sm.record.remote("bug", issue.id, summary=summary))
