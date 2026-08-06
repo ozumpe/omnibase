@@ -24,10 +24,13 @@ from __future__ import annotations
 
 import signal
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from sis.ports import Cloud
 
 
 class Action(str, Enum):
@@ -122,6 +125,116 @@ def repeat(title: str, body: str) -> Callable[[], Work | None]:
     return lambda: work
 
 
+# --------------------------------------------------------------------------
+# The real trigger: a sustained SLO breach on live traffic
+# --------------------------------------------------------------------------
+
+# A breach decision needs enough requests behind it to mean anything: the p99 of
+# a five-request window *is* one slow request. Spending an LLM cycle on that is
+# the online restatement of L5's noise-floor problem, so the floor is a first
+# class parameter rather than a hidden constant.
+DEFAULT_MIN_BREACH_SAMPLES = 20
+
+# How many consecutive breaching ticks before the loop acts. CLAUDE.md/DESIGN.md
+# §4: trigger on a *sustained* breach over a rolling window, never a single spike.
+DEFAULT_BREACH_WINDOW_TICKS = 3
+
+
+def window_in_breach(
+    metrics: Mapping[str, float],
+    *,
+    slo_p99_s: float,
+    min_samples: int = DEFAULT_MIN_BREACH_SAMPLES,
+) -> bool:
+    """Is this one ``live_metrics`` window over the SLO? Pure.
+
+    A window that hasn't cleared ``min_samples`` is *not* a breach — too little
+    traffic to judge. An empty window reports ``p99=0.0``, so it also reads as
+    healthy, which is the safe direction: no traffic must never start a cycle.
+    """
+    if metrics.get("samples", 0.0) < min_samples:
+        return False
+    return metrics.get("p99", 0.0) > slo_p99_s
+
+
+def serve_breach(
+    metrics: Mapping[str, float],
+    *,
+    slo_p99_s: float,
+    consecutive: int,
+    breach_window_ticks: int = DEFAULT_BREACH_WINDOW_TICKS,
+    min_samples: int = DEFAULT_MIN_BREACH_SAMPLES,
+) -> bool:
+    """Sustained breach only — never a single spike. Pure.
+
+    ``consecutive`` is how many *prior* consecutive ticks were already in
+    breach; this tick completes the streak when the total reaches
+    ``breach_window_ticks``. The counter lives in the caller
+    (:func:`breach_trigger` owns it) so this stays a function of its arguments.
+    """
+    if breach_window_ticks < 1:
+        raise ValueError(f"breach_window_ticks must be >= 1, got {breach_window_ticks}")
+    if not window_in_breach(metrics, slo_p99_s=slo_p99_s, min_samples=min_samples):
+        return False
+    return consecutive + 1 >= breach_window_ticks
+
+
+def breach_trigger(
+    cloud: Cloud,
+    version: str,
+    *,
+    slo_p99_s: float,
+    title: str,
+    body: str,
+    window_s: float = 60.0,
+    breach_window_ticks: int = DEFAULT_BREACH_WINDOW_TICKS,
+    min_samples: int = DEFAULT_MIN_BREACH_SAMPLES,
+) -> Callable[[], Work | None]:
+    """The real monitor, in the shape ``serve()``'s ``trigger`` expects.
+
+    The impure half of :func:`serve_breach`: it owns the ``live_metrics`` read
+    and the consecutive-tick counter, and yields :class:`Work` only when the
+    breach is sustained. Drop-in for :func:`repeat` — this is what makes
+    ``main.py --loop`` a self-improving *server* rather than a scheduler
+    replaying one canned proposal.
+
+    The streak resets both when a tick comes back healthy and after firing, so a
+    long outage produces one cycle per ``breach_window_ticks``, not one per tick.
+    """
+    consecutive = 0
+
+    def _trigger() -> Work | None:
+        nonlocal consecutive
+        metrics = cloud.live_metrics(version, window_s)
+        if serve_breach(metrics, slo_p99_s=slo_p99_s, consecutive=consecutive,
+                        breach_window_ticks=breach_window_ticks,
+                        min_samples=min_samples):
+            consecutive = 0
+            return Work(title, body)
+        consecutive = (
+            consecutive + 1
+            if window_in_breach(metrics, slo_p99_s=slo_p99_s, min_samples=min_samples)
+            else 0
+        )
+        return None
+
+    return _trigger
+
+
+def canary_in_flight(deployment: Mapping[str, Any]) -> str | None:
+    """The version occupying the green slot, if any. Pure.
+
+    One canary at a time: a cycle's own canary traffic feeds the very
+    ``live_metrics`` window :func:`breach_trigger` reads, and collecting a window
+    is minutes-scale, so a second cycle started meanwhile would both corrupt the
+    first one's measurement and (because cycles baseline from the *merged*
+    target) re-propose the change still sitting unmerged in the first one's PR.
+    """
+    slots = deployment.get("slots", {})
+    green = slots.get("green")
+    return str(green) if green else None
+
+
 def _install_signal_handlers(stop: threading.Event) -> None:
     def _handler(signum: int, frame: Any) -> None:
         stop.set()
@@ -141,13 +254,26 @@ def serve(
     estimate_usd: float = 0.5,
     max_cycles: int | None = None,
     stop_event: threading.Event | None = None,
+    one_canary_in_flight: bool = True,
 ) -> list[dict[str, Any]]:
-    """Run the loop against a live actor org, with graceful SIGINT/SIGTERM stop."""
+    """Run the loop against a live actor org, with graceful SIGINT/SIGTERM stop.
+
+    ``one_canary_in_flight`` (default on) holds the next cycle while a canary
+    still occupies the green slot — see :func:`canary_in_flight`. Note that
+    nothing releases green today: a cycle that reaches
+    ``verified_awaiting_human_merge`` leaves it occupied, so the loop idles until
+    someone calls ``DevOps.retire_canary`` (or the merge-observation path that
+    docs/SERVE_CANARY.md lists as an open problem). That is the intended
+    "stop at the human gate" behaviour rather than stacking PRs nobody merged,
+    but pass ``False`` for the old always-propose behaviour.
+    """
     import ray
 
     from sis import org
 
     ceo = handles["CEO"]
+    self_model = handles["SelfModel"]
+    workspace = handles["Workspace"]
     stop = stop_event or threading.Event()
     _install_signal_handlers(stop)
 
@@ -155,8 +281,14 @@ def serve(
         econ = ray.get(ceo.economics.remote())  # read-only; no telemetry side effects
         budget_ok = econ["spent_usd"] + estimate_usd <= econ["budget_usd"]
         breaker_open = bool(ray.get(ceo.breaker_open.remote()))
-        # Don't pull new work while frozen — decide() will STOP anyway.
-        work = None if breaker_open else trigger()
+        held_by = None
+        if one_canary_in_flight and not breaker_open:
+            held_by = canary_in_flight(ray.get(self_model.deployment.remote()))
+            if held_by:
+                ray.get(workspace.emit.remote("loop.held_for_canary", version=held_by))
+        # Don't pull new work while frozen or while a canary is still being
+        # evaluated — decide() will SKIP/STOP on a None work item.
+        work = None if (breaker_open or held_by) else trigger()
         return Tick(breaker_open=breaker_open, budget_ok=budget_ok, work=work)
 
     def run_cycle(work: Work) -> dict[str, Any]:
