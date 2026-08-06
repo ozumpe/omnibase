@@ -99,3 +99,63 @@ def test_strict_enabled_allowed_when_fully_satisfied(monkeypatch) -> None:  # ty
     d = authorize_change("sis/roles.py", checks_passed=True, approved=True,
                          justification=Justification.EXCEPTION)
     assert d.allowed and d.tier is ChangeTier.STRICT
+
+
+# --- guardrail directories (L5 Layer 1 precondition) -----------------------
+
+
+def test_contract_space_is_forbidden() -> None:
+    # The implementer must not be able to edit its own exam. Enumerating files
+    # would decay the moment a contract gains one, so a whole tree is guarded.
+    for path in ("specs/README.md",
+                 "specs/sum_of_divisors/oracle.py",
+                 "specs/sum_of_divisors/tests.py",
+                 "specs/deeply/nested/fixture.json"):
+        assert classify(path) is ChangeTier.FORBIDDEN, path
+
+
+def test_the_guarded_directory_itself_is_forbidden() -> None:
+    assert classify("specs") is ChangeTier.FORBIDDEN
+
+
+def test_guardrail_dirs_match_path_segments_not_string_prefixes() -> None:
+    # "specs" must not swallow unrelated siblings — a bare
+    # str.startswith("specs") would classify both of these FORBIDDEN and
+    # quietly freeze code the loop is allowed to touch.
+    assert classify("specs_draft/notes.md") is ChangeTier.STRICT
+    assert classify("specstest.py") is ChangeTier.STRICT
+
+
+def test_contract_space_stays_forbidden_when_pointed_at_as_a_target(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # Guardrail precedence is absolute: mis-configuring SIS_TARGET_PATHS at the
+    # contract must not make the exam writable.
+    monkeypatch.setenv("SIS_TARGET_PATHS", "specs/sum_of_divisors/oracle.py")
+    assert classify("specs/sum_of_divisors/oracle.py") is ChangeTier.FORBIDDEN
+
+
+def test_contract_space_is_forbidden_through_a_traversal_path() -> None:
+    # ../ games must not launder a contract path into a writable tier.
+    assert classify("runtime/../specs/sum_of_divisors/oracle.py") is ChangeTier.FORBIDDEN
+
+
+def test_contract_changes_are_denied_with_every_permission_granted() -> None:
+    # FORBIDDEN has no override path, not even human approval + justification.
+    decision = authorize_change(
+        "specs/sum_of_divisors/oracle.py",
+        checks_passed=True, approved=True, justification=Justification.HUMAN_REQUEST,
+    )
+    assert not decision.allowed
+    assert decision.tier is ChangeTier.FORBIDDEN
+
+
+def test_classification_does_not_depend_on_the_working_directory(monkeypatch, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    # The loop spawns subprocesses with their own cwd, and every tier list here
+    # is repo-root-relative. Resolving against cwd would make a path's tier
+    # depend on where the interpreter was started — and would let a traversal
+    # path slip past the contract guardrail from anywhere but the repo root.
+    monkeypatch.chdir(tmp_path)
+    assert classify("specs/sum_of_divisors/oracle.py") is ChangeTier.FORBIDDEN
+    assert classify("runtime/../specs/oracle.py") is ChangeTier.FORBIDDEN
+    assert classify("sis/gauntlet.py") is ChangeTier.FORBIDDEN
+    assert classify("runtime/target.py") is ChangeTier.SOFT
+    assert classify("sis/org.py") is ChangeTier.STRICT

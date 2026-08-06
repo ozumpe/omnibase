@@ -5,8 +5,10 @@ a change is authorised (pre-write) only if its tier permits it:
 
 - **FORBIDDEN — guardrail / safety code.** NEVER modifiable by the loop, with
   **no override path** (not even human approval). If the rewriter could edit its
-  own gauntlet, sandbox, spend brakes, secret handling, or *this policy*, the
-  safety guarantees evaporate. This is the load-bearing invariant.
+  own gauntlet, sandbox, spend brakes, secret handling, *contracts*, or *this
+  policy*, the safety guarantees evaporate. This is the load-bearing invariant.
+  Listed both as individual files (``GUARDRAIL_PATHS``) and as whole
+  directories (``GUARDRAIL_DIRS``, for trees like ``specs/``).
 - **STRICT — all other engine code.** Off-limits to the loop by default. Enabling
   it (``SIS_ALLOW_STRICT_CHANGES=1``) still requires, before the loop may even
   propose a change: a **justification** (a collected exception or an explicit
@@ -51,6 +53,20 @@ GUARDRAIL_PATHS: tuple[str, ...] = (
     "sis/adapters.py",        # RequiresHumanApproval guardrails (in-memory)
     "sis/adapters_real.py",   # RequiresHumanApproval guardrails (real)
     "Dockerfile.gauntlet",    # the sandbox image
+)
+
+# Whole *directories* the loop must never write, matched by path prefix.
+# Separate from GUARDRAIL_PATHS because a contract is a tree — oracle module,
+# acceptance tests, fixtures — whose filenames aren't known when this list is
+# written, so enumerating them one by one is a guarantee that silently decays
+# every time a contract gains a file.
+GUARDRAIL_DIRS: tuple[str, ...] = (
+    # The contract space: the reference oracle, the benchmark inputs, and the
+    # acceptance tests a candidate must satisfy. The implementer must not be
+    # able to edit its own exam — the direct generalization of "the reference
+    # oracle must not live in the loop-mutable target". See
+    # docs/CLASS2_CONTRACT.md.
+    "specs",
 )
 
 # The designated optimisation target(s) — the SOFT tier. Configurable via
@@ -118,8 +134,18 @@ def _strict_enabled() -> bool:
 
 
 def _rel(path: str | pathlib.Path) -> str:
-    """Repo-root-relative posix path; falls back to a cleaned string."""
+    """Repo-root-relative posix path; falls back to a cleaned string.
+
+    A *relative* path is resolved against ``PROJECT_ROOT``, not the process's
+    cwd. Every tier list here is repo-root-relative, and the loop spawns
+    subprocesses with their own cwd (see ``sis.paths``), so resolving against
+    cwd would make a path's tier depend on where the interpreter happened to be
+    started — and would let ``runtime/../specs/x.py`` slip past the contract
+    guardrail whenever cwd wasn't the repo root.
+    """
     candidate = pathlib.Path(path)
+    if not candidate.is_absolute():
+        candidate = PROJECT_ROOT / candidate
     try:
         return candidate.resolve().relative_to(PROJECT_ROOT).as_posix()
     except (ValueError, OSError):
@@ -128,12 +154,26 @@ def _rel(path: str | pathlib.Path) -> str:
         return str(path).replace("\\", "/").removeprefix("./")
 
 
+def _under_guardrail_dir(rel: str) -> bool:
+    """Is *rel* inside (or equal to) a GUARDRAIL_DIRS directory?
+
+    Compares whole path segments, never a bare string prefix: ``"specs"`` must
+    protect ``specs/x.py`` without also swallowing an unrelated ``specs_draft/``
+    or ``specstest.py``, which ``str.startswith("specs")`` would.
+    """
+    for guarded in GUARDRAIL_DIRS:
+        head = guarded.rstrip("/")
+        if rel == head or rel.startswith(f"{head}/"):
+            return True
+    return False
+
+
 def classify(path: str | pathlib.Path) -> ChangeTier:
     """Classify a path into its change tier."""
     rel = _rel(path)
     # Guardrail precedence is absolute: a path that is both listed as a target
     # AND is guardrail code is still FORBIDDEN.
-    if rel in GUARDRAIL_PATHS:
+    if rel in GUARDRAIL_PATHS or _under_guardrail_dir(rel):
         return ChangeTier.FORBIDDEN
     if rel in target_paths():
         return ChangeTier.SOFT
