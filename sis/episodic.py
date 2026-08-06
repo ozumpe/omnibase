@@ -51,9 +51,10 @@ class EpisodicEvent:
     pr_id: str | None = None
     candidate_sha: str | None = None
     gauntlet_passed: bool | None = None
-    # reject_gate: ast | noop | mypy | pytest | correctness | benchmark | policy
-    #            | timeout | harness   ("harness" = the gate could not run, not
-    #                                   a verdict on the candidate)
+    # reject_gate: ast | noop | mypy | interface | pytest | correctness
+    #            | benchmark | policy | timeout
+    #            | harness   ("harness" = the gate could not run, not a verdict
+    #                         on the candidate)
     reject_gate: str | None = None
     reject_reason: str | None = None
     baseline_latency: float | None = None
@@ -281,6 +282,10 @@ def gate_from_reason(reason: str | None) -> str | None:
     # failed pytest, and the analytics blame the wrong side.
     if r.startswith("harness:"):
         return "harness"
+    # The contract's interface gate: the candidate has the wrong shape, which is
+    # a distinct failure from "its behaviour is wrong" (CLASS2_CONTRACT.md).
+    if r.startswith("interface:"):
+        return "interface"
     if "syntaxerror" in r:
         return "ast"
     if "no change" in r:  # candidate identical to the baseline (no-op)

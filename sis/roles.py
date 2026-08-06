@@ -21,8 +21,8 @@ from typing import Any
 
 import ray
 
-from sis import gauntlet, policy, proposer
-from sis.paths import TARGET_PATH
+from sis import contract, gauntlet, policy, proposer
+from sis.paths import PROJECT_ROOT, TARGET_PATH
 from sis.ports import IssueStatus, IssueType
 from sis.self_model import get_self_model
 from sis.settings import space_keys, version_control_base
@@ -30,6 +30,9 @@ from sis.workspace import get_workspace
 
 # CEO spend-brake defaults — the single source of truth, shared by CEO.__init__
 # and ceo_config_from_env so an env-configured run and a default run agree.
+# Repo-relative key the contract registry is keyed by (see SelfModel).
+_TARGET_REL = TARGET_PATH.relative_to(PROJECT_ROOT).as_posix()
+
 DEFAULT_BUDGET_USD = 5.0
 DEFAULT_BREAKER_THRESHOLD = 3
 DEFAULT_MAX_COST_PER_ACCEPTED_USD = 2.0
@@ -364,17 +367,25 @@ class SWE(Role):
         # against the stale local file. Falls back to the local file when
         # version control has no merged source (the in-memory path, or a target
         # not yet committed to the base).
+        # What this target is judged by — reference, inputs, margin. The
+        # SelfModel is the registry (bootstrap seeds it); fall back to the
+        # bootstrap contract so a bare or legacy SelfModel still runs.
+        spec = (ray.get(self._sm.contract_for.remote(_TARGET_REL))
+                or contract.default_contract())
+
         merged_source = ray.get(self._ws.live_target_source.remote())
         origin = "merged_base" if merged_source else "local_file"
         current_source = merged_source or TARGET_PATH.read_text(encoding="utf-8")
         ray.get(self._ws.emit.remote("target.source", story_id=story_id, origin=origin))
-        baseline = gauntlet.measure_baseline(current_source)  # sandboxed, not in-process
+        # sandboxed, not in-process
+        baseline = gauntlet.measure_baseline(current_source, contract=spec)
         candidate = proposer.propose(current_source, baseline)
         candidate_sha = hashlib.sha256(candidate.encode("utf-8")).hexdigest()[:12]
         cost_usd = proposer.last_cost_usd()  # 0.0 for the stub; real $ for Claude
         # Benchmark the candidate against the source the cycle is based on (the
         # merged target), not the stale local file — see KNOWN_ISSUES.md H1.
-        report = gauntlet.validate(candidate, baseline, baseline_source=current_source)
+        report = gauntlet.validate(
+            candidate, baseline, baseline_source=current_source, contract=spec)
 
         if not report.passed:
             ray.get(self._ws.transition.remote(
@@ -431,7 +442,10 @@ class QA(Role):
             # as merged on the base branch), not the stale local file — H1.
             merged = ray.get(self._ws.live_target_source.remote())
             baseline_source = merged or TARGET_PATH.read_text(encoding="utf-8")
-            report = gauntlet.validate(pr.artifact, 0.0, baseline_source=baseline_source)
+            spec = (ray.get(self._sm.contract_for.remote(_TARGET_REL))
+                    or contract.default_contract())
+            report = gauntlet.validate(
+                pr.artifact, 0.0, baseline_source=baseline_source, contract=spec)
             ok = report.passed
         if ok:
             ray.get(self._ws.transition.remote(story_id, IssueStatus.DONE, "QA verified"))
