@@ -293,6 +293,11 @@ Layer 1) existing first. Scope: a `ToolchainAdapter` port + one adapter per lang
   cheapest-first ordering, same `Result`/episodic plumbing, same policy
   classification. What's new is (a) the `FeatureContract` shape, (b) three new gates
   (interface/invariant/backtest), and (c) the contract-author step in the actor flow.
+- **[`docs/SERVE_CANARY.md`](SERVE_CANARY.md)** is the other half: this doc covers
+  the *offline* gauntlet; that one covers the *online* Ray Serve canary, arguing the
+  two can't be designed separately because the canary needs exactly this contract's
+  invariants to check correctness on live traffic (no stored expected output exists
+  in production the way it does for a generated gauntlet input).
 
 ## Example first-target projects ("easy but not too easy")
 
@@ -330,7 +335,12 @@ Each has a property that makes it a clean contract demo:
 2. **`FeatureContract` + interface/acceptance gates** — the minimum to build and
    verify a first trivial feature end-to-end (no invariants/backtests yet).
 3. **Invariant gate** (property-based, Hypothesis) — the anti-gaming layer for features.
-4. **`ToolchainAdapter`** — make the gate commands adapter-declared; add a second
+4. **[`docs/SERVE_CANARY.md`](SERVE_CANARY.md)** — reuses these same invariants as the
+   *online* correctness gate for a Ray Serve canary (live traffic instead of
+   generated inputs), and replaces the offline benchmark's noise-floor-prone
+   fixed-input timing with real-traffic latency percentiles. Picks up right after
+   step 3 above; see that doc for its own step-by-step sequencing.
+5. **`ToolchainAdapter`** — make the gate commands adapter-declared; add a second
    language (the "even Java" step) reusing the same contract.
-5. **Backtest gate + domain SLO** — once a domain with historical data exists.
-6. **Contract-author actor step** — automate spec → contract with human review.
+6. **Backtest gate + domain SLO** — once a domain with historical data exists.
+7. **Contract-author actor step** — automate spec → contract with human review.
