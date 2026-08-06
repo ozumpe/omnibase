@@ -1,8 +1,11 @@
 """Tests for the gauntlet validator."""
 
+from dataclasses import replace
+
 import pytest
 
 from sis import gauntlet
+from sis.contract import default_contract
 from sis.paths import OPTIMISED_CANDIDATE_PATH, TARGET_PATH
 
 _GOOD_CODE = OPTIMISED_CANDIDATE_PATH.read_text(encoding="utf-8")
@@ -236,18 +239,57 @@ def test_mypy_failure_fails() -> None:
     assert "mypy" in result.reason
 
 
-def test_missing_target_tests_blame_the_harness_not_the_candidate(monkeypatch, tmp_path) -> None:  # type: ignore[no-untyped-def]
-    # Regression (2026-07-28 minor list): with tests/test_target.py absent, the
-    # gate fell through to `pytest <a directory that was never created>`, which
-    # exits non-zero and was reported as "pytest failed" — a perfectly good
-    # candidate rejected with a reason pointing at the wrong side of the fence.
-    # Must still fail closed (a correctness gate that did not run is not a pass)
-    # but name the harness as the cause.
-    monkeypatch.setattr(gauntlet, "TARGET_TEST_PATH", tmp_path / "test_target.py")
-    result = gauntlet.validate(_GOOD_CODE, _BASELINE)
+def test_missing_acceptance_tests_blame_the_harness_not_the_candidate() -> None:
+    # Regression (2026-07-28 minor list): with the suite absent, the gate fell
+    # through to `pytest <a directory that was never created>`, which exits
+    # non-zero and was reported as "pytest failed" — a perfectly good candidate
+    # rejected with a reason pointing at the wrong side of the fence. Must still
+    # fail closed (a correctness gate that did not run is not a pass) but name
+    # the harness as the cause. Now driven by the contract, not a module global.
+    broken = replace(default_contract(), tests_path="specs/does_not_exist/tests.py")
+    result = gauntlet.validate(_GOOD_CODE, _BASELINE, contract=broken)
     assert not result.passed
     assert result.reason.startswith("harness:")
     assert "pytest failed" not in result.reason
+
+
+def test_missing_contract_oracle_blames_the_harness() -> None:
+    # Same principle for the other half of the contract: without the oracle
+    # there is no reference to differ against and no inputs to benchmark over,
+    # so the candidate cannot be judged — that is the harness's fault, not the
+    # candidate's, and must not be recorded as a correctness mismatch.
+    broken = replace(default_contract(), oracle_path="specs/does_not_exist/oracle.py")
+    result = gauntlet.validate(_GOOD_CODE, _BASELINE, contract=broken)
+    assert not result.passed
+    assert result.reason.startswith("harness:")
+    assert "correctness mismatch" not in result.reason
+
+
+def test_candidate_missing_the_contract_entry_fails_the_interface_gate() -> None:
+    # A candidate that is valid, typed, and fast but exports the wrong function
+    # is not a candidate for *this* contract. Before the contract existed this
+    # surfaced as "benchmark script crashed" — an AttributeError deep in the
+    # harness rather than a statement about the diff.
+    wrong_api = (
+        "def totally_different(n: int) -> int:\n"
+        "    return n\n"
+        "def benchmark(n: int = 1, repetitions: int = 1) -> float:\n"
+        "    return 0.0\n"
+    )
+    result = gauntlet.validate(wrong_api, _BASELINE)
+    assert not result.passed
+    assert result.reason.startswith("interface:")
+    assert "sum_of_divisors" in result.reason
+
+
+def test_the_margin_comes_from_the_contract() -> None:
+    # IMPROVEMENT_MARGIN used to be a module constant, so every target had to
+    # want the same 10%. A contract demanding a 99.99% cut must reject the same
+    # candidate the default contract accepts.
+    strict = replace(default_contract(), max_latency_ratio=0.0001)
+    result = gauntlet.validate(_GOOD_CODE, _BASELINE, contract=strict)
+    assert not result.passed
+    assert "no improvement" in result.reason
 
 
 def test_stub_proposer_allows_subprocess_sandbox(monkeypatch) -> None:  # type: ignore[no-untyped-def]

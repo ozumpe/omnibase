@@ -7,6 +7,12 @@ one full cycle end to end. Read it top to bottom once; after that it's a map.
 
 > New to the project? Read [`README.md`](../README.md) first for what the system
 > *does*; this doc is about how the *code* is built.
+>
+> **Prefer pictures?** [`DIAGRAMS.md`](DIAGRAMS.md) has the same material as UML:
+> a [class diagram of the ports, adapters and the contract](DIAGRAMS.md#1-class--ports-adapters-and-the-contract)
+> for §6 below, and an
+> [activity diagram of the gauntlet](DIAGRAMS.md#3-activity--the-validation-gauntlet)
+> for §5.
 
 ---
 
@@ -147,11 +153,25 @@ refuses*, which is the clearest statement of the safety contract.
    passes (`baseline_source` — the target as merged on the base branch), not the
    local file.
 3. **`mypy --strict`** — fully type-checked. Generated code must be annotated.
-4. **`pytest`** — the target's test suite must pass (fixed correctness cases).
-5. **Differential correctness + benchmark** — the candidate is run against an
-   *independent* reference on **random** inputs (catches code that special-cases
-   the known test inputs but is wrong elsewhere — "benchmark gaming"), then timed
-   against that same `baseline_source`; it must be ≥10% faster.
+4. **Interface** — the candidate must export the contract's `entry` function.
+   Cheap, and it fails with a statement about the *shape* of the diff instead of
+   a wall of acceptance-test errors (episodic `reject_gate="interface"`).
+5. **`pytest`** — the contract's acceptance tests must pass (fixed correctness
+   cases), run against the candidate.
+6. **Differential correctness + benchmark** — the candidate is run against the
+   contract's *independent* reference on **random** inputs (catches code that
+   special-cases the known test inputs but is wrong elsewhere — "benchmark
+   gaming"), then timed against that same `baseline_source`; it must clear the
+   contract's `max_latency_ratio` (10% faster by default).
+
+What "correct" and "better" mean is **not** baked into the gauntlet — it comes
+from an `OptimizationContract` (`sis/contract.py`). The declarative half (entry
+point, margin, trial count) is data; the executable half (reference
+implementation, benchmark inputs, random-input generator) is a module under
+`specs/<name>/oracle.py` that the gauntlet copies into the sandbox next to the
+candidate. Everything under `specs/` is POLICY-FORBIDDEN, so the implementer
+cannot edit its own exam. `validate()` falls back to the bootstrap contract when
+a caller doesn't name one.
 
 Two cross-cutting protections wrap every gate that runs candidate code:
 
@@ -165,8 +185,9 @@ Two cross-cutting protections wrap every gate that runs candidate code:
   hang.
 
 Everything the gauntlet needs is written into one temp dir (the candidate, a
-copy of the baseline, the test, an injected `sitecustomize.py`), so the sandbox
-is fully self-contained — nothing reaches the host.
+copy of the baseline, the contract's oracle and acceptance tests, an injected
+`sitecustomize.py`), so the sandbox is fully self-contained — nothing reaches
+the host.
 
 **The invariant: the gauntlet is the *only* place candidate or target code
 runs.** Not just `validate()` — the baseline measurement (`measure_baseline()`,

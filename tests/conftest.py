@@ -1,17 +1,14 @@
-"""Pytest fixtures / path setup for the main test suite.
+"""Pytest fixtures / environment for the main test suite.
 
-test_target.py does a bare ``import target``. The live target lives in
-runtime/, so put that directory on sys.path here. (Inside the gauntlet's
-sandbox, target.py sits next to the test and this conftest is absent — the
-import resolves there via the sandbox's own directory.)
+The target's own acceptance tests are no longer collected here: they live in
+``specs/<contract>/tests.py`` and run **inside the gauntlet sandbox**, against
+whichever candidate is being validated, where ``import target`` resolves to the
+candidate. Running them in this suite would only ever re-test the local
+``runtime/target.py`` — a different question from the one the gauntlet asks, and
+one that needed a ``sys.path`` hack to answer.
 """
 
 import os
-import sys
-
-from sis.paths import RUNTIME_DIR
-
-sys.path.insert(0, str(RUNTIME_DIR))
 
 # Default the suite to the no-op episodic store so cycle tests neither write to
 # the real runtime/episodic.jsonl nor persist CEO state across tests (which would

@@ -24,7 +24,19 @@ bottom with the PR.
 
 ## Low
 
-- **L5 — The gauntlet is hardwired to `sum_of_divisors`.** The independent
+- **L5 — The gauntlet is hardwired to `sum_of_divisors`.**
+  *Partly fixed (2026-08-06) — Layer 1 PRs A and B are in; C and D remain.* The
+  engine no longer bakes in a target: `sis/contract.py` carries the entry point,
+  margin and trial count, and `specs/<name>/` carries the reference oracle,
+  benchmark inputs and acceptance tests as a **module the gauntlet copies into
+  the sandbox** rather than literals interpolated into its benchmark script.
+  `specs/` is POLICY-FORBIDDEN, so the implementer cannot edit its own exam, and
+  the SelfModel is the contract registry. Still open before this can close:
+  the proposer prompt still hardcodes the `sum_of_divisors` signature (PR C), so
+  no second target can actually be proposed yet, and nothing has been proven to
+  generalise until a second target lands (PR D). Original report follows.
+
+  The independent
   reference and benchmark inputs are baked into the bench script, so widening
   `SIS_TARGET_PATHS` is illusory — any other target fails the benchmark gate.
   Fine for bootstrap; a real constraint before omnitrack (a target-contract

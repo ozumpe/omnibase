@@ -167,18 +167,18 @@ provenance: spec page → contract module → branch/PR → gauntlet verdict →
 
 ## Two load-bearing principles carried over from Class 1
 
-1. **The contract must become immutable to the implementer — not yet true today.**
-   `GUARDRAIL_PATHS` (`sis/policy.py`) has no `specs/` entry, and `classify()`
-   matches by *exact* string equality (`rel in GUARDRAIL_PATHS`), not by directory
-   prefix — appending a bare `"specs/"` string would compile fine and silently
-   protect nothing, since no file's relative path is ever literally `"specs/"`.
-   L5 Layer 1 must do two things, not one: (a) add the contract paths to
-   `GUARDRAIL_PATHS`, and (b) teach `classify()` directory-prefix matching (or
-   enumerate every contract module individually) — the same machinery that
-   protects the gauntlet/cost brakes/adapters today, extended, not reused as-is.
-   Once that lands, the SWE writes *only* `entry_module` (`SOFT`); it cannot edit
-   its own exam — the direct generalization of "the reference oracle must not live
-   in the loop-mutable target."
+1. **The contract must become immutable to the implementer — true as of
+   2026-08-06.** It needed two changes, not one: `classify()` matched by *exact*
+   string equality, so appending a bare `"specs/"` to `GUARDRAIL_PATHS` would
+   have compiled fine and silently protected nothing (no file's relative path is
+   ever literally `"specs/"`). L5 Layer 1 PR A added `GUARDRAIL_DIRS` — whole
+   trees matched by path *segment* — and made `_rel()` resolve against the
+   project root rather than the process cwd, without which a traversal path
+   escaped the guard from any other working directory. The SWE now writes *only*
+   the target (`SOFT`) and cannot edit its own exam: the direct generalization
+   of "the reference oracle must not live in the loop-mutable target."
+   `tests/test_policy.py` pins it, including that `"specs"` does not also
+   swallow `specs_draft/`.
 2. **Author and implementer are different actors.** PM/QA author the acceptance
    criteria and invariants; the SWE implements. Separation of concerns = separation
    of trust — the anti-gaming property, made structural.
