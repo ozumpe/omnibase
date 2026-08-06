@@ -3,6 +3,12 @@
 This is the authoritative spec for the actor org and how it touches the outside
 world. `CLAUDE.md` and `DESIGN.md` reference this file.
 
+> **Diagrams:** [`docs/DIAGRAMS.md`](docs/DIAGRAMS.md) has the UML views —
+> a [sequence diagram of one cycle](docs/DIAGRAMS.md#2-sequence--one-self-improvement-cycle)
+> showing the artifact handoffs described below, and
+> [state machines](docs/DIAGRAMS.md#4-state--issue-workflow-and-deploy-slots)
+> for the issue workflow and the blue/green slots.
+
 ## Coordinating principle: artifacts are the bus
 
 Actors do **not** primarily coordinate through free-form chat. They coordinate by
