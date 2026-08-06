@@ -492,6 +492,24 @@ class RealCloud:
         self._tel.emit("canary.deployed", version=version, slot="green", metrics=metrics or {})
         return DeployRecord(version=version, slot="green", live=False, metrics=dict(metrics or {}))
 
+    # shift_traffic/live_metrics exist so RealCloud keeps satisfying the
+    # @runtime_checkable Cloud protocol now that the port has grown them; there
+    # is no traffic to split and no deployment to measure until ServeCloud
+    # lands. They raise rather than no-op on purpose: a silent no-op here would
+    # let a real run report a "passing canary" that never routed a request or
+    # measured anything — the failure mode a canary exists to prevent.
+    def shift_traffic(self, version: str, fraction: float) -> None:
+        raise NotImplementedError(
+            "RealCloud cannot split traffic — it records deployments only. "
+            "Use ServeCloud (docs/SERVE_CANARY.md) for a weighted canary."
+        )
+
+    def live_metrics(self, version: str, window_s: float) -> dict[str, float]:
+        raise NotImplementedError(
+            "RealCloud has no live metrics source — it records deployments only. "
+            "Use ServeCloud (docs/SERVE_CANARY.md) for real per-version metrics."
+        )
+
     def promote(self, version: str) -> DeployRecord:
         raise RequiresHumanApproval(f"promoting {version} to live follows the human PR merge")
 

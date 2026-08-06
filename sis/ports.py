@@ -165,6 +165,22 @@ class Cloud(Protocol):
         self, version: str, *, metrics: dict[str, float] | None = None
     ) -> DeployRecord: ...
 
+    def shift_traffic(self, version: str, fraction: float) -> None:
+        """Route ``fraction`` (0.0–1.0) of traffic to ``version``.
+
+        The weighted split is the whole mechanism of a real canary and the one
+        thing the recording placeholders never needed. See docs/SERVE_CANARY.md.
+        """
+        ...
+
+    def live_metrics(self, version: str, window_s: float) -> dict[str, float]:
+        """Observed metrics for ``version`` over the last ``window_s`` seconds.
+
+        Keys are :data:`sis.metrics.METRIC_KEYS`. Feeds both the canary verdict
+        and the loop's real (non-simulated) SLO-breach trigger.
+        """
+        ...
+
     def promote(self, version: str) -> DeployRecord:  # green → live → human-gated
         ...
 
