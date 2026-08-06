@@ -2,9 +2,11 @@
 
 import json
 import pathlib
+from typing import Any
 
 import pytest
 
+from sis import settings as settings_mod
 from sis.settings import (
     DEFAULT_SPACES,
     AtlassianSettings,
@@ -12,6 +14,7 @@ from sis.settings import (
     FileSecretSource,
     _build_settings,
     load_settings,
+    reset_settings_cache,
     settings_summary,
     space_keys,
     version_control_base,
@@ -115,6 +118,49 @@ def test_version_control_base_falls_back_to_main_without_github() -> None:
     settings = _build_settings("local", "memory", {})
     assert settings.github is None
     assert version_control_base(settings) == "main"
+
+
+def test_hot_accessors_read_the_secret_source_once(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # Regression (2026-07-28 minor list): space_keys()/version_control_base() are
+    # called several times per cycle from inside the Ray actors, and each call
+    # re-read and re-parsed the whole secrets source — a redundant file read
+    # locally, and a redundant Secrets Manager round-trip under SIS_ENV=aws.
+    loads = 0
+
+    class _CountingSource:
+        def load(self) -> dict[str, Any]:
+            nonlocal loads
+            loads += 1
+            return {}
+
+    monkeypatch.setattr(settings_mod, "_select_source", lambda: _CountingSource())
+    reset_settings_cache()
+    try:
+        space_keys()
+        space_keys()
+        version_control_base()
+        assert loads == 1
+    finally:
+        # Never leave a cache built from the fake source behind for other tests.
+        reset_settings_cache()
+
+
+def test_explicit_source_always_reloads(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # Only the no-argument path is cached: load_settings(source) must still read
+    # every time, or tests and check_connections.py would silently get whatever
+    # the first caller in the process happened to load.
+    loads = 0
+
+    class _CountingSource:
+        def load(self) -> dict[str, Any]:
+            nonlocal loads
+            loads += 1
+            return {}
+
+    source = _CountingSource()
+    load_settings(source)
+    load_settings(source)
+    assert loads == 2
 
 
 def test_version_control_base_comes_from_github_settings() -> None:

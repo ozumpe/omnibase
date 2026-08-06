@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import base64
 import os
+import re
 from typing import TYPE_CHECKING, Any, cast
 
 from sis.adapters import InMemoryTelemetry
@@ -252,6 +253,10 @@ class ConfluenceDocumentStore:
 # Jira (Work Tracker)
 # --------------------------------------------------------------------------
 
+# Jira's issue-key grammar: PROJECT-123. Anything outside it must never reach a
+# JQL string (see JiraWorkTracker.children).
+_JIRA_KEY = re.compile(r"[A-Z][A-Z0-9_]*-[0-9]+")
+
 
 class JiraWorkTracker:
     def __init__(self, settings: AtlassianSettings, telemetry: InMemoryTelemetry) -> None:
@@ -295,8 +300,19 @@ class JiraWorkTracker:
         resp = self._http.post(self._api(f"/issue/{issue_id}/transitions"), json=body)
         resp.raise_for_status()
         if comment:
-            self._http.post(self._api(f"/issue/{issue_id}/comment"),
-                            json={"body": _adf(comment)}).raise_for_status()
+            # Best-effort, like the page labels in _apply_labels: the transition
+            # above has already succeeded and is not undoable here. Raising on
+            # the *comment* would report the whole transition as failed, so the
+            # caller retries against an issue that has already moved — and the
+            # second attempt finds no matching transition and hard-fails the
+            # cycle. The comment is an audit note; losing one must not cost the
+            # state change it annotates.
+            try:
+                self._http.post(self._api(f"/issue/{issue_id}/comment"),
+                                json={"body": _adf(comment)}).raise_for_status()
+            except Exception as exc:  # noqa: BLE001 - never fail a completed transition
+                self._tel.emit("issue.comment_failed", issue_id=issue_id,
+                               to=status.value, error=str(exc))
         self._tel.emit("issue.transition", issue_id=issue_id, to=status.value, comment=comment)
         return self.get_issue(issue_id)
 
@@ -316,6 +332,13 @@ class JiraWorkTracker:
         # Enhanced search: the classic GET /rest/api/3/search was removed by
         # Atlassian; use POST /rest/api/3/search/jql. Only keys are needed —
         # get_issue() fetches each issue's fields.
+        # /search/jql takes JQL as a string with no parameter binding, so the
+        # key is validated against Jira's key grammar before interpolation.
+        # Today every caller passes an internal key — but that is a property of
+        # the callers, not something enforced here, and the intake path exists
+        # to let outside text reach the org. Enforce it at the boundary.
+        if not _JIRA_KEY.fullmatch(parent_id):
+            raise ValueError(f"not a valid Jira issue key: {parent_id!r}")
         jql = f'parent = "{parent_id}"'
         data = _json(self._http.post(self._api("/search/jql"),
                                      json={"jql": jql, "fields": ["key"]}))

@@ -107,6 +107,13 @@ def test_gate_from_reason() -> None:
     assert gate_from_reason("mypy gate timed out") == "timeout"
     assert gate_from_reason("pytest gate timed out") == "timeout"
     assert gate_from_reason("benchmark gate timed out") == "timeout"
+    # A harness fault names the gate it could not run, so — like a timeout — it
+    # must win over the gate-name substring checks, or "the suite is missing"
+    # is counted in the analytics as "candidates keep failing pytest".
+    assert gate_from_reason(
+        "harness: target test suite missing at tests/test_target.py "
+        "— the pytest gate cannot run"
+    ) == "harness"
     assert gate_from_reason(None) is None
 
 

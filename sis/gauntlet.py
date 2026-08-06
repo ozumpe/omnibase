@@ -278,7 +278,7 @@ def validate(
     except SyntaxError as exc:
         return Result(passed=False, reason=f"SyntaxError: {exc}")
 
-    # --- Gate 2: no-op — a candidate identical to the baseline can never be an
+    # --- Gate 1b: no-op — a candidate identical to the baseline can never be an
     # improvement, so reject it before the benchmark. Without this, an identical
     # re-proposal (e.g. the stub after its own optimisation has merged) would
     # race the ≥10% margin on µs-scale timing noise. See KNOWN_ISSUES.md M3.
@@ -321,13 +321,24 @@ def validate(
         # which resolves to the candidate written above. The harness's own
         # tests import sis modules not present here and are not the subject of
         # validation.
-        if TARGET_TEST_PATH.exists():
-            tests_dst = tmp / "tests"
-            tests_dst.mkdir()
-            (tests_dst / "__init__.py").write_text("", encoding="utf-8")
-            (tests_dst / "test_target.py").write_text(
-                TARGET_TEST_PATH.read_text(encoding="utf-8"), encoding="utf-8"
+        #
+        # The suite is required, not optional. When it was missing this used to
+        # fall through to `pytest <nonexistent dir>`, which exits non-zero and
+        # was reported as "pytest failed" — blaming the candidate for a broken
+        # harness. Still fails closed (an unrun correctness gate must never read
+        # as a pass), but now says which side is at fault.
+        if not TARGET_TEST_PATH.exists():
+            return Result(
+                passed=False,
+                reason=f"harness: target test suite missing at {TARGET_TEST_PATH} "
+                       "— the pytest gate cannot run",
             )
+        tests_dst = tmp / "tests"
+        tests_dst.mkdir()
+        (tests_dst / "__init__.py").write_text("", encoding="utf-8")
+        (tests_dst / "test_target.py").write_text(
+            TARGET_TEST_PATH.read_text(encoding="utf-8"), encoding="utf-8"
+        )
 
         pytest_result = _run(
             [_PY, "-m", "pytest", str(tmp / "tests"), "-q", "--tb=short"], tmpdir, env

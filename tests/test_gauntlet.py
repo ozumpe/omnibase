@@ -236,6 +236,20 @@ def test_mypy_failure_fails() -> None:
     assert "mypy" in result.reason
 
 
+def test_missing_target_tests_blame_the_harness_not_the_candidate(monkeypatch, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    # Regression (2026-07-28 minor list): with tests/test_target.py absent, the
+    # gate fell through to `pytest <a directory that was never created>`, which
+    # exits non-zero and was reported as "pytest failed" — a perfectly good
+    # candidate rejected with a reason pointing at the wrong side of the fence.
+    # Must still fail closed (a correctness gate that did not run is not a pass)
+    # but name the harness as the cause.
+    monkeypatch.setattr(gauntlet, "TARGET_TEST_PATH", tmp_path / "test_target.py")
+    result = gauntlet.validate(_GOOD_CODE, _BASELINE)
+    assert not result.passed
+    assert result.reason.startswith("harness:")
+    assert "pytest failed" not in result.reason
+
+
 def test_stub_proposer_allows_subprocess_sandbox(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     # The stub returns a trusted, hand-written candidate → soft sandbox is fine.
     monkeypatch.setenv("SIS_PROPOSER", "stub")

@@ -85,6 +85,54 @@ def test_children_uses_enhanced_search_endpoint() -> None:
     assert issues[0].summary == "summary of SD-2"
 
 
+def test_children_rejects_a_parent_that_is_not_an_issue_key() -> None:
+    # /search/jql takes JQL as a string with no parameter binding, and children()
+    # interpolates the parent key straight into it. Today's callers only pass
+    # internal keys — but that is a property of the callers, not an enforced one,
+    # and Confluence intake exists precisely to let outside text into the org.
+    # Validate at the boundary, and before any request goes out.
+    jt, http = _tracker()
+    with pytest.raises(ValueError, match="not a valid Jira issue key"):
+        jt.children('SD-1" OR project = "SECRET')
+    assert http.calls == []
+
+
+def test_transition_survives_a_failed_comment() -> None:
+    # Regression (2026-07-28 minor list): the comment POST was chained onto the
+    # transition with raise_for_status(), so a 500 on the *comment* raised after
+    # the transition had already been applied — and could not be undone. The
+    # caller saw the whole transition fail and retried, but the issue had moved,
+    # so the retry found no matching transition and hard-failed the cycle. An
+    # audit note must never cost the state change it annotates.
+    jt, http = _tracker()
+
+    def _post(url: str, json: Any = None) -> _Resp:
+        http.calls.append(("POST", url, json))
+        if url.endswith("/comment"):
+            raise RuntimeError("Jira 500 on comment")
+        return _Resp({})
+
+    def _get(url: str, params: Any = None) -> _Resp:
+        http.calls.append(("GET", url, params))
+        if url.endswith("/transitions"):
+            return _Resp({"transitions": [{"id": "31", "to": {"name": "In Progress"}}]})
+        return _Resp({"key": "SD-1",
+                      "fields": {"summary": "s", "status": {"name": "In Progress"},
+                                 "issuetype": {"name": "Story"}}})
+
+    http.post = _post  # type: ignore[method-assign]
+    http.get = _get  # type: ignore[method-assign]
+
+    issue = jt.transition("SD-1", IssueStatus.IN_PROGRESS, comment="picked up")
+
+    # The state change stands, and the lost comment is visible in telemetry
+    # rather than silently swallowed.
+    assert issue.status is IssueStatus.IN_PROGRESS
+    emitted = [e["event"] for e in jt._tel.events()]
+    assert "issue.comment_failed" in emitted
+    assert "issue.transition" in emitted
+
+
 def test_children_handles_empty_result() -> None:
     jt, http = _tracker()
 

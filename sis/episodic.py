@@ -51,7 +51,9 @@ class EpisodicEvent:
     pr_id: str | None = None
     candidate_sha: str | None = None
     gauntlet_passed: bool | None = None
-    # reject_gate: ast | noop | mypy | pytest | correctness | benchmark | policy | timeout
+    # reject_gate: ast | noop | mypy | pytest | correctness | benchmark | policy
+    #            | timeout | harness   ("harness" = the gate could not run, not
+    #                                   a verdict on the candidate)
     reject_gate: str | None = None
     reject_reason: str | None = None
     baseline_latency: float | None = None
@@ -273,6 +275,12 @@ def gate_from_reason(reason: str | None) -> str | None:
     # out"), so this must win over the gate-name checks below (L12).
     if "timed out" in r or "timeout" in r:
         return "timeout"
+    # Harness faults next: their reason names the gate that could not run
+    # ("... the pytest gate cannot run"), so this must win over the gate-name
+    # checks below — otherwise a broken harness is counted as a candidate that
+    # failed pytest, and the analytics blame the wrong side.
+    if r.startswith("harness:"):
+        return "harness"
     if "syntaxerror" in r:
         return "ast"
     if "no change" in r:  # candidate identical to the baseline (no-op)
