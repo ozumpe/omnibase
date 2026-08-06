@@ -27,6 +27,7 @@ GitHub), with a SelfModel digital twin tracking the running system.
 ```bash
 poetry install
 poetry run python main.py          # run one full org cycle (in-memory, no creds)
+poetry run python main.py --loop   # run continuously as a server (Ctrl-C to stop)
 poetry run pytest                  # run the test suite
 ```
 
@@ -61,6 +62,7 @@ credentials, or extra installs. Set these to opt into more.
 | `SIS_BUDGET_USD` | `5.0` | CEO hard spend cap (USD). Set a **tiny** value for a first real run so the brakes trip early. Also: `SIS_BREAKER_THRESHOLD` (`3`), `SIS_MAX_COST_PER_ACCEPTED_USD` (`2.0`), `SIS_SLO_MIN_SPEND_USD` (`0.50`). A bad value fails loudly. |
 | `SIS_EPISODIC_STORE` | `jsonl` | Provenance/episodic backend: `jsonl` (zero-dep), `duckdb` (SQL analytics; `poetry install --with analytics`), or `none`. |
 | `SIS_ADAPTERS` | `memory` | `memory` = in-memory artifact bus (no creds). `real` = Confluence/Jira/GitHub/AWS (needs `--with real` + secrets). |
+| `SIS_LOOP_INTERVAL` / `SIS_LOOP_MAX_CYCLES` | `30` / — | `main.py --loop` only: seconds between ticks, and an optional cycle bound (unset = run until Ctrl-C / SIGTERM). |
 | `SIS_HTTP_TIMEOUT` | `30` | Per-request timeout (seconds) for every real-adapter call, so a wedged tenant API can't hang a cycle. A bad value fails loudly. |
 | `SIS_ENV` | `local` | Secret source. `local` = `secrets.local.yml` → `SIS_*` env vars. `aws` = AWS Secrets Manager. |
 | `SIS_SECRETS_FILE` | `secrets.local.yml` | Override the local secrets file path. |
@@ -204,7 +206,7 @@ runtime/                 # runtime-mutable state (kept apart from the engine)
   target.py              # the live target (naive baseline, committed)
   candidates/            # proposer's hand-written variant
   episodic.jsonl         # episodic store (gitignored; or episodic.duckdb)
-tests/                   # pytest suite (127 tests)
+tests/                   # pytest suite (138 tests)
 scripts/check_connections.py   # read-only credential/connectivity preflight
 main.py                  # entry point
 secrets.example.yml      # secrets template (copy to secrets.local.yml)
@@ -293,7 +295,7 @@ No code changes — only environment.
 ## Development
 
 ```bash
-poetry run pytest            # 127 tests (adapters, settings, gauntlet, org cycle + failures, brakes, adversarial corpus, …)
+poetry run pytest            # 138 tests (adapters, settings, gauntlet, org cycle + failures, brakes, adversarial corpus, …)
 poetry run mypy --strict sis/ main.py scripts/
 poetry run ruff check .
 ```
@@ -329,6 +331,7 @@ Open bugs and limitations are tracked with stable IDs in
 | – | Env-configurable CEO spend brakes (`SIS_BUDGET_USD`, …) (M5) | ✅ |
 | – | Shared Ray namespace + persisted CEO brake/spend state (M2/L9) | ✅ |
 | – | Provider-agnostic LLM interface (`sis/llm.py`; not locked to one vendor) | ✅ |
+| – | Long-running server loop (`main.py --loop`; monitor-trigger still simulated) | ✅ partial |
 | 4 | Ray Serve weighted canary + atomic actor swap | next |
 | 5 | Target/oracle contract (L5) + Class-2 feature verification | planned |
 | 6 | Language-agnostic `ToolchainAdapter` (build/verify non-Python targets, e.g. Java) | wanted |

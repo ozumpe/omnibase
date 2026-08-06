@@ -183,9 +183,13 @@ in-process egress block).
 
 This is development work, not configuration. Currently missing:
 
-- **A long-running loop.** `main.py` runs **one** cycle and exits; the SLO breach
-  is *simulated*. A real server needs a monitor/scheduler loop fed by real
-  metrics over a rolling window.
+- **A real monitor trigger.** The long-running loop exists — `poetry run python
+  main.py --loop` runs cycles via `sis/loop.py` (pure `decide()` policy +
+  injectable trigger, graceful SIGINT/SIGTERM stop, `SIS_LOOP_MAX_CYCLES` /
+  `SIS_LOOP_INTERVAL`). What's still simulated is the *trigger*: it runs on a
+  demo `repeat()`/`once()` intake, not a **sustained-SLO-breach detector over a
+  rolling metric window** — which needs a served endpoint producing real
+  metrics (the Ray Serve gap below).
 - **Ray Serve canary + atomic actor swap.** `DevOps.canary` records a green-slot
   deploy; there's no real weighted rollout or promote/swap yet.
 - **AWS provisioning.** `SIS_ENV=aws` + `SIS_AWS_SECRET_ID` switch secrets to
