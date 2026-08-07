@@ -29,7 +29,8 @@ NO_CHANGE_IMPL: dict[str, Any] = {
 def handles():  # type: ignore[no-untyped-def]
     h = org.bootstrap()
     h["SWE"] = SimpleNamespace(
-        implement=SimpleNamespace(remote=lambda story_id: ray.put(NO_CHANGE_IMPL)))
+        implement=SimpleNamespace(
+            remote=lambda story_id, contract_name=None: ray.put(NO_CHANGE_IMPL)))
     yield h
     ray.shutdown()
 

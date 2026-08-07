@@ -94,6 +94,11 @@ class SelfModel:
         """The contract governing *target_path*, or None if it has none."""
         return self._contracts.get(target_path)
 
+    def contract_by_name(self, name: str) -> OptimizationContract | None:
+        """The contract called *name*, or None. How a cycle selects which
+        target to optimise (``SIS_CONTRACT``) when there is more than one."""
+        return next((c for c in self._contracts.values() if c.name == name), None)
+
     def contracts(self) -> list[OptimizationContract]:
         return list(self._contracts.values())
 

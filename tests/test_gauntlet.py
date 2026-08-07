@@ -1,11 +1,12 @@
 """Tests for the gauntlet validator."""
 
+import pathlib
 from dataclasses import replace
 
 import pytest
 
 from sis import gauntlet
-from sis.contract import default_contract
+from sis.contract import SORT, default_contract
 from sis.paths import OPTIMISED_CANDIDATE_PATH, TARGET_PATH
 
 _GOOD_CODE = OPTIMISED_CANDIDATE_PATH.read_text(encoding="utf-8")
@@ -331,3 +332,41 @@ def test_validate_refuses_llm_without_docker(monkeypatch) -> None:  # type: igno
     monkeypatch.delenv("SIS_ALLOW_UNSANDBOXED_LLM", raising=False)
     with pytest.raises(RuntimeError, match="docker sandbox"):
         gauntlet.validate(_GOOD_CODE, _BASELINE)
+
+
+# --- the second target: the gauntlet is genuinely contract-driven (OMNI-7) ---
+
+_SORT_BASELINE = pathlib.Path(SORT.target_file).read_text(encoding="utf-8")
+_SORT_CANDIDATE = pathlib.Path(str(SORT.stub_candidate_path)).read_text(encoding="utf-8")
+
+
+def test_a_completely_different_target_passes_every_gate() -> None:
+    # The proof L5 was actually fixed: a target with a different name, a
+    # different signature (list -> list, not int -> int), a different oracle and
+    # a different required API passes the same engine code, unmodified.
+    result = gauntlet.validate(
+        _SORT_CANDIDATE, 0.0, baseline_source=_SORT_BASELINE, contract=SORT)
+    assert result.passed, result.reason
+
+
+def test_sort_candidate_with_the_wrong_entry_point_fails_the_interface_gate() -> None:
+    result = gauntlet.validate(
+        "def sorted_list(v: list[int]) -> list[int]:\n    return sorted(v)\n",
+        0.0, baseline_source=_SORT_BASELINE, contract=SORT)
+    assert not result.passed
+    assert result.reason.startswith("interface:")
+    assert "sort_numbers" in result.reason
+
+
+def test_size_conditional_sort_cheat_is_caught_by_differential_correctness() -> None:
+    # Regression for a hole found while building this contract: with a narrow
+    # random-input length range (60-120), this candidate -- silently unsorted
+    # for len > 500 -- passed EVERY gate, because the broken branch was never
+    # reached. The oracle now spans tiny/medium/large lengths. Anti-gaming is
+    # only as good as the input distribution.
+    cheat = ("def sort_numbers(v: list[int]) -> list[int]:\n"
+             "    return v if len(v) > 500 else sorted(v)\n")
+    result = gauntlet.validate(
+        cheat, 0.0, baseline_source=_SORT_BASELINE, contract=SORT)
+    assert not result.passed
+    assert "correctness mismatch" in result.reason

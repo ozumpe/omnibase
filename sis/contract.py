@@ -121,7 +121,23 @@ SUM_OF_DIVISORS = OptimizationContract(
     stub_candidate_path="runtime/candidates/optimised_target.py",
 )
 
-DEFAULT_CONTRACTS: tuple[OptimizationContract, ...] = (SUM_OF_DIVISORS,)
+# The second target. Its whole reason for existing is to prove the contract
+# abstraction generalises — nothing in sis/ knows either target by name, so a
+# third one is a new specs/ directory and an entry here, not an engine change.
+# Deliberately different in shape from SUM_OF_DIVISORS: a collection-valued
+# entry point, freely scalable input size (so per-request work can dominate Ray
+# Serve's dispatch overhead when it becomes the served canary target, OMNI-11),
+# and no ``benchmark()`` in its required API.
+SORT = OptimizationContract(
+    name="sort",
+    entry="sort_numbers",
+    target_path="runtime/sort_target.py",
+    oracle_path="specs/sort/oracle.py",
+    tests_path="specs/sort/tests.py",
+    stub_candidate_path="runtime/candidates/optimised_sort.py",
+)
+
+DEFAULT_CONTRACTS: tuple[OptimizationContract, ...] = (SUM_OF_DIVISORS, SORT)
 
 
 def default_contract() -> OptimizationContract:

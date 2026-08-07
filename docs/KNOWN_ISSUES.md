@@ -24,17 +24,54 @@ bottom with the PR.
 
 ## Low
 
-- **L5 — The gauntlet is hardwired to `sum_of_divisors`.**
-  *Partly fixed (2026-08-06) — Layer 1 PRs A and B are in; C and D remain.* The
-  engine no longer bakes in a target: `sis/contract.py` carries the entry point,
-  margin and trial count, and `specs/<name>/` carries the reference oracle,
-  benchmark inputs and acceptance tests as a **module the gauntlet copies into
-  the sandbox** rather than literals interpolated into its benchmark script.
-  `specs/` is POLICY-FORBIDDEN, so the implementer cannot edit its own exam, and
-  the SelfModel is the contract registry. Still open before this can close:
-  the proposer prompt still hardcodes the `sum_of_divisors` signature (PR C), so
-  no second target can actually be proposed yet, and nothing has been proven to
-  generalise until a second target lands (PR D). Original report follows.
+*(none open)*
+
+## Resolved (Low)
+
+- **L5 — The gauntlet is hardwired to `sum_of_divisors`.** **RESOLVED
+  2026-08-06** (OMNI-1: OMNI-4/5/6/7). Nothing in `sis/` knows any target by
+  name. Four changes, in order:
+  - **Policy (OMNI-4).** `GUARDRAIL_DIRS` guards whole trees by path segment, so
+    `specs/` is FORBIDDEN — the implementer cannot edit its own exam. `_rel()`
+    now resolves against the project root, without which a traversal path
+    escaped the guard from any other working directory.
+  - **Contract (OMNI-5).** `sis/contract.py` carries the entry point, paths,
+    margin and trial count; `specs/<name>/oracle.py` carries the reference,
+    benchmark inputs and input generator as a **module the gauntlet copies into
+    the sandbox**, rather than literals interpolated into its bench script. New
+    interface gate; SelfModel is the contract registry.
+  - **Proposer (OMNI-6).** The system prompt named a target
+    (`"preserve sum_of_divisors(n: int) -> int"`), so any other target would
+    have had the LLM instructed to write the *wrong function* — L5 was a
+    gauntlet **and** proposer problem. The prompt is now contract-derived
+    (signature and reference via `inspect` on the oracle; required API via the
+    acceptance tests verbatim) and names no target.
+  - **Second target (OMNI-7).** `runtime/sort_target.py` + `specs/sort/`. Both
+    targets run the full loop end-to-end on the same unmodified engine:
+    sort `0.000880s → 0.000173s`, sum-of-divisors `0.000249s → 0.000002s`.
+    A third target is a new `specs/` directory and a registry entry, not an
+    engine change.
+
+  Two things worth carrying forward, both found by testing rather than reasoning:
+
+  - **Anti-gaming is only as good as the input distribution.** A probe candidate
+    reading `return v if len(v) > 500 else sorted(v)` — silently unsorted on
+    large inputs — passed *every* gate, because the sort oracle's
+    `random_input` drew only 60–120 elements and the broken branch was never
+    reached. The oracle now spans tiny/medium/large lengths. Any new contract
+    must ask what its distribution fails to cover.
+  - **Env vars don't reach role actors.** Contract selection was first built as
+    `SIS_CONTRACT`, and the acceptance test passed *while silently running
+    `sum_of_divisors`*: detached Ray actors are separate processes that inherit
+    the driver's environment when **created**, so anything exported after
+    `bootstrap()` (including `monkeypatch.setenv`) is invisible to them.
+    Selection is now an explicit `run_cycle(contract_name=...)` argument
+    threaded to both SWE and QA; `SIS_CONTRACT`/`--contract` still work when set
+    before launch. Any future per-cycle configuration has the same trap.
+
+  The noise-floor field evidence below stands and is **not** addressed by L5 —
+  it is the argument for the live-traffic canary (OMNI-2), which replaces a
+  fixed-input microbenchmark with real percentiles. Original report follows.
 
   The independent
   reference and benchmark inputs are baked into the bench script, so widening

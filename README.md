@@ -57,7 +57,8 @@ credentials, or extra installs. Set these to opt into more.
 | `SIS_SANDBOX_IMAGE` | `sis-gauntlet:latest` | Image used when `SIS_SANDBOX=docker`. |
 | `SIS_SANDBOX_MEMORY` / `SIS_SANDBOX_CPUS` | `1g` / `2` | Per-container resource caps in `docker` mode. |
 | `SIS_GAUNTLET_TIMEOUT` | `120` | Per-gate wall-clock cap (seconds) — kills infinite loops (and, in docker mode, the container). |
-| `SIS_TARGET_PATHS` | `runtime/target.py` | Comma-separated SOFT-tier paths the loop may optimise. Guardrail code can never be added. |
+| `SIS_TARGET_PATHS` | `runtime/target.py,runtime/sort_target.py` | Comma-separated SOFT-tier paths the loop may optimise. Guardrail code can never be added. |
+| `SIS_CONTRACT` | *(bootstrap target)* | Which registered target a cycle optimises (`sum_of_divisors`, `sort`). Read inside the role actors, so it only takes effect if exported **before** launch — prefer `main.py --contract <name>` or `run_cycle(contract_name=...)`. |
 | `SIS_ALLOW_STRICT_CHANGES` | `0` | `1` lets the loop propose changes to non-guardrail engine code — still requires approval + justification + checks. |
 | `SIS_BUDGET_USD` | `5.0` | CEO hard spend cap (USD). Set a **tiny** value for a first real run so the brakes trip early. Also: `SIS_BREAKER_THRESHOLD` (`3`), `SIS_MAX_COST_PER_ACCEPTED_USD` (`2.0`), `SIS_SLO_MIN_SPEND_USD` (`0.50`). A bad value fails loudly. |
 | `SIS_EPISODIC_STORE` | `jsonl` | Provenance/episodic backend: `jsonl` (zero-dep), `duckdb` (SQL analytics; `poetry install --with analytics`), or `none`. |

@@ -99,8 +99,16 @@ def run_cycle(
     proposal_body: str,
     *,
     estimate_usd: float = 0.5,
+    contract_name: str | None = None,
 ) -> dict[str, Any]:
-    """Run one full intake→spec→epic→story→implement→review→canary cycle."""
+    """Run one full intake→spec→epic→story→implement→review→canary cycle.
+
+    *contract_name* selects which registered target to optimise (see
+    ``sis.contract.DEFAULT_CONTRACTS``); None keeps the bootstrap target.
+    Passed to BOTH the SWE and QA so they judge the candidate against the
+    same oracle — and passed explicitly rather than via ``SIS_CONTRACT``
+    because the role actors are separate processes that cannot see an env
+    var exported after bootstrap()."""
     # Fail fast, before any spend or artifacts: an untrusted (non-stub) proposer
     # requires the kernel-enforced docker sandbox so its code can't read host
     # credentials (KNOWN_ISSUES.md M1). validate() re-checks as a backstop.
@@ -153,7 +161,7 @@ def run_cycle(
     story_id = plan["feature_story_id"]
 
     # 5. Implement (SWE → validated change on a feature branch + PR).
-    impl = ray.get(swe.implement.remote(story_id))
+    impl = ray.get(swe.implement.remote(story_id, contract_name))
     cost_usd = float(impl.get("cost_usd", 0.0))
 
     # A "no change" outcome — the candidate is identical to the current baseline
@@ -192,7 +200,7 @@ def run_cycle(
                         "provenance": ray.get(sm.provenance.remote())}, cost_usd)
 
     # 6. Verify (QA + deterministic gauntlet).
-    approved = ray.get(qa.review.remote(story_id, impl["pr_id"]))
+    approved = ray.get(qa.review.remote(story_id, impl["pr_id"], contract_name))
 
     # 7. Canary deploy to the green slot (DevOps). Promotion to live is the
     #    human PR merge — intentionally NOT performed by the agent. The latency

@@ -7,6 +7,7 @@ import pytest
 
 from sis.contract import (
     DEFAULT_CONTRACTS,
+    SORT,
     SUM_OF_DIVISORS,
     OptimizationContract,
     default_contract,
@@ -93,3 +94,64 @@ def test_the_bootstrap_contract_has_a_stub_candidate() -> None:
     spec = default_contract()
     assert spec.stub_candidate_path is not None
     assert (PROJECT_ROOT / spec.stub_candidate_path).exists()
+
+
+# --- the second target: proof the contract generalises (OMNI-7) -----------
+
+
+def test_both_targets_are_registered() -> None:
+    names = {c.name for c in DEFAULT_CONTRACTS}
+    assert names == {"sum_of_divisors", "sort"}
+
+
+def test_the_sort_contract_points_at_files_that_exist() -> None:
+    for path in (SORT.target_file, SORT.oracle_file, SORT.tests_file):
+        assert (PROJECT_ROOT / path).exists(), path
+    assert SORT.stub_candidate_path is not None
+    assert (PROJECT_ROOT / SORT.stub_candidate_path).exists()
+
+
+def test_the_two_contracts_require_different_interfaces() -> None:
+    # The point of the second target: what a candidate must implement is a
+    # property of its contract, not of the engine. Nothing in sis/ knows either
+    # target by name.
+    assert SUM_OF_DIVISORS.entry != SORT.entry
+    assert SUM_OF_DIVISORS.target_path != SORT.target_path
+    assert SUM_OF_DIVISORS.oracle_path != SORT.oracle_path
+
+
+def test_the_sort_target_is_soft_and_its_contract_forbidden() -> None:
+    # A new target is useless if the SWE may not write it, and unsafe if the
+    # SWE may write its exam.
+    assert classify(SORT.target_path) is ChangeTier.SOFT
+    assert classify(SORT.oracle_path) is ChangeTier.FORBIDDEN
+    assert classify(SORT.tests_path) is ChangeTier.FORBIDDEN
+
+
+def test_sort_oracle_reference_is_correct() -> None:
+    oracle = SORT.load_oracle()
+    assert oracle.reference([3, 1, 2]) == [1, 2, 3]
+    assert oracle.reference([]) == []
+
+
+def test_sort_random_inputs_span_a_wide_length_range() -> None:
+    # Load-bearing, not cosmetic. With a narrow range (the first version drew
+    # only 60-120), a candidate reading `return v if len(v) > 500 else sorted(v)`
+    # -- silently unsorted on large inputs -- passed every gate, because the
+    # broken branch was never reached. Differential correctness only catches
+    # what the distribution covers.
+    oracle = SORT.load_oracle()
+    rng = random.Random(0)
+    lengths = [len(oracle.random_input(rng)[0]) for _ in range(400)]
+    assert min(lengths) <= 5, "no tiny inputs: off-by-one bugs go uncaught"
+    assert max(lengths) >= 500, "no large inputs: size-conditional cheats pass"
+
+
+def test_sort_bench_inputs_cover_adversarial_shapes() -> None:
+    # Sorts have wildly different best/worst cases; timing only shuffled input
+    # would flatter whichever algorithm suits it.
+    oracle = SORT.load_oracle()
+    shapes = [args[0] for args in oracle.BENCH_INPUTS]
+    assert any(s == sorted(s) for s in shapes), "no already-sorted case"
+    assert any(s == sorted(s, reverse=True) for s in shapes), "no reverse-sorted case"
+    assert any(len(set(s)) == 1 for s in shapes), "no all-equal case"

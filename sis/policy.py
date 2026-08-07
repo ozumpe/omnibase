@@ -76,6 +76,7 @@ GUARDRAIL_DIRS: tuple[str, ...] = (
 # overlap safety code even if mis-configured here.
 DEFAULT_TARGET_PATHS: tuple[str, ...] = (
     "runtime/target.py",
+    "runtime/sort_target.py",
 )
 
 
