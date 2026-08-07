@@ -112,6 +112,14 @@ internal target before it models anything external.
 - Confluence specs/docs live in the **"Software Development" (SD)** space (Atlassian MCP,
   cloudId `760ca470-0091-4601-9704-a56633b5e9b6`): Architecture, Validation Gauntlet,
   Codebase Guide, Guardrails & Operations, Milestone Roadmap, Risks & Next Steps.
+- **Milestone plan lives in Jira: project `OMNI` ("OmniBase"), same cloudId**
+  (<https://olafzumpe.atlassian.net/browse/OMNI>). Epics + stories for the next
+  milestone; **this is the source of truth for what to work on next.** Move a story
+  to Done as its PR merges, and reference the key in the commit/PR
+  (e.g. "OMNI-6: contract-derived proposer prompt"). `docs/KNOWN_ISSUES.md` stays
+  the canonical record of *defects* (H/M/L IDs); Jira holds *planned work*.
+  Note the scratch project `TES` is where the **loop itself** files artifacts during
+  live runs — don't put planning there.
 
 ## Current status — where to pick up
 Released through **v0.1.4**. The bootstrap skeleton (original "first task") is
@@ -156,8 +164,10 @@ Released through **v0.1.4**. The bootstrap skeleton (original "first task") is
 severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
 the IDs in commits/PRs. High and Medium are clear (M2 + L9 fixed 2026-07-29:
 shared `sis` namespace + CEO brake/spend state persisted to the episodic store
-and rehydrated on restart). The only open items are Low: **L5** (the target
-contract / benchmark oracle).
+and rehydrated on restart). The only open item is Low: **L5** (the target
+contract / benchmark oracle) — **partly fixed**, tracked in Jira as epic
+[OMNI-1](https://olafzumpe.atlassian.net/browse/OMNI-1); it closes when a second
+target proves the contract generalises.
 
 - **First real-life test PASSED (2026-07-28): the full loop ran end-to-end with a
   real Claude proposer + real adapters + the kernel-enforced docker sandbox.** Cycle
@@ -168,7 +178,24 @@ contract / benchmark oracle).
   $0.014375, reconciled against the Anthropic console. Details in
   `docs/KNOWN_ISSUES.md` (Resolved).
 
-**Next (sequencing detail in `docs/KNOWN_ISSUES.md`):**
-1. A small AWS run (one node, a few cycles); fix **M2** (anonymous Ray namespace)
-   first; watch the provenance graph and the bill.
-2. Ray Serve weighted canary + atomic actor swap (currently a placeholder).
+**Next — the milestone plan is in Jira ([`OMNI`](https://olafzumpe.atlassian.net/browse/OMNI)),
+not here.** Three epics; design detail in the docs each links to. Check the board
+for current status rather than trusting this list:
+
+1. **[OMNI-1](https://olafzumpe.atlassian.net/browse/OMNI-1) — L5 target contract**
+   (Class 1). PRs A/B done; open: contract-derived proposer prompt (**OMNI-6**),
+   then the sort as a second target (**OMNI-7**, closes L5).
+   Design: `docs/CLASS2_CONTRACT.md`.
+2. **[OMNI-2](https://olafzumpe.atlassian.net/browse/OMNI-2) — Ray Serve canary.**
+   Steps 5/7/11 done (`evaluate_canary`, the `Cloud` traffic+metrics port, the live
+   breach trigger); open: serve the sort (**OMNI-11**), load generator
+   (**OMNI-12**), `ServeCloud` (**OMNI-13**), rework `DevOps.canary()`
+   (**OMNI-14**), and **OMNI-15** — observe the human merge so `promote()` has a
+   caller at all. Design: `docs/SERVE_CANARY.md`.
+3. **[OMNI-3](https://olafzumpe.atlassian.net/browse/OMNI-3) — Class 2**, feature
+   construction: `FeatureContract` + acceptance gates, `InvariantGate`, backtests,
+   `ToolchainAdapter`, the contract-author actor. Design: `docs/CLASS2_CONTRACT.md`.
+
+Not yet scheduled: a small AWS run (one node, a few cycles) — watch the provenance
+graph and the bill; and the **atomic actor swap** for internal, never-served actors,
+which `docs/SERVE_CANARY.md` scopes out and which has no design doc yet.

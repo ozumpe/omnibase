@@ -233,23 +233,31 @@ in *both* implementations — the guardrail lives in the port contract.
 
 Follow the data through a single run. Each step is `ray.get(actor.method.remote(...))`:
 
+```mermaid
+flowchart TD
+    A["CEO.approve_budget(estimate)<br/><i>gate: is this worth the spend?</i>"]
+    B["Workspace.create_page(proposal)<br/><i>intake: a user drops a request</i>"]
+    C["PM.refine_proposal(proposal)<br/><i>→ a spec page (Confluence)</i>"]
+    D["Designer.outline(spec)<br/><i>→ a design outline</i>"]
+    E["CTO.plan(spec)<br/><i>→ a Jira epic + stories</i>"]
+    F["SWE.implement(story)<br/><i>propose() + gauntlet.validate()</i>"]
+    G["QA.review(story, pr)<br/><i>re-runs the gauntlet, verifies</i>"]
+    H["DevOps.canary(pr)<br/><i>green-slot deploy, never promotes</i>"]
+    I["PM.accept(spec)<br/>CEO.report_outcome(success, cost)<br/><i>drives the brakes</i>"]
+    J(["stops here — the human merges the PR"])
+
+    A --> B --> C --> D --> E --> F --> G --> H --> I --> J
+
+    F -. "on pass: branch + commit + PR<br/>(records the proposer's cost)" .-> F
+    K["source = live_target_source()<br/>the target as merged on the base branch,<br/>falling back to runtime/target.py —<br/>so cycles build on merged improvements"]
+    K -.-> F
+
+    style J fill:#e8f0e8
 ```
-CEO.approve_budget(estimate)         # gate: is this worth the spend?
-  └─ Workspace.create_page(proposal) # intake: a "user" drops a request
-PM.refine_proposal(proposal)         # → a spec page (Confluence)
-Designer.outline(spec)               # → a design outline
-CTO.plan(spec)                       # → a Jira epic + stories
-SWE.implement(story)                 # → propose() + gauntlet.validate()
-  │                                  #   source = live_target_source() (the target
-  │                                  #   as merged on the base branch), falling
-  │                                  #   back to the local runtime/target.py —
-  │                                  #   so cycles build on merged improvements
-  │                                  #   on pass: branch + commit + PR
-  └─ (records cost from the proposer)
-QA.review(story, pr)                 # → re-runs the gauntlet, verifies
-DevOps.canary(pr)                    # → green-slot deploy (never promotes)
-PM.accept(spec) ; CEO.report_outcome(success, cost)   # drives the brakes
-```
+
+Each step is `ray.get(actor.method.remote(...))`. The full choreography — including
+the reject and no-change branches, and which artifact each handoff writes — is the
+[sequence diagram](DIAGRAMS.md#2-sequence--one-self-improvement-cycle).
 
 Two things to notice:
 
