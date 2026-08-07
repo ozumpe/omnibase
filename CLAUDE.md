@@ -76,6 +76,15 @@ internal target before it models anything external.
   `git push --no-verify`). Server-side rulesets are also active on both branches
   (GitHub Pro; ruleset ids `17153780` main, `17153781` develop) — the client hook
   is belt-and-suspenders, not the sole enforcement.
+- **Every commit needs a Jira key or an explicit opt-out.** Same `core.hooksPath
+  hooks` setting enables `hooks/commit-msg`, which rejects a commit message with
+  neither an `OMNI-N` key nor a `No-Ticket: <reason>` trailer line (same style as
+  `Co-Authored-By:`; emergency override: `git commit --no-verify`). A trailer, not
+  free text like `[no-ticket]` — free text collides with prose *about* the marker
+  (this hook's own commit needed to document it, which would otherwise trip the
+  bypass). Merge commits and `fixup!`/`squash!` commits are exempt. Client-side
+  only — there is no server-side equivalent, so this one relies on the hook
+  actually being enabled in every clone.
 - CI (`.github/workflows/ci.yml`): `ruff` + `mypy --strict` + `pytest` on push/PR to
   `main` and `develop`. The required status-check context is `test`.
 - Commit-lint (`.github/workflows/commit-lint.yml`): every non-merge commit newly
