@@ -66,8 +66,8 @@ internal target before it models anything external.
 - Hard LLM spend cap + cost-per-accepted-improvement SLO + circuit breaker (CEO brakes).
 
 ## Repo & GitHub workflow
-- Repo: **github.com/ozumpe/omnibase** (private). `gh` CLI is authenticated (account
-  `ozumpe`, SSH). **Default branch: `develop`.**
+- Repo: **github.com/ozumpe/omnibase** (public since 2026-08-06). `gh` CLI is
+  authenticated (account `ozumpe`, SSH). **Default branch: `develop`.**
 - Flow: **`feature/<name>` → `develop` (integration sandbox) → `main` (tested releases).**
   Open PRs with `gh pr create --base develop`. CI must pass before merge; self-merge is
   fine (0 required approvals).
@@ -78,6 +78,12 @@ internal target before it models anything external.
   is belt-and-suspenders, not the sole enforcement.
 - CI (`.github/workflows/ci.yml`): `ruff` + `mypy --strict` + `pytest` on push/PR to
   `main` and `develop`. The required status-check context is `test`.
+- Commit-lint (`.github/workflows/commit-lint.yml`): every non-merge commit newly
+  introduced by a PR needs an `OMNI-N` key or a `No-Ticket:` trailer — the
+  server-side backstop for the Jira-key convention above, for when
+  `hooks/commit-msg` is bypassed or not enabled in a given clone. Runs on a PR
+  against any base (no branch filter, unlike `ci.yml`'s `test` job). Required
+  status-check context: `commit-lint`.
 - After ANY `pyproject.toml` change, run `poetry lock` — CI fails on a stale lock file.
 
 ## Conventions

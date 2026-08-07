@@ -1,0 +1,71 @@
+name: commit-lint
+
+# Server-side backstop for the Jira-key convention (CLAUDE.md): every commit
+# needs an OMNI-N key or an explicit "No-Ticket:" trailer. hooks/commit-msg
+# enforces this client-side, but that only holds if the hook is enabled in
+# whatever clone is committing -- this is what still catches a bypass
+# (--no-verify, a fresh clone with core.hooksPath unset) before merge.
+#
+# The native GitHub ruleset rule for this (commit_message_pattern) requires
+# GitHub Enterprise Cloud and isn't available on this plan -- confirmed by
+# trying it and having it rejected identically to another rule in the same
+# family (branch_name_pattern), while the plan's other rule types (deletion,
+# non_fast_forward, pull_request, required_status_checks) all work. This job
+# is the reachable equivalent: add it to required_status_checks and nothing
+# merges without it.
+#
+# No branch filter on pull_request: unlike ci.yml (KNOWN_ISSUES OMNI-16 --
+# its branches:[main, develop] filter matches the PR's *base*, so a PR
+# stacked on a feature branch skips CI entirely), this check should hold
+# regardless of what a PR targets.
+on:
+  pull_request:
+
+concurrency:
+  group: commit-lint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  commit-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Every commit needs a Jira key or a No-Ticket trailer
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          merge_base="$(git merge-base "$BASE_SHA" "$HEAD_SHA")"
+          fail=0
+
+          for sha in $(git rev-list "$merge_base..$HEAD_SHA"); do
+            # Merge commits are git-generated, not hand-authored -- exempt,
+            # same as hooks/commit-msg's MERGE_HEAD check.
+            parent_count=$(git show -s --format=%P "$sha" | wc -w)
+            if [ "$parent_count" -gt 1 ]; then
+              continue
+            fi
+
+            subject="$(git show -s --format=%s "$sha")"
+            if [[ "$subject" =~ ^(fixup|squash)! ]]; then
+              continue
+            fi
+
+            msg="$(git show -s --format=%B "$sha")"
+            if echo "$msg" | grep -qiE '(^|[^A-Za-z0-9])OMNI-[0-9]+([^A-Za-z0-9]|$)'; then
+              continue
+            fi
+            if echo "$msg" | grep -qiE '^No-Ticket:'; then
+              continue
+            fi
+
+            echo "::error::Commit $sha (\"$subject\") has no Jira key (OMNI-N) and no No-Ticket: trailer."
+            fail=1
+          done
+
+          exit $fail
