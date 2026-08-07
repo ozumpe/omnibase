@@ -1,8 +1,9 @@
 """main.py — bootstrap the actor org and run intake→deploy cycle(s).
 
 Usage:
-    poetry run python main.py            # one cycle, then exit (the demo)
-    poetry run python main.py --loop     # run as a server until Ctrl-C / SIGTERM
+    poetry run python main.py                    # one cycle, then exit (the demo)
+    poetry run python main.py --contract sort    # optimise a different target
+    poetry run python main.py --loop             # run as a server until Ctrl-C
 
 The org cycle exercises the whole hierarchy on a simulated intake: a
 non-technical user drops a proposal into Confluence → PM writes a spec →
@@ -24,7 +25,7 @@ import ray
 from sis import loop, org
 
 
-def run_org_cycle() -> None:
+def run_org_cycle(contract_name: str | None = None) -> None:
     handles = org.bootstrap()
     print("[main] org bootstrapped:", ", ".join(handles))
 
@@ -35,6 +36,7 @@ def run_org_cycle() -> None:
             "The divisor-sum computation is too slow under load. "
             "Please make it faster without changing results."
         ),
+        contract_name=contract_name,
     )
 
     print("\n[main] cycle status:", result["status"])
@@ -77,10 +79,21 @@ def run_server_loop() -> None:
 def main() -> None:
     import sys
 
+    # --contract <name> picks which registered target to optimise. Passed down
+    # as an argument rather than read from the environment inside the actors:
+    # they are separate processes and only see the env as it was when they were
+    # created (SIS_CONTRACT still works, but only if exported before launch).
+    contract_name: str | None = None
+    if "--contract" in sys.argv:
+        index = sys.argv.index("--contract")
+        if index + 1 >= len(sys.argv):
+            raise SystemExit("--contract needs a contract name, e.g. --contract sort")
+        contract_name = sys.argv[index + 1]
+
     if "--loop" in sys.argv:
         run_server_loop()
     else:
-        run_org_cycle()
+        run_org_cycle(contract_name)
 
 
 if __name__ == "__main__":

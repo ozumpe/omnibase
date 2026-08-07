@@ -76,3 +76,30 @@ def test_contract_registration_is_idempotent(handles) -> None:  # type: ignore[n
 
 def test_an_unregistered_target_has_no_contract(handles) -> None:  # type: ignore[no-untyped-def]
     assert ray.get(handles["SelfModel"].contract_for.remote("runtime/nope.py")) is None
+
+
+def test_full_cycle_against_the_second_contract(handles) -> None:  # type: ignore[no-untyped-def]
+    # OMNI-7 acceptance: the whole actor cycle -- propose, gauntlet, QA re-run,
+    # canary -- runs against a target the engine knows nothing about by name.
+    # contract_name selects it; everything downstream is contract-driven.
+    #
+    # Passed as an ARGUMENT, not monkeypatch.setenv("SIS_CONTRACT"). The first
+    # version of this test did the latter and passed while silently running
+    # sum_of_divisors: the role actors are separate processes that inherit the
+    # driver's env when created, so a var set afterwards never reaches them.
+    result = org.run_cycle(
+        handles, "Speed up the sort", "Bubble sort is too slow; same results, faster.",
+        contract_name="sort")
+    assert result["status"] == "verified_awaiting_human_merge", result.get("reason")
+    assert result["candidate_latency"] < result["baseline_latency"]
+    # Prove it really was the sort, not the default target passing by luck.
+    pr = ray.get(handles["Workspace"].get_pr.remote(result["pr_id"]))
+    assert "sort_numbers" in pr.artifact
+    assert "sum_of_divisors" not in pr.artifact
+
+
+def test_unknown_contract_name_fails_loudly(handles) -> None:  # type: ignore[no-untyped-def]
+    # A typo'd contract name must not silently optimise a different target --
+    # that would burn a cycle's spend and produce a baffling PR.
+    with pytest.raises(Exception, match="not a registered contract"):
+        ray.get(handles["SWE"].implement.remote("STORY-1", "not-a-real-contract"))

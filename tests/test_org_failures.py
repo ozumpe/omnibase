@@ -31,7 +31,7 @@ def handles():  # type: ignore[no-untyped-def]
     # always fails the gauntlet. ray.put gives run_cycle the ObjectRef shape it
     # expects from a real actor call.
     h["SWE"] = SimpleNamespace(
-        implement=SimpleNamespace(remote=lambda story_id: ray.put(FAILED_IMPL)))
+        implement=SimpleNamespace(remote=lambda story_id, contract_name=None: ray.put(FAILED_IMPL)))
     yield h
     ray.shutdown()
 

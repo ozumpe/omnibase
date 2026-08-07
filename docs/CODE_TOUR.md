@@ -116,8 +116,11 @@ This codebase is a tour of current Python on purpose — you said you're learnin
 
 Read in this order — each builds on the last:
 
-1. **`runtime/target.py`** — the thing being optimised. A deliberately slow
-   `sum_of_divisors`. Tiny; start here.
+1. **`runtime/target.py`** — a thing being optimised. A deliberately slow
+   `sum_of_divisors`. Tiny; start here. Then `runtime/sort_target.py` (a naive
+   bubble sort) and `sis/contract.py`: there are **two** targets, and nothing in
+   `sis/` knows either by name. What each one must implement and be judged by
+   lives in its contract plus `specs/<name>/`, never in the engine.
 2. **`sis/gauntlet.py`** — `validate(code, baseline) -> Result`. The moat. Read
    this closely; it's the heart of the safety story (§5).
 3. **`sis/proposer.py`** — `propose(...) -> code`. Stub by default; real Claude

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import pathlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -123,6 +124,43 @@ class Role:
         self._sm = get_self_model()
         self._ws = get_workspace()
         ray.get(self._sm.register.remote(name, role, parent))
+
+    def _contract(self, name: str | None = None) -> contract.OptimizationContract:
+        """Which target this cycle optimises, and what judges it.
+
+        Shared by the SWE (which proposes) and QA (which re-runs the gauntlet):
+        both must resolve the *same* contract, or QA re-judges the candidate
+        against a different target's oracle and rejects a perfectly good diff.
+        ``run_cycle`` passes the same *name* to both for exactly that reason.
+
+        Resolution order: the explicit *name* the caller passed, then
+        ``SIS_CONTRACT``, then the bootstrap target (the historical behaviour).
+
+        The explicit argument is the primary mechanism, not a nicety: these are
+        **detached Ray actors in their own processes**, which inherit the
+        driver's environment when they are *created*. An env var exported after
+        ``bootstrap()`` — including anything a test sets with
+        ``monkeypatch.setenv`` — is invisible to them. ``SIS_CONTRACT`` therefore
+        only works when set before launch (``SIS_CONTRACT=sort python main.py``),
+        which is fine for the CLI and useless for anything programmatic.
+
+        An unknown name raises rather than silently falling back — a typo'd
+        contract name that quietly optimised a different target would be a
+        confusing way to waste a cycle's spend.
+        """
+        wanted = name or os.getenv("SIS_CONTRACT")
+        if wanted:
+            named: contract.OptimizationContract | None = ray.get(
+                self._sm.contract_by_name.remote(wanted))
+            if named is None:
+                known = [c.name for c in ray.get(self._sm.contracts.remote())]
+                source = "contract_name" if name else "SIS_CONTRACT"
+                raise ValueError(
+                    f"{source}={wanted!r} is not a registered contract; known: {known}")
+            return named
+        registered: contract.OptimizationContract | None = ray.get(
+            self._sm.contract_for.remote(_TARGET_REL))
+        return registered or contract.default_contract()
 
 
 # --------------------------------------------------------------------------
@@ -359,7 +397,13 @@ class SWE(Role):
     def __init__(self) -> None:
         super().__init__("SWE", "SWE", parent="CTO")
 
-    def implement(self, story_id: str) -> dict[str, Any]:
+    def implement(self, story_id: str, contract_name: str | None = None) -> dict[str, Any]:
+        # What this target is judged by — reference, inputs, margin. Resolved
+        # FIRST, before any artifact is touched: a bad contract name is a
+        # configuration error, and failing after moving the story to
+        # In Progress would leave it stranded there with nothing working on it.
+        spec = self._contract(contract_name)
+
         ray.get(self._ws.transition.remote(story_id, IssueStatus.IN_PROGRESS, "SWE picked up"))
 
         # Start from the target as merged on the base branch, so a cycle that
@@ -367,15 +411,14 @@ class SWE(Role):
         # against the stale local file. Falls back to the local file when
         # version control has no merged source (the in-memory path, or a target
         # not yet committed to the base).
-        # What this target is judged by — reference, inputs, margin. The
-        # SelfModel is the registry (bootstrap seeds it); fall back to the
-        # bootstrap contract so a bare or legacy SelfModel still runs.
-        spec = (ray.get(self._sm.contract_for.remote(_TARGET_REL))
-                or contract.default_contract())
 
         merged_source = ray.get(self._ws.live_target_source.remote())
         origin = "merged_base" if merged_source else "local_file"
-        current_source = merged_source or TARGET_PATH.read_text(encoding="utf-8")
+        # Fall back to the *contract's* target, not a hardcoded path — otherwise
+        # a cycle for any contract but the bootstrap one silently optimises
+        # runtime/target.py while being judged against a different oracle.
+        current_source = merged_source or pathlib.Path(
+            spec.target_file).read_text(encoding="utf-8")
         ray.get(self._ws.emit.remote("target.source", story_id=story_id, origin=origin))
         # sandboxed, not in-process
         baseline = gauntlet.measure_baseline(current_source, contract=spec)
@@ -430,7 +473,7 @@ class QA(Role):
     def __init__(self) -> None:
         super().__init__("QA", "QA", parent="CTO")
 
-    def review(self, story_id: str, pr_id: str) -> bool:
+    def review(self, story_id: str, pr_id: str, contract_name: str | None = None) -> bool:
         issue = ray.get(self._ws.get_issue.remote(story_id))
         pr = ray.get(self._ws.get_pr.remote(pr_id))
         # Deterministic gate already ran in the SWE step; QA confirms the
@@ -440,10 +483,13 @@ class QA(Role):
             # Re-run the gauntlet: the candidate executes ONLY inside its sandbox.
             # Benchmark against the same merged baseline the SWE used (the target
             # as merged on the base branch), not the stale local file — H1.
+            # Must resolve the SAME contract the SWE used, or QA re-judges the
+            # candidate against a different target's oracle and rejects a
+            # perfectly good diff.
+            spec = self._contract(contract_name)
             merged = ray.get(self._ws.live_target_source.remote())
-            baseline_source = merged or TARGET_PATH.read_text(encoding="utf-8")
-            spec = (ray.get(self._sm.contract_for.remote(_TARGET_REL))
-                    or contract.default_contract())
+            baseline_source = merged or pathlib.Path(
+                spec.target_file).read_text(encoding="utf-8")
             report = gauntlet.validate(
                 pr.artifact, 0.0, baseline_source=baseline_source, contract=spec)
             ok = report.passed

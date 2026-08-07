@@ -47,16 +47,20 @@ internal target before it models anything external.
   per-gate timeout kills infinite loops. A real (non-stub) proposer writes untrusted code
   and REQUIRES `SIS_SANDBOX=docker` — the loop refuses otherwise (override:
   `SIS_ALLOW_UNSANDBOXED_LLM=1`); the subprocess sandbox leaves host files readable (M1).
-- Gauntlet gates hard (`sis/gauntlet.py`): `ast.parse` → `mypy --strict` → `pytest` →
-  differential correctness on random inputs (anti-gaming) + benchmark vs a freshly
-  measured baseline (must be ≥10% faster) → human PR. Generated code MUST be fully typed.
+- Gauntlet gates hard (`sis/gauntlet.py`): `ast.parse` → no-op check →
+  `mypy --strict` → interface (exports the contract's entry point) → the
+  contract's acceptance tests → differential correctness on random inputs
+  (anti-gaming) + benchmark vs a freshly measured baseline (must clear the
+  contract's margin, ≥10% faster by default) → human PR. Generated code MUST be
+  fully typed. What counts as correct/better is per-target — see `sis/contract.py`.
 - **Change-authorization policy (`sis/policy.py`) — what the loop may rewrite:**
   - FORBIDDEN (never, no override): guardrail/safety code — the gauntlet, cost/brakes,
     settings/secrets, the adapters, `Dockerfile.gauntlet`, and the policy itself.
   - STRICT (off-limits unless `SIS_ALLOW_STRICT_CHANGES=1`, then needs human approval +
     justification + passing checks): all other engine code.
-  - SOFT (optimisable; checks + review): the designated target(s) — `runtime/target.py`,
-    extendable via `SIS_TARGET_PATHS`. Guardrail classification always wins.
+  - SOFT (optimisable; checks + review): the designated target(s) —
+    `runtime/target.py` and `runtime/sort_target.py`, extendable via
+    `SIS_TARGET_PATHS`. Guardrail classification always wins.
 - Branches: `feature/*` → `develop` → `main`. Never push to `develop`/`main` directly
   (see workflow below).
 - Secrets: `secrets.local.yml` (gitignored) locally; AWS Secrets Manager in cloud
@@ -82,9 +86,9 @@ internal target before it models anything external.
   `Co-Authored-By:`; emergency override: `git commit --no-verify`). A trailer, not
   free text like `[no-ticket]` — free text collides with prose *about* the marker
   (this hook's own commit needed to document it, which would otherwise trip the
-  bypass). Merge commits and `fixup!`/`squash!` commits are exempt. Client-side
-  only — there is no server-side equivalent, so this one relies on the hook
-  actually being enabled in every clone.
+  bypass). Merge commits and `fixup!`/`squash!` commits are exempt. The hook is
+  client-side, so the `commit-lint` CI job below is its server-side backstop for
+  when it is bypassed or not enabled in a clone.
 - CI (`.github/workflows/ci.yml`): `ruff` + `mypy --strict` + `pytest` on push/PR to
   `main` and `develop`. The required status-check context is `test`.
 - Commit-lint (`.github/workflows/commit-lint.yml`): every non-merge commit newly
@@ -115,6 +119,8 @@ internal target before it models anything external.
 - Env flags (full table in `README.md`): `SIS_PROPOSER` (stub|claude), `SIS_SANDBOX`
   (subprocess|docker), `SIS_ADAPTERS` (memory|real), `SIS_ENV` (local|aws),
   `SIS_EPISODIC_STORE` (jsonl|duckdb|none), `SIS_TARGET_PATHS`,
+  `SIS_CONTRACT` (which target a cycle optimises: sum_of_divisors|sort —
+  must be set BEFORE launch; prefer `--contract`/`run_cycle(contract_name=)`),
   `SIS_ALLOW_STRICT_CHANGES`, `SIS_GAUNTLET_TIMEOUT`, `SIS_SANDBOX_IMAGE`,
   `SIS_ALLOW_UNSANDBOXED_LLM`, `SIS_BUDGET_USD` (CEO hard cap; + the other
   brakes), `SIS_HTTP_TIMEOUT` (real-adapter request timeout), `SIS_LLM_PROVIDER`
@@ -169,19 +175,34 @@ Released through **v0.1.4**. The bootstrap skeleton (original "first task") is
 - The CEO spend brakes are env-configurable (`SIS_BUDGET_USD` + the other
   thresholds), so a first real run can set a deliberately tiny cap without
   editing source (M5).
-- 194 tests; `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop → main`
-
-
+- **The engine is target-agnostic (L5 closed, 2026-08-06).** Nothing in `sis/`
+  knows a target by name. `sis/contract.py` holds each target's entry point,
+  margin and trial count; `specs/<name>/` holds its reference oracle, benchmark
+  inputs and acceptance tests as a module the gauntlet copies into the sandbox.
+  `specs/` is POLICY-FORBIDDEN — the implementer cannot edit its own exam. The
+  proposer prompt is contract-derived too, so the LLM is told to write the right
+  function for whichever target is active. **Two targets ship** and both run the
+  full loop on the same engine: `runtime/target.py` (`sum_of_divisors`) and
+  `runtime/sort_target.py` (`sort_numbers`). Select with
+  `--contract <name>` / `run_cycle(contract_name=...)`. A third target is a new
+  `specs/` directory plus a registry entry, not an engine change.
+- 230 tests; `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop → main`
   enforced by both the client-side pre-push hook and active server-side rulesets.
 
 **Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L
 severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
-the IDs in commits/PRs. High and Medium are clear (M2 + L9 fixed 2026-07-29:
-shared `sis` namespace + CEO brake/spend state persisted to the episodic store
-and rehydrated on restart). The only open item is Low: **L5** (the target
-contract / benchmark oracle) — **partly fixed**, tracked in Jira as epic
-[OMNI-1](https://olafzumpe.atlassian.net/browse/OMNI-1); it closes when a second
-target proves the contract generalises.
+the IDs in commits/PRs. **High, Medium and Low are all clear**; L5 (the target
+contract / benchmark oracle) resolved 2026-08-06. Planned work lives in Jira
+([`OMNI`](https://olafzumpe.atlassian.net/browse/OMNI)), defects here.
+
+Two traps L5 surfaced, both worth knowing before writing similar code:
+- **Anti-gaming is only as strong as the input distribution.** A candidate that
+  was silently wrong above a size threshold passed every gate until the oracle's
+  random inputs spanned that range.
+- **Env vars don't reach the role actors.** They are detached Ray actors in
+  their own processes, inheriting the driver's environment when *created* — so
+  anything exported after `bootstrap()` (including `monkeypatch.setenv`) is
+  invisible. Per-cycle configuration must be passed as an argument.
 
 - **First real-life test PASSED (2026-07-28): the full loop ran end-to-end with a
   real Claude proposer + real adapters + the kernel-enforced docker sandbox.** Cycle
@@ -196,16 +217,15 @@ target proves the contract generalises.
 not here.** Three epics; design detail in the docs each links to. Check the board
 for current status rather than trusting this list:
 
-1. **[OMNI-1](https://olafzumpe.atlassian.net/browse/OMNI-1) — L5 target contract**
-   (Class 1). PRs A/B done; open: contract-derived proposer prompt (**OMNI-6**),
-   then the sort as a second target (**OMNI-7**, closes L5).
-   Design: `docs/CLASS2_CONTRACT.md`.
+1. ~~**[OMNI-1](https://olafzumpe.atlassian.net/browse/OMNI-1) — L5 target
+   contract** (Class 1)~~ — **done 2026-08-06** (OMNI-4/5/6/7). Two targets ship
+   and the engine names neither. Design: `docs/CLASS2_CONTRACT.md`.
 2. **[OMNI-2](https://olafzumpe.atlassian.net/browse/OMNI-2) — Ray Serve canary.**
    Steps 5/7/11 done (`evaluate_canary`, the `Cloud` traffic+metrics port, the live
-   breach trigger); open: serve the sort (**OMNI-11**), load generator
-   (**OMNI-12**), `ServeCloud` (**OMNI-13**), rework `DevOps.canary()`
-   (**OMNI-14**), and **OMNI-15** — observe the human merge so `promote()` has a
-   caller at all. Design: `docs/SERVE_CANARY.md`.
+   breach trigger); open: serve the sort (**OMNI-11** — the target now exists),
+   load generator (**OMNI-12**), `ServeCloud` (**OMNI-13**), rework
+   `DevOps.canary()` (**OMNI-14**), and **OMNI-15** — observe the human merge so
+   `promote()` has a caller at all. Design: `docs/SERVE_CANARY.md`.
 3. **[OMNI-3](https://olafzumpe.atlassian.net/browse/OMNI-3) — Class 2**, feature
    construction: `FeatureContract` + acceptance gates, `InvariantGate`, backtests,
    `ToolchainAdapter`, the contract-author actor. Design: `docs/CLASS2_CONTRACT.md`.
