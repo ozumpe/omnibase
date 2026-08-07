@@ -24,6 +24,8 @@ property, made structural rather than incidental.
 
 from __future__ import annotations
 
+import importlib.util
+import types
 from dataclasses import dataclass
 
 from sis.paths import PROJECT_ROOT
@@ -59,6 +61,11 @@ class OptimizationContract:
     tests_path: str     # repo-relative; FORBIDDEN — acceptance tests, run in-sandbox
     max_latency_ratio: float = DEFAULT_MAX_LATENCY_RATIO
     diff_trials: int = DEFAULT_DIFF_TRIALS
+    # repo-relative; the stub proposer's canned answer for this contract
+    # (SIS_PROPOSER=stub, the offline/zero-cost/CI default). None means the stub
+    # has nothing to offer here — SIS_PROPOSER=claude is required for this
+    # contract, and propose() says so rather than reading the wrong file.
+    stub_candidate_path: str | None = None
 
     def __post_init__(self) -> None:
         if not 0.0 < self.max_latency_ratio <= 1.0:
@@ -81,6 +88,27 @@ class OptimizationContract:
     def tests_file(self) -> str:
         return str(PROJECT_ROOT / self.tests_path)
 
+    def load_oracle(self) -> types.ModuleType:
+        """Import and return the oracle module.
+
+        The oracle is trusted (human/PM-authored, stdlib-only, no side effects
+        — never generated candidate code), so importing it in the main process
+        is safe; this is a different act from the gauntlet copying its *text*
+        into the sandbox for the candidate to be judged against.
+
+        Used by the proposer to build a contract-specific prompt — the entry
+        function's required signature and its trusted-reference source — without
+        a second, separate place declaring what "correct" means. The oracle
+        already is that single source of truth.
+        """
+        oracle_spec = importlib.util.spec_from_file_location(
+            f"oracle_{self.name}", self.oracle_file)
+        if oracle_spec is None or oracle_spec.loader is None:
+            raise RuntimeError(f"cannot load oracle module at {self.oracle_path}")
+        module = importlib.util.module_from_spec(oracle_spec)
+        oracle_spec.loader.exec_module(module)
+        return module
+
 
 # The bootstrap target. Registered in the SelfModel at bootstrap, and used as
 # the fallback by callers that don't name a contract (see gauntlet.validate).
@@ -90,6 +118,7 @@ SUM_OF_DIVISORS = OptimizationContract(
     target_path="runtime/target.py",
     oracle_path="specs/sum_of_divisors/oracle.py",
     tests_path="specs/sum_of_divisors/tests.py",
+    stub_candidate_path="runtime/candidates/optimised_target.py",
 )
 
 DEFAULT_CONTRACTS: tuple[OptimizationContract, ...] = (SUM_OF_DIVISORS,)
