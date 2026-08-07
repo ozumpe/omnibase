@@ -379,7 +379,7 @@ class SWE(Role):
         ray.get(self._ws.emit.remote("target.source", story_id=story_id, origin=origin))
         # sandboxed, not in-process
         baseline = gauntlet.measure_baseline(current_source, contract=spec)
-        candidate = proposer.propose(current_source, baseline)
+        candidate = proposer.propose(current_source, baseline, contract=spec)
         candidate_sha = hashlib.sha256(candidate.encode("utf-8")).hexdigest()[:12]
         cost_usd = proposer.last_cost_usd()  # 0.0 for the stub; real $ for Claude
         # Benchmark the candidate against the source the cycle is based on (the

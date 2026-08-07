@@ -1,5 +1,6 @@
 """Tests for the target contract (pure — no Ray, no sandbox)."""
 
+import random
 from dataclasses import replace
 
 import pytest
@@ -66,3 +67,29 @@ def test_paths_resolve_against_the_project_root() -> None:
         oracle_path="specs/x/oracle.py", tests_path="specs/x/tests.py",
     )
     assert spec.oracle_file == str(PROJECT_ROOT / "specs/x/oracle.py")
+
+
+# --- oracle loading + the stub answer (OMNI-6) ----------------------------
+
+
+def test_load_oracle_exposes_the_reference_and_inputs() -> None:
+    # The proposer inspects the oracle to build its prompt, so the contract has
+    # to be able to import it -- not just hand its path to the sandbox.
+    oracle = default_contract().load_oracle()
+    assert oracle.reference(6) == 12  # 1+2+3+6
+    assert oracle.BENCH_INPUTS
+    assert oracle.random_input(random.Random(0))
+
+
+def test_load_oracle_on_a_missing_path_raises() -> None:
+    broken = replace(default_contract(), oracle_path="specs/nope/oracle.py")
+    with pytest.raises(Exception):  # noqa: B017 - FileNotFoundError or RuntimeError
+        broken.load_oracle()
+
+
+def test_the_bootstrap_contract_has_a_stub_candidate() -> None:
+    # SIS_PROPOSER=stub is the offline/CI default, so the bootstrap contract
+    # must be runnable without an API key.
+    spec = default_contract()
+    assert spec.stub_candidate_path is not None
+    assert (PROJECT_ROOT / spec.stub_candidate_path).exists()
