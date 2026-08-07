@@ -92,6 +92,11 @@ internal target before it models anything external.
   I/O in the Ray actors, so logic is unit-testable without standing up Ray.
 - Every bug found becomes a permanent regression test (see `tests/test_adversarial.py`).
 - Small reviewable PRs. Provenance: prompt → commit → PR → ticket → outcome.
+- **Every commit and PR title touching planned work references its Jira key**
+  (e.g. `OMNI-6: contract-derived proposer prompt`) — anywhere in the message,
+  first line preferred. This is what lets the GitHub-for-Jira app populate the
+  issue's Development panel automatically; without the key present, nothing
+  links. Ad-hoc fixes with no OMNI story don't need one.
 
 ## Operational quick reference
 - Run a cycle: `poetry run python main.py` (in-memory, no creds).
