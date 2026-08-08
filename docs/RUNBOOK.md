@@ -86,6 +86,38 @@ under a weighted split the caller doesn't choose.
 
 ---
 
+## Level 0c — generate load against the served target
+
+The canary needs traffic to judge a candidate on, and nothing external calls
+omnibase. With the server from Level 0b running:
+
+```bash
+poetry run python -m sis.loadgen --url http://127.0.0.1:8000/sort -n 200 -c 8
+# 200 requests, 8 concurrent, 51 req/s over 3.95s
+#   p50=155.00ms  p95=237.90ms  p99=283.57ms  error_rate=0.0%
+```
+
+Point it at `/sort-green` to measure the candidate, and compare.
+
+Inputs come from the **contract's oracle** (`random_input`) — the same trusted
+generator the offline differential gate draws from, so there is one definition of
+"a valid input for this target" rather than two that can drift.
+
+**Concurrency is the point.** The gauntlet times one call at a time in a quiet
+sandbox, so queueing, lock contention and GC pauses are invisible to it. Latency
+here is measured client-side end to end, *including* time spent queued, because
+that is what a caller experiences and what a p99 SLO is written against.
+
+> Expect the advantage to look *smaller* here than in the offline benchmark.
+> Measured runs of the two commands above: the merge-sort candidate is **~5x**
+> faster in isolation (`main.py --contract sort`: 0.88ms → 0.17ms) but only
+> **~30%** faster at p95 under 8-way concurrent load (237.90ms → 167.78ms).
+> CPU-bound Python serialises on the GIL, so both versions become queue-bound.
+> That gap between the two numbers is exactly why the canary exists — and why a
+> promotion decision should rest on the live one.
+
+---
+
 ## Level 1 — real Claude writes the optimization (cheap)
 
 The LLM proposes the diff; the gauntlet still gates it, and the CEO spend brakes
