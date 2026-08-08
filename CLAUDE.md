@@ -193,7 +193,14 @@ Released through **v0.1.4**. The bootstrap skeleton (original "first task") is
   not the gauntlet sandbox** — serving candidate source runs generated code
   without a scrubbed env or egress block; that is the intended canary shape but
   the guarantee is procedural, not kernel-enforced.
-- 243 tests; `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop → main`
+- **Synthetic load** (`sis/loadgen.py`, OMNI-12): concurrent, varied, valid
+  traffic against the served target, inputs from the contract's oracle so the
+  online and offline gates share one definition of a valid input. Observations
+  feed `InMemoryCloud.observe()`. `python -m sis.loadgen`; RUNBOOK Level 0c.
+  Measured: the candidate is ~5x faster in isolation but only ~30% faster at
+  p95 under 8-way load — the GIL makes both queue-bound. That gap is why the
+  canary exists.
+- 262 tests; `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop → main`
   enforced by both the client-side pre-push hook and active server-side rulesets.
 
 **Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L
@@ -228,11 +235,11 @@ for current status rather than trusting this list:
    contract** (Class 1)~~ — **done 2026-08-06** (OMNI-4/5/6/7). Two targets ship
    and the engine names neither. Design: `docs/CLASS2_CONTRACT.md`.
 2. **[OMNI-2](https://olafzumpe.atlassian.net/browse/OMNI-2) — Ray Serve canary.**
-   Steps 5/6/7/11 done (`evaluate_canary`, the served sort, the `Cloud`
-   traffic+metrics port, the live breach trigger); open: load generator
-   (**OMNI-12**), `ServeCloud` (**OMNI-13**), rework `DevOps.canary()`
-   (**OMNI-14**), and **OMNI-15** — observe the human merge so `promote()` has a
-   caller at all. Design: `docs/SERVE_CANARY.md`.
+   Steps 5/6/7/8/11 done (`evaluate_canary`, the served sort, the load
+   generator, the `Cloud` traffic+metrics port, the live breach trigger); open:
+   `ServeCloud` (**OMNI-13**), rework `DevOps.canary()` (**OMNI-14**), and
+   **OMNI-15** — observe the human merge so `promote()` has a caller at all.
+   Design: `docs/SERVE_CANARY.md`.
 3. **[OMNI-3](https://olafzumpe.atlassian.net/browse/OMNI-3) — Class 2**, feature
    construction: `FeatureContract` + acceptance gates, `InvariantGate`, backtests,
    `ToolchainAdapter`, the contract-author actor. Design: `docs/CLASS2_CONTRACT.md`.

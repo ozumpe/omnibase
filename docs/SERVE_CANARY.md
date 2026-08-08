@@ -1,8 +1,8 @@
 # Ray Serve canary — and why it needs the Class-2 contract to work
 
-**Status:** partly implemented — steps 5, 6, 7 and 11 are in (`sis/canary.py`,
-`sis/serving.py`, the `Cloud` traffic/metrics port, the live breach trigger);
-8, 9, 10 remain. Tracked as [OMNI-2](https://olafzumpe.atlassian.net/browse/OMNI-2).
+**Status:** partly implemented — steps 5, 6, 7, 8 and 11 are in (`sis/canary.py`,
+`sis/serving.py`, `sis/loadgen.py`, the `Cloud` traffic/metrics port, the
+live breach trigger); 9 and 10 remain. Tracked as [OMNI-2](https://olafzumpe.atlassian.net/browse/OMNI-2).
 Depends on [`docs/CLASS2_CONTRACT.md`](CLASS2_CONTRACT.md) — read that first.
 This doc is the extension of it that makes the canary step real.
 
@@ -352,8 +352,29 @@ step 1 (already done):
    real run report a passing canary that never routed a request or measured
    anything. Both adapters have `isinstance(x, Cloud)` conformance tests now, so
    the next port change can't silently drop one.
-8. **`sis/loadgen.py`** — reuse the contract's invariant `strategy` to generate valid
-   concurrent traffic locally.
+8. ~~**`sis/loadgen.py`**~~ — **done** (2026-08-08, OMNI-12). Concurrent, varied,
+   valid traffic against the served target, with per-request observations fed
+   through `InMemoryCloud.observe()` so `live_metrics` summarises real
+   measurements. `python -m sis.loadgen --url ... -n 200 -c 8`
+   (docs/RUNBOOK.md Level 0c).
+
+   **Inputs come from the contract's oracle (`random_input`), not a Hypothesis
+   strategy.** This step originally assumed the latter, and it is still worth
+   doing when `InvariantGate` (OMNI-18) introduces strategies for shrinking —
+   but the oracle already defines "a valid input for this target", already
+   emits args tuples, and is already what the offline differential gate draws
+   from. A second generator would be free to drift from it, and a canary's
+   verdict is only as good as its input distribution. So Hypothesis stays
+   unadded rather than becoming a dependency with no caller, and **this step
+   did not need to wait on OMNI-18** as the sequencing assumed.
+
+   **Field measurement, and the reason this whole epic exists.** The merge-sort
+   candidate is ~5x faster measured in isolation (0.88ms → 0.17ms) but only
+   ~30% faster at p95 under 8-way concurrent load (237.90ms → 167.78ms):
+   CPU-bound Python serialises on the GIL, so both versions become queue-bound.
+   The offline benchmark cannot see that — it times one call at a time in a
+   quiet sandbox — which is precisely the class of thing a live canary is for.
+
 9. **`ServeCloud`** — the real Ray Serve adapter: deploy, weighted split, atomic
    promote/rollback, `live_metrics` backed by real Serve metrics.
 10. **Rework `DevOps.canary()`** for the real flow — a signature change, not a
