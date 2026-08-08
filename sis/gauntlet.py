@@ -48,7 +48,12 @@ IMPROVEMENT_MARGIN = DEFAULT_MAX_LATENCY_RATIO
 # Only these env vars survive into the sandbox. Everything else — crucially
 # every credential — is dropped, so generated code can't read or exfiltrate a
 # token even before the network block kicks in.
-_ENV_ALLOWLIST = ("PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "SYSTEMROOT", "TERM")
+#
+# Public because ``sis.serving`` scrubs a green canary replica's environment
+# against this same list (widened there for the vars a Ray worker needs to
+# boot). One definition of "which env vars are safe to expose to generated
+# code", so tightening it here tightens it everywhere.
+ENV_ALLOWLIST = ("PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "SYSTEMROOT", "TERM")
 
 # Installed at interpreter startup (via PYTHONPATH→sitecustomize) in every
 # subprocess that runs candidate code. Blocks outbound connections while
@@ -75,7 +80,7 @@ _NETWORK_GUARD = textwrap.dedent(
 
 def _sandbox_env(home: str, pythonpath: str) -> dict[str, str]:
     """A minimal, credential-free environment for a gauntlet subprocess."""
-    env = {k: os.environ[k] for k in _ENV_ALLOWLIST if k in os.environ}
+    env = {k: os.environ[k] for k in ENV_ALLOWLIST if k in os.environ}
     env.setdefault("PATH", os.defpath)
     env["HOME"] = home
     env["TMPDIR"] = home

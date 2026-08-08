@@ -1,8 +1,10 @@
 # Ray Serve canary — and why it needs the Class-2 contract to work
 
-**Status:** partly implemented — steps 5, 6, 7, 8 and 11 are in (`sis/canary.py`,
-`sis/serving.py`, `sis/loadgen.py`, the `Cloud` traffic/metrics port, the
-live breach trigger); 9 and 10 remain. Tracked as [OMNI-2](https://olafzumpe.atlassian.net/browse/OMNI-2).
+**Status:** partly implemented — steps 5, 6, 7, 8, 9 and 11 are in
+(`sis/canary.py`, `sis/serving.py`, `sis/loadgen.py`, `sis/serve_cloud.py`, the
+`Cloud` traffic/metrics port, the live breach trigger); **10 remains**, plus the
+open problem of what observes the human merge. Tracked as
+[OMNI-2](https://olafzumpe.atlassian.net/browse/OMNI-2).
 Depends on [`docs/CLASS2_CONTRACT.md`](CLASS2_CONTRACT.md) — read that first.
 This doc is the extension of it that makes the canary step real.
 
@@ -339,8 +341,10 @@ step 1 (already done):
    **not** the gauntlet sandbox — no scrubbed env, no egress block, no per-call
    timeout. That is the intended shape of a canary and the candidate has passed
    every offline gate, but the guarantee is *procedural* here rather than
-   kernel-enforced. Step 9 must decide deliberately whether the green replica
-   needs a scrubbed `runtime_env`.
+   kernel-enforced. **Settled in step 9:** green gets a scrubbed `runtime_env`
+   (every non-allowlisted variable blanked), while egress stays open by
+   construction — a replica exists to answer HTTP. A credential boundary, not a
+   sandbox.
 
 7. ~~**`Cloud.shift_traffic` / `Cloud.live_metrics`** on the port~~ — **done**
    (2026-08-05). The port grew both; `InMemoryCloud` implements them for real
@@ -375,8 +379,58 @@ step 1 (already done):
    The offline benchmark cannot see that — it times one call at a time in a
    quiet sandbox — which is precisely the class of thing a live canary is for.
 
-9. **`ServeCloud`** — the real Ray Serve adapter: deploy, weighted split, atomic
-   promote/rollback, `live_metrics` backed by real Serve metrics.
+9. ~~**`ServeCloud`**~~ — **done** (2026-08-08, OMNI-13). `sis/serve_cloud.py`:
+   real deployments, a real weighted split, real shadow dispatch, real
+   per-version latency windows. `python -m sis.serve_cloud` runs the whole
+   online path in one command (docs/RUNBOOK.md Level 0d).
+
+   **Ray Serve has no weighted traffic split, so the split is a component.**
+   Serve routes a request to one application by path prefix; "send 5% to the
+   candidate" is not a config knob. `sis/serving.py`'s new `CanaryRouter` is
+   that component, and it is also where shadow dispatch lives — it is the only
+   place that sees both versions answer, hence the only place a *paired*
+   observation can be recorded at all. Pinned to one replica for that reason; a
+   production deployment ships observations to a metrics store and drops the
+   constraint.
+
+   **Two applications, not one — and this was measured, not assumed.** The
+   obvious topology (router + blue + green in one app) was built first. Adding a
+   canary re-runs that graph, and re-running it **restarts the blue replica**
+   (blue's construction identity changes; Serve drains gracefully, so no request
+   is dropped, but the process cycles). Cycling the stable version in order to
+   start observing a candidate discards blue's warm state at the exact moment
+   blue becomes the baseline under comparison. So green is deployed as its own
+   unrouted application and *attached* to the router: deploy, ramp and rollback
+   became control-plane calls, and blue is never touched. Regression test:
+   `test_deploying_a_canary_does_not_restart_blue`.
+
+   **The step-6 sandbox question, settled.** A green replica now runs with a
+   scrubbed `runtime_env`: every non-allowlisted environment variable is blanked,
+   so candidate code cannot read `ANTHROPIC_API_KEY`, `AWS_*` or any other
+   env-carried credential. **Network egress stays open by construction** — a
+   replica exists to answer HTTP, so `--network none` is unavailable here in a
+   way it is not in the gauntlet. This is therefore a *credential boundary, not
+   a sandbox*, and `sis/serving.py` says so where someone extending it will look.
+   Scrubbing works by **blanking rather than omitting**, because Ray's
+   `runtime_env["env_vars"]` merges with the inherited environment — listing only
+   the safe variables would have left every secret intact. Both halves are
+   tested, and the negative control matters as much as the positive: without it
+   the test passes just as happily when the variable never reached the replica,
+   which is how the first version of it passed while proving nothing.
+
+   **`live_window()` sits beside `live_metrics()`** (not on the port): the loop's
+   breach trigger wants a summarised snapshot, but `evaluate_canary` compares
+   latency *arrays* so that offline and online percentiles share one definition
+   rather than trusting each other's arithmetic.
+
+   **Field measurement.** 300 requests at concurrency 8, shadow mode: blue
+   p95 88.99ms vs green 63.14ms, 300 paired samples, 0 disagreements, verdict
+   PASS. The ~29% live gap matches step 8's unpaired ~30% — measured a second
+   way, on a different comparison, which is the reassuring result.
+
+   `ServeCloud` is **not yet wired into `Workspace`** — `DevOps.canary()` still
+   calls the in-memory adapter. That is step 10 (OMNI-14) by design: the port
+   signature has to change first.
 10. **Rework `DevOps.canary()`** for the real flow — a signature change, not a
     rewire: today it's `canary(pr_id, candidate_latency: float)`, one scalar
     measured in the gauntlet sandbox (`sis/roles.py`). It needs the target's
@@ -421,7 +475,7 @@ Recorded here so the sequencing above reads against settled ground:
 |---|---|---|
 | Paired samples | **Shadow by default**, `CanaryMode` per target | `LiveSample.baseline_response` is optional; the response-agreement gate is shadow-only |
 | First served target | **A sort** | scalable input (real latency signal) + unique output (strict shadow check) |
-| Ray Serve in CI | **Yes** — CI runs Serve | `ServeCloud` (step 9) gets real coverage, not skipped integration tests; the CI job grows a Serve-capable stage in that step |
+| Ray Serve in CI | **Yes** — CI runs Serve | `ServeCloud` (step 9) gets real coverage, not skipped integration tests. In the event no new CI stage was needed: `ray[serve]` is a core dependency, so the existing `pytest` job already runs the live Serve tests from steps 6, 8 and 9 |
 | Property testing | **Hypothesis**, added as an optional dep group | lands with step 5/8, its first actual use — not added ahead of a caller |
 
 ## Open problems
