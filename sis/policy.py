@@ -52,6 +52,7 @@ GUARDRAIL_PATHS: tuple[str, ...] = (
     "sis/settings.py",        # secret loading + masking
     "sis/adapters.py",        # RequiresHumanApproval guardrails (in-memory)
     "sis/adapters_real.py",   # RequiresHumanApproval guardrails (real)
+    "sis/serve_cloud.py",     # same guardrail, plus the green-replica env scrub
     "Dockerfile.gauntlet",    # the sandbox image
 )
 

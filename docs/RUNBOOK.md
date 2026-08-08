@@ -118,6 +118,50 @@ that is what a caller experiences and what a p99 SLO is written against.
 
 ---
 
+## Level 0d — one canary end to end (serve → load → verdict)
+
+Levels 0b and 0c stood the pieces up separately. This runs the whole online path
+in one command: blue and a candidate behind a weighted/shadow router, real
+concurrent load through it, and the live window fed to `evaluate_canary`.
+
+```bash
+poetry run python -m sis.serve_cloud -n 300 -c 8
+# blue=blue-live green=green-candidate mode=shadow weight=1.0
+# driving 300 requests at concurrency 8 → http://127.0.0.1:8000/sort
+#
+#   blue   p50=  47.86ms  p95=  88.99ms  p99= 126.57ms  errors=0.0%  n=300
+#   green  p50=  32.86ms  p95=  63.14ms  p99=  72.90ms  errors=0.0%  n=300
+#   client-side: 40 req/s over 7.57s
+#
+# verdict: PASS — canary passed on 300 live samples
+#   samples=300 disagreements=0 blue_errors=0 green_errors=0
+```
+
+`--mode split` for a plain weighted split (`--weight 0.05` to ramp), `--contract`
+to pick a target.
+
+**Shadow is the default, and it is what makes this a paired comparison.** Every
+request goes to *both* versions and only blue's answer is returned to the caller
+— so the candidate can be arbitrarily wrong without a client ever seeing it, and
+both latencies come from the same request at the same instant, which removes the
+traffic-mix confounder a weighted split can't avoid. Both columns show `n=300`
+for that reason: 300 requests, each answered twice.
+
+**Passing is eligibility, not promotion.** `promote()` still raises
+`RequiresHumanApproval`; the human PR merge is what promotes.
+
+Two guarantees worth knowing, both verified by tests rather than asserted:
+
+- **Deploying a canary does not restart blue.** Green is a separate Serve
+  application the router attaches to, precisely so adding one never re-runs the
+  blue graph. The one-application version of this cycled the blue replica.
+- **The green replica's environment is scrubbed.** Candidate code cannot read
+  `ANTHROPIC_API_KEY`, `AWS_*` or any other env-carried credential. Network
+  egress stays open by construction — a replica exists to answer HTTP — so this
+  is a credential boundary, **not** the gauntlet's sandbox.
+
+---
+
 ## Level 1 — real Claude writes the optimization (cheap)
 
 The LLM proposes the diff; the gauntlet still gates it, and the CEO spend brakes
