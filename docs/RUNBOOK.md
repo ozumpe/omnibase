@@ -42,6 +42,48 @@ poetry run mypy --strict sis/ main.py scripts/      # type gate
 poetry run ruff check .                             # lint gate
 ```
 
+**Optimise the other target.** Two contracts ship; the engine names neither:
+
+```bash
+poetry run python main.py --contract sort   # runtime/sort_target.py
+poetry run python main.py                   # runtime/target.py (default)
+```
+
+---
+
+## Level 0b — serve the target over HTTP (Ray Serve)
+
+The target behind a real endpoint, so a canary has somewhere to send traffic.
+Blue and green run **simultaneously with different code** — that is the whole
+point; blue owns the plain route, green a suffixed one.
+
+```bash
+poetry run python -m sis.serving          # blue on /sort, green on /sort-green
+```
+
+Call it:
+
+```bash
+curl -s localhost:8000/sort       -X POST -d '{"args": [[3,1,2]]}'
+curl -s localhost:8000/sort-green -X POST -d '{"args": [[3,1,2]]}'
+# -> {"result": [1,2,3], "version": "...", "slot": "blue"|"green"}
+```
+
+The wire format is `{"args": [...]}` — the entry function's positional
+arguments. That matches the oracle's `random_input`/`BENCH_INPUTS`, which are
+already args tuples, so generated load needs no translation.
+
+Each response carries its own `version` and `slot`, so a canary attributes a
+sample to a version from the response rather than inferring it from routing —
+under a weighted split the caller doesn't choose.
+
+> **Sandbox note.** A replica *executes the source it is handed*. Serving the
+> merged target is ordinary trusted code; serving a **candidate** means running
+> LLM-generated code in a Ray worker, and a Serve replica is **not** the
+> gauntlet sandbox (no scrubbed env, no egress block, no per-call timeout).
+> That is the intended shape of a canary, but the guarantee there is procedural
+> rather than kernel-enforced — see `sis/serving.py`'s module docstring.
+
 ---
 
 ## Level 1 — real Claude writes the optimization (cheap)

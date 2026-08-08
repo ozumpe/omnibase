@@ -1,8 +1,10 @@
 # Ray Serve canary — and why it needs the Class-2 contract to work
 
-**Status:** design sketch (not implemented). Depends on
-[`docs/CLASS2_CONTRACT.md`](CLASS2_CONTRACT.md) — read that first. This doc is the
-extension of it that makes the canary step real.
+**Status:** partly implemented — steps 5, 6, 7 and 11 are in (`sis/canary.py`,
+`sis/serving.py`, the `Cloud` traffic/metrics port, the live breach trigger);
+8, 9, 10 remain. Tracked as [OMNI-2](https://olafzumpe.atlassian.net/browse/OMNI-2).
+Depends on [`docs/CLASS2_CONTRACT.md`](CLASS2_CONTRACT.md) — read that first.
+This doc is the extension of it that makes the canary step real.
 
 > Mirrored in Confluence (SD space) as a child of **The Validation Gauntlet**, sibling
 > of the Class-2 contract page:
@@ -313,18 +315,33 @@ step 1 (already done):
    predicate that raises counts as a violation rather than propagating, and a
    `SHADOW` window that lost its baselines returns a `harness:` reason instead of
    being recorded as the candidate disagreeing.
-6. **First served target: a sort** (decided 2026-08-05; supersedes the earlier
-   "JSON/CSV transformer or sort" recommendation). Stateless, request/response,
-   and the two properties that actually matter here: its **input size scales
-   freely**, so per-request work can be made to dominate Serve's own
-   ~ms overhead — without that the p95 comparison measures the framework, not
-   the candidate, which is the online rerun of exactly the noise-floor failure
-   L5 documented offline — and its **output is unique for a given input**, so
-   `SHADOW` response-agreement is a strict check. Deliberately *not* reusing
-   L5's roman-numeral target: bounded 1–3999 means the input can't be scaled to
-   clear Serve overhead, and its self-contained round-trip invariant never reads
-   `baseline_response`, so it would leave the shadow path unexercised. *Not* LRU
-   cache / rate limiter yet (see above).
+6. ~~**First served target: a sort**~~ — **done** (2026-08-08, OMNI-11).
+   `sis/serving.py` stands the sort up as a Ray Serve deployment: the first
+   `ray.serve` import in the codebase. Blue and green run **simultaneously with
+   different source** (blue owns `/sort`, green `/sort-green`), each response
+   carries its own `version`/`slot` so a sample is attributed from the response
+   rather than inferred from routing, and a failing request returns an error
+   *response* instead of killing the replica — which is what makes `error_rate`
+   a candidate signal rather than an infrastructure fault. Stateless by
+   construction, so canary mechanics can be proven without also solving
+   blue/green state hand-off. `python -m sis.serving` runs both
+   (docs/RUNBOOK.md Level 0b).
+
+   Chosen (2026-08-05) over roman numerals and JSON/CSV because its **input size
+   scales freely** — per-request work can dominate Serve's ~ms overhead, without
+   which a live p95 comparison measures the framework rather than the candidate
+   (the online rerun of L5's noise floor) — and its **output is unique per
+   input**, so `SHADOW` response-agreement is a strict check.
+
+   **Sandbox boundary, now that something actually serves:** a replica executes
+   the source it is handed. Serving the merged target is trusted code; serving a
+   *candidate* runs LLM-generated code in a Ray worker, and a Serve replica is
+   **not** the gauntlet sandbox — no scrubbed env, no egress block, no per-call
+   timeout. That is the intended shape of a canary and the candidate has passed
+   every offline gate, but the guarantee is *procedural* here rather than
+   kernel-enforced. Step 9 must decide deliberately whether the green replica
+   needs a scrubbed `runtime_env`.
+
 7. ~~**`Cloud.shift_traffic` / `Cloud.live_metrics`** on the port~~ — **done**
    (2026-08-05). The port grew both; `InMemoryCloud` implements them for real
    (weight map + `observe()` → windowed percentiles via the new `sis/metrics.py`),
