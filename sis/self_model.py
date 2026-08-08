@@ -55,6 +55,12 @@ class SelfModel:
         self._slots: dict[str, str | None] = {"blue": None, "green": None}  # slot → version
         self._live_version: str | None = None
         self._contracts: dict[str, OptimizationContract] = {}  # target_path → contract
+        # The PR whose merge would release the current canary. Tracked here
+        # rather than parsed back out of the green version string: the version
+        # is f"{branch}@{pr_id}" and a branch name may itself contain "@", so
+        # recovering the id by splitting is guesswork. The merge watcher needs
+        # an exact id, and this is already the actor that knows what is deployed.
+        self._pending_pr: str | None = None
 
     # --- actor registry ---
     def register(self, name: str, role: str, parent: str | None = None) -> None:
@@ -79,8 +85,13 @@ class SelfModel:
         self._live_version = version
         self._slots["blue"] = version
 
+    def set_pending_pr(self, pr_id: str | None) -> None:
+        """Record (or clear) the PR whose merge would release the canary."""
+        self._pending_pr = pr_id
+
     def deployment(self) -> dict[str, Any]:
-        return {"slots": dict(self._slots), "live_version": self._live_version}
+        return {"slots": dict(self._slots), "live_version": self._live_version,
+                "pending_pr": self._pending_pr}
 
     # --- contract registry ---
     # The SelfModel already knows what is deployed where; knowing what each

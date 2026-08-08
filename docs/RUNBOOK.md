@@ -264,8 +264,13 @@ This is development work, not configuration. Currently missing:
   demo `repeat()`/`once()` intake, not a **sustained-SLO-breach detector over a
   rolling metric window** — which needs a served endpoint producing real
   metrics (the Ray Serve gap below).
-- **Ray Serve canary + atomic actor swap.** `DevOps.canary` records a green-slot
-  deploy; there's no real weighted rollout or promote/swap yet.
+- **Ray Serve canary + atomic actor swap.** `DevOps.canary` still records a
+  green-slot deploy against the in-memory adapter, so the *cycle* has no real
+  weighted rollout yet — wiring `ServeCloud` in is OMNI-14. (The mechanics
+  themselves exist: Level 0d runs a real weighted/shadow canary end to end, and
+  the promote path is closed — the loop now observes a human merge, promotes,
+  and releases green instead of idling forever.) The atomic *actor* swap, for
+  internal never-served actors, is still unbuilt.
 - **AWS provisioning.** `SIS_ENV=aws` + `SIS_AWS_SECRET_ID` switch secrets to
   Secrets Manager (needs the secret + an IAM role with
   `secretsmanager:GetSecretValue`), but there is no infra/deploy code — the

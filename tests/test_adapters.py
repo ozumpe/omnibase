@@ -70,7 +70,6 @@ def test_destructive_actions_are_gated() -> None:
     docs = InMemoryDocumentStore(tel)
     work = InMemoryWorkTracker(tel)
     vcs = InMemoryVersionControl(tel)
-    cloud = InMemoryCloud(tel)
     page = docs.create_page("S", "t", "b")
     issue = work.create_issue(IssueType.BUG, "b")
     pr = vcs.open_pr(vcs.create_branch("feature/x").name, "t")
@@ -78,10 +77,39 @@ def test_destructive_actions_are_gated() -> None:
         lambda: docs.archive_page(page.id),
         lambda: work.delete_issue(issue.id),
         lambda: vcs.merge_pr(pr.id),
-        lambda: cloud.promote("v1"),
     ):
         with pytest.raises(RequiresHumanApproval):
             call()
+
+
+def test_promotion_is_gated_by_the_merge_the_agent_cannot_perform() -> None:
+    # `promote()` used to be in the list above, raising unconditionally — which
+    # made promotion unreachable, so the "human gate" was really just an absent
+    # feature (docs/SERVE_CANARY.md: "nothing calls promote() today").
+    #
+    # OMNI-15 moved the gate to where the evidence is. What must stay true is
+    # the *chain*: promotion only ever follows an observed merge, and the agent
+    # cannot produce one. `merge_pr` raising is the load-bearing half — if that
+    # ever stops raising, self-promotion becomes reachable.
+    tel = _tel()
+    vcs = InMemoryVersionControl(tel)
+    pr = vcs.open_pr(vcs.create_branch("feature/x").name, "t")
+
+    with pytest.raises(RequiresHumanApproval):
+        vcs.merge_pr(pr.id)
+    assert vcs.get_pr(pr.id).merged is False, (
+        "a failed merge attempt must leave the PR unmerged — otherwise the agent "
+        "could flip the flag that authorises its own promotion"
+    )
+
+
+def test_promote_makes_a_version_live() -> None:
+    cloud = InMemoryCloud(_tel())
+    cloud.deploy_canary("v1")
+    record = cloud.promote("v1")
+    assert record.slot == "blue" and record.live is True
+    assert cloud.live_version() == "v1"
+    assert cloud.traffic_weights()["v1"] == 1.0
 
 
 def test_canary_uses_green_slot() -> None:

@@ -280,8 +280,12 @@ No code changes — only environment.
   kernel-enforced no-egress / no-credential isolation).
 - **Never commit to `main`**; the agent works on feature branches only.
 - Destructive/irreversible actions — merging a PR, archiving a page, deleting an
-  issue, promoting a canary to live — raise `RequiresHumanApproval` instead of
-  executing.
+  issue — raise `RequiresHumanApproval` instead of executing.
+- **Promotion follows an *observed* merge, never a decision.** The loop polls the
+  pending PR while a canary holds the green slot and promotes only once it reads
+  back as merged. It cannot manufacture that: `merge_pr()` raises in every
+  adapter, and the `Workspace` surface roles talk through exposes no merge at
+  all. The agent applies a human's decision; it never makes one.
 - **Three CEO brakes:** a hard total LLM spend cap, a circuit breaker after N
   regressed cycles, and a cost-per-accepted-improvement SLO (so low-value spend
   trips the breaker, not just regressions). Real Claude token usage is priced

@@ -65,8 +65,14 @@ internal target before it models anything external.
   (see workflow below).
 - Secrets: `secrets.local.yml` (gitignored) locally; AWS Secrets Manager in cloud
   (`SIS_ENV=aws`). Never commit tokens.
-- Destructive Jira/Confluence/GitHub actions, PR merges, and canary→live promotion
-  require human approval (`RequiresHumanApproval` in the adapters).
+- Destructive Jira/Confluence/GitHub actions and PR merges require human approval
+  (`RequiresHumanApproval` in the adapters). **Canary→live promotion follows an
+  *observed* merge** (OMNI-15): `Cloud.promote()` no longer raises, because doing
+  so unconditionally made promotion unreachable rather than gated. Its only
+  caller is `DevOps.observe_merge()`, which promotes solely when the PR reads
+  back as `merged`. The agent cannot manufacture that — `merge_pr()` still raises
+  in every adapter and `Workspace` exposes no merge-shaped method at all (both
+  asserted by tests). It applies a human's decision; it never makes one.
 - Hard LLM spend cap + cost-per-accepted-improvement SLO + circuit breaker (CEO brakes).
 
 ## Repo & GitHub workflow
@@ -200,7 +206,13 @@ Released through **v0.1.4**. The bootstrap skeleton (original "first task") is
   Measured: the candidate is ~5x faster in isolation but only ~30% faster at
   p95 under 8-way load — the GIL makes both queue-bound. That gap is why the
   canary exists.
-- 262 tests; `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop → main`
+- **The loop closes on a human merge** (`DevOps.observe_merge`, OMNI-15).
+  `loop.serve(watch_merges=True)` (default) polls the pending PR while a canary
+  holds green; when a human merges, the candidate is promoted, green is released
+  and the next cycle starts — previously `--loop` ran one cycle and idled
+  forever, because `Cloud.promote()` had no caller at all. Provenance now
+  terminates in `promote` instead of stopping at `canary`.
+- 275 tests; `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop → main`
   enforced by both the client-side pre-push hook and active server-side rulesets.
 
 **Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L
@@ -236,10 +248,11 @@ for current status rather than trusting this list:
    and the engine names neither. Design: `docs/CLASS2_CONTRACT.md`.
 2. **[OMNI-2](https://olafzumpe.atlassian.net/browse/OMNI-2) — Ray Serve canary.**
    Steps 5/6/7/8/11 done (`evaluate_canary`, the served sort, the load
-   generator, the `Cloud` traffic+metrics port, the live breach trigger); open:
-   `ServeCloud` (**OMNI-13**), rework `DevOps.canary()` (**OMNI-14**), and
-   **OMNI-15** — observe the human merge so `promote()` has a caller at all.
-   Design: `docs/SERVE_CANARY.md`.
+   generator, the `Cloud` traffic+metrics port, the live breach trigger), plus
+   **OMNI-15** (the merge is observed, so `promote()` finally has a caller) and
+   **OMNI-13** (`ServeCloud`, in review as PR #76). Open: rework
+   `DevOps.canary()` for the real flow (**OMNI-14**) — the step that wires
+   `ServeCloud` into `Workspace`. Design: `docs/SERVE_CANARY.md`.
 3. **[OMNI-3](https://olafzumpe.atlassian.net/browse/OMNI-3) — Class 2**, feature
    construction: `FeatureContract` + acceptance gates, `InvariantGate`, backtests,
    `ToolchainAdapter`, the contract-author actor. Design: `docs/CLASS2_CONTRACT.md`.

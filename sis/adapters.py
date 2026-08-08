@@ -164,6 +164,26 @@ class InMemoryVersionControl:
             f"merging {pr_id} to main is the mandatory human-review gate (gauntlet step 6)"
         )
 
+    def simulate_human_merge(self, pr_id: str) -> PullRequest:
+        """Model a human merging out of band. **Not** on the ``VersionControl``
+        port, and not reachable from any role.
+
+        The in-memory adapter has no GitHub to observe, so something has to
+        stand in for the human action that ``merged`` reports — the same shape
+        as :meth:`InMemoryCloud.observe`, which lets a load generator feed
+        metrics a real cloud would report by itself. The real adapter has no
+        counterpart: there, ``merged`` comes from GitHub's API and the only way
+        it becomes true is a person clicking merge.
+
+        Deliberately absent from :class:`~sis.workspace.Workspace`'s delegating
+        surface too, so a role cannot reach it even by accident — the whole
+        promotion gate rests on the agent being unable to set this flag.
+        """
+        pr = self._prs[pr_id]
+        pr.merged = True
+        self._tel.emit("pr.merged", pr_id=pr_id, by="human")
+        return pr
+
 
 class InMemoryCloud:
     """AWS + Ray Serve canary stand-in. Blue is live; green is the canary.
@@ -229,9 +249,15 @@ class InMemoryCloud:
                          errors=sum(1 for _, err in recent if err)).as_metrics()
 
     def promote(self, version: str) -> DeployRecord:
-        raise RequiresHumanApproval(
-            f"promoting {version} from green canary to live follows the human PR merge"
-        )
+        # Deliberately does NOT raise (see Cloud.promote): the human gate is the
+        # observed PR merge, checked by the only caller. Raising here again
+        # would just restore the state where promotion can never happen at all.
+        self._live = version
+        self._weights[version] = 1.0
+        record = DeployRecord(version=version, slot="blue", live=True)
+        self._records.append(record)
+        self._tel.emit("canary.promoted", version=version, slot="blue")
+        return record
 
     def rollback(self, version: str) -> None:
         self._weights[version] = 0.0

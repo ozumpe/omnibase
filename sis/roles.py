@@ -24,7 +24,7 @@ import ray
 
 from sis import contract, gauntlet, policy, proposer
 from sis.paths import PROJECT_ROOT, TARGET_PATH
-from sis.ports import IssueStatus, IssueType
+from sis.ports import IssueStatus, IssueType, PullRequest
 from sis.self_model import get_self_model
 from sis.settings import space_keys, version_control_base
 from sis.workspace import get_workspace
@@ -113,6 +113,17 @@ def evaluate_brakes(
     if spent >= slo_min_spend and cost_per_accepted > max_cost_per_accepted:
         return "cost-per-accepted-improvement SLO breached"
     return None
+
+
+def _version_for(pr: PullRequest) -> str:
+    """The deployed-version string for a PR's candidate. Pure.
+
+    One definition, because ``canary()`` and ``observe_merge()`` must agree
+    exactly: the promote path looks the version up by the string the deploy
+    path wrote, and a mismatch would silently promote nothing while reporting
+    success.
+    """
+    return f"{pr.branch}@{pr.id}"
 
 
 class Role:
@@ -512,14 +523,55 @@ class DevOps(Role):
         # candidate_latency was measured inside the gauntlet sandbox by the SWE
         # step. The candidate is NEVER executed here (main process, holds creds).
         pr = ray.get(self._ws.get_pr.remote(pr_id))
-        version = f"{pr.branch}@{pr.id}"
+        version = _version_for(pr)
         record = ray.get(self._ws.deploy_canary.remote(
             version, {"latency_seconds": candidate_latency}))
         ray.get(self._sm.set_slot.remote("green", version))
+        # Remember which PR would release this canary, so the merge watcher has
+        # an exact id rather than one parsed back out of the version string.
+        ray.get(self._sm.set_pending_pr.remote(pr_id))
         ray.get(self._sm.record.remote(
             "canary", version, pr=pr_id, latency=candidate_latency))
         return {"version": version, "slot": record.slot,
                 "latency_seconds": candidate_latency, "live": record.live}
+
+    def observe_merge(self, pr_id: str) -> dict[str, Any]:
+        """Notice that a human merged ``pr_id``; promote and release green.
+
+        **This never merges and never decides to promote.** It reads the PR
+        back from the version-control port and does nothing at all unless
+        ``merged`` is already true. Since ``merge_pr()`` raises
+        ``RequiresHumanApproval`` in every adapter, the agent cannot make that
+        true — so the only thing this does is *apply* a decision a human
+        already made, which is what closes the loop the design always described
+        (docs/SERVE_CANARY.md, "nothing calls promote() today").
+
+        Idempotent: promoting an already-live version is a no-op, so a poll that
+        fires twice on the same merge does not double-promote or double-record.
+        """
+        pr = ray.get(self._ws.get_pr.remote(pr_id))
+        version = _version_for(pr)
+        if not pr.merged:
+            # The overwhelmingly common case on any given tick. Deliberately
+            # silent — emitting here would bury the audit trail under one event
+            # per poll while a human takes hours to review.
+            return {"pr": pr_id, "version": version, "merged": False, "promoted": False}
+
+        if ray.get(self._ws.live_version.remote()) == version:
+            return {"pr": pr_id, "version": version, "merged": True, "promoted": False,
+                    "reason": "already live"}
+
+        record = ray.get(self._ws.promote.remote(version))
+        ray.get(self._sm.set_live_version.remote(version))
+        # Release the gate: green is free, so loop.serve may start a new cycle —
+        # and it will now baseline from the merged target rather than
+        # re-proposing the change that was sitting in this PR.
+        ray.get(self._sm.set_slot.remote("green", None))
+        ray.get(self._sm.set_pending_pr.remote(None))
+        ray.get(self._sm.record.remote("promote", version, pr=pr_id))
+        ray.get(self._ws.emit.remote("merge.observed", pr_id=pr_id, version=version))
+        return {"pr": pr_id, "version": version, "merged": True, "promoted": True,
+                "slot": record.slot, "live": record.live}
 
     def retire_canary(self, version: str) -> dict[str, Any]:
         """Take the canary out of the green slot and stop its traffic.
@@ -532,6 +584,7 @@ class DevOps(Role):
         """
         ray.get(self._ws.rollback.remote(version))
         ray.get(self._sm.set_slot.remote("green", None))
+        ray.get(self._sm.set_pending_pr.remote(None))
         ray.get(self._sm.record.remote("canary_retired", version))
         return {"version": version, "slot": "green", "released": True}
 
