@@ -29,3 +29,8 @@ TESTS_DIR = PROJECT_ROOT / "tests"
 # gauntlet copies a contract's oracle and tests into its sandbox; the concrete
 # paths live on the contract, not here, since there is one set per target.
 SPECS_DIR = PROJECT_ROOT / "specs"
+# Shared comparators for the backtest gate — the marking scheme, one set for
+# every contract, so it sits at the root of specs/ rather than inside any one
+# contract's directory. A contract may still override a comparator by name in
+# its own oracle (see sis.backtest.build_script).
+COMPARATORS_PATH = SPECS_DIR / "comparators.py"

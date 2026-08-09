@@ -18,6 +18,7 @@ runtime/episodic.duckdb
 .idea/
 .vscode/
 .claude/settings.local.json
+.claude-code-gui/
 
 # Secrets (see DESIGN.md §6). Local dev only — never commit real credentials.
 # secrets.example.yml IS committed (template); secrets.local.yml is NOT.

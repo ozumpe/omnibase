@@ -1,8 +1,9 @@
 """sis.gauntlet — validation gauntlet for generated code.
 
-Runs cheapest-first gates: ast.parse → mypy --strict → pytest → benchmark.
-All execution happens in a subprocess so an infinite loop or bad import
-cannot hang or corrupt the main process.
+Runs cheapest-first gates: ast.parse → mypy --strict → interface → pytest →
+backtest → differential correctness + benchmark. All execution happens in a
+subprocess so an infinite loop or bad import cannot hang or corrupt the main
+process.
 
 Gate 5 (sandbox) has two modes, chosen by ``SIS_SANDBOX``:
 
@@ -34,11 +35,22 @@ import textwrap
 import uuid
 from dataclasses import dataclass, field
 
+from sis.backtest import (
+    EXIT_BAD_FIXTURE,
+    EXIT_MISMATCH,
+    EXIT_NO_COMPARATOR,
+    EXIT_NO_ENTRY,
+    build_script,
+    parse_expectation,
+    parse_fixture,
+    plan_entry,
+)
 from sis.contract import (
     DEFAULT_MAX_LATENCY_RATIO,
     OptimizationContract,
     default_contract,
 )
+from sis.paths import COMPARATORS_PATH, PROJECT_ROOT
 
 # Back-compat alias: the margin is now per-contract
 # (``OptimizationContract.max_latency_ratio``), because what counts as a
@@ -225,6 +237,114 @@ def ensure_sandbox_allows_proposer() -> None:
     )
 
 
+def _backtest_gate(
+    spec: OptimizationContract,
+    *,
+    tmp: pathlib.Path,
+    candidate: pathlib.Path,
+    oracle_mod: pathlib.Path,
+    tmpdir: str,
+    env: dict[str, str],
+) -> Result | None:
+    """Run the contract's backtests in the sandbox. Returns None when they pass.
+
+    Fixtures are parsed **here**, in the main process, before anything is copied
+    in. They are trusted data under ``specs/``, and validating them first means a
+    malformed fixture is reported as the harness fault it is, naming the file —
+    rather than surfacing as an opaque sandbox crash that reads like the
+    candidate's fault. Same reason the missing-oracle and missing-tests checks
+    fail loudly rather than falling through.
+    """
+    if not spec.backtests:
+        return None
+
+    comparators_src = pathlib.Path(COMPARATORS_PATH)
+    if not comparators_src.exists():
+        return Result(
+            passed=False,
+            reason=f"harness: shared comparators missing at {COMPARATORS_PATH} "
+                   "— the backtest gate cannot run",
+        )
+    comparators_mod = tmp / "comparators.py"
+    comparators_mod.write_text(comparators_src.read_text(encoding="utf-8"), encoding="utf-8")
+
+    fixtures_dir = tmp / "fixtures"
+    fixtures_dir.mkdir(exist_ok=True)
+    plan: list[dict[str, object]] = []
+    for index, bt in enumerate(spec.backtests):
+        fixture_src = PROJECT_ROOT / bt.fixture
+        expect_src = PROJECT_ROOT / bt.expect
+        for path in (fixture_src, expect_src):
+            if not path.exists():
+                return Result(
+                    passed=False,
+                    reason=f"harness: backtest {bt.name!r} references a missing file "
+                           f"({path}) — the backtest gate cannot run",
+                )
+        try:
+            # Parsed for validation, then copied verbatim: the sandbox re-reads
+            # the file, so re-serialising here would let the two views drift.
+            parse_fixture(fixture_src.read_text(encoding="utf-8"), where=bt.fixture)
+            parse_expectation(expect_src.read_text(encoding="utf-8"), where=bt.expect)
+        except ValueError as exc:
+            return Result(
+                passed=False,
+                reason=f"harness: backtest {bt.name!r} has a malformed fixture — {exc}",
+            )
+        # Indexed filenames, not bt.name: a name is human-authored and may
+        # contain a path separator or a character the filesystem dislikes.
+        fixture_dst = fixtures_dir / f"{index}_fixture.json"
+        expect_dst = fixtures_dir / f"{index}_expect.json"
+        fixture_dst.write_text(fixture_src.read_text(encoding="utf-8"), encoding="utf-8")
+        expect_dst.write_text(expect_src.read_text(encoding="utf-8"), encoding="utf-8")
+        plan.append(plan_entry(bt, fixture_path=fixture_dst, expect_path=expect_dst))
+
+    script = build_script(
+        candidate_path=str(candidate),
+        comparators_path=str(comparators_mod),
+        oracle_path=str(oracle_mod),
+        entry=spec.entry,
+        plan=plan,
+    )
+    result = _run([_PY, "-c", script], tmpdir, env)
+    if timed_out := _timed_out(result, "backtest"):
+        return timed_out
+    if result.returncode == EXIT_NO_ENTRY:
+        return Result(
+            passed=False,
+            reason=f"interface: candidate does not export {spec.entry!r} "
+                   f"(required by contract {spec.name!r})",
+            errors=result.stdout.splitlines(),
+        )
+    if result.returncode == EXIT_NO_COMPARATOR:
+        return Result(
+            passed=False,
+            reason="harness: a backtest names a comparator that does not exist in the "
+                   "contract's oracle or in specs/comparators.py",
+            errors=result.stdout.splitlines(),
+        )
+    if result.returncode == EXIT_BAD_FIXTURE:
+        return Result(
+            passed=False,
+            reason="harness: a backtest fixture could not be read in the sandbox",
+            errors=result.stdout.splitlines(),
+        )
+    if result.returncode == EXIT_MISMATCH:
+        detail = result.stdout.strip().removeprefix("MISMATCH").strip()
+        return Result(
+            passed=False,
+            reason=f"backtest failed: candidate did not reproduce recorded history — {detail}",
+            errors=result.stdout.splitlines(),
+        )
+    if result.returncode != 0:
+        return Result(
+            passed=False,
+            reason="harness: the backtest script crashed",
+            errors=result.stderr.splitlines(),
+        )
+    return None
+
+
 def _timed_out(result: subprocess.CompletedProcess[str], gate: str) -> Result | None:
     """If *result* is a gate timeout (returncode 124 from _timeout_result), return
     a Result whose reason maps to the ``timeout`` episodic gate; else None.
@@ -254,6 +374,9 @@ def validate(
     2. Not be identical to the baseline (a no-op is not an improvement).
     3. Pass mypy --strict.
     4. Pass the contract's acceptance tests.
+    4b. Reproduce every recorded episode the contract declares, within the
+        comparator and tolerance that episode names (skipped when the contract
+        declares none, which is the case for both shipped targets).
     5a. Export the contract's ``entry`` function (interface).
     5b. Agree with the contract's independent reference on randomised inputs
         (anti-gaming).
@@ -422,6 +545,29 @@ def validate(
                 reason="pytest failed",
                 errors=pytest_result.stdout.splitlines() + pytest_result.stderr.splitlines(),
             )
+
+        # --- Gate 3b: backtest — does the candidate reproduce recorded reality?
+        # Placed after the acceptance tests and before the differential gate on
+        # the cheapest-first rule: replaying a handful of fixtures costs far less
+        # than 300 randomised trials plus five benchmark repetitions, and it
+        # fails with a far sharper message ("did not reproduce 2026Q1, off by
+        # 12%") than a differential mismatch on an opaque random input.
+        #
+        # It is not a *substitute* for the differential gate and does not reorder
+        # the anti-gaming argument. Fixtures are few and fixed, so a candidate
+        # could in principle special-case them; unpredictable inputs are what
+        # make that not worth attempting. Backtest asks "does it match history",
+        # differential asks "is it right in general", and the second is the moat.
+        #
+        # docs/CLASS2_CONTRACT.md lists backtest *after* the invariant gate. That
+        # ordering can be revisited when OMNI-17/18 split this pipeline into
+        # discrete Gate objects; today differential-correctness and the benchmark
+        # share one script, so there is no seam between them to sit in.
+        if backtest_failure := _backtest_gate(
+            spec, tmp=tmp, candidate=candidate, oracle_mod=oracle_mod,
+            tmpdir=tmpdir, env=env,
+        ):
+            return backtest_failure
 
         # --- Gate 4: differential correctness + benchmark ---
         # Two anti-gaming defences beyond the static pytest cases:

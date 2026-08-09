@@ -51,7 +51,7 @@ class EpisodicEvent:
     pr_id: str | None = None
     candidate_sha: str | None = None
     gauntlet_passed: bool | None = None
-    # reject_gate: ast | noop | mypy | interface | pytest | correctness
+    # reject_gate: ast | noop | mypy | interface | pytest | backtest | correctness
     #            | benchmark | policy | timeout
     #            | harness   ("harness" = the gate could not run, not a verdict
     #                         on the candidate)
@@ -291,6 +291,13 @@ def gate_from_reason(reason: str | None) -> str | None:
     # a distinct failure from "its behaviour is wrong" (CLASS2_CONTRACT.md).
     if r.startswith("interface:"):
         return "interface"
+    # The backtest gate (sis/backtest.py): the candidate is well-formed and
+    # passes its acceptance tests, but does not reproduce a recorded episode.
+    # Distinct from "correctness" — that gate compares against a reference
+    # oracle evaluated on demand, this one against history that actually
+    # happened, and for a world-model the second is the evidence that counts.
+    if r.startswith("backtest failed"):
+        return "backtest"
     # The canary's own gates (sis/canary.py: evaluate_canary), each a live
     # analogue of an offline concept but named distinctly — conflating a live
     # regression with an offline "no improvement" (or a live invariant
