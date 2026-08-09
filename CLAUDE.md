@@ -104,6 +104,10 @@ internal target before it models anything external.
   against any base (no branch filter, unlike `ci.yml`'s `test` job). Required
   status-check context: `commit-lint`.
 - After ANY `pyproject.toml` change, run `poetry lock` — CI fails on a stale lock file.
+- `pyproject.toml`'s `version` tracks the last git tag (bump it as part of cutting
+  a release, e.g. `git tag v0.1.5`); it had drifted to `0.1.0` across five
+  releases (OMNI-22) before being corrected to match `v0.1.4`, the last actual
+  tag — unreleased work on `develop` has no version number until its own tag.
 
 ## Conventions
 - `ruff`, `mypy --strict`, `pytest` — all green before a PR (also CI + gauntlet gates).

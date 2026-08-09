@@ -12,7 +12,7 @@
 
 [project]
 name = "self-improving-server"
-version = "0.1.0"
+version = "0.1.4"
 description = "A self-improving server on a Ray actor hierarchy that generates, validates, and safely deploys its own code."
 authors = [{ name = "Olaf Zumpe", email = "olaf.zumpe@gmail.com" }]
 license = "Apache-2.0"
