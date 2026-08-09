@@ -12,7 +12,7 @@ import pytest
 from sis.adapters import InMemoryTelemetry
 from sis.canary import CanaryMode, LiveSample, evaluate_canary
 from sis.contract import SORT
-from sis.ports import Cloud, RequiresHumanApproval
+from sis.ports import Cloud
 from sis.serve_cloud import ServeCloud
 
 # Set at *import* time, which pytest runs during collection — i.e. before any
@@ -109,11 +109,13 @@ def test_operations_before_a_baseline_fail_loudly() -> None:
             call()
 
 
-def test_promotion_still_requires_a_human() -> None:
-    # CLAUDE.md hard rule. A passing canary makes a candidate *eligible*; the
-    # human PR merge is what promotes.
-    with pytest.raises(RequiresHumanApproval):
-        ServeCloud(InMemoryTelemetry(), SORT).promote("v2")
+def test_only_the_deployed_candidate_can_be_promoted() -> None:
+    # Promotion moves the *canary* into the live slot. Naming anything else is a
+    # caller bug, and silently promoting whatever string arrived would be a way
+    # to make arbitrary source live.
+    cloud = ServeCloud(InMemoryTelemetry(), SORT)
+    with pytest.raises(ValueError, match="not the deployed candidate"):
+        cloud.promote("v2")
 
 
 # --- live Serve ------------------------------------------------------------
@@ -132,13 +134,58 @@ def ray_serve():  # type: ignore[no-untyped-def]
     ray.shutdown()
 
 
-@pytest.fixture
-def cloud(ray_serve):  # type: ignore[no-untyped-def]
-    """A ServeCloud with blue up, torn down after each test."""
+@pytest.fixture(scope="module")
+def _live(ray_serve):  # type: ignore[no-untyped-def]
+    """One ServeCloud for the whole module.
+
+    Module-scoped deliberately. A per-test fixture stood an application up and
+    tore it down around each test — roughly twenty ``serve.run``/``serve.delete``
+    pairs — and under that churn ``serve.delete`` intermittently blew its own 60s
+    timeout, failing a different test each run. Nothing was wrong with the
+    adapter (verified: a second, identically-configured ServeCloud gets a
+    genuinely fresh router, no stale state); it was the harness hammering
+    Serve's control plane.
+
+    So: deploy once, and let each test mutate through the control plane
+    (``set_mode``/``deploy_canary``/``shift_traffic``), which is cheap and is
+    also how a real canary is driven. ``deploy_canary`` re-runs the green
+    application in place rather than deleting it, so repeated use costs nothing.
+    """
     c = ServeCloud(InMemoryTelemetry(), SORT, mode=CanaryMode.SPLIT)
     c.serve_blue(version="v1")
     yield c
     c.shutdown()
+
+
+def _reset(c, mode, *, blue_source=None) -> None:  # type: ignore[no-untyped-def]
+    """Return the shared deployment to a known state.
+
+    ``serve_blue`` re-runs the public application, which Serve applies as an
+    *update* — the cheap operation. What this avoids is ``rollback()``, which
+    deletes the green application; repeatedly deleting applications is the churn
+    that made this module flaky. Detaching green and clearing the window is
+    equivalent here and costs two RPCs.
+    """
+    c.serve_blue(source=blue_source, version="v1")
+    router = c._require_router()
+    router.detach_green.remote().result()
+    router.reset.remote().result()
+    c._green_source = c._green_version = None
+    c.set_mode(mode)
+
+
+@pytest.fixture
+def cloud(_live):  # type: ignore[no-untyped-def]
+    """The shared ServeCloud: blue v1, SPLIT, no candidate, empty window."""
+    _reset(_live, CanaryMode.SPLIT)
+    return _live
+
+
+@pytest.fixture
+def shadow(_live):  # type: ignore[no-untyped-def]
+    """The shared ServeCloud in SHADOW mode, otherwise as ``cloud``."""
+    _reset(_live, CanaryMode.SHADOW)
+    return _live
 
 
 def _post(args, url="http://127.0.0.1:8000/sort"):  # type: ignore[no-untyped-def]
@@ -151,24 +198,24 @@ def test_blue_serves_the_committed_target(cloud) -> None:  # type: ignore[no-unt
     assert cloud.live_version() == "v1"
 
 
-def test_deploying_a_canary_does_not_restart_blue(ray_serve) -> None:  # type: ignore[no-untyped-def]
+def test_deploying_a_canary_does_not_restart_blue(_live) -> None:  # type: ignore[no-untyped-def]
     # Regression, and the reason green is a separate application rather than a
     # third deployment in the router's graph. Re-running one combined graph to
     # add a canary cycles the blue replica — measured, not theorised — which
     # discards blue's warm state at the moment it becomes the baseline under
     # comparison. Deploy and rollback must both leave blue untouched.
-    c = ServeCloud(InMemoryTelemetry(), SORT, mode=CanaryMode.SPLIT)
-    c.serve_blue(source=_IDENTITY_SRC, version="v1")
-    try:
-        before = _post([[1]])["result"]
-        c.deploy_canary("v2", source=_DIFFERENT_SRC)
-        assert _post([[1]])["result"] in (before, "green-answer")
-        c.shift_traffic("v2", 0.0)
-        assert _post([[1]])["result"] == before, "blue restarted on canary deploy"
-        c.rollback("v2")
-        assert _post([[1]])["result"] == before, "blue restarted on rollback"
-    finally:
-        c.shutdown()
+    #
+    # Blue serves a construction-time id here, so a changed answer means the
+    # replica restarted.
+    _reset(_live, CanaryMode.SPLIT, blue_source=_IDENTITY_SRC)
+
+    before = _post([[1]])["result"]
+    _live.deploy_canary("v2", source=_DIFFERENT_SRC)
+    _live.shift_traffic("v2", 0.0)
+    assert _post([[1]])["result"] == before, "blue restarted on canary deploy"
+
+    _live.rollback("v2")
+    assert _post([[1]])["result"] == before, "blue restarted on rollback"
 
 
 def test_traffic_shifts_to_the_candidate(cloud) -> None:  # type: ignore[no-untyped-def]
@@ -209,6 +256,23 @@ def test_live_metrics_are_per_version(cloud) -> None:  # type: ignore[no-untyped
     assert blue["p95"] > 0 and blue["error_rate"] == 0.0
 
 
+def test_promotion_makes_the_candidate_the_new_baseline(cloud) -> None:  # type: ignore[no-untyped-def]
+    # The other half of OMNI-15: once a human merge is observed, promotion has
+    # to actually move the code, not just record that it did. Blue must serve
+    # the candidate's answers afterwards and green must be gone.
+    cloud.deploy_canary("v2", source=_DIFFERENT_SRC)
+    assert _post([[3, 1, 2]])["result"] == [1, 2, 3]     # blue still the old code
+
+    record = cloud.promote("v2")
+
+    assert record.slot == "blue" and record.live is True
+    assert cloud.live_version() == "v2"
+    answer = _post([[3, 1, 2]])
+    assert answer["result"] == "green-answer", "blue is not running the candidate"
+    assert answer["slot"] == "blue"
+    assert cloud.status()["green_version"] is None, "green must be retired"
+
+
 def test_rollback_removes_the_candidate(cloud) -> None:  # type: ignore[no-untyped-def]
     cloud.deploy_canary("v2", source=_DIFFERENT_SRC)
     cloud.shift_traffic("v2", 1.0)
@@ -219,20 +283,19 @@ def test_rollback_removes_the_candidate(cloud) -> None:  # type: ignore[no-untyp
     assert {_post([[2, 1]])["slot"] for _ in range(8)} == {"blue"}
 
 
-def _snitch_on(ray_serve, *, scrub: bool):  # type: ignore[no-untyped-def]
+def _snitch_on(live, *, scrub: bool):  # type: ignore[no-untyped-def]
     """Deploy a candidate that reports its own environment, and ask it."""
-    c = ServeCloud(InMemoryTelemetry(), SORT, mode=CanaryMode.SPLIT,
-                   scrub_green_env=scrub)
-    c.serve_blue(version="v1")
+    _reset(live, CanaryMode.SPLIT)
+    previous, live._scrub = live._scrub, scrub
     try:
-        c.deploy_canary("v2", source=_SNITCH_SRC)
-        c.shift_traffic("v2", 1.0)
+        live.deploy_canary("v2", source=_SNITCH_SRC)
+        live.shift_traffic("v2", 1.0)
         return _post([[1]])["result"]
     finally:
-        c.shutdown()
+        live._scrub = previous
 
 
-def test_the_green_replica_cannot_read_credentials(ray_serve) -> None:  # type: ignore[no-untyped-def]
+def test_the_green_replica_cannot_read_credentials(_live) -> None:  # type: ignore[no-untyped-def]
     # The OMNI-13 decision, enforced rather than documented. A Serve replica is
     # NOT the gauntlet sandbox — egress stays open by construction, since a
     # replica exists to answer HTTP — but candidate code must not be able to
@@ -242,28 +305,20 @@ def test_the_green_replica_cannot_read_credentials(ray_serve) -> None:  # type: 
     # either half: on its own this assertion also passes if the variable never
     # reached the replica in the first place, which is exactly how the first
     # version of this test passed while proving nothing.
-    leaked, has_path = _snitch_on(ray_serve, scrub=True)
+    leaked, has_path = _snitch_on(_live, scrub=True)
     assert leaked == "", "candidate code read a credential"
     assert has_path, "scrubbing must not blind the replica to PATH, or it cannot boot"
 
 
-def test_without_the_scrub_the_credential_does_leak(ray_serve) -> None:  # type: ignore[no-untyped-def]
+def test_without_the_scrub_the_credential_does_leak(_live) -> None:  # type: ignore[no-untyped-def]
     # The negative control: proves the threat is real and that the scrub is
     # what closes it. Without this, the test above is indistinguishable from a
     # harness that simply never set the variable.
-    leaked, _ = _snitch_on(ray_serve, scrub=False)
+    leaked, _ = _snitch_on(_live, scrub=False)
     assert leaked == FAKE_VALUE
 
 
 # --- shadow mode -----------------------------------------------------------
-
-
-@pytest.fixture
-def shadow(ray_serve):  # type: ignore[no-untyped-def]
-    c = ServeCloud(InMemoryTelemetry(), SORT, mode=CanaryMode.SHADOW)
-    c.serve_blue(version="v1")
-    yield c
-    c.shutdown()
 
 
 def test_shadow_never_returns_the_candidates_answer(shadow) -> None:  # type: ignore[no-untyped-def]

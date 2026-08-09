@@ -206,7 +206,6 @@ Released through **v0.1.4**. The bootstrap skeleton (original "first task") is
   Measured: the candidate is ~5x faster in isolation but only ~30% faster at
   p95 under 8-way load — the GIL makes both queue-bound. That gap is why the
   canary exists.
-<
 - **`ServeCloud`** (`sis/serve_cloud.py`, OMNI-13): the third `Cloud` adapter —
   real weighted split, real shadow dispatch, real per-version windows.
   `python -m sis.serve_cloud` runs serve → load → verdict in one command
@@ -223,7 +222,13 @@ Released through **v0.1.4**. The bootstrap skeleton (original "first task") is
     candidate code cannot read a credential. **Egress stays open by
     construction** — a replica must answer HTTP. A credential boundary, not the
     gauntlet's sandbox. Not yet wired into `Workspace`; that is OMNI-14.
-- 282 tests; `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop → main`
+- **The loop closes on a human merge** (`DevOps.observe_merge`, OMNI-15).
+  `loop.serve(watch_merges=True)` (default) polls the pending PR while a canary
+  holds green; when a human merges, the candidate is promoted, green is released
+  and the next cycle starts — previously `--loop` ran one cycle and idled
+  forever, because `Cloud.promote()` had no caller at all. Provenance now
+  terminates in `promote` instead of stopping at `canary`.
+- 296 tests; `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop → main`
   enforced by both the client-side pre-push hook and active server-side rulesets.
 
 **Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L
@@ -258,12 +263,12 @@ for current status rather than trusting this list:
    contract** (Class 1)~~ — **done 2026-08-06** (OMNI-4/5/6/7). Two targets ship
    and the engine names neither. Design: `docs/CLASS2_CONTRACT.md`.
 2. **[OMNI-2](https://olafzumpe.atlassian.net/browse/OMNI-2) — Ray Serve canary.**
-
    Steps 5/6/7/8/9/11 done (`evaluate_canary`, the served sort, the load
    generator, the `Cloud` traffic+metrics port, `ServeCloud`, the live breach
-   trigger); open: rework `DevOps.canary()` for the real flow (**OMNI-14**, the
-   step that wires `ServeCloud` into `Workspace`), and **OMNI-15** — observe the
-   human merge so `promote()` has a caller at all. Design: `docs/SERVE_CANARY.md`.
+   trigger), plus **OMNI-15** — the human merge is observed, so `promote()`
+   finally has a caller and the loop releases itself. Open: rework
+   `DevOps.canary()` for the real flow (**OMNI-14**), the step that wires
+   `ServeCloud` into `Workspace`. Design: `docs/SERVE_CANARY.md`.
 3. **[OMNI-3](https://olafzumpe.atlassian.net/browse/OMNI-3) — Class 2**, feature
    construction: `FeatureContract` + acceptance gates, `InvariantGate`, backtests,
    `ToolchainAdapter`, the contract-author actor. Design: `docs/CLASS2_CONTRACT.md`.

@@ -266,6 +266,15 @@ class CanaryRouter:
         self._green = None
         self._green_version = None
 
+    def set_mode(self, mode: CanaryMode) -> None:
+        """Switch between shadow and split dispatch without redeploying.
+
+        Mode is per-target configuration, and a redeploy to change it would
+        restart the replica and discard the window — the same cost that made
+        green a separate application in the first place.
+        """
+        self._mode = CanaryMode(mode)
+
     def set_weight(self, fraction: float) -> None:
         """Route ``fraction`` of traffic to green. 0.0 = green is dark."""
         if not 0.0 <= fraction <= 1.0:
