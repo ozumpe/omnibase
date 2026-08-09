@@ -95,14 +95,18 @@ internal target before it models anything external.
   bypass). Merge commits and `fixup!`/`squash!` commits are exempt. The hook is
   client-side, so the `commit-lint` CI job below is its server-side backstop for
   when it is bypassed or not enabled in a clone.
-- CI (`.github/workflows/ci.yml`): `ruff` + `mypy --strict` + `pytest` on push/PR to
-  `main` and `develop`. The required status-check context is `test`.
+- CI (`.github/workflows/ci.yml`): `ruff` + `mypy --strict` + `pytest`. Runs on
+  every push to `main`/`develop` and on **any PR regardless of base** (OMNI-16,
+  fixed 2026-08-09) — the `pull_request` trigger used to filter on `[main,
+  develop]`, which matches the PR's *base*, so a PR stacked on a feature branch
+  skipped CI entirely and could merge looking green with zero verification
+  (what happened to #67/#68). The required status-check context is `test`.
 - Commit-lint (`.github/workflows/commit-lint.yml`): every non-merge commit newly
   introduced by a PR needs an `OMNI-N` key or a `No-Ticket:` trailer — the
   server-side backstop for the Jira-key convention above, for when
   `hooks/commit-msg` is bypassed or not enabled in a given clone. Runs on a PR
-  against any base (no branch filter, unlike `ci.yml`'s `test` job). Required
-  status-check context: `commit-lint`.
+  against any base, same as `ci.yml` now. Required status-check context:
+  `commit-lint`.
 - After ANY `pyproject.toml` change, run `poetry lock` — CI fails on a stale lock file.
 
 ## Conventions
