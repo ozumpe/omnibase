@@ -14,6 +14,7 @@ import json
 import pathlib
 import types
 from dataclasses import replace
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -72,7 +73,9 @@ def test_a_fixture_round_trips_with_its_event_time() -> None:
     )
     fixture = parse_fixture(raw, where="f.json")
     assert fixture.args == [6]
-    assert fixture.event_time == "2026-01-15T00:00:00Z"
+    # A parsed instant, not the string it was written as (OMNI-23); the
+    # timezone rules live in sis.clock and are tested in tests/test_clock.py.
+    assert fixture.event_time == datetime(2026, 1, 15, tzinfo=UTC)
 
 
 def test_event_time_is_optional_today_but_part_of_the_schema() -> None:

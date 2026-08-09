@@ -164,6 +164,18 @@ class SelfModel:
 
 
 def _now() -> str:
+    """Wall clock, deliberately — provenance is an audit trail, not event time.
+
+    ``sis.clock`` makes event time injectable, and this is the place it should
+    *not* be used. A provenance entry records when the **engine** did something;
+    an audit trail that can be repositioned is worth less than one that cannot.
+
+    There is a second, mechanical reason a clock would not work here anyway: the
+    SelfModel is a named, detached actor created with ``get_if_exists``, so a
+    clock passed at construction would be fixed by whichever process created it
+    first and silently ignored by every later cycle — the same shape as the
+    env-var trap that sis.clock's docstring warns about.
+    """
     return datetime.datetime.now(datetime.UTC).isoformat()
 
 

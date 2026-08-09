@@ -20,7 +20,6 @@ retrieval) is a new backend implementing the same port — the loop doesn't chan
 
 from __future__ import annotations
 
-import datetime
 import json
 import os
 import uuid
@@ -29,6 +28,7 @@ from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import Any, Protocol
 
+from sis.clock import Clock, now_iso
 from sis.paths import EPISODIC_DUCKDB, EPISODIC_JSONL
 
 # Outcomes that count as an accepted improvement (passed gauntlet + QA, in a PR).
@@ -75,8 +75,16 @@ class EpisodicEvent:
 _FIELD_NAMES: tuple[str, ...] = tuple(f.name for f in fields(EpisodicEvent))
 
 
-def _now() -> str:
-    return datetime.datetime.now(datetime.UTC).isoformat()
+def _now(clock: Clock | None = None) -> str:
+    """Event time for an episode. Wall clock unless a replay drives it.
+
+    Almost always the wall clock: ``ts`` records when the *engine* ran a cycle,
+    which is audit-trail time and should not be movable. The parameter exists
+    for the one case where it should — a replay driver reconstructing episodes
+    stamps them in the timeline they belong to, not the timeline they are being
+    recomputed in. See sis.clock for the engine-time/world-time distinction.
+    """
+    return now_iso(clock)
 
 
 def _from_dict(data: dict[str, Any]) -> EpisodicEvent:
@@ -332,8 +340,13 @@ def gate_from_reason(reason: str | None) -> str | None:
 def event_from_cycle_result(
     result: dict[str, Any], *, cost_usd: float = 0.0,
     proposer: str = "stub", model: str | None = None,
+    clock: Clock | None = None,
 ) -> EpisodicEvent:
-    """Build an EpisodicEvent from an ``org.run_cycle`` result dict."""
+    """Build an EpisodicEvent from an ``org.run_cycle`` result dict.
+
+    *clock* defaults to the wall clock, so every existing caller is unchanged;
+    pass one only when replaying (see :func:`_now`).
+    """
     status = str(result.get("status", "unknown"))
     base = result.get("baseline_latency")
     cand = result.get("candidate_latency")
@@ -350,7 +363,7 @@ def event_from_cycle_result(
     )
     return EpisodicEvent(
         cycle_id=EpisodicEvent.new_cycle_id(),
-        ts=_now(),
+        ts=_now(clock),
         outcome=status,
         proposer=proposer,
         model=model,
