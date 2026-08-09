@@ -235,6 +235,18 @@ def canary_in_flight(deployment: Mapping[str, Any]) -> str | None:
     return str(green) if green else None
 
 
+def pending_merge(deployment: Mapping[str, Any]) -> str | None:
+    """The PR whose merge would release the current canary, if any. Pure.
+
+    Sibling of :func:`canary_in_flight`, and separate from it because the two
+    answer different questions: green can be occupied by a canary that has no
+    PR to wait on (a manual ``deploy_canary``), and a recorded PR is only
+    actionable while green is actually held.
+    """
+    pending = deployment.get("pending_pr")
+    return str(pending) if pending else None
+
+
 def _install_signal_handlers(stop: threading.Event) -> None:
     def _handler(signum: int, frame: Any) -> None:
         stop.set()
@@ -255,17 +267,23 @@ def serve(
     max_cycles: int | None = None,
     stop_event: threading.Event | None = None,
     one_canary_in_flight: bool = True,
+    watch_merges: bool = True,
 ) -> list[dict[str, Any]]:
     """Run the loop against a live actor org, with graceful SIGINT/SIGTERM stop.
 
     ``one_canary_in_flight`` (default on) holds the next cycle while a canary
-    still occupies the green slot — see :func:`canary_in_flight`. Note that
-    nothing releases green today: a cycle that reaches
-    ``verified_awaiting_human_merge`` leaves it occupied, so the loop idles until
-    someone calls ``DevOps.retire_canary`` (or the merge-observation path that
-    docs/SERVE_CANARY.md lists as an open problem). That is the intended
-    "stop at the human gate" behaviour rather than stacking PRs nobody merged,
-    but pass ``False`` for the old always-propose behaviour.
+    still occupies the green slot — see :func:`canary_in_flight`.
+
+    ``watch_merges`` (default on) is what *releases* that hold. On every tick
+    where a canary is held, the loop re-reads the pending PR and, if a human
+    has merged it, promotes the candidate and frees green (see
+    ``DevOps.observe_merge``). Without it the loop stops permanently at the
+    first successful cycle, which is why ``Cloud.promote()`` had no caller at
+    all before OMNI-15.
+
+    The loop still never merges and never decides to promote — it only notices
+    that a human did. Pass ``watch_merges=False`` to hold until an operator
+    calls ``retire_canary``/``observe_merge`` by hand.
     """
     import ray
 
@@ -274,6 +292,7 @@ def serve(
     ceo = handles["CEO"]
     self_model = handles["SelfModel"]
     workspace = handles["Workspace"]
+    devops = handles["DevOps"]
     stop = stop_event or threading.Event()
     _install_signal_handlers(stop)
 
@@ -283,7 +302,14 @@ def serve(
         breaker_open = bool(ray.get(ceo.breaker_open.remote()))
         held_by = None
         if one_canary_in_flight and not breaker_open:
-            held_by = canary_in_flight(ray.get(self_model.deployment.remote()))
+            deployment = ray.get(self_model.deployment.remote())
+            held_by = canary_in_flight(deployment)
+            # Check for a human merge *before* deciding to hold, so the tick
+            # that observes the merge is also the tick that may start the next
+            # cycle — rather than idling one whole interval after the release.
+            pending = pending_merge(deployment) if (held_by and watch_merges) else None
+            if pending and ray.get(devops.observe_merge.remote(pending))["promoted"]:
+                held_by = None
             if held_by:
                 ray.get(workspace.emit.remote("loop.held_for_canary", version=held_by))
         # Don't pull new work while frozen or while a canary is still being

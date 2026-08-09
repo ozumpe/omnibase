@@ -120,6 +120,12 @@ class Workspace:
     def deploy_canary(self, version: str, metrics: dict[str, float] | None = None) -> DeployRecord:
         return self.cloud.deploy_canary(version, metrics=metrics)
 
+    def promote(self, version: str) -> DeployRecord:
+        return self.cloud.promote(version)
+
+    def live_version(self) -> str | None:
+        return self.cloud.live_version()
+
     def rollback(self, version: str) -> None:
         self.cloud.rollback(version)
 

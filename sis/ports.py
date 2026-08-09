@@ -181,7 +181,22 @@ class Cloud(Protocol):
         """
         ...
 
-    def promote(self, version: str) -> DeployRecord:  # green → live → human-gated
+    def promote(self, version: str) -> DeployRecord:
+        """Make ``version`` live (green → blue).
+
+        **The human gate is upstream of this call, not inside it.** Until
+        OMNI-15 every adapter raised ``RequiresHumanApproval`` here
+        unconditionally, which made promotion unreachable — the rule was
+        enforced by the feature not existing rather than by a check. It is now
+        enforced where the evidence actually is: the only caller is
+        ``DevOps.observe_merge()``, which promotes solely after reading
+        ``PullRequest.merged`` back from the version-control port.
+
+        That state cannot be manufactured by the agent, because ``merge_pr()``
+        still raises ``RequiresHumanApproval`` in every adapter — so the only
+        way a PR becomes merged is a human merging it. Promotion applies a
+        decision a human already made; it never makes one.
+        """
         ...
 
     def rollback(self, version: str) -> None: ...

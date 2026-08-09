@@ -65,8 +65,14 @@ internal target before it models anything external.
   (see workflow below).
 - Secrets: `secrets.local.yml` (gitignored) locally; AWS Secrets Manager in cloud
   (`SIS_ENV=aws`). Never commit tokens.
-- Destructive Jira/Confluence/GitHub actions, PR merges, and canary→live promotion
-  require human approval (`RequiresHumanApproval` in the adapters).
+- Destructive Jira/Confluence/GitHub actions and PR merges require human approval
+  (`RequiresHumanApproval` in the adapters). **Canary→live promotion follows an
+  *observed* merge** (OMNI-15): `Cloud.promote()` no longer raises, because doing
+  so unconditionally made promotion unreachable rather than gated. Its only
+  caller is `DevOps.observe_merge()`, which promotes solely when the PR reads
+  back as `merged`. The agent cannot manufacture that — `merge_pr()` still raises
+  in every adapter and `Workspace` exposes no merge-shaped method at all (both
+  asserted by tests). It applies a human's decision; it never makes one.
 - Hard LLM spend cap + cost-per-accepted-improvement SLO + circuit breaker (CEO brakes).
 
 ## Repo & GitHub workflow
@@ -200,6 +206,7 @@ Released through **v0.1.4**. The bootstrap skeleton (original "first task") is
   Measured: the candidate is ~5x faster in isolation but only ~30% faster at
   p95 under 8-way load — the GIL makes both queue-bound. That gap is why the
   canary exists.
+<
 - **`ServeCloud`** (`sis/serve_cloud.py`, OMNI-13): the third `Cloud` adapter —
   real weighted split, real shadow dispatch, real per-version windows.
   `python -m sis.serve_cloud` runs serve → load → verdict in one command
@@ -251,6 +258,7 @@ for current status rather than trusting this list:
    contract** (Class 1)~~ — **done 2026-08-06** (OMNI-4/5/6/7). Two targets ship
    and the engine names neither. Design: `docs/CLASS2_CONTRACT.md`.
 2. **[OMNI-2](https://olafzumpe.atlassian.net/browse/OMNI-2) — Ray Serve canary.**
+
    Steps 5/6/7/8/9/11 done (`evaluate_canary`, the served sort, the load
    generator, the `Cloud` traffic+metrics port, `ServeCloud`, the live breach
    trigger); open: rework `DevOps.canary()` for the real flow (**OMNI-14**, the

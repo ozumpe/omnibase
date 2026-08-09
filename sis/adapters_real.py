@@ -511,7 +511,12 @@ class RealCloud:
         )
 
     def promote(self, version: str) -> DeployRecord:
-        raise RequiresHumanApproval(f"promoting {version} to live follows the human PR merge")
+        # See Cloud.promote: the gate is the observed merge, upstream. RealCloud
+        # only records deployments, so promotion here is a bookkeeping entry —
+        # ServeCloud is what actually moves traffic.
+        self._live = version
+        self._tel.emit("canary.promoted", version=version, slot="blue")
+        return DeployRecord(version=version, slot="blue", live=True)
 
     def rollback(self, version: str) -> None:
         self._tel.emit("canary.rolledback", version=version)

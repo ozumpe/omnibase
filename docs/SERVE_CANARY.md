@@ -448,15 +448,17 @@ step 1 (already done):
     rather than one per tick. `loop.serve(one_canary_in_flight=True)` (default)
     holds the next cycle while `canary_in_flight()` reports green occupied.
 
-    **Consequence, deliberate:** `DevOps.canary()` sets green and nothing ever
-    cleared it, so with the gate on, `main.py --loop` now runs one successful
-    cycle and then idles instead of cycling continuously. That is the correct
-    reading of "stop at the human gate" — the old behaviour stacked PRs against
-    an unmerged predecessor, and since cycles baseline from the *merged* target
-    each one re-proposed the same change and spent again for it. The new
-    `DevOps.retire_canary()` is the release (rollback now, promotion once
-    something observes the merge — see Open problems); `one_canary_in_flight=False`
-    restores the old behaviour.
+    **Consequence, since resolved:** `DevOps.canary()` sets green and nothing
+    cleared it, so with the gate on, `main.py --loop` ran one successful cycle
+    and then idled. That was the correct reading of "stop at the human gate" —
+    the old behaviour stacked PRs against an unmerged predecessor, and since
+    cycles baseline from the *merged* target each one re-proposed the same
+    change and spent again for it — but it left the loop permanently parked.
+    **OMNI-15 supplies the missing release:** `DevOps.observe_merge()` frees
+    green once a human merges, so the loop resumes on its own and the next cycle
+    genuinely builds on the merged target. `retire_canary()` remains the
+    rollback-side release; `one_canary_in_flight=False` restores the old
+    always-propose behaviour and `watch_merges=False` restores the parked one.
 12. **`ToolchainAdapter`** (language genericity) and **backtest/SLO gates** — orthogonal
     to this doc, can interleave per `CLASS2_CONTRACT.md`'s own sequencing.
 13. **Stateful served targets** (LRU cache, rate limiter) — once state-handoff-on-swap
@@ -480,12 +482,31 @@ Recorded here so the sequencing above reads against settled ground:
 
 ## Open problems
 
-- **Nothing calls `promote()` today.** This doc says the human PR merge triggers
-  promotion, but `merge_pr` raises `RequiresHumanApproval` in *every* adapter, so
-  there is no post-merge code path to hang it on — the loop stops at
-  `verified_awaiting_human_merge` and nothing resumes after a human merges. Whoever
-  builds step 9 has to decide what observes the merge (a poll, a webhook, an
-  explicit operator command) before `ServeCloud.promote` has a caller.
+- ~~**Nothing calls `promote()` today.**~~ — **closed** (2026-08-08, OMNI-15).
+  `DevOps.observe_merge(pr_id)` reads the PR back from the version-control port
+  and, only if `merged` is already true, promotes the candidate and frees green.
+  `loop.serve(watch_merges=True)` (default) polls it on each tick while a canary
+  is held, so the tick that notices the merge is also the tick that may start
+  the next cycle.
+
+  **The gate moved rather than loosened.** `Cloud.promote()` used to raise
+  `RequiresHumanApproval` unconditionally in every adapter, which made promotion
+  *unreachable* — the rule was enforced by the feature not existing, not by a
+  check. It is now enforced where the evidence is: promotion follows an
+  **observed** merge, and the agent cannot manufacture one because `merge_pr()`
+  still raises everywhere, and `Workspace` — the only surface a role has —
+  exposes no merge-shaped method at all. Both locks are asserted by
+  `test_no_role_can_reach_a_merge_at_all`, including a `dir(Workspace)` check so
+  that adding one later fails the suite rather than silently opening the path.
+
+  Polling was chosen over a webhook: the loop already ticks, so it costs one
+  cheap GET per tick while a canary is in flight and nothing when idle, whereas a
+  webhook needs an inbound endpoint, a public URL and signature verification —
+  real infra weight for a system that runs on a laptop.
+
+  Consequence worth noting: the provenance graph now *terminates in a promotion*
+  (`… → canary → promote`) instead of stopping at the canary, so it finally
+  records what became live.
 - **Sampling rate for live invariant checks.** Checking every response is safest but
   may not be free depending on invariant cost; needs a documented sampling policy
   (start at 100% for a low-traffic bootstrap load-gen; revisit under real volume).
