@@ -63,6 +63,20 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 BLUE = "blue"
 GREEN = "green"
 
+# Every replica here — TargetDeployment or CanaryRouter — is I/O- and
+# GIL-bound, not something that needs a physically dedicated core reserved at
+# *scheduling* time. Left at Ray's default (1 whole CPU per actor, the same
+# default the org's own role actors use), a live canary competes for integer
+# CPU slots against the always-running actor org (CEO/PM/CTO/SWE/QA/DevOps/
+# Designer/Workspace/SelfModel — 9 actors) plus Serve's own controller and
+# HTTP proxy. On a machine with CPU to spare that competition is invisible;
+# on a constrained one (a CI runner has far fewer cores than a workstation) it
+# starves outright: `serve.run()` blocks forever waiting for a replica that
+# can never be scheduled, with no timeout to surface the deadlock. Confirmed
+# by reproducing under `ray.init(num_cpus=2)` — canary deploy/blue succeeded,
+# adding the green replica hung indefinitely until this was set to 0.
+_LIGHTWEIGHT_REPLICA: dict[str, Any] = {"num_cpus": 0}
+
 # A Ray worker needs more of its environment than a bare gauntlet subprocess
 # does — it has to import Ray and talk to the cluster before any of our code
 # runs — so the replica allowlist widens the gauntlet's by these *operational*
@@ -410,7 +424,8 @@ def build(
     # its stub still types the name as the plain class — so .options/.bind are
     # invisible to mypy. Narrow ignores rather than dropping the strict gate.
     return TargetDeployment.options(  # type: ignore[attr-defined]
-        num_replicas=num_replicas).bind(code, contract.entry, version, slot)
+        num_replicas=num_replicas, ray_actor_options=_LIGHTWEIGHT_REPLICA,
+    ).bind(code, contract.entry, version, slot)
 
 
 def build_canary(
@@ -428,14 +443,15 @@ def build_canary(
     the blue replica.
     """
     blue = TargetDeployment.options(  # type: ignore[attr-defined]
-        name="blue", num_replicas=1,
+        name="blue", num_replicas=1, ray_actor_options=_LIGHTWEIGHT_REPLICA,
     ).bind(blue_source, contract.entry, blue_version, BLUE)
 
     # Pinned to one replica: the router is the only place a paired observation
     # can be recorded, so a second replica would split the window (see the class
     # docstring).
-    return CanaryRouter.options(num_replicas=1).bind(  # type: ignore[attr-defined]
-        blue, blue_version=blue_version, mode=mode)
+    return CanaryRouter.options(  # type: ignore[attr-defined]
+        num_replicas=1, ray_actor_options=_LIGHTWEIGHT_REPLICA,
+    ).bind(blue, blue_version=blue_version, mode=mode)
 
 
 def build_candidate(
@@ -452,9 +468,11 @@ def build_candidate(
     Blue serves merged, human-reviewed code and is left alone. Turning it off
     exists so a test can observe the difference; a real canary should not.
     """
-    options: dict[str, Any] = {"name": "green", "num_replicas": 1}
+    ray_actor_options: dict[str, Any] = dict(_LIGHTWEIGHT_REPLICA)
     if scrub_env:
-        options["ray_actor_options"] = {"runtime_env": {"env_vars": scrubbed_env_vars()}}
+        ray_actor_options["runtime_env"] = {"env_vars": scrubbed_env_vars()}
+    options: dict[str, Any] = {
+        "name": "green", "num_replicas": 1, "ray_actor_options": ray_actor_options}
     return TargetDeployment.options(**options).bind(  # type: ignore[attr-defined]
         source, contract.entry, version, GREEN)
 
