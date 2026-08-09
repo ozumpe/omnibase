@@ -227,8 +227,11 @@ This is the pattern that lets the whole org run locally with zero credentials
 Because a `Protocol` is satisfied structurally, the roles just call
 `workspace.create_issue(...)` and neither know nor care whether that's an
 in-memory dict or a live Jira call. Swapping is a config flag, not a rewrite.
-The destructive operations (delete, merge, promote) raise `RequiresHumanApproval`
-in *both* implementations — the guardrail lives in the port contract.
+The destructive operations (delete, merge) raise `RequiresHumanApproval` in
+*both* implementations — the guardrail lives in the port contract. `promote()`
+is gated differently since OMNI-15: it no longer raises, but its only caller
+(`DevOps.observe_merge`) acts solely after reading a PR back as merged — a state
+the agent cannot produce, precisely because `merge_pr()` always raises.
 
 ---
 

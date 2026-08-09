@@ -207,7 +207,7 @@ runtime/                 # runtime-mutable state (kept apart from the engine)
   target.py              # the live target (naive baseline, committed)
   candidates/            # proposer's hand-written variant
   episodic.jsonl         # episodic store (gitignored; or episodic.duckdb)
-tests/                   # pytest suite (194 tests)
+tests/                   # pytest suite (296 tests)
 scripts/check_connections.py   # read-only credential/connectivity preflight
 main.py                  # entry point
 secrets.example.yml      # secrets template (copy to secrets.local.yml)
@@ -300,7 +300,7 @@ No code changes — only environment.
 ## Development
 
 ```bash
-poetry run pytest            # 194 tests (adapters, settings, gauntlet, org cycle + failures, brakes, adversarial corpus, …)
+poetry run pytest            # 296 tests (adapters, gauntlet, org cycle + failures, serving/canary/loadgen, adversarial corpus, …)
 poetry run mypy --strict sis/ main.py scripts/
 poetry run ruff check .
 ```
@@ -338,7 +338,8 @@ Open bugs and limitations are tracked with stable IDs in
 | – | Provider-agnostic LLM interface (`sis/llm.py`; not locked to one vendor) | ✅ |
 | – | Long-running server loop (`main.py --loop`; monitor-trigger still simulated) | ✅ partial |
 | – | Served target + load generator + `ServeCloud` (weighted split, shadow dispatch, live windows) | ✅ (2026-08-08) |
-| 4 | Wire the canary into `DevOps.canary()`; observe the human merge so `promote()` has a caller | next |
+| – | Observe the human merge: `promote()` has a caller, green is released, the loop resumes | ✅ (2026-08-09) |
+| 4 | Wire the canary into `DevOps.canary()` (real flow + PR→Contract lookup, OMNI-14) | next |
 | 5 | Target/oracle contract (L5) + Class-2 feature verification | ✅ L5 / Class-2 planned |
 | 6 | Language-agnostic `ToolchainAdapter` (build/verify non-Python targets, e.g. Java) | wanted |
 | 7 | Model an external slice of the real world | vision |
