@@ -198,6 +198,22 @@ any long-lived cluster exists.
 
 ## Resolved
 
+- **Flaky Serve tests: per-test app churn blew `serve.delete`'s own timeout**
+  *(found and fixed 2026-08-09, PR #78; shipped briefly via #77's merge)* —
+  `tests/test_serve_cloud.py` stood a Serve application up and tore it down
+  around *each* test (~20 `serve.run`/`serve.delete` pairs); under that churn
+  `serve.delete` intermittently exceeded its internal 60s timeout, failing a
+  **different test each run** whenever another Serve module ran first — so a
+  green run proved nothing. Verified the adapter itself was sound before
+  touching the tests (a second, identically-configured `ServeCloud` gets a
+  genuinely fresh router — no stale state), then restructured to one
+  module-scoped deployment mutated through the control plane, which is also how
+  a real canary is driven. General lesson, same family as the noise-floor
+  items: **a test that passes intermittently for environmental reasons is worse
+  than a failing one, because it converts luck into confidence.** Serve
+  app create/delete is expensive and control-plane mutation is cheap — prefer
+  the latter inside a test module.
+
 - **Minor batch** *(2026-08-05)* The six unnumbered items from the 2026-07-28
   review, each with a regression test that fails without its fix:
   - **`candidate_sha` dropped on the policy-block path** — `SWE.implement`'s

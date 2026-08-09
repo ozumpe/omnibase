@@ -176,7 +176,9 @@ class ServeCloud:
 
     def promote(self, version: str) -> DeployRecord:
         # atomic: shift_traffic(version, 1.0), retire the old deployment.
-        # Still RequiresHumanApproval per CLAUDE.md — human PR merge triggers this,
+        # Human-gated via the OBSERVED merge (settled by OMNI-15, superseding
+        # this sketch's original "still raises" note): the only caller is
+        # DevOps.observe_merge(), which acts after a PR reads back as merged —
         # canary evaluation only decides whether to OFFER it, never auto-promotes.
 
     def rollback(self, version: str) -> None:

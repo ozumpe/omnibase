@@ -8,7 +8,7 @@ This wires the roles onto the control loop exactly as ACTORS.md maps them:
     propose / implement→ SWE, on a feature branch (reuses proposer+gauntlet)
     verify             → QA + the deterministic gauntlet
     canary deploy      → DevOps via the Cloud port (green slot)
-    promote / rollback → human PR merge (left pending) / DevOps
+    promote / rollback → human PR merge, observed & applied by DevOps / DevOps
     circuit breaker    → CEO authority
 
 Everything is coordinated through durable artifacts in the shared Workspace,

@@ -147,8 +147,11 @@ both latencies come from the same request at the same instant, which removes the
 traffic-mix confounder a weighted split can't avoid. Both columns show `n=300`
 for that reason: 300 requests, each answered twice.
 
-**Passing is eligibility, not promotion.** `promote()` still raises
-`RequiresHumanApproval`; the human PR merge is what promotes.
+**Passing is eligibility, not promotion.** The human PR merge is what promotes —
+the loop *observes* the merge (`DevOps.observe_merge`, polled by
+`loop.serve(watch_merges=True)`) and only then applies it: blue is re-run with
+the candidate's source and green is released. The agent cannot manufacture the
+condition, because `merge_pr()` raises `RequiresHumanApproval` in every adapter.
 
 Two guarantees worth knowing, both verified by tests rather than asserted:
 
