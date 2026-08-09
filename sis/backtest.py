@@ -44,9 +44,12 @@ from __future__ import annotations
 import json
 import textwrap
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any
+
+from sis.clock import parse_event_time
 
 # Fixture schema version. Bumped only for a breaking layout change; the gate
 # refuses a version it does not know rather than guessing at the shape and
@@ -123,11 +126,11 @@ class Fixture:
     """A parsed fixture file: the recorded input state of one episode."""
 
     args: list[Any]
-    # ISO-8601 of when this episode occurred. Optional *today* — no adapter
-    # records it yet — and deliberately part of the schema anyway, because a
-    # fixture written without it can never be replayed in event time and history
-    # does not come round again. OMNI-23 populates it.
-    event_time: str | None = None
+    # When this episode occurred, as a timezone-aware instant — parsed and
+    # validated (sis.clock), not carried around as whatever string happened to
+    # be in the JSON. Still optional, because no adapter records traces yet;
+    # when one does, ``ReplayClock.at`` drives a replay straight off this.
+    event_time: datetime | None = None
 
 
 def parse_fixture(raw: str, *, where: str) -> Fixture:
@@ -155,11 +158,16 @@ def parse_fixture(raw: str, *, where: str) -> Fixture:
     if not isinstance(args, list):
         raise ValueError(f"{where}: 'args' must be a list of entry-point arguments")
 
-    event_time = data.get("event_time")
-    if event_time is not None and not isinstance(event_time, str):
+    raw_event_time = data.get("event_time")
+    if raw_event_time is None:
+        return Fixture(args=args)
+    if not isinstance(raw_event_time, str):
         raise ValueError(f"{where}: 'event_time' must be an ISO-8601 string or absent")
-
-    return Fixture(args=args, event_time=event_time)
+    # Parsed here rather than at the point of use: a fixture with an
+    # unparseable or naive timestamp is broken *as recorded*, and finding that
+    # out during a replay — potentially long after the window to re-record has
+    # closed — is the failure this whole field exists to avoid.
+    return Fixture(args=args, event_time=parse_event_time(raw_event_time, where=where))
 
 
 def parse_expectation(raw: str, *, where: str) -> Any:

@@ -63,10 +63,21 @@ outcome lets it reproduce history without modelling anything. Keeping them apart
 makes "show the inputs, never the answers" a file-level rule rather than
 something a prompt author has to remember.
 
-`event_time` is optional today — nothing records it yet — and is in the schema
-from version 1 anyway. A fixture written without it can never be replayed in
-event time, and unlike code, history does not come round again to be
-re-recorded. OMNI-23 populates and consumes it.
+`event_time` stays optional — no adapter records traces yet, so requiring it
+would block every fixture on a recorder that does not exist. When present it is
+**parsed and validated** (`sis/clock.py`), not carried around as whatever string
+was in the file:
+
+- it must be ISO-8601, and
+- it must carry a timezone. A naive timestamp means "23:59, somewhere";
+  replaying it silently assumes an offset the recorder never stated, and the
+  result is a model that looks subtly wrong with nothing in the log explaining
+  why. `Z` and `+09:00` are both fine.
+
+The validation happens at parse time on purpose: a fixture with a broken
+timestamp is broken *as recorded*, and discovering that during a replay — quite
+possibly after the window to re-record has closed — is exactly the failure the
+field exists to prevent. `ReplayClock.at()` drives a replay straight off it.
 
 Each backtest names a **comparator** (default `within_tolerance`) resolved
 inside the sandbox: the contract's own `oracle.py` first, then
