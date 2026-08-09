@@ -28,6 +28,7 @@ import importlib.util
 import types
 from dataclasses import dataclass
 
+from sis.backtest import Backtest
 from sis.paths import PROJECT_ROOT
 
 # A candidate must run in at most this fraction of the baseline's time (i.e. be
@@ -66,6 +67,14 @@ class OptimizationContract:
     # has nothing to offer here — SIS_PROPOSER=claude is required for this
     # contract, and propose() says so rather than reading the wrong file.
     stub_candidate_path: str | None = None
+    # Recorded episodes the candidate must reproduce (sis.backtest). Empty for
+    # both shipped targets, and that is not an oversight: `sum_of_divisors` and
+    # `sort` are pure functions with no history to reproduce, and inventing some
+    # would make the gate look exercised while testing nothing. The mechanism
+    # ships now because omnitrack's acceptance evidence is exactly this shape
+    # (docs/OMNITRACK_VISION.md, Phases A/B); its first real fixtures arrive
+    # with the first modelled target.
+    backtests: tuple[Backtest, ...] = ()
 
     def __post_init__(self) -> None:
         if not 0.0 < self.max_latency_ratio <= 1.0:
@@ -75,6 +84,13 @@ class OptimizationContract:
             )
         if self.diff_trials < 1:
             raise ValueError(f"diff_trials must be >= 1, got {self.diff_trials}")
+        names = [b.name for b in self.backtests]
+        if len(names) != len(set(names)):
+            raise ValueError(
+                f"contract {self.name!r} has duplicate backtest names: "
+                f"{sorted({n for n in names if names.count(n) > 1})} — names identify a "
+                "fixture in the episodic log, so they have to be unique to be useful"
+            )
 
     @property
     def target_file(self) -> str:
