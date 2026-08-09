@@ -337,8 +337,9 @@ Open bugs and limitations are tracked with stable IDs in
 | – | Shared Ray namespace + persisted CEO brake/spend state (M2/L9) | ✅ |
 | – | Provider-agnostic LLM interface (`sis/llm.py`; not locked to one vendor) | ✅ |
 | – | Long-running server loop (`main.py --loop`; monitor-trigger still simulated) | ✅ partial |
-| 4 | Ray Serve weighted canary + atomic actor swap | next |
-| 5 | Target/oracle contract (L5) + Class-2 feature verification | planned |
+| – | Served target + load generator + `ServeCloud` (weighted split, shadow dispatch, live windows) | ✅ (2026-08-08) |
+| 4 | Wire the canary into `DevOps.canary()`; observe the human merge so `promote()` has a caller | next |
+| 5 | Target/oracle contract (L5) + Class-2 feature verification | ✅ L5 / Class-2 planned |
 | 6 | Language-agnostic `ToolchainAdapter` (build/verify non-Python targets, e.g. Java) | wanted |
 | 7 | Model an external slice of the real world | vision |
 
