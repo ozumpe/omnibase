@@ -98,6 +98,23 @@ def test_full_cycle_against_the_second_contract(handles) -> None:  # type: ignor
     assert "sum_of_divisors" not in pr.artifact
 
 
+def test_a_prs_contract_can_be_recovered_by_id(handles) -> None:  # type: ignore[no-untyped-def]
+    # OMNI-14: the canary needs a PR's contract (oracle, entry point, margin,
+    # route) and has only the PR id to go on by the time it runs -- SWE resolves
+    # the contract and opens the PR in the same call, so it is the one place
+    # that can record the association.
+    result = org.run_cycle(
+        handles, "Speed up the sort again", "same as before", contract_name="sort")
+    assert result["status"] == "verified_awaiting_human_merge", result.get("reason")
+
+    spec = ray.get(handles["SelfModel"].contract_for_pr.remote(result["pr_id"]))
+    assert spec is not None and spec.name == "sort"
+
+
+def test_an_unknown_pr_has_no_recoverable_contract(handles) -> None:  # type: ignore[no-untyped-def]
+    assert ray.get(handles["SelfModel"].contract_for_pr.remote("PR-never-existed")) is None
+
+
 def test_unknown_contract_name_fails_loudly(handles) -> None:  # type: ignore[no-untyped-def]
     # A typo'd contract name must not silently optimise a different target --
     # that would burn a cycle's spend and produce a baffling PR.

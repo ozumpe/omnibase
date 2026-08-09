@@ -93,6 +93,31 @@ def bootstrap() -> dict[str, Any]:
     return handles
 
 
+def cycle_outcome(approved: bool, canary: dict[str, Any] | None) -> tuple[str, bool, str | None]:
+    """Fold QA's verdict and (if one ran) the canary's into one cycle outcome.
+
+    Pure — no Ray, no I/O — per the project convention that decision logic is
+    unit-testable without standing up a cluster (``evaluate_brakes``,
+    ``gate_from_reason``, ``loop.decide``). Returns ``(status, success,
+    canary_reason)``.
+
+    Before OMNI-14, QA approval alone decided success; a live canary
+    (OMNI-14, ``canary_backend="serve"``) can now reject a candidate QA
+    already approved — exactly the failure mode it exists to catch, since it
+    sees real concurrency and queueing the offline gauntlet cannot. That
+    rejection has to be able to change the outcome, not just ride along in
+    the returned dict unread. ``canary`` is None when QA rejected (no canary
+    runs) or the legacy backend ran (no ``canary_passed`` key at all, so it
+    defaults True and this reduces to the pre-OMNI-14 behaviour exactly).
+    """
+    canary_passed = True if canary is None else bool(canary.get("canary_passed", True))
+    canary_reason = None if canary is None else canary.get("reason")
+    success = approved and canary_passed
+    status = ("verified_awaiting_human_merge" if success
+              else "canary_rejected" if approved else "qa_rejected")
+    return status, success, canary_reason
+
+
 def run_cycle(
     handles: dict[str, Any],
     proposal_title: str,
@@ -100,6 +125,7 @@ def run_cycle(
     *,
     estimate_usd: float = 0.5,
     contract_name: str | None = None,
+    canary_backend: str | None = None,
 ) -> dict[str, Any]:
     """Run one full intake→spec→epic→story→implement→review→canary cycle.
 
@@ -108,7 +134,13 @@ def run_cycle(
     Passed to BOTH the SWE and QA so they judge the candidate against the
     same oracle — and passed explicitly rather than via ``SIS_CONTRACT``
     because the role actors are separate processes that cannot see an env
-    var exported after bootstrap()."""
+    var exported after bootstrap().
+
+    *canary_backend* selects ``DevOps.canary()``'s backend ("serve" for a real
+    Ray Serve deployment judged against live traffic; anything else keeps the
+    legacy in-memory/real ``Cloud`` recording). Same reasoning as
+    *contract_name*: an explicit argument, not ``SIS_CANARY`` alone, because
+    DevOps is an already-running actor by the time this runs."""
     # Fail fast, before any spend or artifacts: an untrusted (non-stub) proposer
     # requires the kernel-enforced docker sandbox so its code can't read host
     # credentials (KNOWN_ISSUES.md M1). validate() re-checks as a backstop.
@@ -203,16 +235,29 @@ def run_cycle(
     approved = ray.get(qa.review.remote(story_id, impl["pr_id"], contract_name))
 
     # 7. Canary deploy to the green slot (DevOps). Promotion to live is the
-    #    human PR merge — intentionally NOT performed by the agent. The latency
-    #    was measured inside the gauntlet sandbox; the candidate is not re-run.
-    canary = (ray.get(devops.canary.remote(impl["pr_id"], impl["candidate_latency"]))
+    #    human PR merge — intentionally NOT performed by the agent. On the
+    #    legacy backend the offline latency is recorded as-is (the candidate
+    #    is not re-run); on the "serve" backend this is a real deployment
+    #    judged against live traffic (OMNI-14) and can itself reject a
+    #    candidate QA already approved — the failure mode a canary exists to
+    #    catch (real concurrency/queueing the offline gauntlet cannot see).
+    canary = (ray.get(devops.canary.remote(
+                  impl["pr_id"], impl["candidate_latency"], canary_backend))
               if approved else None)
 
+    status, success, canary_reason = cycle_outcome(approved, canary)
+
     # 8. PM acceptance + CEO records the outcome + spend (drives the brakes).
-    ray.get(pm.accept.remote(spec_id, satisfied=approved))
-    trip = ray.get(ceo.report_outcome.remote(success=approved, cost_usd=cost_usd))
-    bug_id = (ray.get(devops.file_bug.remote(f"QA rejected {story_id} (PR {impl['pr_id']})"))
-              if not approved else None)
+    ray.get(pm.accept.remote(spec_id, satisfied=success))
+    trip = ray.get(ceo.report_outcome.remote(success=success, cost_usd=cost_usd))
+    if status == "canary_rejected":
+        bug_id = ray.get(devops.file_bug.remote(
+            f"Live canary rejected {story_id} (PR {impl['pr_id']}): {canary_reason}"))
+    elif status == "qa_rejected":
+        bug_id = ray.get(devops.file_bug.remote(
+            f"QA rejected {story_id} (PR {impl['pr_id']})"))
+    else:
+        bug_id = None
     breaker_bug_id = (
         ray.get(devops.file_bug.remote(
             f"CIRCUIT BREAKER OPEN — human attention required: {trip}"))
@@ -220,7 +265,12 @@ def run_cycle(
     )
 
     return _record({
-        "status": "verified_awaiting_human_merge" if approved else "qa_rejected",
+        "status": status,
+        # Feeds episodic.event_from_cycle_result's existing reason/reject_gate
+        # extraction (result.get("reason")) with zero new plumbing there —
+        # CanaryVerdict.reason (evaluate_canary) is a distinct failure family
+        # from the offline gauntlet's, so gate_from_reason grows matching names.
+        "reason": canary_reason if status == "canary_rejected" else None,
         "bug_id": bug_id,
         "breaker_bug_id": breaker_bug_id,
         "spec_id": spec_id,

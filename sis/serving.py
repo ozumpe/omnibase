@@ -356,6 +356,18 @@ class CanaryRouter:
             return {"error": err, "version": version, "slot": slot}
         return {"result": out, "version": version, "slot": slot}
 
+    async def invoke(self, *args: Any) -> dict[str, Any]:
+        """Alias for :meth:`route`.
+
+        ``sis.loadgen.drive_handle`` calls ``.invoke`` on whatever handle it is
+        given — that is the direct path a :class:`TargetDeployment` exposes.
+        Aliasing it here lets the same load generator fill a canary's live
+        window (OMNI-14's bootstrap traffic, since nothing external calls the
+        target yet) by driving the router exactly as a real caller would,
+        rather than needing a router-aware special case in ``loadgen``.
+        """
+        return await self.route(*args)
+
     async def __call__(self, request: Request) -> dict[str, Any]:
         payload = await request.json()
         args = payload.get("args", [])

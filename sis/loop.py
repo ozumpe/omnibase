@@ -268,8 +268,15 @@ def serve(
     stop_event: threading.Event | None = None,
     one_canary_in_flight: bool = True,
     watch_merges: bool = True,
+    canary_backend: str | None = None,
 ) -> list[dict[str, Any]]:
     """Run the loop against a live actor org, with graceful SIGINT/SIGTERM stop.
+
+    ``canary_backend`` is threaded to every cycle's ``DevOps.canary()`` call
+    (OMNI-14) — ``"serve"`` for a real Ray Serve deployment judged against
+    live traffic, anything else for the legacy in-memory/real recording. Most
+    relevant here of anywhere: a continuously-running server is exactly where
+    a real served canary matters, unlike a single demo cycle.
 
     ``one_canary_in_flight`` (default on) holds the next cycle while a canary
     still occupies the green slot — see :func:`canary_in_flight`.
@@ -318,7 +325,8 @@ def serve(
         return Tick(breaker_open=breaker_open, budget_ok=budget_ok, work=work)
 
     def run_cycle(work: Work) -> dict[str, Any]:
-        return org.run_cycle(handles, work.title, work.body, estimate_usd=estimate_usd)
+        return org.run_cycle(handles, work.title, work.body, estimate_usd=estimate_usd,
+                             canary_backend=canary_backend)
 
     return run_loop(poll, run_cycle, interval_s=interval_s,
                     max_cycles=max_cycles, stop_event=stop)

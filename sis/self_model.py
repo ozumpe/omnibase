@@ -55,6 +55,7 @@ class SelfModel:
         self._slots: dict[str, str | None] = {"blue": None, "green": None}  # slot → version
         self._live_version: str | None = None
         self._contracts: dict[str, OptimizationContract] = {}  # target_path → contract
+        self._pr_contracts: dict[str, str] = {}  # pr_id → contract name
         # The PR whose merge would release the current canary. Tracked here
         # rather than parsed back out of the green version string: the version
         # is f"{branch}@{pr_id}" and a branch name may itself contain "@", so
@@ -112,6 +113,25 @@ class SelfModel:
 
     def contracts(self) -> list[OptimizationContract]:
         return list(self._contracts.values())
+
+    def set_pr_contract(self, pr_id: str, contract_name: str) -> None:
+        """Remember which contract a PR's candidate was implemented against.
+
+        The engine is multi-target (``sum_of_divisors``, ``sort``, ...), so by
+        the time a canary needs the contract — its oracle, entry point, margin,
+        route — the PR id is all it has to go on. Set once by ``SWE.implement()``
+        right after it resolves the contract and opens the PR; read by
+        ``DevOps.canary()``. Adapter-agnostic: this lives here rather than on
+        the ``PullRequest`` dataclass or a VCS-specific field, so it works
+        identically for every ``VersionControl`` adapter without teaching the
+        real GitHub adapter to round-trip custom metadata through a PR.
+        """
+        self._pr_contracts[pr_id] = contract_name
+
+    def contract_for_pr(self, pr_id: str) -> OptimizationContract | None:
+        """The contract governing *pr_id*'s candidate, or None if unknown."""
+        name = self._pr_contracts.get(pr_id)
+        return self.contract_by_name(name) if name else None
 
     # --- provenance graph ---
     def record(self, kind: str, ref: str, **detail: Any) -> None:

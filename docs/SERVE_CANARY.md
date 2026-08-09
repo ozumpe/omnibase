@@ -1,9 +1,10 @@
 # Ray Serve canary — and why it needs the Class-2 contract to work
 
-**Status:** partly implemented — steps 5, 6, 7, 8, 9 and 11 are in
+**Status:** the canary mechanics are done — steps 5–11 are all in
 (`sis/canary.py`, `sis/serving.py`, `sis/loadgen.py`, `sis/serve_cloud.py`, the
-`Cloud` traffic/metrics port, the live breach trigger); **10 remains**, plus the
-open problem of what observes the human merge. Tracked as
+`Cloud` traffic/metrics port, `DevOps.canary(canary_backend="serve")`, the live
+breach trigger, and OMNI-15's observed-merge promotion). What's left (12, 13)
+is orthogonal follow-on work, not this doc's core loop. Tracked as
 [OMNI-2](https://olafzumpe.atlassian.net/browse/OMNI-2).
 Depends on [`docs/CLASS2_CONTRACT.md`](CLASS2_CONTRACT.md) — read that first.
 This doc is the extension of it that makes the canary step real.
@@ -430,17 +431,76 @@ step 1 (already done):
    PASS. The ~29% live gap matches step 8's unpaired ~30% — measured a second
    way, on a different comparison, which is the reassuring result.
 
-   `ServeCloud` is **not yet wired into `Workspace`** — `DevOps.canary()` still
-   calls the in-memory adapter. That is step 10 (OMNI-14) by design: the port
-   signature has to change first.
-10. **Rework `DevOps.canary()`** for the real flow — a signature change, not a
-    rewire: today it's `canary(pr_id, candidate_latency: float)`, one scalar
-    measured in the gauntlet sandbox (`sis/roles.py`). It needs the target's
-    `Contract` plus live samples and baseline/candidate latency arrays instead,
-    and nothing today associates a PR/target with a `Contract` to fetch — that
-    lookup has to land in `Workspace`/`SelfModel` first. Then: deploy at low
-    weight → collect a window → `evaluate_canary()` → rollback+bug or
-    verified-awaiting-merge.
+   ~~`ServeCloud` is not yet wired into `Workspace`~~ — done in step 10
+   (OMNI-14). It bypasses `Workspace.cloud` rather than replacing it —
+   see step 10 for why.
+10. ~~**Rework `DevOps.canary()`**~~ — **done** (2026-08-09, OMNI-14).
+    `canary()` grew an optional `canary_backend` argument ("serve" for the
+    real flow; anything else — the default — keeps the pre-OMNI-14 in-memory
+    recording bit-for-bit, verified against the full existing suite).
+    `SIS_CANARY=serve` / `main.py --canary serve` set it for a CLI launch;
+    threaded explicitly the rest of the way (`org.run_cycle`, `loop.serve`),
+    the same "explicit argument, not the env var alone" fix `SIS_CONTRACT`
+    needed — `DevOps` is an already-running actor by the time a cycle calls
+    it, so a test's `monkeypatch.setenv` can never reach it.
+
+    **What "collect a window" turned out to mean.** The design sketch read
+    like one more synchronous step; building it surfaced two things the
+    sketch didn't have visibility into (it predates `ServeCloud`):
+
+    - **Where the traffic comes from.** Nothing external calls the served
+      target (this doc's own bootstrap problem), so "collect a window" would
+      block on traffic that never arrives. `DevOps._canary_live()` fills it
+      itself — a bounded `sis.loadgen` burst (150 requests, `LIVE_CANARY_
+      REQUESTS`) driven straight through the router
+      (`CanaryRouter.invoke`, aliasing `route()` so `loadgen.drive_handle`
+      needs no router-aware special case) — keeping the whole flow
+      synchronous and `run_cycle()`'s shape unchanged. The two-phase,
+      spans-cycles version this sketch first imagined is the natural
+      upgrade once there's a reason for the target to be user-facing
+      (omnitrack), not before.
+    - **One `Cloud`, many contracts.** `Workspace.cloud` is a single adapter
+      slot, picked once; `ServeCloud` needs a `contract` at construction (it
+      has to, to know what it's serving). `DevOps` holds its own lazy
+      `dict[str, ServeCloud]`, one per contract, bypassing `Workspace.cloud`
+      only on the live path — `InMemoryCloud`/`RealCloud` are untouched, and
+      `poetry run python main.py` still needs nothing (no default Ray Serve
+      startup).
+
+    **Forced `SHADOW`, not configurable — for now.** `OptimizationContract`
+    (both current targets) carries no invariants (Class 2 / OMNI-18,
+    unbuilt), so `SPLIT` would have zero live correctness signal, only a
+    speed comparison — and could silently promote a fast, wrong candidate.
+    `_canary_live()` forces `CanaryMode.SHADOW` regardless of what's
+    configured; response agreement is the only live correctness check
+    available until invariants exist.
+
+    **The PR→Contract link** landed on `SelfModel` (`set_pr_contract`/
+    `contract_for_pr`), set by `SWE.implement()` right after it resolves the
+    contract and opens the PR — the one place both are already in scope.
+    Adapter-agnostic by construction: no `PullRequest`/`VersionControl`
+    changes, so the real GitHub adapter needed nothing to round-trip it.
+
+    **A live rejection can now change a cycle's outcome** — the failure mode
+    a canary exists to catch, since it sees real concurrency/queueing the
+    offline gauntlet cannot (OMNI-12's field measurement: ~5x offline,
+    ~30% live). Before this, QA approval alone decided success; a fold
+    (`org.cycle_outcome`, pure, unit-tested directly) now also asks whether a
+    live evaluation ran and passed. `canary=None` (legacy backend, or QA
+    already rejected) reduces to the old QA-only behaviour exactly.
+    `gate_from_reason()` grew four new names (`canary_evidence`,
+    `canary_invariant`, `canary_disagreement`, `canary_regression`) distinct
+    from their offline analogues, so `rejected_by_gate` analytics can tell
+    which side caught a rejection.
+
+    **Found while testing, not a defect:** a test chaining two near-optimal
+    candidates back to back (an already-promoted merge sort vs. Python's
+    built-in `sorted()`) hit this project's own known noise floor (L5) —
+    `evaluate_canary`'s default `max_latency_ratio=1.0` on a ~0.4ms live
+    p95 gap is a coin flip. Not a bug; the test was comparing two
+    already-fast implementations with no real margin between them. Fixed by
+    testing against `sum_of_divisors`' untouched O(n) baseline instead,
+    where an O(√n) candidate clears the bar for real.
 11. ~~**`serve_breach()` replaces `repeat()`** as `main.py --loop`'s trigger~~ —
     **done** (2026-08-05), ahead of steps 8–10 because none of it needs the L5
     `Contract`. `window_in_breach`/`serve_breach` are pure (sample floor, sustained

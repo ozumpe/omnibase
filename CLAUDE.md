@@ -135,6 +135,9 @@ internal target before it models anything external.
   `SIS_EPISODIC_STORE` (jsonl|duckdb|none), `SIS_TARGET_PATHS`,
   `SIS_CONTRACT` (which target a cycle optimises: sum_of_divisors|sort —
   must be set BEFORE launch; prefer `--contract`/`run_cycle(contract_name=)`),
+  `SIS_CANARY` (`serve` for a real Ray Serve canary judged against live
+  traffic, OMNI-14; unset = legacy in-memory recording; same BEFORE-launch
+  caveat as `SIS_CONTRACT` — prefer `--canary`/`run_cycle(canary_backend=)`),
   `SIS_ALLOW_STRICT_CHANGES`, `SIS_GAUNTLET_TIMEOUT`, `SIS_SANDBOX_IMAGE`,
   `SIS_ALLOW_UNSANDBOXED_LLM`, `SIS_BUDGET_USD` (CEO hard cap; + the other
   brakes), `SIS_HTTP_TIMEOUT` (real-adapter request timeout), `SIS_LLM_PROVIDER`
@@ -229,14 +232,25 @@ Released through **v0.1.4**. The bootstrap skeleton (original "first task") is
     blanked, since Ray *merges* `env_vars` rather than replacing them), so
     candidate code cannot read a credential. **Egress stays open by
     construction** — a replica must answer HTTP. A credential boundary, not the
-    gauntlet's sandbox. Not yet wired into `Workspace`; that is OMNI-14.
+    gauntlet's sandbox.
 - **The loop closes on a human merge** (`DevOps.observe_merge`, OMNI-15).
   `loop.serve(watch_merges=True)` (default) polls the pending PR while a canary
   holds green; when a human merges, the candidate is promoted, green is released
   and the next cycle starts — previously `--loop` ran one cycle and idled
   forever, because `Cloud.promote()` had no caller at all. Provenance now
   terminates in `promote` instead of stopping at `canary`.
-- 296 tests; `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop → main`
+- **`DevOps.canary()` can judge a candidate against real traffic**
+  (`canary_backend="serve"`, OMNI-14; `--canary serve` / `SIS_CANARY=serve`;
+  RUNBOOK Level 0e) — `sis.loadgen` fills the window itself (nothing external
+  calls the target yet), forces `SHADOW` mode (neither shipped contract has
+  invariants, so a split would have no live correctness signal at all), and a
+  live rejection now changes the cycle's own outcome
+  (`org.cycle_outcome`, pure) — QA approval alone no longer decides success.
+  `DevOps` holds one `ServeCloud` per contract (`Workspace.cloud` is a single,
+  contract-agnostic slot; `ServeCloud` needs a contract at construction) and
+  opts in per call, so the legacy in-memory recording — and a zero-setup
+  `main.py` — stay the default.
+- 308 tests; `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop → main`
   enforced by both the client-side pre-push hook and active server-side rulesets.
 
 **Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L
@@ -270,13 +284,13 @@ for current status rather than trusting this list:
 1. ~~**[OMNI-1](https://olafzumpe.atlassian.net/browse/OMNI-1) — L5 target
    contract** (Class 1)~~ — **done 2026-08-06** (OMNI-4/5/6/7). Two targets ship
    and the engine names neither. Design: `docs/CLASS2_CONTRACT.md`.
-2. **[OMNI-2](https://olafzumpe.atlassian.net/browse/OMNI-2) — Ray Serve canary.**
-   Steps 5/6/7/8/9/11 done (`evaluate_canary`, the served sort, the load
-   generator, the `Cloud` traffic+metrics port, `ServeCloud`, the live breach
-   trigger), plus **OMNI-15** — the human merge is observed, so `promote()`
-   finally has a caller and the loop releases itself. Open: rework
-   `DevOps.canary()` for the real flow (**OMNI-14**), the step that wires
-   `ServeCloud` into `Workspace`. Design: `docs/SERVE_CANARY.md`.
+2. ~~**[OMNI-2](https://olafzumpe.atlassian.net/browse/OMNI-2) — Ray Serve
+   canary.**~~ — **done 2026-08-09** (OMNI-8/9/11/12/13/14/15). The full
+   mechanism works end to end: `DevOps.canary(canary_backend="serve")` deploys
+   behind Ray Serve, fills the window itself, `evaluate_canary()` decides — a
+   live rejection now changes the cycle's outcome — and a human merge is
+   observed and promotes automatically. Opt-in; the legacy in-memory path
+   stays the default. Design: `docs/SERVE_CANARY.md`.
 3. **[OMNI-3](https://olafzumpe.atlassian.net/browse/OMNI-3) — Class 2**, feature
    construction: `FeatureContract` + acceptance gates, `InvariantGate`, backtests,
    `ToolchainAdapter`, the contract-author actor. Design: `docs/CLASS2_CONTRACT.md`.
