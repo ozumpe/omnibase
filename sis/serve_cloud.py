@@ -27,8 +27,11 @@ candidate source lives on the PR artifact. It is keyword-only with a default, so
 rather than defaults when it is missing, because a green slot serving the same
 source as blue is a canary that can only ever report "no difference".
 
-Promotion still raises :class:`~sis.ports.RequiresHumanApproval`. Nothing here
-changes the rule that a human merge is what promotes (``CLAUDE.md``).
+**Promotion here is a real redeployment**, not a bookkeeping entry: blue is
+re-run with the candidate's source and the green application is torn down. The
+human gate is unchanged and lives upstream — ``Cloud.promote``'s only caller is
+``DevOps.observe_merge()``, which acts solely after reading a PR back as merged
+(OMNI-15). Nothing here decides to promote.
 """
 
 from __future__ import annotations
@@ -40,7 +43,7 @@ from sis.adapters import InMemoryTelemetry
 from sis.canary import CanaryMode, LiveSample
 from sis.contract import OptimizationContract
 from sis.metrics import summarise
-from sis.ports import DeployRecord, RequiresHumanApproval
+from sis.ports import DeployRecord
 from sis.serving import app_name, build_canary, build_candidate, route_prefix
 
 # Where a canary starts: a small slice of traffic, so a candidate that is bad in
@@ -114,8 +117,8 @@ class ServeCloud:
     def serve_blue(self, *, source: str | None = None, version: str = "live") -> DeployRecord:
         """Stand up the baseline. ``source`` defaults to the committed target.
 
-        Calling it again redeploys with a new baseline — which is what a
-        promotion would do, once something observes the human merge (OMNI-15).
+        Calling it again redeploys with a new baseline — which is exactly what
+        :meth:`promote` does once a human merge has been observed.
         """
         from ray import serve
 
@@ -226,6 +229,15 @@ class ServeCloud:
         router.set_weight.remote(green_fraction).result()
         self._tel.emit("canary.traffic_shifted", version=version, fraction=fraction)
 
+    def set_mode(self, mode: CanaryMode) -> None:
+        """Switch shadow/split dispatch in place (not on the ``Cloud`` port).
+
+        Changing it by redeploying would restart the router and throw away the
+        window it has accumulated, which is the one thing a canary cannot spare.
+        """
+        self._mode = mode
+        self._require_router().set_mode.remote(mode).result()
+
     def live_window(
         self, version: str, window_s: float = DEFAULT_WINDOW_S
     ) -> tuple[list[float], int]:
@@ -257,9 +269,33 @@ class ServeCloud:
         return samples
 
     def promote(self, version: str) -> DeployRecord:
-        raise RequiresHumanApproval(
-            f"promoting {version} from green canary to live follows the human PR merge"
-        )
+        """Make the candidate the new baseline: green's source becomes blue's.
+
+        See ``Cloud.promote`` — the human gate is the observed merge, upstream
+        in ``DevOps.observe_merge()``. Here promotion is a real redeployment
+        rather than a bookkeeping entry: blue is re-run with the candidate's
+        source, and the green application is torn down.
+
+        Blue *does* restart here, unavoidably and correctly — it is becoming
+        different code. That is the opposite of the canary-deploy case, where a
+        restart was a defect precisely because nothing about blue had changed.
+        """
+        from ray import serve
+
+        if version != self._green_version or self._green_source is None:
+            raise ValueError(
+                f"cannot promote {version!r}: it is not the deployed candidate "
+                f"(green={self._green_version!r}). Promotion moves the *canary* "
+                "into the live slot."
+            )
+        # Re-run blue with the candidate's source, then retire green. Ordered
+        # this way so there is no instant where the route has nothing behind it.
+        candidate = self._green_source
+        record = self.serve_blue(source=candidate, version=version)
+        serve.delete(self.green_app_name)
+        self._green_source = self._green_version = None
+        self._tel.emit("canary.promoted", version=version, slot="blue")
+        return record
 
     def rollback(self, version: str) -> None:
         """Stop green's traffic, then delete the candidate application.
