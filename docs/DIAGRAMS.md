@@ -331,7 +331,8 @@ stateDiagram-v2
     [*] --> BlueOnly : bootstrap
     BlueOnly --> GreenDeployed : DevOps.canary()
     GreenDeployed --> BlueOnly : DevOps.retire_canary()
-    GreenDeployed --> Promoted : human merges the PR
+    GreenDeployed --> BlueOnly : DevOps.observe_merge() reads<br/>the verdict as a live rejection
+    GreenDeployed --> Promoted : DevOps.observe_merge() reads<br/>the PR back as merged
     Promoted --> BlueOnly : green becomes the new blue
 
     note right of GreenDeployed
@@ -339,9 +340,19 @@ stateDiagram-v2
         loop.serve() holds the next
         cycle: one canary in flight.
     end note
+
+    note right of Promoted
+        loop.serve(watch_merges=True)
+        polls observe_merge() each tick,
+        which is what actually fires
+        this transition.
+    end note
 ```
 
-> **Known gap:** nothing observes the human merge today, so the
-> `GreenDeployed → Promoted` transition has no automatic trigger — `merge_pr`
-> raises `RequiresHumanApproval` in every adapter and there is no post-merge
-> path. Tracked as an open problem in [`SERVE_CANARY.md`](SERVE_CANARY.md).
+`DevOps.observe_merge()` (OMNI-15) is what makes `GreenDeployed → Promoted`
+real: it reads the PR back from version control and, only if a human has
+*already* merged it, promotes and frees green. `merge_pr` still raises
+`RequiresHumanApproval` in every adapter, so the agent can never make that
+condition true itself — it can only notice that a human did. Before this
+existed, the transition had no trigger at all and the loop idled forever after
+one successful cycle.

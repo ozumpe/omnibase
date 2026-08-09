@@ -134,8 +134,13 @@ Read in this order — each builds on the last:
    tried and why it was accepted or rejected.
 9. **`main.py`** — the entry point.
 
-Also worth a look: **`sis/policy.py`** (§7a, what the loop may change) and
-**`sis/cost.py`** (LLM pricing feeding the CEO's spend brakes).
+Also worth a look: **`sis/policy.py`** (§7a, what the loop may change),
+**`sis/cost.py`** (LLM pricing feeding the CEO's spend brakes), and
+**`sis/llm.py`** — the proposer's model choice sits behind a small `Protocol`
+(`LLMClient`), so `SIS_PROPOSER=claude` isn't locked to one vendor; every
+adapter returns cost alongside text so the spend brakes are vendor-agnostic
+too. When you're ready for the serving/canary layer (loaded once a candidate
+has already passed the gauntlet), see §8.
 
 The tests under `tests/` are also excellent documentation — each shows a piece
 in isolation. `tests/test_adversarial.py` in particular shows *what the gauntlet
@@ -192,14 +197,23 @@ copy of the baseline, the contract's oracle and acceptance tests, an injected
 `sitecustomize.py`), so the sandbox is fully self-contained — nothing reaches
 the host.
 
-**The invariant: the gauntlet is the *only* place candidate or target code
+**The invariant: the gauntlet is the *only* place *unvalidated* candidate code
 runs.** Not just `validate()` — the baseline measurement (`measure_baseline()`,
-used by the SWE before proposing) and the DevOps canary reuse the sandbox or the
-already-sandbox-measured latency. No role ever `exec`s a module in the main
-actor process (where credentials live). If you add a code path that runs a
-generated or target module, route it through the sandbox — this is the rule the
-whole safety model rests on. (Two review passes were needed to make it true
-everywhere: the candidate-execution sites *and* the baseline path.)
+used by the SWE before proposing) reuses the same sandbox. No role ever `exec`s
+a module in the main actor process (where credentials live). If you add a code
+path that runs a generated or target module before it has passed every gate,
+route it through the sandbox — this is the rule the whole safety model rests
+on. (Two review passes were needed to make it true everywhere: the
+candidate-execution sites *and* the baseline path.)
+
+**One deliberate exception, added after this invariant was written: a live
+canary (§8) re-runs a candidate that has *already passed* every gate.** That is
+correct by design — DESIGN.md §4 says a canary deploys the real thing — but the
+guarantee changes shape: a Ray Serve replica is not the gauntlet's kernel- or
+subprocess-enforced sandbox. It gets a scrubbed environment (no credentials
+readable) but keeps network egress, because a replica exists to answer HTTP.
+Opt-in only (`canary_backend="serve"`); the default path still only ever
+re-plays a latency number the sandbox already measured, executing nothing.
 
 > Learning note: read `_run()` to see the subprocess/docker branch and the
 > `TimeoutExpired` handling, `_docker_args()` for exactly how the container is
@@ -348,7 +362,131 @@ makes rollups identical across backends, and the DuckDB column schema is
 in later (multi-node cluster / embedding retrieval) without touching the loop —
 the same ports/adapters move as Confluence/Jira/GitHub.
 
-## 8. How to run and poke at it
+## 8. Serving a target and canarying it live (`sis/serving.py`, `sis/loadgen.py`, `sis/canary.py`, `sis/serve_cloud.py`, `sis/metrics.py`)
+
+> [`DIAGRAMS.md`'s deploy-slot state machine](DIAGRAMS.md#4-state--issue-workflow-and-deploy-slots)
+> is the blue/green picture for this whole section.
+
+Everything through §7 answers "is the candidate correct and faster, measured
+once, offline, in a quiet sandbox?" This layer answers a harder question: is it
+*still* faster once real, concurrent traffic is queuing for it? The offline
+benchmark times one call at a time — it structurally cannot see GIL contention,
+queueing, or real input variety. Measured field example: a merge-sort candidate
+was **~5x faster in isolation** (0.88ms → 0.17ms) but only **~30% faster at p95
+under 8-way concurrent load** (237.90ms → 167.78ms) — both versions become
+queue-bound under real concurrency. That gap is this whole layer's reason to
+exist.
+
+**`sis/metrics.py`** is the smallest piece and everything else depends on it: a
+pure `percentile()`/`Window`/`summarise()` — nearest-rank percentiles over
+observed latencies, no interpolation, because a canary window is a sample of
+requests that actually happened. Shared so the offline gauntlet and the online
+canary compute "p95" the same way.
+
+**`sis/serving.py`** puts a contract's entry function behind Ray Serve —
+`TargetDeployment` wraps the function; `CanaryRouter` sits in front of a blue
+(live) and an optional green (candidate) deployment. It exists because **Ray
+Serve has no built-in weighted traffic split** — routing a request to one
+version or the other, at a configurable weight, is not a framework feature, so
+`CanaryRouter` *is* the split. Two dispatch modes (`CanaryMode`): `SHADOW`
+(default) sends every sampled request to *both* versions and returns only
+blue's answer — the candidate can be arbitrarily wrong and no caller ever sees
+it, which is what makes a paired latency comparison and a direct
+answer-agreement check possible; `SPLIT` sends each request to exactly one
+version (no pairing, but half the compute).
+
+> **A finding worth knowing before you touch this:** the router, blue and green
+> were first built as *one* Serve application. Adding a canary meant re-running
+> that whole graph — which restarts the **blue** replica, discarding its warm
+> state at the exact moment blue becomes the baseline everything is measured
+> against. Green is now deployed as its own, separate application that the
+> router *attaches to* at runtime, so a canary deploy or rollback never touches
+> blue. This wasn't predicted; it was measured (give blue a construction-time
+> identity, watch it change) and then fixed — the kind of bug that only shows
+> up once something actually runs continuously.
+
+**`sis/loadgen.py`** generates the traffic a canary needs, since nothing
+external calls the target yet. Inputs come from the contract's own oracle
+(`random_input`) — the same function the offline gauntlet's differential-
+correctness gate already trusts — rather than a second, independently-written
+generator that could quietly drift from it.
+
+**`sis/canary.py::evaluate_canary()`** is the pure decision function — no Ray,
+no Serve, no network, mirroring `evaluate_brakes`/`gauntlet.validate`'s
+gate-functions-are-pure convention. Four gates, cheapest first, **everything
+fails closed** (a predicate that raises counts as a violation, not an
+exception that propagates):
+
+1. Evidence floor — enough samples to say anything at all.
+2. Correctness (hard) — zero invariant violations (Class 2 — no invariants
+   exist for either shipped target yet, so this gate is vacuously satisfied
+   until that lands; response agreement is the live correctness check today).
+3. Response agreement (hard, `SHADOW` only) — blue and green must have
+   answered every sampled request identically.
+4. Performance (graded) — candidate p95 *and* p99 within a configurable ratio
+   of baseline's.
+
+**`sis/serve_cloud.py::ServeCloud`** is the real `Cloud` port adapter that ties
+the above together — a third implementation alongside the in-memory fake and
+the real-adapters placeholder, needing only `ray[serve]` (no credentials). Its
+`deploy_canary`/`shift_traffic`/`live_metrics` do for real what `InMemoryCloud`
+fakes. `promote()` does not raise — it is gated by `DevOps.observe_merge()`
+reading a PR back as *already* merged, the same human-approval invariant
+enforced one layer up instead of by the adapter refusing outright (see §6).
+Green's replica runs with a scrubbed `runtime_env` — see the §5 sandbox note
+above for exactly what that boundary does and doesn't guarantee.
+
+**Where this plugs into the cycle you already read in §7:** `DevOps.canary()`
+takes an optional `canary_backend`. Left unset, it's exactly what §7 described
+— record the sandbox-measured latency, deploy to the green slot, never execute
+anything. Pass `"serve"` (or `SIS_CANARY=serve` / `main.py --canary serve`) and
+it runs the real flow instead: deploy behind `ServeCloud`, drive a bounded
+`loadgen` burst through the router to fill the window (the real target has no
+traffic of its own yet — same bootstrap problem `loadgen` exists to solve),
+then `evaluate_canary()` decides. **Forced to `SHADOW` regardless of
+configuration** — neither shipped contract has invariants yet, so a weighted
+split would have zero live correctness signal, only a speed comparison, which
+could silently wave a fast-but-wrong candidate through.
+
+The one behavioural change worth calling out explicitly: **a live rejection can
+now overrule QA's approval.** Before this layer existed, `run_cycle`'s outcome
+was QA's call alone. `org.cycle_outcome` — another pure fold, same convention
+as everywhere else in this doc — now also asks whether a live evaluation ran
+and passed; a `None` canary (the default backend, or QA already said no)
+reduces to exactly the old behaviour.
+
+---
+
+## 8a. The loop as a server (`sis/loop.py`)
+
+`main.py` on its own runs **one** cycle and exits — useful for reading the
+trace in §7, useless as a server. `sis/loop.py` is the difference: `serve()`
+runs cycles continuously, gated by a pure `decide()` (same pure/impure split as
+everywhere else — `poll()` does the I/O, `decide()` is the testable policy).
+
+Two gates worth understanding, both read off `SelfModel`'s deployment state
+rather than adding anything new:
+
+- **`canary_in_flight()`** — while green is occupied, the loop holds the next
+  cycle rather than stacking a second proposal on an unmerged predecessor
+  (cycles baseline from the *merged* target, so a second cycle would just
+  re-propose the same diff and spend again for it).
+- **`pending_merge()`** paired with **`DevOps.observe_merge()`** — polled once
+  per tick while a canary is held. This is what actually *releases* the hold:
+  it reads the PR back from version control and, only if a human has already
+  merged it, promotes and frees green. The loop can never merge anything
+  itself — `merge_pr()` raises `RequiresHumanApproval` in every adapter, so
+  the only way `merged` ever becomes true is a person clicking merge on
+  GitHub.
+
+Before this existed, `main.py --loop` ran one successful cycle and then idled
+forever, because nothing ever cleared the green slot on success (only
+rollback did). That was arguably the *correct* reading of "stop at the human
+gate" — but permanently, not just until a human acts.
+
+---
+
+## 9. How to run and poke at it
 
 ```bash
 poetry install
@@ -368,10 +506,16 @@ Good first experiments to build intuition:
 - Run a few cycles with `SIS_EPISODIC_STORE=duckdb` (`--with analytics`), then
   query the log: `get_episodic_store("duckdb").sql("SELECT reject_gate,
   count(*) FROM episodes GROUP BY reject_gate")`.
+- Run `poetry run python main.py --contract sort --canary serve` (§8) and read
+  the printed verdict: real dispatched requests, a real paired p95/p99
+  comparison — not a number copied from the offline benchmark. (A candidate
+  that answers *wrong* gets caught earlier, by §5's offline differential gate,
+  before a canary ever sees it — the live gates in §8 catch what only shows up
+  under real concurrency, which is a different failure class entirely.)
 
 ---
 
-## 9. Glossary
+## 10. Glossary
 
 - **omnibase** — this project / engine (the `sis/` package).
 - **omnitrack** — the future end product (the external-world-modeling layer).
@@ -382,3 +526,12 @@ Good first experiments to build intuition:
   persisted by the episodic store, `sis/episodic.py`).
 - **episodic store** — the pluggable backend (jsonl/duckdb/none) that persists
   each cycle's outcome as the dataset to learn from.
+- **canary** — a candidate deployed behind real traffic (blue = live, green =
+  candidate) so it can be judged against production-shaped load instead of a
+  synthetic offline benchmark (§8).
+- **shadow dispatch** — the default canary mode: every sampled request goes to
+  *both* blue and green, but only blue's answer ever reaches the caller. Buys a
+  paired comparison and a direct agreement check; costs double compute.
+- **blue / green** — the live slot and the candidate slot. Same vocabulary in
+  `sis/serving.py`, `SelfModel`'s deployment state, and `DeployRecord.slot`, so
+  an incident doesn't require translating between three names for one thing.
