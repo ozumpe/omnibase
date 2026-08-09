@@ -17,17 +17,28 @@ import hashlib
 import os
 import pathlib
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any
 
 import ray
 
 from sis import contract, gauntlet, policy, proposer
+from sis.canary import DEFAULT_MIN_CANARY_SAMPLES, CanaryMode, evaluate_canary
 from sis.paths import PROJECT_ROOT, TARGET_PATH
 from sis.ports import IssueStatus, IssueType, PullRequest
 from sis.self_model import get_self_model
 from sis.settings import space_keys, version_control_base
 from sis.workspace import get_workspace
+
+# How many synthetic requests DevOps drives through a live canary to fill its
+# window (OMNI-14). Nothing external calls the served target yet
+# (docs/SERVE_CANARY.md's bootstrap problem), so the window has to be filled
+# the same way manual testing already does (sis.loadgen) rather than waiting
+# on organic traffic that will never arrive. Comfortably above
+# evaluate_canary's own evidence floor, with headroom for a candidate that
+# fails some fraction of requests (a failed dispatch is not a paired sample).
+LIVE_CANARY_REQUESTS = 150
+LIVE_CANARY_CONCURRENCY = 8
 
 # CEO spend-brake defaults — the single source of truth, shared by CEO.__init__
 # and ceo_config_from_env so an env-configured run and a default run agree.
@@ -468,6 +479,9 @@ class SWE(Role):
         pr = ray.get(self._ws.open_pr.remote(branch, f"Optimise target ({story_id})", candidate))
         ray.get(self._ws.transition.remote(
             story_id, IssueStatus.READY_FOR_REVIEW, f"PR {pr.id} ready"))
+        # The canary needs this PR's contract later (oracle, entry point,
+        # margin, route) and has only the PR id to go on by then.
+        ray.get(self._sm.set_pr_contract.remote(pr.id, spec.name))
         ray.get(self._sm.record.remote("branch", branch, story=story_id))
         ray.get(self._sm.record.remote(
             "pr", pr.id, story=story_id,
@@ -512,18 +526,95 @@ class QA(Role):
         return ok
 
 
+@dataclass(frozen=True)
+class _RemoteTelemetry:
+    """Forwards ``emit`` through ``Workspace.emit.remote(...)``.
+
+    Satisfies :class:`sis.serve_cloud.SupportsEmit` for a role actor, which
+    holds a Ray *handle* to Workspace rather than the raw ``InMemoryTelemetry``
+    instance living inside it. Without this, a live ``ServeCloud``'s events
+    would land in a second, invisible audit trail instead of the one
+    everything else writes to.
+    """
+
+    workspace: Any
+
+    def emit(self, event: str, **fields: object) -> None:
+        ray.get(self.workspace.emit.remote(event, **fields))
+
+
 @ray.remote
 class DevOps(Role):
-    """Infra & ops: canary deploy to the green slot; files bugs; feeds SelfModel."""
+    """Infra & ops: canary deploy to the green slot; files bugs; feeds SelfModel.
+
+    Two canary backends, chosen per call (OMNI-14):
+
+    - **legacy** (default) — records a deploy against ``Workspace.cloud``
+      (``InMemoryCloud``/``RealCloud``); no traffic, matches the engine's
+      behaviour before this story.
+    - **serve** (``SIS_CANARY=serve`` or ``canary_backend="serve"``) — a real
+      Ray Serve deployment via :class:`~sis.serve_cloud.ServeCloud`, judged by
+      :func:`~sis.canary.evaluate_canary` against live traffic this class
+      synthesises itself (see :meth:`_canary_live`).
+    """
 
     def __init__(self) -> None:
         super().__init__("DevOps", "DevOps", parent="CTO")
+        # One ServeCloud per contract, built on first use (each construction
+        # starts a real Serve application). Keyed by contract name because the
+        # engine is multi-target and Workspace.cloud is a single, contract-
+        # agnostic adapter slot that a per-contract deployment cannot share.
+        self._serve_clouds: dict[str, Any] = {}
+        # pr_id -> "serve" | "legacy", set by canary() and read by
+        # observe_merge()/retire_canary() so a later call on the same PR routes
+        # to the same backend it was deployed through. In-memory only, same
+        # durability bar as SelfModel's own slot state — not persisted across a
+        # cluster restart.
+        self._pr_backend: dict[str, str] = {}
 
-    def canary(self, pr_id: str, candidate_latency: float) -> dict[str, Any]:
+    def _cloud_for(self, spec: contract.OptimizationContract) -> Any:
+        """The ``ServeCloud`` for *spec*, built and served on first use.
+
+        Cached per contract name: a second construction would call
+        ``serve_blue()`` again and, per OMNI-13's finding, needlessly cycle a
+        replica the first construction already stood up correctly. Ray is
+        already initialised — this runs inside a live Ray actor — so only
+        Serve needs an explicit, idempotent start.
+        """
+        if spec.name not in self._serve_clouds:
+            from ray import serve
+
+            from sis.serve_cloud import ServeCloud
+
+            serve.start(logging_config={"log_level": "ERROR"})
+            cloud = ServeCloud(_RemoteTelemetry(self._ws), spec)
+            cloud.serve_blue(version="live")
+            self._serve_clouds[spec.name] = cloud
+        return self._serve_clouds[spec.name]
+
+    def canary(
+        self, pr_id: str, candidate_latency: float, canary_backend: str | None = None
+    ) -> dict[str, Any]:
         # candidate_latency was measured inside the gauntlet sandbox by the SWE
-        # step. The candidate is NEVER executed here (main process, holds creds).
+        # step. On the legacy backend the candidate is NEVER executed here
+        # (main process, holds creds). On "serve" it runs in a Serve replica
+        # with a scrubbed runtime_env (OMNI-13) — a different, procedural
+        # guarantee, and the intended shape of a canary.
         pr = ray.get(self._ws.get_pr.remote(pr_id))
         version = _version_for(pr)
+
+        # Explicit argument first, then the env var. Reading the env var
+        # "fresh" inside an already-running actor is not fresh at all: the
+        # actor's os.environ is a snapshot from when its OS process was
+        # spawned, so a test's monkeypatch.setenv() (a different process) can
+        # never reach it. Same trap as SIS_CONTRACT (docs/KNOWN_ISSUES.md, and
+        # Role._contract above); same fix.
+        backend = canary_backend or os.getenv("SIS_CANARY")
+        self._pr_backend[pr_id] = "serve" if backend == "serve" else "legacy"
+
+        if backend == "serve":
+            return self._canary_live(pr, version, candidate_latency)
+
         record = ray.get(self._ws.deploy_canary.remote(
             version, {"latency_seconds": candidate_latency}))
         ray.get(self._sm.set_slot.remote("green", version))
@@ -533,7 +624,68 @@ class DevOps(Role):
         ray.get(self._sm.record.remote(
             "canary", version, pr=pr_id, latency=candidate_latency))
         return {"version": version, "slot": record.slot,
-                "latency_seconds": candidate_latency, "live": record.live}
+                "latency_seconds": candidate_latency, "live": record.live,
+                "canary_passed": True}
+
+    def _canary_live(
+        self, pr: PullRequest, version: str, candidate_latency: float
+    ) -> dict[str, Any]:
+        """The real flow: deploy behind Ray Serve, fill the window, decide.
+
+        A live signal the sandboxed benchmark structurally cannot see — real
+        concurrency, real queueing (OMNI-12's field measurement: a ~5x offline
+        speedup was only ~30% faster under 8-way load). That gap is the reason
+        this exists, not a formality to satisfy before ``verified_awaiting_
+        human_merge`` unchanged.
+        """
+        spec: contract.OptimizationContract | None = ray.get(
+            self._sm.contract_for_pr.remote(pr.id))
+        if spec is None:
+            raise RuntimeError(
+                f"no contract recorded for PR {pr.id!r} — SWE.implement() must "
+                "resolve and record one before a live canary can judge the candidate"
+            )
+        cloud = self._cloud_for(spec)
+
+        # Forced, not configured: an OptimizationContract carries no
+        # invariants (Class 2 / OMNI-18, unbuilt), so SPLIT mode would have
+        # ZERO live correctness signal — only a speed comparison — and could
+        # silently promote a fast, wrong candidate. Response agreement under
+        # SHADOW is the only live correctness check available today.
+        cloud.set_mode(CanaryMode.SHADOW)
+
+        record = cloud.deploy_canary(
+            version, metrics={"latency_seconds": candidate_latency}, source=pr.artifact)
+        ray.get(self._sm.set_slot.remote("green", version))
+        ray.get(self._sm.set_pending_pr.remote(pr.id))
+        ray.get(self._sm.record.remote(
+            "canary", version, pr=pr.id, latency=candidate_latency, backend="serve"))
+
+        # Bootstrap traffic (see LIVE_CANARY_REQUESTS): nothing external calls
+        # the target yet, so the window is filled synthetically rather than
+        # waiting on organic traffic that will never arrive.
+        cloud.warm_up(LIVE_CANARY_REQUESTS, concurrency=LIVE_CANARY_CONCURRENCY)
+
+        blue_latencies, _ = cloud.live_window(str(cloud.live_version()))
+        green_latencies, _ = cloud.live_window(version)
+        verdict = evaluate_canary(
+            [], cloud.live_samples(), blue_latencies, green_latencies,
+            version=version, mode=CanaryMode.SHADOW,
+            min_samples=min(DEFAULT_MIN_CANARY_SAMPLES, LIVE_CANARY_REQUESTS))
+
+        if not verdict.passed:
+            self.retire_canary(version, pr.id)
+            bug_id = self.file_bug(
+                f"Live canary rejected PR {pr.id} ({spec.name}): {verdict.reason}")
+            ray.get(self._sm.record.remote(
+                "canary_rejected", version, pr=pr.id, reason=verdict.reason))
+            return {"version": version, "slot": "green", "live": False,
+                    "latency_seconds": candidate_latency, "canary_passed": False,
+                    "reason": verdict.reason, "bug_id": bug_id, "verdict": asdict(verdict)}
+
+        return {"version": version, "slot": record.slot, "live": record.live,
+                "latency_seconds": candidate_latency, "canary_passed": True,
+                "verdict": asdict(verdict)}
 
     def observe_merge(self, pr_id: str) -> dict[str, Any]:
         """Notice that a human merged ``pr_id``; promote and release green.
@@ -548,6 +700,9 @@ class DevOps(Role):
 
         Idempotent: promoting an already-live version is a no-op, so a poll that
         fires twice on the same merge does not double-promote or double-record.
+        Routes to the same backend the PR was canaried through, so a live
+        promotion actually redeploys blue rather than silently updating a
+        bookkeeping record nobody is looking at (see ``canary()``).
         """
         pr = ray.get(self._ws.get_pr.remote(pr_id))
         version = _version_for(pr)
@@ -557,11 +712,19 @@ class DevOps(Role):
             # per poll while a human takes hours to review.
             return {"pr": pr_id, "version": version, "merged": False, "promoted": False}
 
-        if ray.get(self._ws.live_version.remote()) == version:
-            return {"pr": pr_id, "version": version, "merged": True, "promoted": False,
-                    "reason": "already live"}
+        if self._pr_backend.get(pr_id) == "serve":
+            spec = self._contract_for_live_pr(pr_id)
+            cloud = self._cloud_for(spec)
+            if cloud.live_version() == version:
+                return {"pr": pr_id, "version": version, "merged": True,
+                        "promoted": False, "reason": "already live"}
+            record = cloud.promote(version)
+        else:
+            if ray.get(self._ws.live_version.remote()) == version:
+                return {"pr": pr_id, "version": version, "merged": True,
+                        "promoted": False, "reason": "already live"}
+            record = ray.get(self._ws.promote.remote(version))
 
-        record = ray.get(self._ws.promote.remote(version))
         ray.get(self._sm.set_live_version.remote(version))
         # Release the gate: green is free, so loop.serve may start a new cycle —
         # and it will now baseline from the merged target rather than
@@ -573,20 +736,39 @@ class DevOps(Role):
         return {"pr": pr_id, "version": version, "merged": True, "promoted": True,
                 "slot": record.slot, "live": record.live}
 
-    def retire_canary(self, version: str) -> dict[str, Any]:
+    def retire_canary(self, version: str, pr_id: str | None = None) -> dict[str, Any]:
         """Take the canary out of the green slot and stop its traffic.
 
         The release half of ``canary()``. Without it the one-canary-in-flight
-        gate (``loop.serve``) has no exit: green is set when a canary deploys and
-        nothing else ever clears it, so the loop would idle forever after its
-        first successful cycle. Called on rollback, and — once something observes
-        the human PR merge (docs/SERVE_CANARY.md open problem) — on promotion.
+        gate (``loop.serve``) has no exit: green is set when a canary deploys
+        and nothing else ever clears it, so the loop would idle forever after
+        its first successful cycle. Called on rollback (including from
+        ``_canary_live`` on a failed live verdict), and by ``observe_merge`` on
+        promotion.
+
+        ``pr_id`` is optional: given, it routes the rollback to the same
+        backend the canary was deployed through. Omitted — the manual
+        "an operator releases the gate by hand" path — it always goes through
+        the legacy adapter, the historical behaviour.
         """
-        ray.get(self._ws.rollback.remote(version))
+        if pr_id is not None and self._pr_backend.get(pr_id) == "serve":
+            self._cloud_for(self._contract_for_live_pr(pr_id)).rollback(version)
+        else:
+            ray.get(self._ws.rollback.remote(version))
         ray.get(self._sm.set_slot.remote("green", None))
         ray.get(self._sm.set_pending_pr.remote(None))
         ray.get(self._sm.record.remote("canary_retired", version))
         return {"version": version, "slot": "green", "released": True}
+
+    def _contract_for_live_pr(self, pr_id: str) -> contract.OptimizationContract:
+        spec: contract.OptimizationContract | None = ray.get(
+            self._sm.contract_for_pr.remote(pr_id))
+        if spec is None:  # pragma: no cover - canary() would not set backend="serve" otherwise
+            raise RuntimeError(
+                f"PR {pr_id!r} was canaried on the live backend but has no "
+                "recorded contract — this should be unreachable"
+            )
+        return spec
 
     def file_bug(self, summary: str) -> str:
         issue = ray.get(self._ws.create_issue.remote(IssueType.BUG, summary, None))

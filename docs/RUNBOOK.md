@@ -165,6 +165,43 @@ Two guarantees worth knowing, both verified by tests rather than asserted:
 
 ---
 
+## Level 0e — the actor org drives its own live canary
+
+Levels 0b–0d stood the canary up and drove it by hand. This is the automatic
+version: one cycle through the whole actor org, with `DevOps.canary()` itself
+deploying behind Ray Serve, filling the window, and deciding.
+
+```bash
+poetry run python main.py --contract sort --canary serve
+# [main] cycle status: verified_awaiting_human_merge
+#   live canary: PASS — canary passed on 150 live samples
+```
+
+`--canary serve` (or `SIS_CANARY=serve` exported before launch) is the only
+difference from Level 0's plain `main.py --contract sort` — same cycle, same
+PR, but now DevOps judges the candidate against real dispatched traffic instead
+of recording a deploy nobody measured. `--loop --canary serve` runs this
+continuously (`sis.loop.serve`'s `canary_backend` parameter).
+
+**A live rejection changes the cycle's outcome.** Before this, QA approval
+alone decided success; now a candidate that passes the offline gauntlet and QA
+can still be rejected here — exactly the failure mode a canary exists to catch
+(real concurrency/queueing the sandboxed benchmark cannot see, per Level 0c's
+measurement). A rejection rolls the candidate back, files a bug, and reports
+`canary_rejected` rather than `verified_awaiting_human_merge`.
+
+**Forced shadow mode, not a default.** Neither shipped target has invariants
+yet (that's Class 2 / OMNI-18), so a weighted split would have no live
+correctness signal at all — only a speed comparison, which could silently wave
+through a fast, wrong candidate. `DevOps.canary()` forces `SHADOW` regardless
+of configuration until invariants exist.
+
+The legacy in-memory recording (no traffic, no verdict) stays the default —
+`--canary serve` is opt-in, and `poetry run python main.py` with no flags is
+still Level 0's zero-setup path, unchanged.
+
+---
+
 ## Level 1 — real Claude writes the optimization (cheap)
 
 The LLM proposes the diff; the gauntlet still gates it, and the CEO spend brakes
@@ -311,13 +348,12 @@ This is development work, not configuration. Currently missing:
   demo `repeat()`/`once()` intake, not a **sustained-SLO-breach detector over a
   rolling metric window** — which needs a served endpoint producing real
   metrics (the Ray Serve gap below).
-- **Ray Serve canary + atomic actor swap.** `DevOps.canary` still records a
-  green-slot deploy against the in-memory adapter, so the *cycle* has no real
-  weighted rollout yet — wiring `ServeCloud` in is OMNI-14. (The mechanics
-  themselves exist: Level 0d runs a real weighted/shadow canary end to end, and
-  the promote path is closed — the loop now observes a human merge, promotes,
-  and releases green instead of idling forever.) The atomic *actor* swap, for
-  internal never-served actors, is still unbuilt.
+- ~~**Ray Serve canary.**~~ **Done** — `DevOps.canary(canary_backend="serve")`
+  deploys the candidate behind a real Serve router, drives real traffic
+  through it, and lets `evaluate_canary()` decide (OMNI-14; Level 0e). Opt-in
+  (`--canary serve` / `SIS_CANARY=serve`); the in-memory recording stays the
+  default. The **atomic actor swap**, for internal never-served actors, is
+  still unbuilt — a different mechanism (DESIGN.md §4), no design doc yet.
 - **AWS provisioning.** `SIS_ENV=aws` + `SIS_AWS_SECRET_ID` switch secrets to
   Secrets Manager (needs the secret + an IAM role with
   `secretsmanager:GetSecretValue`), but there is no infra/deploy code — the

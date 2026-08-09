@@ -198,6 +198,39 @@ any long-lived cluster exists.
 
 ## Resolved
 
+- **Serve replica CPU reservation deadlocked CI — `serve.run()` blocked
+  forever on a constrained runner** *(found and fixed 2026-08-09, during
+  OMNI-14's first CI run, which hung for 2h+ inside pytest)* — Ray Serve
+  reserves **1 whole CPU per replica at scheduling time** by default, the same
+  default the org's nine detached role actors already consume. On a
+  workstation with cores to spare the competition is invisible; on a CI
+  runner (~4 vCPUs) the green canary replica could never be scheduled, and
+  `serve.run()` waits for it **with no timeout** — not a failure, a silent
+  hang. Reproduced deterministically under `ray.init(num_cpus=2)`: blue
+  deployed fine, adding green hung until killed. Fix: `num_cpus=0` on every
+  Serve replica (`_LIGHTWEIGHT_REPLICA` in `sis/serving.py`) — they are I/O-
+  and GIL-bound and need no reserved core. Lessons: **a Ray deployment that
+  works locally can deadlock, not just slow down, on a smaller machine — test
+  scheduling assumptions under `ray.init(num_cpus=2)` before CI does it for
+  you**; and anything that blocks on cluster scheduling needs a timeout,
+  because "waiting for resources that will never come" is indistinguishable
+  from progress.
+
+- **The L5 noise floor, third appearance: Serve dispatch overhead swamps the
+  target's own compute** *(2026-08-09, OMNI-14 tests)* — two `test_live_canary`
+  tests asserted a live canary must *pass*, picking candidates with "real"
+  offline margin (a merge sort; then O(√n) vs O(n) `sum_of_divisors`). Both
+  flaked: at these input sizes the function's compute (µs) is dwarfed by Ray
+  Serve's per-request dispatch (tens of ms), so even a genuine 100x algorithmic
+  win doesn't reliably clear `evaluate_canary`'s p95 gate — the live analogue
+  of the offline benchmark jitter L5 already documented. Fixed by removing the
+  pass/fail assertion from tests whose actual subject (routing, caching) holds
+  regardless of verdict. Lesson: **a live-canary verdict is only meaningful
+  when per-request work dominates transport overhead** — which is exactly why
+  the sort (freely scalable input size) was chosen as the served target, and
+  why `sum_of_divisors(10_000)` makes a fine gauntlet target but a poor served
+  one.
+
 - **Flaky Serve tests: per-test app churn blew `serve.delete`'s own timeout**
   *(found and fixed 2026-08-09, PR #78; shipped briefly via #77's merge)* —
   `tests/test_serve_cloud.py` stood a Serve application up and tore it down

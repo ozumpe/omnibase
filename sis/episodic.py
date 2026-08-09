@@ -55,6 +55,11 @@ class EpisodicEvent:
     #            | benchmark | policy | timeout
     #            | harness   ("harness" = the gate could not run, not a verdict
     #                         on the candidate)
+    #            | canary_evidence | canary_invariant | canary_disagreement
+    #            | canary_regression  (evaluate_canary, OMNI-14: the ONLINE
+    #                         analogue of correctness/benchmark, named
+    #                         distinctly so rejected_by_gate can tell whether
+    #                         the sandbox or live traffic caught it)
     reject_gate: str | None = None
     reject_reason: str | None = None
     baseline_latency: float | None = None
@@ -286,6 +291,20 @@ def gate_from_reason(reason: str | None) -> str | None:
     # a distinct failure from "its behaviour is wrong" (CLASS2_CONTRACT.md).
     if r.startswith("interface:"):
         return "interface"
+    # The canary's own gates (sis/canary.py: evaluate_canary), each a live
+    # analogue of an offline concept but named distinctly — conflating a live
+    # regression with an offline "no improvement" (or a live invariant
+    # violation with the offline differential-correctness "correctness" gate)
+    # would make rejected_by_gate ambiguous about whether the sandbox or live
+    # traffic caught it, which is exactly the distinction the canary adds.
+    if r.startswith("insufficient evidence"):
+        return "canary_evidence"
+    if r.startswith("invariant violated"):
+        return "canary_invariant"
+    if r.startswith("response disagreement"):
+        return "canary_disagreement"
+    if r.startswith("live "):  # "live p95/p99 regression: ..."
+        return "canary_regression"
     if "syntaxerror" in r:
         return "ast"
     if "no change" in r:  # candidate identical to the baseline (no-op)

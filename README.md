@@ -59,6 +59,7 @@ credentials, or extra installs. Set these to opt into more.
 | `SIS_GAUNTLET_TIMEOUT` | `120` | Per-gate wall-clock cap (seconds) — kills infinite loops (and, in docker mode, the container). |
 | `SIS_TARGET_PATHS` | `runtime/target.py,runtime/sort_target.py` | Comma-separated SOFT-tier paths the loop may optimise. Guardrail code can never be added. |
 | `SIS_CONTRACT` | *(bootstrap target)* | Which registered target a cycle optimises (`sum_of_divisors`, `sort`). Read inside the role actors, so it only takes effect if exported **before** launch — prefer `main.py --contract <name>` or `run_cycle(contract_name=...)`. |
+| `SIS_CANARY` | *(legacy in-memory)* | `serve` judges the candidate against a real Ray Serve canary and real dispatched traffic (OMNI-14); anything else keeps the zero-setup in-memory recording. Same before-launch caveat as `SIS_CONTRACT` — prefer `main.py --canary serve` or `run_cycle(canary_backend=...)`. |
 | `SIS_ALLOW_STRICT_CHANGES` | `0` | `1` lets the loop propose changes to non-guardrail engine code — still requires approval + justification + checks. |
 | `SIS_BUDGET_USD` | `5.0` | CEO hard spend cap (USD). Set a **tiny** value for a first real run so the brakes trip early. Also: `SIS_BREAKER_THRESHOLD` (`3`), `SIS_MAX_COST_PER_ACCEPTED_USD` (`2.0`), `SIS_SLO_MIN_SPEND_USD` (`0.50`). A bad value fails loudly. |
 | `SIS_EPISODIC_STORE` | `jsonl` | Provenance/episodic backend: `jsonl` (zero-dep), `duckdb` (SQL analytics; `poetry install --with analytics`), or `none`. |
@@ -339,10 +340,10 @@ Open bugs and limitations are tracked with stable IDs in
 | – | Long-running server loop (`main.py --loop`; monitor-trigger still simulated) | ✅ partial |
 | – | Served target + load generator + `ServeCloud` (weighted split, shadow dispatch, live windows) | ✅ (2026-08-08) |
 | – | Observe the human merge: `promote()` has a caller, green is released, the loop resumes | ✅ (2026-08-09) |
-| 4 | Wire the canary into `DevOps.canary()` (real flow + PR→Contract lookup, OMNI-14) | next |
-| 5 | Target/oracle contract (L5) + Class-2 feature verification | ✅ L5 / Class-2 planned |
-| 6 | Language-agnostic `ToolchainAdapter` (build/verify non-Python targets, e.g. Java) | wanted |
-| 7 | Model an external slice of the real world | vision |
+| – | `DevOps.canary()` judges a candidate against real traffic (`canary_backend="serve"`, OMNI-14); a live rejection changes the cycle's outcome | ✅ (2026-08-09) |
+| 4 | Target/oracle contract (L5) + Class-2 feature verification | ✅ L5 / Class-2 planned |
+| 5 | Language-agnostic `ToolchainAdapter` (build/verify non-Python targets, e.g. Java) | wanted |
+| 6 | Model an external slice of the real world | vision |
 
 See the **Milestone Roadmap** Confluence page for detail.
 

@@ -117,6 +117,34 @@ def test_gate_from_reason() -> None:
     assert gate_from_reason(None) is None
 
 
+def test_gate_from_reason_for_the_canarys_own_gates() -> None:
+    # evaluate_canary's four reasons (sis/canary.py), each named distinctly
+    # from its offline analogue -- OMNI-14 -- so rejected_by_gate can tell
+    # whether the sandbox or live traffic caught a rejection.
+    assert gate_from_reason(
+        "insufficient evidence: 42 observations, need 100 "
+        "(a percentile over a handful of requests is not a measurement)"
+    ) == "canary_evidence"
+    assert gate_from_reason(
+        "invariant violated: sorted_permutation (3 of 100 checks failed)"
+    ) == "canary_invariant"
+    assert gate_from_reason(
+        "response disagreement: 12 of 12 sampled requests got a different "
+        "answer from the candidate"
+    ) == "canary_disagreement"
+    assert gate_from_reason(
+        "live p95 regression: candidate 0.001234s vs baseline 0.000987s "
+        "(need <= 0.001086s)"
+    ) == "canary_regression"
+    # A SHADOW window missing its baseline is a harness fault, not a candidate
+    # verdict -- it already matches the existing "harness:" prefix and must
+    # keep doing so rather than needing a fifth canary-specific branch.
+    assert gate_from_reason(
+        "harness: SHADOW mode sample is missing its baseline_response — "
+        "the shadow dispatcher recorded only one side"
+    ) == "harness"
+
+
 def test_event_from_cycle_result_maps_fields() -> None:
     ev = event_from_cycle_result(
         {"status": "verified_awaiting_human_merge", "spec_id": "PAGE-2",

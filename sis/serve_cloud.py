@@ -37,14 +37,32 @@ human gate is unchanged and lives upstream — ``Cloud.promote``'s only caller i
 from __future__ import annotations
 
 import pathlib
-from typing import Any
+from typing import TYPE_CHECKING, Any, Protocol
 
-from sis.adapters import InMemoryTelemetry
 from sis.canary import CanaryMode, LiveSample
 from sis.contract import OptimizationContract
 from sis.metrics import summarise
 from sis.ports import DeployRecord
 from sis.serving import app_name, build_canary, build_candidate, route_prefix
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from sis.loadgen import LoadReport
+
+
+class SupportsEmit(Protocol):
+    """The one method ``ServeCloud`` needs from a telemetry sink.
+
+    Narrowed from the concrete ``InMemoryTelemetry`` on purpose (OMNI-14): a
+    role actor holds a *Ray handle* to ``Workspace``, not the raw adapter
+    instance living inside it, so it cannot hand `ServeCloud` an
+    ``InMemoryTelemetry`` and have events land in the shared audit trail. A
+    thin shim forwarding ``emit`` through ``Workspace.emit.remote(...)``
+    satisfies this Protocol without ``ServeCloud`` needing to know the
+    difference — same reasoning as ``loadgen.SupportsObserve``.
+    """
+
+    def emit(self, event: str, **fields: object) -> None: ...
+
 
 # Where a canary starts: a small slice of traffic, so a candidate that is bad in
 # a way every offline gate missed damages a few requests rather than all of
@@ -80,7 +98,7 @@ class ServeCloud:
 
     def __init__(
         self,
-        telemetry: InMemoryTelemetry,
+        telemetry: SupportsEmit,
         contract: OptimizationContract,
         *,
         mode: CanaryMode = CanaryMode.SHADOW,
@@ -268,6 +286,27 @@ class ServeCloud:
         samples: list[LiveSample] = self._require_router().samples.remote(limit).result()
         return samples
 
+    def warm_up(self, count: int = 150, *, concurrency: int = 8) -> LoadReport:
+        """Drive *count* requests from the contract's oracle through the router.
+
+        The bootstrap answer to "where does a canary's live traffic come
+        from" (``docs/SERVE_CANARY.md``): nothing external calls the served
+        target yet, so a caller collecting a window has to fill it
+        synthetically — the same role ``sis.loadgen`` already plays for manual
+        testing (RUNBOOK Level 0c/0d), now called from inside the canary flow
+        instead of by hand. Uses the direct handle path (``CanaryRouter.invoke``),
+        not HTTP, since the caller and the router share a process.
+
+        Not on the ``Cloud`` port: no other adapter needs a traffic source, and
+        an in-memory or recording adapter has no window to fill.
+        """
+        from sis import loadgen
+
+        inputs = loadgen.inputs_for(self._contract, count)
+        return loadgen.drive_handle(
+            self._require_router(), inputs,
+            version=str(self._green_version), concurrency=concurrency)
+
     def promote(self, version: str) -> DeployRecord:
         """Make the candidate the new baseline: green's source becomes blue's.
 
@@ -343,6 +382,7 @@ def _main() -> None:
     from ray import serve
 
     from sis import loadgen
+    from sis.adapters import InMemoryTelemetry
     from sis.canary import evaluate_canary
     from sis.contract import DEFAULT_CONTRACTS
 
