@@ -196,9 +196,9 @@ Released through **v0.1.4**. The bootstrap skeleton (original "first task") is
   blue and green run simultaneously with *different source* (`/sort`,
   `/sort-green`), each response carrying its own `version`/`slot`. Stateless by
   construction. `python -m sis.serving`; see RUNBOOK Level 0b. **A replica is
-  not the gauntlet sandbox** — serving candidate source runs generated code
-  without a scrubbed env or egress block; that is the intended canary shape but
-  the guarantee is procedural, not kernel-enforced.
+  not the gauntlet sandbox** — OMNI-13 closed the credential half (green's env
+  is scrubbed) but egress stays open by construction, since a replica must
+  answer HTTP. Treat it as a credential boundary, never as a sandbox.
 - **Synthetic load** (`sis/loadgen.py`, OMNI-12): concurrent, varied, valid
   traffic against the served target, inputs from the contract's oracle so the
   online and offline gates share one definition of a valid input. Observations
@@ -206,13 +206,24 @@ Released through **v0.1.4**. The bootstrap skeleton (original "first task") is
   Measured: the candidate is ~5x faster in isolation but only ~30% faster at
   p95 under 8-way load — the GIL makes both queue-bound. That gap is why the
   canary exists.
-- **The loop closes on a human merge** (`DevOps.observe_merge`, OMNI-15).
-  `loop.serve(watch_merges=True)` (default) polls the pending PR while a canary
-  holds green; when a human merges, the candidate is promoted, green is released
-  and the next cycle starts — previously `--loop` ran one cycle and idled
-  forever, because `Cloud.promote()` had no caller at all. Provenance now
-  terminates in `promote` instead of stopping at `canary`.
-- 275 tests; `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop → main`
+<
+- **`ServeCloud`** (`sis/serve_cloud.py`, OMNI-13): the third `Cloud` adapter —
+  real weighted split, real shadow dispatch, real per-version windows.
+  `python -m sis.serve_cloud` runs serve → load → verdict in one command
+  (RUNBOOK Level 0d). Three things worth knowing:
+  - **Ray Serve has no weighted split**, so it is a component: `CanaryRouter`
+    in `sis/serving.py`, also the only place that sees both versions answer and
+    therefore the only place a *paired* sample can be recorded.
+  - **Green is a separate Serve application** the router attaches to. The
+    one-app topology was built first and measured to **restart the blue
+    replica** on every canary deploy — cycling the stable version at the moment
+    it becomes the baseline. Regression-tested.
+  - **Green's `runtime_env` is scrubbed** (every non-allowlisted env var
+    blanked, since Ray *merges* `env_vars` rather than replacing them), so
+    candidate code cannot read a credential. **Egress stays open by
+    construction** — a replica must answer HTTP. A credential boundary, not the
+    gauntlet's sandbox. Not yet wired into `Workspace`; that is OMNI-14.
+- 282 tests; `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop → main`
   enforced by both the client-side pre-push hook and active server-side rulesets.
 
 **Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L
@@ -247,12 +258,12 @@ for current status rather than trusting this list:
    contract** (Class 1)~~ — **done 2026-08-06** (OMNI-4/5/6/7). Two targets ship
    and the engine names neither. Design: `docs/CLASS2_CONTRACT.md`.
 2. **[OMNI-2](https://olafzumpe.atlassian.net/browse/OMNI-2) — Ray Serve canary.**
-   Steps 5/6/7/8/11 done (`evaluate_canary`, the served sort, the load
-   generator, the `Cloud` traffic+metrics port, the live breach trigger), plus
-   **OMNI-15** (the merge is observed, so `promote()` finally has a caller) and
-   **OMNI-13** (`ServeCloud`, in review as PR #76). Open: rework
-   `DevOps.canary()` for the real flow (**OMNI-14**) — the step that wires
-   `ServeCloud` into `Workspace`. Design: `docs/SERVE_CANARY.md`.
+
+   Steps 5/6/7/8/9/11 done (`evaluate_canary`, the served sort, the load
+   generator, the `Cloud` traffic+metrics port, `ServeCloud`, the live breach
+   trigger); open: rework `DevOps.canary()` for the real flow (**OMNI-14**, the
+   step that wires `ServeCloud` into `Workspace`), and **OMNI-15** — observe the
+   human merge so `promote()` has a caller at all. Design: `docs/SERVE_CANARY.md`.
 3. **[OMNI-3](https://olafzumpe.atlassian.net/browse/OMNI-3) — Class 2**, feature
    construction: `FeatureContract` + acceptance gates, `InvariantGate`, backtests,
    `ToolchainAdapter`, the contract-author actor. Design: `docs/CLASS2_CONTRACT.md`.
