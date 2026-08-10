@@ -27,9 +27,126 @@ from __future__ import annotations
 import importlib.util
 import types
 from dataclasses import dataclass
+from enum import Enum
+from typing import Protocol
 
 from sis.backtest import Backtest
 from sis.paths import PROJECT_ROOT
+
+
+class Determinism(str, Enum):
+    """Whether a contract's entry point returns a value or a distribution.
+
+    **An axis, not a task class.** The tempting move is to call a stochastic
+    target "Class 3", after optimisation (Class 1) and feature construction
+    (Class 2). That is a category error: Classes 1 and 2 differ by *what the
+    task is*, while determinism differs by *what the output is*, and it crosses
+    both. A slow Monte Carlo simulation someone wants sped up is unambiguously a
+    Class-1 optimisation and unambiguously stochastic — a linear 1→2→3 ladder
+    has nowhere to put it. See docs/OMNITRACK_VISION.md E2.
+
+    Consequences, and the reason this is one field rather than a hierarchy:
+
+    - **The default is DETERMINISTIC and a contract that says nothing stays
+      that way, permanently.** There is no ladder to climb and nothing to opt
+      out of.
+    - **The gate profile does not branch on this.** Only the *comparator*
+      inside a gate does (``Backtest.compare``): a deterministic contract names
+      ``within_tolerance`` and compares values, a stochastic one names a proper
+      scoring rule and compares distributions. Same gates, same fixtures.
+    - The one structural difference is the seed requirement below, enforced by
+      the interface gate.
+    """
+
+    DETERMINISTIC = "deterministic"
+    STOCHASTIC = "stochastic"
+
+
+class GateName(str, Enum):
+    """The gates a contract can ask for, in the order they are cheapest to run.
+
+    The *contract* selects the profile; :mod:`sis.gauntlet` owns every
+    implementation. That split is deliberate: gate code is guardrail code and
+    stays in one FORBIDDEN file, while which gates apply is a property of the
+    target and belongs next to it.
+    """
+
+    AST = "ast"
+    NOOP = "noop"
+    MYPY = "mypy"
+    INTERFACE = "interface"
+    ACCEPTANCE = "acceptance"
+    BACKTEST = "backtest"
+    DIFFERENTIAL_BENCHMARK = "differential_benchmark"
+
+
+class Contract(Protocol):
+    """What the gauntlet needs from a contract, regardless of its class.
+
+    Not ``runtime_checkable``: it carries data members, and an ``isinstance``
+    check against those is both unsupported and beside the point — this exists
+    so ``validate()`` can be written once against a shape, not so anything can
+    interrogate a contract at runtime.
+    """
+
+    # Read-only properties, not bare attributes: a Protocol member declared as
+    # a plain attribute is a *settable* variable, which a frozen dataclass can
+    # never satisfy. Every contract is frozen, so every member here is a
+    # property — mypy is right to insist, and the alternative (unfreezing the
+    # contracts) would make the exam mutable at runtime.
+    @property
+    def name(self) -> str:
+        """Identifier used in reject reasons and the episodic log."""
+        ...
+
+    @property
+    def determinism(self) -> Determinism:
+        """Whether the entry point returns a value or a distribution."""
+        ...
+
+    @property
+    def backtests(self) -> tuple[Backtest, ...]:
+        """Recorded episodes the candidate must reproduce."""
+        ...
+
+    def gate_profile(self) -> tuple[GateName, ...]:
+        """Which gates run, cheapest first."""
+        ...
+
+    @property
+    def entry(self) -> str:
+        """The primary callable a candidate must export."""
+        ...
+
+    @property
+    def public_api(self) -> tuple[str, ...]:
+        """Every symbol a candidate must export, including :attr:`entry`."""
+        ...
+
+    @property
+    def target_file(self) -> str:
+        """Absolute path to the module the implementer writes."""
+        ...
+
+    @property
+    def oracle_path(self) -> str | None:
+        """Repo-relative trusted oracle module, or None if the contract has no reference.
+
+        Class 1 always has one — it *is* the definition of correct. Class 2 has
+        none by definition, though it may still ship a module here to supply
+        contract-local backtest comparators.
+        """
+        ...
+
+    @property
+    def tests_path(self) -> str:
+        """Repo-relative path to the trusted acceptance tests."""
+        ...
+
+    @property
+    def tests_file(self) -> str:
+        """Absolute path to the trusted acceptance tests."""
+        ...
 
 # A candidate must run in at most this fraction of the baseline's time (i.e. be
 # at least 10% faster) — "beat the baseline by a defined margin". Per-contract,
@@ -75,6 +192,32 @@ class OptimizationContract:
     # (docs/OMNITRACK_VISION.md, Phases A/B); its first real fixtures arrive
     # with the first modelled target.
     backtests: tuple[Backtest, ...] = ()
+    # Almost always DETERMINISTIC. A stochastic *optimisation* is a real cell in
+    # the grid, though — "this Monte Carlo simulation is too slow" — which is
+    # precisely why determinism is a field here rather than a third contract
+    # class. See Determinism.
+    determinism: Determinism = Determinism.DETERMINISTIC
+
+    def gate_profile(self) -> tuple[GateName, ...]:
+        """The Class-1 profile: agreement with a reference, and faster."""
+        return (
+            GateName.AST,
+            GateName.NOOP,
+            GateName.MYPY,
+            GateName.INTERFACE,
+            GateName.ACCEPTANCE,
+            GateName.BACKTEST,
+            GateName.DIFFERENTIAL_BENCHMARK,
+        )
+
+    @property
+    def public_api(self) -> tuple[str, ...]:
+        """An optimisation replaces one function, so the API is that function.
+
+        A Class-1 candidate is free to add helpers; it just may not drop the
+        entry point. ``FeatureContract`` is where a multi-symbol API matters.
+        """
+        return (self.entry,)
 
     def __post_init__(self) -> None:
         if not 0.0 < self.max_latency_ratio <= 1.0:
@@ -126,6 +269,93 @@ class OptimizationContract:
         return module
 
 
+@dataclass(frozen=True)
+class FeatureContract:
+    """Class-2 (feature construction) contract: build what a spec describes.
+
+    There is **no pre-existing correct version to differ against**, and "10%
+    faster" is not what makes it right. So correctness comes from the spec's
+    acceptance tests and (once OMNI-18 lands) the domain's invariants, and the
+    reference oracle is replaced by recorded history via ``backtests``.
+
+    Two gates from the Class-1 profile are deliberately absent:
+
+    - **no-op** — there is no baseline to be identical *to*. The first
+      implementation of a feature has nothing to be a no-op against, and a
+      later one that happens to match the previous version is a legitimate
+      "nothing to change here", not a gaming attempt.
+    - **differential + benchmark** — both presuppose a reference implementation
+      that can be evaluated on demand. Keeping the benchmark would also quietly
+      re-import the wrong success criterion: a feature that is correct and slow
+      has passed, and a latency budget belongs in a ``DomainSLO`` (OMNI-24),
+      which is explicitly not a correctness gate.
+
+    ``spec_ref`` is the Confluence page the feature was specified in — the
+    provenance root, so ``spec → contract → branch/PR → verdict → outcome``
+    reconstructs from artifacts rather than from memory.
+    """
+
+    name: str
+    spec_ref: str                 # Confluence page id — the provenance root
+    entry: str                    # the primary callable
+    entry_module: str             # repo-relative; SOFT — where the SWE writes
+    acceptance_tests: str         # repo-relative; FORBIDDEN — the trusted exam
+    # Every symbol the feature must export. Required rather than defaulted to
+    # ``(entry,)``: for a feature the API *is* part of the specification, and a
+    # contract that shrugs about its own surface has given the implementer one
+    # less thing it must get right.
+    public_api: tuple[str, ...]
+    # The name of a typing.Protocol the implementation should satisfy.
+    # **Declared, not yet enforced** — say so plainly rather than implying a
+    # check that does not run. Enforcing it means resolving the Protocol inside
+    # the sandbox and asserting the candidate module against it under mypy, and
+    # no shipped contract needs that yet. The interface gate meanwhile answers
+    # the cheaper question: do the symbols exist and is the entry callable.
+    protocol: str | None = None
+    # Optional here, unlike Class 1: a feature has no reference implementation
+    # by definition. A contract may still point at a module to supply its own
+    # backtest comparators, which take precedence over the shared library.
+    oracle_path: str | None = None
+    backtests: tuple[Backtest, ...] = ()
+    determinism: Determinism = Determinism.DETERMINISTIC
+
+    def __post_init__(self) -> None:
+        if self.entry not in self.public_api:
+            raise ValueError(
+                f"contract {self.name!r}: entry {self.entry!r} is not in public_api "
+                f"{self.public_api} — the entry point is part of the API by definition, "
+                "and the interface gate only checks what public_api lists"
+            )
+        names = [b.name for b in self.backtests]
+        if len(names) != len(set(names)):
+            raise ValueError(
+                f"contract {self.name!r} has duplicate backtest names: "
+                f"{sorted({n for n in names if names.count(n) > 1})}"
+            )
+
+    def gate_profile(self) -> tuple[GateName, ...]:
+        """The Class-2 profile: the right shape, the spec's cases, and history."""
+        return (
+            GateName.AST,
+            GateName.MYPY,
+            GateName.INTERFACE,
+            GateName.ACCEPTANCE,
+            GateName.BACKTEST,
+        )
+
+    @property
+    def target_file(self) -> str:
+        return str(PROJECT_ROOT / self.entry_module)
+
+    @property
+    def tests_path(self) -> str:
+        return self.acceptance_tests
+
+    @property
+    def tests_file(self) -> str:
+        return str(PROJECT_ROOT / self.acceptance_tests)
+
+
 # The bootstrap target. Registered in the SelfModel at bootstrap, and used as
 # the fallback by callers that don't name a contract (see gauntlet.validate).
 SUM_OF_DIVISORS = OptimizationContract(
@@ -154,6 +384,32 @@ SORT = OptimizationContract(
 )
 
 DEFAULT_CONTRACTS: tuple[OptimizationContract, ...] = (SUM_OF_DIVISORS, SORT)
+
+# The first Class-2 target: build roman-numeral conversion from a spec, with no
+# pre-existing implementation to differ against. Chosen from the shortlist in
+# docs/CLASS2_CONTRACT.md — a total function over a tiny, closed, unambiguous
+# domain, and one whose round-trip property gives OMNI-18's invariant gate an
+# obvious first customer.
+#
+# Two exports rather than one on purpose: it is the smallest honest example of
+# an API that is *specified* rather than inherited from an existing function,
+# which is the distinction Class 2 turns on.
+ROMAN = FeatureContract(
+    name="roman",
+    spec_ref="CONF-ROMAN",  # placeholder until the intake page exists
+    entry="to_roman",
+    entry_module="runtime/roman.py",
+    acceptance_tests="specs/roman/tests.py",
+    public_api=("to_roman", "from_roman"),
+)
+
+# Kept separate from DEFAULT_CONTRACTS, which the SelfModel registers and types
+# as optimisation contracts. Merging the two would push a Class-2 shape through
+# the contract registry, the ``--contract`` selector and the proposer prompt —
+# all of which assume a reference oracle and a benchmark. Wiring feature
+# contracts through the loop is its own change; this ticket delivers the
+# gauntlet profile they run under.
+FEATURE_CONTRACTS: tuple[FeatureContract, ...] = (ROMAN,)
 
 
 def default_contract() -> OptimizationContract:

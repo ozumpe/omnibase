@@ -40,12 +40,17 @@ def sum_of_divisors(n: int) -> int:
 def benchmark(n: int = 10_000, repetitions: int = 5) -> float:
     return 1e-9
 '''
-    # Rejected for being wrong — caught by the pytest cases and/or the random
-    # differential check (whichever trips first). The point: a plausible,
-    # typed, fast-but-incorrect diff does not ship.
+    # Rejected for being wrong — caught by the contract's acceptance cases
+    # and/or the random differential check (whichever trips first). The point: a
+    # plausible, typed, fast-but-incorrect diff does not ship. Which of the two
+    # catches it is deliberately not asserted; pinning that would make the test
+    # about gate ordering rather than about the candidate being rejected.
     result = _validate(code)
     assert not result.passed
-    assert result.reason in ("pytest failed",) or "correctness mismatch" in result.reason
+    assert (
+        result.reason == "acceptance tests failed"
+        or "correctness mismatch" in result.reason
+    )
 
 
 def test_correct_but_not_faster_is_rejected() -> None:

@@ -1,9 +1,23 @@
 """sis.gauntlet — validation gauntlet for generated code.
 
-Runs cheapest-first gates: ast.parse → mypy --strict → interface → pytest →
-backtest → differential correctness + benchmark. All execution happens in a
-subprocess so an infinite loop or bad import cannot hang or corrupt the main
-process.
+**The contract selects which gates run.** ``validate()`` iterates whatever
+``Contract.gate_profile()`` asks for, cheapest first, stopping at the first
+failure — so a Class-1 optimisation and a Class-2 feature flow through one
+entry point with different profiles (see :mod:`sis.contract`):
+
+- Class 1: ast → no-op → mypy → interface → acceptance → backtest →
+  differential correctness + benchmark.
+- Class 2: ast → mypy → interface → acceptance → backtest. No no-op (nothing
+  to be identical to) and no differential/benchmark (no reference exists, and
+  "faster" is not what makes a feature correct).
+
+Gate *implementations* all live here, deliberately: this file is
+POLICY-FORBIDDEN, and guardrail code concentrated in one place is easier to keep
+guarded than guardrail code spread across modules that each have to be
+remembered in a list. The contract chooses; the gauntlet implements.
+
+All execution happens in a subprocess so an infinite loop or bad import cannot
+hang or corrupt the main process.
 
 Gate 5 (sandbox) has two modes, chosen by ``SIS_SANDBOX``:
 
@@ -33,6 +47,7 @@ import sys
 import tempfile
 import textwrap
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from sis.backtest import (
@@ -46,7 +61,11 @@ from sis.backtest import (
     plan_entry,
 )
 from sis.contract import (
+    DEFAULT_DIFF_TRIALS,
     DEFAULT_MAX_LATENCY_RATIO,
+    Contract,
+    Determinism,
+    GateName,
     OptimizationContract,
     default_contract,
 )
@@ -203,6 +222,33 @@ class Result:
     errors: list[str] = field(default_factory=list)
 
 
+@dataclass
+class _GateContext:
+    """Everything a gate may need, assembled once by :func:`validate`.
+
+    One context rather than a per-gate argument list, because gates are selected
+    by the contract and run through a uniform table — a gate that needed its own
+    signature could not be dispatched from one.
+
+    ``baseline`` and ``oracle`` are ``None`` for a contract whose profile does
+    not ask for them: a Class-2 feature has no prior version to be a no-op
+    against and no reference to differ from. A gate that needs one says so
+    itself rather than trusting that ``validate`` prepared it.
+    """
+
+    contract: Contract
+    code_str: str
+    tmp: pathlib.Path
+    tmpdir: str
+    env: dict[str, str]
+    candidate: pathlib.Path
+    baseline_code: str | None = None
+    baseline: pathlib.Path | None = None
+    oracle: pathlib.Path | None = None
+    # Filled in by the differential+benchmark gate; reported on success.
+    candidate_latency: float | None = None
+
+
 def ensure_sandbox_allows_proposer() -> None:
     """Refuse to run an untrusted proposer's code without kernel isolation.
 
@@ -237,16 +283,22 @@ def ensure_sandbox_allows_proposer() -> None:
     )
 
 
-def _backtest_gate(
-    spec: OptimizationContract,
-    *,
-    tmp: pathlib.Path,
-    candidate: pathlib.Path,
-    oracle_mod: pathlib.Path,
-    tmpdir: str,
-    env: dict[str, str],
-) -> Result | None:
+def _gate_backtest(ctx: _GateContext) -> Result | None:
     """Run the contract's backtests in the sandbox. Returns None when they pass.
+
+    **Ordered after acceptance and before the differential gate**, which differs
+    from the list in docs/CLASS2_CONTRACT.md. Cheapest-first: replaying a handful
+    of fixtures costs far less than 300 randomised trials plus five benchmark
+    repetitions, and it fails with a far sharper message ("did not reproduce q1,
+    off by 12%") than a differential mismatch on an opaque random input.
+
+    It is not a *substitute* for the differential gate and does not reorder the
+    anti-gaming argument. Fixtures are few and fixed, so a candidate could in
+    principle special-case them; unpredictable inputs are what make that not
+    worth attempting. Backtest asks "does it match history", differential asks
+    "is it right in general", and the second is the moat. The design doc's order
+    places backtest after an invariant gate that does not exist yet (OMNI-18);
+    revisit once it does.
 
     Fixtures are parsed **here**, in the main process, before anything is copied
     in. They are trusted data under ``specs/``, and validating them first means a
@@ -255,6 +307,8 @@ def _backtest_gate(
     candidate's fault. Same reason the missing-oracle and missing-tests checks
     fail loudly rather than falling through.
     """
+    spec, tmp, tmpdir, env = ctx.contract, ctx.tmp, ctx.tmpdir, ctx.env
+    candidate, oracle_mod = ctx.candidate, ctx.oracle
     if not spec.backtests:
         return None
 
@@ -302,7 +356,9 @@ def _backtest_gate(
     script = build_script(
         candidate_path=str(candidate),
         comparators_path=str(comparators_mod),
-        oracle_path=str(oracle_mod),
+        # A Class-2 contract need not ship an oracle at all; when it does, its
+        # comparators take precedence over the shared library.
+        oracle_path=str(oracle_mod) if oracle_mod is not None else None,
         entry=spec.entry,
         plan=plan,
     )
@@ -360,46 +416,334 @@ def _timed_out(result: subprocess.CompletedProcess[str], gate: str) -> Result | 
     return None
 
 
+def _gate_ast(ctx: _GateContext) -> Result | None:
+    """Syntax. The nearest thing Python has to "does it compile"."""
+    try:
+        ast.parse(ctx.code_str)
+    except SyntaxError as exc:
+        return Result(passed=False, reason=f"SyntaxError: {exc}")
+    return None
+
+
+def _gate_noop(ctx: _GateContext) -> Result | None:
+    """A candidate identical to the baseline can never be an improvement.
+
+    Rejected before the benchmark because an identical re-proposal (the stub
+    after its own optimisation has merged) would otherwise race the margin on
+    µs-scale timing noise and pass or fail at random. See KNOWN_ISSUES.md M3.
+
+    Only in the Class-1 profile: a feature being built for the first time has no
+    prior version to be identical to.
+    """
+    if ctx.baseline_code is None:
+        return Result(
+            passed=False,
+            reason="harness: the no-op gate needs a baseline and none was prepared",
+        )
+    if ctx.code_str.strip() == ctx.baseline_code.strip():
+        return Result(passed=False, reason="no change: candidate is identical to the baseline")
+    return None
+
+
+def _gate_mypy(ctx: _GateContext) -> Result | None:
+    """Static types. Generated code must be fully annotated — see DESIGN.md §5."""
+    result = _run([_PY, "-m", "mypy", "--strict", str(ctx.candidate)], ctx.tmpdir, ctx.env)
+    if timed_out := _timed_out(result, "mypy"):
+        return timed_out
+    if result.returncode != 0:
+        return Result(
+            passed=False,
+            reason="mypy --strict failed",
+            errors=result.stdout.splitlines() + result.stderr.splitlines(),
+        )
+    return None
+
+
+def _gate_interface(ctx: _GateContext) -> Result | None:
+    """The candidate exports every symbol the contract's ``public_api`` names.
+
+    Cheap (one import) and it fails with a statement about the *shape* of the
+    diff. Without it a wrong-API candidate surfaces as a wall of acceptance-test
+    failures that never names the actual problem, which is why it runs before
+    acceptance (docs/CLASS2_CONTRACT.md: "fails fast if the LLM built the wrong
+    shape").
+
+    For a **stochastic** contract it additionally requires the entry point to
+    accept a ``seed`` parameter. That is the one place determinism changes the
+    gate stack rather than a comparator: without a seed the gauntlet cannot
+    reproduce a failure, and every distributional gate downstream is measuring
+    noise it cannot distinguish from a real regression.
+
+    Note this checks *presence*, not full signatures. "Does it have the shape we
+    asked for" is a structural-typing question, and mypy --strict against the
+    contract's ``protocol`` is the right tool for it; duplicating that here in
+    ``inspect`` would be a second, weaker implementation of the same idea.
+    """
+    spec = ctx.contract
+    needs_seed = spec.determinism is Determinism.STOCHASTIC
+    script = textwrap.dedent(
+        f"""\
+        import sys, inspect, importlib.util
+        s = importlib.util.spec_from_file_location("candidate", {str(ctx.candidate)!r})
+        m = importlib.util.module_from_spec(s)
+        s.loader.exec_module(m)
+
+        missing = [n for n in {list(spec.public_api)!r} if not hasattr(m, n)]
+        if missing:
+            print("MISSING", ",".join(missing))
+            sys.exit(4)
+
+        entry = getattr(m, {spec.entry!r})
+        if not callable(entry):
+            print("NOTCALLABLE", {spec.entry!r})
+            sys.exit(6)
+
+        if {needs_seed!r}:
+            try:
+                params = inspect.signature(entry).parameters
+            except (TypeError, ValueError):
+                params = {{}}
+            if "seed" not in params:
+                print("NOSEED", {spec.entry!r})
+                sys.exit(5)
+        """
+    )
+    result = _run([_PY, "-c", script], ctx.tmpdir, ctx.env)
+    if timed_out := _timed_out(result, "interface"):
+        return timed_out
+    detail = result.stdout.strip()
+    if result.returncode == 4:
+        return Result(
+            passed=False,
+            reason=f"interface: candidate does not export "
+                   f"{detail.removeprefix('MISSING').strip()!r} "
+                   f"(required by contract {spec.name!r})",
+        )
+    if result.returncode == 6:
+        return Result(
+            passed=False,
+            reason=f"interface: candidate's {spec.entry!r} is not callable "
+                   f"(required by contract {spec.name!r})",
+        )
+    if result.returncode == 5:
+        return Result(
+            passed=False,
+            reason=f"interface: contract {spec.name!r} is stochastic, so {spec.entry!r} must "
+                   "accept a 'seed' parameter — without it a failure cannot be reproduced",
+        )
+    if result.returncode != 0:
+        return Result(
+            passed=False,
+            reason="interface: candidate could not be imported",
+            errors=result.stderr.splitlines(),
+        )
+    return None
+
+
+def _gate_acceptance(ctx: _GateContext) -> Result | None:
+    """The contract's trusted-authored acceptance tests, run against the candidate.
+
+    Only they go into the sandbox: they ``import target``, which resolves to the
+    candidate. The harness's own tests import sis modules that are not present
+    there and are not the subject of validation.
+
+    The suite is **required, not optional**. When it was missing this used to
+    fall through to ``pytest <nonexistent dir>``, which exits non-zero and was
+    reported as a candidate failure — blaming the candidate for a broken
+    harness. Still fails closed (an unrun correctness gate must never read as a
+    pass), but now says which side is at fault.
+    """
+    spec = ctx.contract
+    tests_src = pathlib.Path(spec.tests_file)
+    if not tests_src.exists():
+        return Result(
+            passed=False,
+            reason=f"harness: contract acceptance tests missing at {spec.tests_path} "
+                   "— the acceptance gate cannot run",
+        )
+    tests_dst = ctx.tmp / "tests"
+    tests_dst.mkdir(exist_ok=True)
+    (tests_dst / "__init__.py").write_text("", encoding="utf-8")
+    (tests_dst / "test_target.py").write_text(
+        tests_src.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+
+    result = _run(
+        [_PY, "-m", "pytest", str(tests_dst), "-q", "--tb=short"], ctx.tmpdir, ctx.env
+    )
+    if timed_out := _timed_out(result, "acceptance"):
+        return timed_out
+    if result.returncode != 0:
+        return Result(
+            passed=False,
+            reason="acceptance tests failed",
+            errors=result.stdout.splitlines() + result.stderr.splitlines(),
+        )
+    return None
+
+
+def _gate_differential_benchmark(ctx: _GateContext) -> Result | None:
+    """Differential correctness over random inputs, then a like-for-like benchmark.
+
+    Two anti-gaming defences beyond the static acceptance cases:
+
+    (a) Agreement with an **independent reference** over **randomised** inputs
+        the candidate cannot predict — catches a diff that special-cases the
+        known test and benchmark inputs but is wrong elsewhere.
+    (b) The harness drives the entry function itself (never the candidate's own
+        ``benchmark()``) and times candidate and baseline over the **same**
+        fixed workload, so the comparison is fair and the timing cannot be
+        faked.
+
+    Class-1 only: both halves presuppose a reference that can be evaluated on
+    demand, which is exactly what a Class-2 feature does not have.
+    """
+    spec = ctx.contract
+    if ctx.oracle is None:
+        return Result(
+            passed=False,
+            reason=f"harness: contract oracle missing at {spec.oracle_path} "
+                   "— correctness and benchmark gates cannot run",
+        )
+    if ctx.baseline is None:
+        return Result(
+            passed=False,
+            reason="harness: the benchmark gate needs a baseline and none was prepared",
+        )
+    trials = getattr(spec, "diff_trials", DEFAULT_DIFF_TRIALS)
+    max_ratio = getattr(spec, "max_latency_ratio", DEFAULT_MAX_LATENCY_RATIO)
+    script = textwrap.dedent(
+        f"""\
+        import sys, time, random, importlib.util
+
+        def _load(path, name):
+            spec = importlib.util.spec_from_file_location(name, path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+
+        cand = _load({str(ctx.candidate)!r}, "candidate")
+        base = _load({str(ctx.baseline)!r}, "baseline")
+        oracle = _load({str(ctx.oracle)!r}, "oracle")
+
+        entry = {spec.entry!r}
+        if not hasattr(cand, entry):
+            print("NOENTRY", entry)
+            sys.exit(4)
+        cand_fn = getattr(cand, entry)
+        base_fn = getattr(base, entry)
+
+        rng = random.Random()  # system entropy: inputs are unpredictable
+        for _ in range({trials}):
+            args = oracle.random_input(rng)
+            if cand_fn(*args) != oracle.reference(*args):
+                print("MISMATCH", args)
+                sys.exit(3)
+
+        INPUTS = oracle.BENCH_INPUTS
+
+        def bench(fn):
+            best = float("inf")
+            for _ in range(5):
+                start = time.perf_counter()
+                for args in INPUTS:
+                    fn(*args)
+                best = min(best, time.perf_counter() - start)
+            return best / len(INPUTS)
+
+        print(bench(cand_fn), bench(base_fn))
+        """
+    )
+    result = _run([_PY, "-c", script], ctx.tmpdir, ctx.env)
+    if timed_out := _timed_out(result, "benchmark"):
+        return timed_out
+    if result.returncode == 4:
+        return Result(
+            passed=False,
+            reason=f"interface: candidate does not export {spec.entry!r} "
+                   f"(required by contract {spec.name!r})",
+            errors=result.stdout.splitlines(),
+        )
+    if result.returncode == 3:
+        return Result(
+            passed=False,
+            reason="correctness mismatch (candidate disagrees with reference — "
+                   "possible benchmark gaming)",
+            errors=result.stdout.splitlines(),
+        )
+    if result.returncode != 0:
+        return Result(
+            passed=False,
+            reason="benchmark script crashed",
+            errors=result.stderr.splitlines(),
+        )
+
+    try:
+        candidate_latency, measured_baseline = (float(x) for x in result.stdout.split())
+    except ValueError:
+        return Result(passed=False, reason="benchmark produced non-numeric output")
+
+    ctx.candidate_latency = candidate_latency
+    if candidate_latency > measured_baseline * max_ratio:
+        return Result(
+            passed=False,
+            reason=(
+                f"no improvement: candidate {candidate_latency:.6f}s vs baseline "
+                f"{measured_baseline:.6f}s (need ≤ {max_ratio:.0%})"
+            ),
+            latency_seconds=candidate_latency,
+        )
+    return None
+
+
+# Which gate name runs which implementation. The *contract* chooses the profile
+# (``Contract.gate_profile``); this table is the only place an implementation is
+# named, so a gate cannot be selected that does not exist.
+_GATES: dict[GateName, Callable[[_GateContext], Result | None]] = {
+    GateName.AST: _gate_ast,
+    GateName.NOOP: _gate_noop,
+    GateName.MYPY: _gate_mypy,
+    GateName.INTERFACE: _gate_interface,
+    GateName.ACCEPTANCE: _gate_acceptance,
+    GateName.BACKTEST: _gate_backtest,
+    GateName.DIFFERENTIAL_BENCHMARK: _gate_differential_benchmark,
+}
+
+# Gates that need the baseline written into the sandbox.
+_NEEDS_BASELINE = frozenset({GateName.NOOP, GateName.DIFFERENTIAL_BENCHMARK})
+
+
 def validate(
     code_str: str,
     baseline_latency: float = 0.0,
     *,
     baseline_source: str | None = None,
-    contract: OptimizationContract | None = None,
+    contract: Contract | None = None,
 ) -> Result:
     """Validate *code_str* against *contract* and return a Result.
 
-    The candidate must:
-    1. Parse as valid Python.
-    2. Not be identical to the baseline (a no-op is not an improvement).
-    3. Pass mypy --strict.
-    4. Pass the contract's acceptance tests.
-    4b. Reproduce every recorded episode the contract declares, within the
-        comparator and tolerance that episode names (skipped when the contract
-        declares none, which is the case for both shipped targets).
-    5a. Export the contract's ``entry`` function (interface).
-    5b. Agree with the contract's independent reference on randomised inputs
-        (anti-gaming).
-    5c. Beat the freshly-measured baseline by the contract's
-        ``max_latency_ratio``.
+    **The contract selects the gates.** ``validate`` runs whatever
+    ``contract.gate_profile()`` asks for, cheapest first, and stops at the first
+    failure. A Class-1 ``OptimizationContract`` asks for the full stack ending in
+    differential correctness and a benchmark; a Class-2 ``FeatureContract`` omits
+    the two gates that presuppose a reference implementation. Both classes flow
+    through this one entry point — see :mod:`sis.contract`.
 
-    *contract* says what "correct" and "better" mean for this target — the
-    reference, the inputs, the margin (see :mod:`sis.contract`). Omitting it
-    falls back to the bootstrap ``sum_of_divisors`` contract, so existing
-    callers and tests keep working unchanged.
-
-    *baseline_source* is the code the candidate must beat — the code the cycle
-    is actually based on (the merged target), which the loop passes in. It is
+    *baseline_source* is the code the candidate must beat — the code the cycle is
+    actually based on (the merged target), which the loop passes in. It is
     written into the sandbox and benchmarked against; the candidate never
     competes with a stale copy on disk (see docs/KNOWN_ISSUES.md H1). When
-    omitted, it falls back to the contract's target file on disk so direct
-    callers and tests still work.
+    omitted it falls back to the contract's target file on disk, so direct
+    callers and tests still work. Ignored entirely by a profile with no
+    baseline-dependent gate.
 
     *baseline_latency* is advisory only (kept for logging/compat); the pass/fail
     comparison uses a baseline measured in-sandbox over the same workload as the
     candidate, which is far less noisy.
     """
-    spec = contract if contract is not None else default_contract()
+    spec: Contract = contract if contract is not None else default_contract()
+    profile = spec.gate_profile()
+
     # Backstop: never execute untrusted proposer code in a soft sandbox (M1).
     ensure_sandbox_allows_proposer()
 
@@ -411,25 +755,16 @@ def validate(
         )
 
     # The code the candidate must beat: what the caller says the cycle is based
-    # on (the merged target), NOT whatever happens to be on disk. Fall back to
-    # the local target only when no source is supplied. See KNOWN_ISSUES.md H1.
-    baseline_code = (
-        baseline_source if baseline_source is not None
-        else pathlib.Path(spec.target_file).read_text(encoding="utf-8")
-    )
-
-    # --- Gate 1: syntax ---
-    try:
-        ast.parse(code_str)
-    except SyntaxError as exc:
-        return Result(passed=False, reason=f"SyntaxError: {exc}")
-
-    # --- Gate 1b: no-op — a candidate identical to the baseline can never be an
-    # improvement, so reject it before the benchmark. Without this, an identical
-    # re-proposal (e.g. the stub after its own optimisation has merged) would
-    # race the ≥10% margin on µs-scale timing noise. See KNOWN_ISSUES.md M3.
-    if code_str.strip() == baseline_code.strip():
-        return Result(passed=False, reason="no change: candidate is identical to the baseline")
+    # on (the merged target), NOT whatever happens to be on disk. Resolved only
+    # when a gate in the profile actually needs it — a Class-2 feature has no
+    # target file yet, and reading one that does not exist would fail a cycle
+    # for a file whose absence is the whole point.
+    baseline_code: str | None = None
+    if _NEEDS_BASELINE & set(profile):
+        baseline_code = (
+            baseline_source if baseline_source is not None
+            else pathlib.Path(spec.target_file).read_text(encoding="utf-8")
+        )
 
     # Everything lives under the temp dir so the sandbox is self-contained
     # (in docker mode only this dir is mounted — nothing reaches the host).
@@ -438,232 +773,48 @@ def validate(
         candidate = tmp / "target.py"
         candidate.write_text(code_str, encoding="utf-8")
 
-        # The baseline the candidate must beat, copied into the sandbox — loaded
-        # from the mount, never from an external host path.
-        baseline_mod = tmp / "baseline.py"
-        baseline_mod.write_text(baseline_code, encoding="utf-8")
-
-        # The contract's oracle: reference implementation, benchmark inputs and
-        # random-input generator. It is *code* and has to run beside the
-        # candidate, so it is copied in as a module rather than interpolated
-        # into the benchmark script as literals (which is what tied the whole
-        # gauntlet to one target — L5).
-        oracle_src = pathlib.Path(spec.oracle_file)
-        if not oracle_src.exists():
-            return Result(
-                passed=False,
-                reason=f"harness: contract oracle missing at {spec.oracle_path} "
-                       "— correctness and benchmark gates cannot run",
-            )
-        oracle_mod = tmp / "oracle.py"
-        oracle_mod.write_text(oracle_src.read_text(encoding="utf-8"), encoding="utf-8")
-
-        # --- Gate 5 (sandbox): network-egress block + scrubbed env ---
         # sitecustomize.py runs at interpreter startup in every gate that has
         # tmp on PYTHONPATH, installing the network guard before any candidate
         # code runs. In docker mode --network none enforces this in the kernel
         # too; the guard stays as defence in depth.
         (tmp / "sitecustomize.py").write_text(_NETWORK_GUARD, encoding="utf-8")
-        env = _sandbox_env(home=tmpdir, pythonpath=tmpdir)
 
-        # --- Gate 2: mypy --strict ---
-        mypy_result = _run([_PY, "-m", "mypy", "--strict", str(candidate)], tmpdir, env)
-        if timed_out := _timed_out(mypy_result, "mypy"):
-            return timed_out
-        if mypy_result.returncode != 0:
-            return Result(
-                passed=False,
-                reason="mypy --strict failed",
-                errors=mypy_result.stdout.splitlines() + mypy_result.stderr.splitlines(),
-            )
+        baseline_mod: pathlib.Path | None = None
+        if baseline_code is not None:
+            # Copied into the sandbox and loaded from the mount, never from an
+            # external host path.
+            baseline_mod = tmp / "baseline.py"
+            baseline_mod.write_text(baseline_code, encoding="utf-8")
 
-        # --- Gate 2b: interface — the candidate must export the contract's
-        # entry point. Cheap (one import), and it fails with a statement about
-        # the *shape* of the diff; without it a wrong-API candidate surfaces as
-        # a wall of acceptance-test failures that never names the actual
-        # problem. Ordered before acceptance per docs/CLASS2_CONTRACT.md's gate
-        # stack — "fails fast if the LLM built the wrong shape".
-        iface_script = textwrap.dedent(
-            f"""\
-            import sys, importlib.util
-            s = importlib.util.spec_from_file_location("candidate", {str(candidate)!r})
-            m = importlib.util.module_from_spec(s)
-            s.loader.exec_module(m)
-            if not callable(getattr(m, {spec.entry!r}, None)):
-                sys.exit(4)
-            """
-        )
-        iface_result = _run([_PY, "-c", iface_script], tmpdir, env)
-        if timed_out := _timed_out(iface_result, "interface"):
-            return timed_out
-        if iface_result.returncode == 4:
-            return Result(
-                passed=False,
-                reason=f"interface: candidate does not export a callable "
-                       f"{spec.entry!r} (required by contract {spec.name!r})",
-            )
-        if iface_result.returncode != 0:
-            return Result(
-                passed=False,
-                reason="interface: candidate could not be imported",
-                errors=iface_result.stderr.splitlines(),
-            )
+        # The contract's oracle: reference implementation, benchmark inputs and
+        # random-input generator. It is *code* and has to run beside the
+        # candidate, so it is copied in as a module rather than interpolated
+        # into a script as literals (which is what tied the whole gauntlet to
+        # one target — L5). Optional: a Class-2 contract may declare none, and
+        # the gate that requires one says so itself.
+        oracle_mod: pathlib.Path | None = None
+        oracle_path = spec.oracle_path
+        if oracle_path is not None:
+            oracle_src = pathlib.Path(PROJECT_ROOT / oracle_path)
+            if oracle_src.exists():
+                oracle_mod = tmp / "oracle.py"
+                oracle_mod.write_text(
+                    oracle_src.read_text(encoding="utf-8"), encoding="utf-8"
+                )
 
-        # --- Gate 3: pytest — the contract's acceptance tests, against the
-        # candidate. Only they go into the sandbox: they do `import target`,
-        # which resolves to the candidate written above. The harness's own tests
-        # import sis modules not present here and are not the subject of
-        # validation.
-        #
-        # The suite is required, not optional. When it was missing this used to
-        # fall through to `pytest <nonexistent dir>`, which exits non-zero and
-        # was reported as "pytest failed" — blaming the candidate for a broken
-        # harness. Still fails closed (an unrun correctness gate must never read
-        # as a pass), but now says which side is at fault.
-        tests_src = pathlib.Path(spec.tests_file)
-        if not tests_src.exists():
-            return Result(
-                passed=False,
-                reason=f"harness: contract acceptance tests missing at {spec.tests_path} "
-                       "— the pytest gate cannot run",
-            )
-        tests_dst = tmp / "tests"
-        tests_dst.mkdir()
-        (tests_dst / "__init__.py").write_text("", encoding="utf-8")
-        (tests_dst / "test_target.py").write_text(
-            tests_src.read_text(encoding="utf-8"), encoding="utf-8"
+        ctx = _GateContext(
+            contract=spec, code_str=code_str, tmp=tmp, tmpdir=tmpdir,
+            env=_sandbox_env(home=tmpdir, pythonpath=tmpdir), candidate=candidate,
+            baseline_code=baseline_code, baseline=baseline_mod, oracle=oracle_mod,
         )
 
-        pytest_result = _run(
-            [_PY, "-m", "pytest", str(tmp / "tests"), "-q", "--tb=short"], tmpdir, env
+        for gate_name in profile:
+            if failure := _GATES[gate_name](ctx):
+                return failure
+
+        return Result(
+            passed=True, reason="all gates passed", latency_seconds=ctx.candidate_latency
         )
-        if timed_out := _timed_out(pytest_result, "pytest"):
-            return timed_out
-        if pytest_result.returncode != 0:
-            return Result(
-                passed=False,
-                reason="pytest failed",
-                errors=pytest_result.stdout.splitlines() + pytest_result.stderr.splitlines(),
-            )
-
-        # --- Gate 3b: backtest — does the candidate reproduce recorded reality?
-        # Placed after the acceptance tests and before the differential gate on
-        # the cheapest-first rule: replaying a handful of fixtures costs far less
-        # than 300 randomised trials plus five benchmark repetitions, and it
-        # fails with a far sharper message ("did not reproduce 2026Q1, off by
-        # 12%") than a differential mismatch on an opaque random input.
-        #
-        # It is not a *substitute* for the differential gate and does not reorder
-        # the anti-gaming argument. Fixtures are few and fixed, so a candidate
-        # could in principle special-case them; unpredictable inputs are what
-        # make that not worth attempting. Backtest asks "does it match history",
-        # differential asks "is it right in general", and the second is the moat.
-        #
-        # docs/CLASS2_CONTRACT.md lists backtest *after* the invariant gate. That
-        # ordering can be revisited when OMNI-17/18 split this pipeline into
-        # discrete Gate objects; today differential-correctness and the benchmark
-        # share one script, so there is no seam between them to sit in.
-        if backtest_failure := _backtest_gate(
-            spec, tmp=tmp, candidate=candidate, oracle_mod=oracle_mod,
-            tmpdir=tmpdir, env=env,
-        ):
-            return backtest_failure
-
-        # --- Gate 4: differential correctness + benchmark ---
-        # Two anti-gaming defences beyond the static pytest cases:
-        #   (a) Differential correctness against an INDEPENDENT reference over
-        #       RANDOMISED inputs the candidate cannot predict — catches a diff
-        #       that special-cases the known test/benchmark inputs but is wrong
-        #       elsewhere ("benchmark gaming").
-        #   (b) The harness drives sum_of_divisors directly (never the
-        #       candidate's own benchmark()) and times the candidate AND the
-        #       current target over the SAME fixed workload, so the comparison
-        #       is fair and the candidate can't fake its own timing.
-        bench_script = textwrap.dedent(
-            f"""\
-            import sys, time, random, importlib.util
-
-            def _load(path, name):
-                spec = importlib.util.spec_from_file_location(name, path)
-                mod = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(mod)
-                return mod
-
-            cand = _load({str(candidate)!r}, "candidate")
-            base = _load({str(baseline_mod)!r}, "baseline")
-            oracle = _load({str(oracle_mod)!r}, "oracle")
-
-            entry = {spec.entry!r}
-            if not hasattr(cand, entry):
-                print("NOENTRY", entry)
-                sys.exit(4)
-            cand_fn = getattr(cand, entry)
-            base_fn = getattr(base, entry)
-
-            rng = random.Random()  # system entropy: inputs are unpredictable
-            for _ in range({spec.diff_trials}):
-                args = oracle.random_input(rng)
-                if cand_fn(*args) != oracle.reference(*args):
-                    print("MISMATCH", args)
-                    sys.exit(3)
-
-            INPUTS = oracle.BENCH_INPUTS
-
-            def bench(fn):
-                best = float("inf")
-                for _ in range(5):
-                    start = time.perf_counter()
-                    for args in INPUTS:
-                        fn(*args)
-                    best = min(best, time.perf_counter() - start)
-                return best / len(INPUTS)
-
-            print(bench(cand_fn), bench(base_fn))
-            """
-        )
-        bench_result = _run([_PY, "-c", bench_script], tmpdir, env)
-        if timed_out := _timed_out(bench_result, "benchmark"):
-            return timed_out
-        if bench_result.returncode == 4:
-            return Result(
-                passed=False,
-                reason=f"interface: candidate does not export {spec.entry!r} "
-                       f"(required by contract {spec.name!r})",
-                errors=bench_result.stdout.splitlines(),
-            )
-        if bench_result.returncode == 3:
-            return Result(
-                passed=False,
-                reason="correctness mismatch (candidate disagrees with reference — "
-                       "possible benchmark gaming)",
-                errors=bench_result.stdout.splitlines(),
-            )
-        if bench_result.returncode != 0:
-            return Result(
-                passed=False,
-                reason="benchmark script crashed",
-                errors=bench_result.stderr.splitlines(),
-            )
-
-        try:
-            candidate_latency, measured_baseline = (
-                float(x) for x in bench_result.stdout.split()
-            )
-        except ValueError:
-            return Result(passed=False, reason="benchmark produced non-numeric output")
-
-        # Must beat the freshly-measured baseline by the contract's margin.
-        if candidate_latency > measured_baseline * spec.max_latency_ratio:
-            return Result(
-                passed=False,
-                reason=(
-                    f"no improvement: candidate {candidate_latency:.6f}s vs baseline "
-                    f"{measured_baseline:.6f}s (need ≤ {spec.max_latency_ratio:.0%})"
-                ),
-                latency_seconds=candidate_latency,
-            )
-
-        return Result(passed=True, reason="all gates passed", latency_seconds=candidate_latency)
 
 
 def measure_baseline(
