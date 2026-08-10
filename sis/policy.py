@@ -48,6 +48,16 @@ class Justification(str, Enum):
 GUARDRAIL_PATHS: tuple[str, ...] = (
     "sis/policy.py",          # this policy itself
     "sis/gauntlet.py",        # the validation moat + sandbox + timeout
+    # The contract layer. This module's docstring has always named *contracts*
+    # as FORBIDDEN, but the list only ever protected `specs/` — the exam's
+    # content — and not the declarations that decide how it is marked. That gap
+    # became load-bearing in OMNI-17: a contract now returns its own
+    # `gate_profile()`, so a loop able to edit this file could return an empty
+    # tuple and pass every candidate, on top of the pre-existing ability to set
+    # `max_latency_ratio=1.0` or `diff_trials=1` and gut two gates.
+    "sis/contract.py",
+    "sis/backtest.py",        # fixture parsing + the in-sandbox backtest script
+    "sis/clock.py",           # event time: what a replayed gate believes "now" is
     "sis/cost.py",            # spend accounting that feeds the brakes
     "sis/settings.py",        # secret loading + masking
     "sis/adapters.py",        # RequiresHumanApproval guardrails (in-memory)
@@ -78,6 +88,10 @@ GUARDRAIL_DIRS: tuple[str, ...] = (
 DEFAULT_TARGET_PATHS: tuple[str, ...] = (
     "runtime/target.py",
     "runtime/sort_target.py",
+    # The first Class-2 target (contract `roman`). Unlike the two above, this
+    # file does not exist yet — that is the point of feature construction, and
+    # the tier has to be declared before the implementer may write it.
+    "runtime/roman.py",
 )
 
 

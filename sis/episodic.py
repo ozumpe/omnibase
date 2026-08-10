@@ -51,8 +51,10 @@ class EpisodicEvent:
     pr_id: str | None = None
     candidate_sha: str | None = None
     gauntlet_passed: bool | None = None
-    # reject_gate: ast | noop | mypy | interface | pytest | backtest | correctness
-    #            | benchmark | policy | timeout
+    # reject_gate: ast | noop | mypy | interface | acceptance | backtest
+    #            | correctness | benchmark | policy | timeout
+    #            | pytest    (pre-OMNI-17 name for `acceptance`; still emitted
+    #                         by nothing, still recognised for old rows)
     #            | harness   ("harness" = the gate could not run, not a verdict
     #                         on the candidate)
     #            | canary_evidence | canary_invariant | canary_disagreement
@@ -326,6 +328,15 @@ def gate_from_reason(reason: str | None) -> str | None:
         return "noop"
     if "mypy" in r:
         return "mypy"
+    # The contract's trusted acceptance tests. Renamed from `pytest` in OMNI-17:
+    # the gate is named for what it checks (the spec's cases) rather than for
+    # the tool that happens to run them, which matters once a ToolchainAdapter
+    # can run junit or cargo test instead. Rows written before that rename still
+    # read `pytest`, and the rule below still recognises the old reason string,
+    # so `rejected_by_gate` shows both names across the transition rather than
+    # silently losing the older half.
+    if r.startswith("acceptance"):
+        return "acceptance"
     if "pytest" in r:
         return "pytest"
     if "correctness mismatch" in r:

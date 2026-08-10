@@ -252,6 +252,31 @@ structure to model, and a domain where a wrong model is embarrassing rather than
 dangerous. **D8** then decides who decomposes the chosen domain into modelled actors.
 → *Decide before Phase A; every later decision is shaped by it.*
 
+Candidates surfaced 2026-08-09, none selected — D0 has zero code dependencies (OMNI-25),
+so parking this doesn't block Class 2 / Phase A/B work already in flight:
+
+- **Bike-share network** (station GBFS feeds + historical trip data). Best fit on all four
+  criteria and on §1's actor-network shape: each station is an actor, the rebalancing
+  dispatcher is a literal regulator reacting to network imbalance. Cheapest Phase-A
+  path — one station, fill-level from rides + weather — before any network model exists.
+- **Regional power grid** (EIA + ISO real-time load). Strongest real structure to model
+  (actual supply/demand balancing physics/economics); the regulator/supplier actor shape
+  comes free from how the grid is already organised. More moving parts than bike-share to
+  stand up a first fixture.
+- **Multi-agency transit** (GTFS-realtime across a metro's subway/bus/rail). Best E5 story —
+  cascading delay is the textbook "every local actor passes, the system misbehaves" demo —
+  but that payoff needs several actors already standing, so it's a weaker Phase-A start.
+- **Regional air traffic** (OpenSky / ADS-B Exchange). Richest, highest-frequency public
+  data of the four and the most visually compelling demo. Also the heaviest scope/optics
+  tax — the one domain here where "wrong is dangerous" needs active management even for a
+  passive, non-controlling twin — and a first fixture (holding-pattern/reroute vs. weather)
+  is a bigger lift than one bike station.
+
+Not decided now: limited time on this project favours landing Class 2 and Phase A/B's
+supporting pieces first. Current lean if forced to start today: bike-share to prove the
+loop end-to-end cheaply, air traffic as the aspirational target once the pattern holds —
+don't let the most appealing option be the first cost commitment.
+
 **D1 — One engine with N contracts, or N omnibase instances?**
 *Recommend one engine, N slots.* The engine is already target-agnostic; per-actor
 separation buys credit assignment and rollback granularity without a second engine.
