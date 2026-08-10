@@ -32,6 +32,7 @@ ray = { version = "^2.55", extras = ["serve"] }
 [tool.poetry.group.dev.dependencies]
 mypy = "^1.8"
 pytest = "^8.0"
+pytest-xdist = "^3.6"   # -n auto; the suite is subprocess-heavy, not CPU-bound
 ruff = "^0.6"
 
 # Real-world adapters (Confluence/Jira/GitHub/AWS). Optional: the default
@@ -81,7 +82,21 @@ warn_unused_ignores = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+# The default is the *inner-loop* run: everything except the Ray Serve
+# integration tests, in parallel. Those are ~8-14s each because they stand up a
+# real cluster, deploy real Serve applications and drive real HTTP traffic —
+# which is the point of them (OMNI-13's blue-replica restart was invisible to
+# anything less), but it makes them the wrong thing to pay for on every save.
+#
+# `-m "not serve"` here means a bare `pytest` is NOT a full verification, so
+# conftest.py prints a loud reminder whenever it skips them, and CI runs both
+# halves explicitly. That combination is deliberate: this repo has already been
+# bitten once by a green tick that verified nothing (OMNI-16), and a default
+# that silently narrows what "passing" means is exactly that shape.
+addopts = "-q -m 'not serve' -n auto"
+markers = [
+    "serve: stands up a real Ray Serve deployment. Slow, excluded from the default run, always run in CI.",
+]
 
 [tool.ruff]
 line-length = 100

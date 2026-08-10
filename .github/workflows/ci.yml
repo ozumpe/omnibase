@@ -41,5 +41,17 @@ jobs:
       - name: mypy --strict (type gate)
         run: poetry run mypy --strict sis/ main.py scripts/
 
+      # Two halves, both required. The default addopts exclude the `serve`
+      # marker and parallelise, which is right for the inner loop and wrong for
+      # a verification gate — so CI runs the excluded half explicitly rather
+      # than inheriting a narrowed definition of "passing" (OMNI-16).
+      # tests/test_test_layout.py pins that this file keeps doing so.
       - name: pytest (test gate)
         run: poetry run pytest -q
+
+      - name: pytest (Ray Serve integration gate)
+        # Serial by design: these bind a fixed port and share one Ray cluster,
+        # so -n auto would have them fight over both. `-n 0` rather than
+        # `-p no:xdist`, which would disable the plugin while addopts still
+        # passes it `-n auto` — an unrecognised-argument error, not a serial run.
+        run: poetry run pytest -q -m serve -n 0
