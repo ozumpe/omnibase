@@ -34,3 +34,7 @@ SPECS_DIR = PROJECT_ROOT / "specs"
 # contract's directory. A contract may still override a comparator by name in
 # its own oracle (see sis.backtest.build_script).
 COMPARATORS_PATH = SPECS_DIR / "comparators.py"
+# Shared invariant predicates + strategies — the domain-agnostic laws, next to
+# the comparators for the same reason: one set for every contract, overridable
+# per contract from its own oracle.
+INVARIANTS_PATH = SPECS_DIR / "invariants.py"

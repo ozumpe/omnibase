@@ -31,6 +31,7 @@ from enum import Enum
 from typing import Protocol
 
 from sis.backtest import Backtest
+from sis.invariant import DEFAULT_INVARIANT_EXAMPLES, Invariant
 from sis.paths import PROJECT_ROOT
 
 
@@ -76,6 +77,7 @@ class GateName(str, Enum):
     MYPY = "mypy"
     INTERFACE = "interface"
     ACCEPTANCE = "acceptance"
+    INVARIANT = "invariant"
     BACKTEST = "backtest"
     DIFFERENTIAL_BENCHMARK = "differential_benchmark"
 
@@ -107,6 +109,16 @@ class Contract(Protocol):
     @property
     def backtests(self) -> tuple[Backtest, ...]:
         """Recorded episodes the candidate must reproduce."""
+        ...
+
+    @property
+    def invariants(self) -> tuple[Invariant, ...]:
+        """Domain laws the candidate must obey on generated inputs."""
+        ...
+
+    @property
+    def invariant_examples(self) -> int:
+        """How many generated examples per invariant."""
         ...
 
     def gate_profile(self) -> tuple[GateName, ...]:
@@ -197,6 +209,10 @@ class OptimizationContract:
     # precisely why determinism is a field here rather than a third contract
     # class. See Determinism.
     determinism: Determinism = Determinism.DETERMINISTIC
+    invariants: tuple[Invariant, ...] = ()
+    # Mirrors ``diff_trials``' role: statistical power is a property of the
+    # target, not of the engine, so it is a contract field rather than a constant.
+    invariant_examples: int = DEFAULT_INVARIANT_EXAMPLES
 
     def gate_profile(self) -> tuple[GateName, ...]:
         """The Class-1 profile: agreement with a reference, and faster."""
@@ -206,6 +222,7 @@ class OptimizationContract:
             GateName.MYPY,
             GateName.INTERFACE,
             GateName.ACCEPTANCE,
+            GateName.INVARIANT,
             GateName.BACKTEST,
             GateName.DIFFERENTIAL_BENCHMARK,
         )
@@ -318,6 +335,10 @@ class FeatureContract:
     oracle_path: str | None = None
     backtests: tuple[Backtest, ...] = ()
     determinism: Determinism = Determinism.DETERMINISTIC
+    invariants: tuple[Invariant, ...] = ()
+    # Mirrors ``diff_trials``' role: statistical power is a property of the
+    # target, not of the engine, so it is a contract field rather than a constant.
+    invariant_examples: int = DEFAULT_INVARIANT_EXAMPLES
 
     def __post_init__(self) -> None:
         if self.entry not in self.public_api:
@@ -340,6 +361,7 @@ class FeatureContract:
             GateName.MYPY,
             GateName.INTERFACE,
             GateName.ACCEPTANCE,
+            GateName.INVARIANT,
             GateName.BACKTEST,
         )
 
@@ -401,6 +423,19 @@ ROMAN = FeatureContract(
     entry_module="runtime/roman.py",
     acceptance_tests="specs/roman/tests.py",
     public_api=("to_roman", "from_roman"),
+    # Strategies and domain laws only — no reference implementation. See the
+    # module docstring for why a Class-2 "oracle" is a different thing.
+    oracle_path="specs/roman/oracle.py",
+    invariants=(
+        # The law that makes this a good first Class-2 target: checkable without
+        # knowing what the right numeral is, so it catches a candidate that is
+        # self-consistently wrong on inputs nobody enumerated.
+        Invariant(name="round_trip", strategy="in_range_values", check="round_trip"),
+        # Separate from round-trip on purpose: a candidate can round-trip
+        # perfectly with a non-canonical encoding (IIII parses back to 4), and
+        # the spec asks for the canonical numeral, not merely a reversible one.
+        Invariant(name="canonical", strategy="in_range_values", check="canonical_form"),
+    ),
 )
 
 # Kept separate from DEFAULT_CONTRACTS, which the SelfModel registers and types

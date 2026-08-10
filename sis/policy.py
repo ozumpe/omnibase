@@ -57,6 +57,7 @@ GUARDRAIL_PATHS: tuple[str, ...] = (
     # `max_latency_ratio=1.0` or `diff_trials=1` and gut two gates.
     "sis/contract.py",
     "sis/backtest.py",        # fixture parsing + the in-sandbox backtest script
+    "sis/invariant.py",       # the domain-law gate + its in-sandbox script
     "sis/clock.py",           # event time: what a replayed gate believes "now" is
     "sis/cost.py",            # spend accounting that feeds the brakes
     "sis/settings.py",        # secret loading + masking

@@ -5,11 +5,11 @@
 failure — so a Class-1 optimisation and a Class-2 feature flow through one
 entry point with different profiles (see :mod:`sis.contract`):
 
-- Class 1: ast → no-op → mypy → interface → acceptance → backtest →
-  differential correctness + benchmark.
-- Class 2: ast → mypy → interface → acceptance → backtest. No no-op (nothing
-  to be identical to) and no differential/benchmark (no reference exists, and
-  "faster" is not what makes a feature correct).
+- Class 1: ast → no-op → mypy → interface → acceptance → invariant →
+  backtest → differential correctness + benchmark.
+- Class 2: ast → mypy → interface → acceptance → invariant → backtest. No
+  no-op (nothing to be identical to) and no differential/benchmark (no
+  reference exists, and "faster" is not what makes a feature correct).
 
 Gate *implementations* all live here, deliberately: this file is
 POLICY-FORBIDDEN, and guardrail code concentrated in one place is easier to keep
@@ -41,6 +41,7 @@ the candidate passes all gates.
 import ast
 import os
 import pathlib
+import random
 import shutil
 import subprocess
 import sys
@@ -69,7 +70,16 @@ from sis.contract import (
     OptimizationContract,
     default_contract,
 )
-from sis.paths import COMPARATORS_PATH, PROJECT_ROOT
+from sis.invariant import (
+    DEFAULT_SEED,
+    EXIT_STRATEGY_ERROR,
+    EXIT_UNRESOLVED,
+    EXIT_VIOLATED,
+)
+from sis.invariant import EXIT_NO_ENTRY as EXIT_NO_ENTRY_INV
+from sis.invariant import build_script as invariant_script
+from sis.invariant import plan_entry as invariant_plan_entry
+from sis.paths import COMPARATORS_PATH, INVARIANTS_PATH, PROJECT_ROOT
 
 # Back-compat alias: the margin is now per-contract
 # (``OptimizationContract.max_latency_ratio``), because what counts as a
@@ -220,6 +230,10 @@ class Result:
     reason: str
     latency_seconds: float | None = None
     errors: list[str] = field(default_factory=list)
+    # The invariant gate's generation seed, on a violation. Also carried in the
+    # reason string so it survives into the episodic log's reject_reason without
+    # every caller having to plumb a new field.
+    seed: int | None = None
 
 
 @dataclass
@@ -245,6 +259,9 @@ class _GateContext:
     baseline_code: str | None = None
     baseline: pathlib.Path | None = None
     oracle: pathlib.Path | None = None
+    # Chosen once per validation and handed to the invariant gate, so a
+    # violation is reproducible from the log alone.
+    seed: int = DEFAULT_SEED
     # Filled in by the differential+benchmark gate; reported on success.
     candidate_latency: float | None = None
 
@@ -281,6 +298,91 @@ def ensure_sandbox_allows_proposer() -> None:
         "Dockerfile.gauntlet .), or set SIS_ALLOW_UNSANDBOXED_LLM=1 to accept the "
         "risk (not recommended)."
     )
+
+
+def _gate_invariant(ctx: _GateContext) -> Result | None:
+    """Assert the contract's domain laws over generated inputs.
+
+    The Class-2 replacement for differential correctness, and the same
+    anti-gaming role: a candidate can special-case the handful of acceptance
+    examples, but it cannot special-case an input distribution it never sees.
+    Ordered after acceptance (which is cheaper and names the problem more
+    precisely) and before backtest.
+
+    The seed is chosen *per run* and reported on failure. Hypothesis's example
+    database is disabled in the sandbox, so the seed is the only reproduction
+    handle — which is what makes a rejection recorded in the episodic log worth
+    anything later.
+    """
+    spec = ctx.contract
+    if not spec.invariants:
+        return None
+
+    shared_src = pathlib.Path(INVARIANTS_PATH)
+    if not shared_src.exists():
+        return Result(
+            passed=False,
+            reason=f"harness: shared invariants missing at {INVARIANTS_PATH} "
+                   "— the invariant gate cannot run",
+        )
+    shared_mod = ctx.tmp / "invariants.py"
+    shared_mod.write_text(shared_src.read_text(encoding="utf-8"), encoding="utf-8")
+
+    seed = ctx.seed
+    script = invariant_script(
+        candidate_path=str(ctx.candidate),
+        shared_path=str(shared_mod),
+        oracle_path=str(ctx.oracle) if ctx.oracle is not None else None,
+        entry=spec.entry,
+        plan=[invariant_plan_entry(inv) for inv in spec.invariants],
+        examples=spec.invariant_examples,
+        seed=seed,
+    )
+    result = _run([_PY, "-c", script], ctx.tmpdir, ctx.env)
+    if timed_out := _timed_out(result, "invariant"):
+        return timed_out
+
+    detail = result.stdout.strip()
+    if result.returncode == EXIT_NO_ENTRY_INV:
+        return Result(
+            passed=False,
+            reason=f"interface: candidate does not export {spec.entry!r} "
+                   f"(required by contract {spec.name!r})",
+            errors=result.stdout.splitlines(),
+        )
+    if result.returncode == EXIT_UNRESOLVED:
+        return Result(
+            passed=False,
+            reason="harness: an invariant names a strategy or predicate that exists "
+                   "in neither the contract's oracle nor specs/invariants.py "
+                   f"({detail.removeprefix('UNRESOLVED').strip()})",
+            errors=result.stdout.splitlines(),
+        )
+    if result.returncode == EXIT_STRATEGY_ERROR:
+        return Result(
+            passed=False,
+            reason="harness: an invariant's strategy raised while generating inputs "
+                   f"({detail.removeprefix('STRATEGY').strip()})",
+            errors=result.stdout.splitlines(),
+        )
+    if result.returncode == EXIT_VIOLATED:
+        return Result(
+            passed=False,
+            # The seed rides in the reason so it reaches ``reject_reason`` in the
+            # episodic log. Without it a recorded violation names a counterexample
+            # nobody can regenerate, which is most of the value of recording it.
+            reason=f"invariant violated in sandbox (seed={seed}): "
+                   f"{detail.removeprefix('VIOLATED').strip()}",
+            errors=result.stdout.splitlines(),
+            seed=seed,
+        )
+    if result.returncode != 0:
+        return Result(
+            passed=False,
+            reason="harness: the invariant script crashed",
+            errors=result.stderr.splitlines(),
+        )
+    return None
 
 
 def _gate_backtest(ctx: _GateContext) -> Result | None:
@@ -705,6 +807,7 @@ _GATES: dict[GateName, Callable[[_GateContext], Result | None]] = {
     GateName.MYPY: _gate_mypy,
     GateName.INTERFACE: _gate_interface,
     GateName.ACCEPTANCE: _gate_acceptance,
+    GateName.INVARIANT: _gate_invariant,
     GateName.BACKTEST: _gate_backtest,
     GateName.DIFFERENTIAL_BENCHMARK: _gate_differential_benchmark,
 }
@@ -719,6 +822,7 @@ def validate(
     *,
     baseline_source: str | None = None,
     contract: Contract | None = None,
+    seed: int | None = None,
 ) -> Result:
     """Validate *code_str* against *contract* and return a Result.
 
@@ -743,6 +847,11 @@ def validate(
     """
     spec: Contract = contract if contract is not None else default_contract()
     profile = spec.gate_profile()
+    # A fresh seed per validation unless the caller pins one. Fresh because a
+    # fixed seed means a fixed input set, and an input set a candidate could
+    # learn is exactly the hole the invariant gate exists to close; pinnable
+    # because reproducing a recorded violation is the point of logging the seed.
+    run_seed = random.randrange(2**31) if seed is None else seed
 
     # Backstop: never execute untrusted proposer code in a soft sandbox (M1).
     ensure_sandbox_allows_proposer()
@@ -806,6 +915,7 @@ def validate(
             contract=spec, code_str=code_str, tmp=tmp, tmpdir=tmpdir,
             env=_sandbox_env(home=tmpdir, pythonpath=tmpdir), candidate=candidate,
             baseline_code=baseline_code, baseline=baseline_mod, oracle=oracle_mod,
+            seed=run_seed,
         )
 
         for gate_name in profile:

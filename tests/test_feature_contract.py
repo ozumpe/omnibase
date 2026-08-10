@@ -95,7 +95,8 @@ def test_an_optimization_contract_keeps_the_full_class_one_stack() -> None:
     profile = default_contract().gate_profile()
     assert profile == (
         GateName.AST, GateName.NOOP, GateName.MYPY, GateName.INTERFACE,
-        GateName.ACCEPTANCE, GateName.BACKTEST, GateName.DIFFERENTIAL_BENCHMARK,
+        GateName.ACCEPTANCE, GateName.INVARIANT, GateName.BACKTEST,
+        GateName.DIFFERENTIAL_BENCHMARK,
     )
 
 
