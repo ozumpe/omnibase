@@ -32,6 +32,7 @@ ray = { version = "^2.55", extras = ["serve"] }
 [tool.poetry.group.dev.dependencies]
 mypy = "^1.8"
 pytest = "^8.0"
+hypothesis = "^6.0"     # invariant gate: generation + shrinking (also in Dockerfile.gauntlet)
 pytest-xdist = "^3.6"   # -n auto; the suite is subprocess-heavy, not CPU-bound
 ruff = "^0.6"
 

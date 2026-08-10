@@ -14,7 +14,9 @@ FROM python:3.14-slim
 
 # Pin the same gate tooling the host uses. No project code is baked in — the
 # candidate, tests, and benchmark are bind-mounted at runtime.
-RUN pip install --no-cache-dir "mypy>=1.8" "pytest>=8.0"
+# hypothesis: the invariant gate generates inputs and shrinks counterexamples
+# inside the sandbox, so it needs the library here, not just on the host.
+RUN pip install --no-cache-dir "mypy>=1.8" "pytest>=8.0" "hypothesis>=6.0"
 
 # Run as an unprivileged user (defence in depth alongside --cap-drop ALL).
 RUN useradd --create-home --uid 10001 sandbox

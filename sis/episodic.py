@@ -51,8 +51,8 @@ class EpisodicEvent:
     pr_id: str | None = None
     candidate_sha: str | None = None
     gauntlet_passed: bool | None = None
-    # reject_gate: ast | noop | mypy | interface | acceptance | backtest
-    #            | correctness | benchmark | policy | timeout
+    # reject_gate: ast | noop | mypy | interface | acceptance | invariant
+    #            | backtest | correctness | benchmark | policy | timeout
     #            | pytest    (pre-OMNI-17 name for `acceptance`; still emitted
     #                         by nothing, still recognised for old rows)
     #            | harness   ("harness" = the gate could not run, not a verdict
@@ -308,6 +308,14 @@ def gate_from_reason(reason: str | None) -> str | None:
     # happened, and for a world-model the second is the evidence that counts.
     if r.startswith("backtest failed"):
         return "backtest"
+    # The offline invariant gate (sis/invariant.py). The reason says "in
+    # sandbox" specifically because the canary's own violation reason starts
+    # "invariant violated" too — the same predicates, applied to live traffic.
+    # A shared prefix here would shadow the canary rule below and silently
+    # report every live violation as an offline one, losing exactly the
+    # sandbox-vs-production distinction the canary exists to add.
+    if r.startswith("invariant violated in sandbox"):
+        return "invariant"
     # The canary's own gates (sis/canary.py: evaluate_canary), each a live
     # analogue of an offline concept but named distinctly — conflating a live
     # regression with an offline "no improvement" (or a live invariant

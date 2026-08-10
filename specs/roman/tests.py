@@ -80,12 +80,9 @@ def test_malformed_numerals_are_rejected(numeral: str) -> None:
         from_roman(numeral)
 
 
-def test_the_pair_round_trips_across_the_whole_defined_range() -> None:
-    """Every value the spec defines survives a round trip.
-
-    Exhaustive here only because the domain is 3999 values — cheap enough to
-    check completely, which is a luxury the invariant gate exists to replace as
-    soon as a domain is bigger than this one.
-    """
-    for value in range(1, 4000):
-        assert from_roman(to_roman(value)) == value
+# Round-tripping the whole 1..3999 range used to live here, exhaustively. It has
+# moved to the contract's `round_trip` invariant (OMNI-18), which is where this
+# file's own docstring always said it belonged. Keeping both would have made the
+# invariant gate decorative for this contract: acceptance would catch every
+# violation first, and the demonstration that laws find what enumerated cases
+# cannot would be true of every domain except the one shipped to show it.
