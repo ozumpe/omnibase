@@ -309,28 +309,44 @@ def test_the_script_tolerates_a_contract_with_no_oracle() -> None:
 # --- the gate, against a real sandbox ------------------------------------
 
 
-def _gate(
-    tmp_path: pathlib.Path, backtests: tuple[Backtest, ...], *, entry: str = "sum_of_divisors"
-) -> gauntlet.Result | None:
-    """Run ``_backtest_gate`` against a hand-built sandbox dir.
+def _ctx(
+    tmp_path: pathlib.Path,
+    spec: OptimizationContract,
+    *,
+    oracle_source: str | None = None,
+    candidate_source: str = CANDIDATE_SOURCE,
+) -> gauntlet._GateContext:
+    """A hand-built sandbox dir + gate context, without a full ``validate()``.
 
-    Cheaper than a full ``validate()`` (no mypy, no pytest) while exercising the
-    real script in the real sandbox.
+    Cheaper than the real thing (no mypy, no acceptance run) while exercising
+    the real script in the real sandbox.
     """
     candidate = tmp_path / "target.py"
-    candidate.write_text(CANDIDATE_SOURCE, encoding="utf-8")
+    candidate.write_text(candidate_source, encoding="utf-8")
     oracle = tmp_path / "oracle.py"
     oracle.write_text(
-        (PROJECT_ROOT / "specs/sum_of_divisors/oracle.py").read_text(encoding="utf-8"),
+        oracle_source
+        if oracle_source is not None
+        else (PROJECT_ROOT / "specs/sum_of_divisors/oracle.py").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
     (tmp_path / "sitecustomize.py").write_text(gauntlet._NETWORK_GUARD, encoding="utf-8")
-    env = gauntlet._sandbox_env(home=str(tmp_path), pythonpath=str(tmp_path))
-    spec = replace(default_contract(), entry=entry, backtests=backtests)
-    return gauntlet._backtest_gate(
-        spec, tmp=tmp_path, candidate=candidate, oracle_mod=oracle,
-        tmpdir=str(tmp_path), env=env,
+    return gauntlet._GateContext(
+        contract=spec,
+        code_str=candidate_source,
+        tmp=tmp_path,
+        tmpdir=str(tmp_path),
+        env=gauntlet._sandbox_env(home=str(tmp_path), pythonpath=str(tmp_path)),
+        candidate=candidate,
+        oracle=oracle,
     )
+
+
+def _gate(
+    tmp_path: pathlib.Path, backtests: tuple[Backtest, ...], *, entry: str = "sum_of_divisors"
+) -> gauntlet.Result | None:
+    spec = replace(default_contract(), entry=entry, backtests=backtests)
+    return gauntlet._gate_backtest(_ctx(tmp_path, spec))
 
 
 def test_a_contract_with_no_backtests_skips_the_gate_entirely(tmp_path: pathlib.Path) -> None:
@@ -380,16 +396,6 @@ def test_a_contract_may_name_a_comparator_defined_in_its_own_oracle(
 ) -> None:
     # The oracle's comparator must win over the shared library, which is how a
     # domain expresses a comparison the shared set should not know about.
-    oracle = tmp_path / "oracle.py"
-    candidate = tmp_path / "target.py"
-    candidate.write_text(CANDIDATE_SOURCE, encoding="utf-8")
-    oracle.write_text(
-        "def always_ok(actual, expected, tolerance):\n"
-        "    return True, 'domain comparator ran'\n",
-        encoding="utf-8",
-    )
-    (tmp_path / "sitecustomize.py").write_text(gauntlet._NETWORK_GUARD, encoding="utf-8")
-    env = gauntlet._sandbox_env(home=str(tmp_path), pythonpath=str(tmp_path))
     fixture = _write_fixture(tmp_path / "f.json", [6])
     expect = _write_expect(tmp_path / "e.json", 999)  # wrong -- only the oracle saves it
     spec = replace(
@@ -398,10 +404,15 @@ def test_a_contract_may_name_a_comparator_defined_in_its_own_oracle(
             Backtest(name="six", fixture=fixture, expect=expect, compare="always_ok"),
         ),
     )
-    assert gauntlet._backtest_gate(
-        spec, tmp=tmp_path, candidate=candidate, oracle_mod=oracle,
-        tmpdir=str(tmp_path), env=env,
-    ) is None
+    ctx = _ctx(
+        tmp_path,
+        spec,
+        oracle_source=(
+            "def always_ok(actual, expected, tolerance):\n"
+            "    return True, 'domain comparator ran'\n"
+        ),
+    )
+    assert gauntlet._gate_backtest(ctx) is None
 
 
 def test_a_missing_fixture_file_is_a_harness_fault_not_the_candidates(

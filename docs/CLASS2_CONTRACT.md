@@ -1,8 +1,26 @@
 # Class-2 gauntlet contract — verifying built *features*, not just optimizations
 
-**Status:** design sketch (not implemented). This is the plan for how the gauntlet
-verifies *feature construction* — the work omnitrack actually needs — as an
-extension of the existing `validate()` gate stack, not a redesign.
+**Status:** partly implemented. This is the plan for how the gauntlet verifies
+*feature construction* — the work omnitrack actually needs — as an extension of
+the existing `validate()` gate stack, not a redesign.
+
+| Piece | Status |
+|---|---|
+| `Contract` abstraction, POLICY-FORBIDDEN `specs/` | done (OMNI-5, L5) |
+| `BacktestGate` + comparators + held-out splits | done ([OMNI-19](https://olafzumpe.atlassian.net/browse/OMNI-19)) |
+| `Clock` port + event time on fixtures | done ([OMNI-23](https://olafzumpe.atlassian.net/browse/OMNI-23)) |
+| `FeatureContract`, contract-selected gate profile, interface + acceptance gates | done ([OMNI-17](https://olafzumpe.atlassian.net/browse/OMNI-17)) |
+| `InvariantGate` (property-based anti-gaming) | [OMNI-18](https://olafzumpe.atlassian.net/browse/OMNI-18) |
+| `DomainSLO` / `SloGate` | [OMNI-24](https://olafzumpe.atlassian.net/browse/OMNI-24) |
+| `ToolchainAdapter` | [OMNI-20](https://olafzumpe.atlassian.net/browse/OMNI-20), parked |
+| Contract-author actor | [OMNI-21](https://olafzumpe.atlassian.net/browse/OMNI-21) |
+
+Two details below were revised in implementation and the text is left as
+originally written, with the deviation noted where it occurs: the gate stack is
+dispatched from a `GateName` table in `sis/gauntlet.py` rather than from `Gate`
+objects returned by the contract (so gate code stays concentrated in one
+POLICY-FORBIDDEN file), and the backtest gate runs *before* differential
+correctness rather than after, on cheapest-first grounds.
 
 > Mirrored in Confluence (SD space) as a child of **The Validation Gauntlet**:
 > <https://olafzumpe.atlassian.net/wiki/spaces/SD/pages/6357056>. This repo copy is

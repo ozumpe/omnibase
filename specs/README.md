@@ -25,12 +25,37 @@ specs/
     comparators.py            # shared marking scheme for the backtest gate
     <contract-name>/
         oracle.py             # trusted reference impl + benchmark inputs + input
-                              # generator; copied into the sandbox next to the candidate
+                              # generator; copied into the sandbox next to the
+                              # candidate. Class 1 only — a Class-2 feature has
+                              # no reference by definition (it may still ship a
+                              # module here for contract-local comparators).
         tests.py              # acceptance tests the candidate must pass (run in-sandbox)
         backtests/            # recorded episodes, when the target has history
             q1_fixture.json
             q1_expect.json
 ```
+
+## Two classes of contract
+
+`sis/contract.py` declares which gates apply, and the two classes differ in what
+"correct" even means:
+
+| | `OptimizationContract` (Class 1) | `FeatureContract` (Class 2) |
+|---|---|---|
+| The task | make a working function faster | build what a spec describes |
+| Correct = | agrees with `oracle.reference` | passes `tests.py`, reproduces history |
+| Better = | faster by `max_latency_ratio` | *not a thing* — correct and slow has passed |
+| Gates | ast · no-op · mypy · interface · acceptance · backtest · differential+benchmark | ast · mypy · interface · acceptance · backtest |
+
+The Class-2 profile drops two gates on purpose. **No-op** has nothing to compare
+against — a feature built for the first time has no prior version to be
+identical to. **Differential + benchmark** both presuppose a reference that can
+be evaluated on demand, and keeping the benchmark would quietly reimport the
+wrong success criterion; a latency budget is a `DomainSLO`, which is explicitly
+not a correctness gate.
+
+`specs/roman/` is the first Class-2 contract: `to_roman` / `from_roman` built
+from a spec, with no implementation to differ against.
 
 These modules run **inside the sandbox** alongside untrusted candidate code, so
 they must be self-contained: standard library only, no imports from `sis/`.
