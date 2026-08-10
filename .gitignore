@@ -13,6 +13,8 @@ runtime/target.py.bak
 runtime/episodic.jsonl
 runtime/episodic_state.json
 runtime/episodic.duckdb
+# Drafted contracts awaiting human approval — local review state, not source.
+runtime/contract_staging/
 
 # Editor / tooling
 .idea/
