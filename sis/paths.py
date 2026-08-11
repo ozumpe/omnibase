@@ -17,6 +17,11 @@ TARGET_PATH = RUNTIME_DIR / "target.py"            # the live target module
 # Episodic store (sis/episodic.py) — backend chosen by SIS_EPISODIC_STORE.
 EPISODIC_JSONL = RUNTIME_DIR / "episodic.jsonl"
 EPISODIC_DUCKDB = RUNTIME_DIR / "episodic.duckdb"
+# Drafted contracts awaiting human approval (sis/contract_author.py). Under
+# runtime/ and not under specs/ on purpose: the loop may write here freely
+# because nothing reads it — no gate loads a staged file, and only specs/ is
+# ever copied into a sandbox. Promotion into specs/ is the human-approved step.
+CONTRACT_STAGING_DIR = RUNTIME_DIR / "contract_staging"
 
 # Generated/candidate code.
 CANDIDATES_DIR = RUNTIME_DIR / "candidates"

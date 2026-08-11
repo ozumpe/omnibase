@@ -22,7 +22,7 @@ from typing import Any
 
 import ray
 
-from sis import contract, gauntlet, policy, proposer
+from sis import contract, contract_author, gauntlet, policy, proposer
 from sis.canary import DEFAULT_MIN_CANARY_SAMPLES, CanaryMode, evaluate_canary
 from sis.paths import PROJECT_ROOT, TARGET_PATH
 from sis.ports import IssueStatus, IssueType, PullRequest
@@ -524,6 +524,66 @@ class QA(Role):
             ray.get(self._ws.transition.remote(story_id, IssueStatus.TBD, "QA found discrepancy"))
         ray.get(self._sm.record.remote("outcome", story_id, passed=ok, by="QA"))
         return ok
+
+
+@ray.remote
+class ContractAuthor(Role):
+    """Turns a spec into a drafted contract. Trusted; its output is human-reviewed.
+
+    **The one role that is allowed to write the exam**, which is exactly why it
+    is a different actor from the SWE that has to pass it. Separation of author
+    and implementer is not a workflow nicety — it *is* the anti-gaming property,
+    and making it structural is the point of this step existing at all.
+
+    Deliberately thin: the drafting logic is pure and lives in
+    :mod:`sis.contract_author`, so it is unit-testable without standing up Ray,
+    and the approval gate lives there too — in guardrail code, not in a method on
+    an actor the loop could otherwise reason its way around.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("ContractAuthor", "ContractAuthor", parent="CTO")
+
+    def draft(
+        self,
+        spec_id: str,
+        *,
+        name: str,
+        entry: str,
+        public_api: tuple[str, ...],
+    ) -> dict[str, Any]:
+        """Draft a contract skeleton from a spec page and stage it for review.
+
+        Returns a summary rather than the draft itself: the artifacts are on
+        disk under ``runtime/contract_staging/``, and what a caller needs back is
+        *what to go and look at*.
+
+        Never promotes. ``contract_author.promote`` requires human approval and
+        this actor does not call it — the agent surfaces the decision, a human
+        makes it, which is the same shape as ``DevOps.observe_merge`` applying a
+        human's merge rather than performing one.
+        """
+        page = ray.get(self._ws.get_page.remote(spec_id))
+        draft = contract_author.skeleton_from_spec(
+            name=name,
+            spec_ref=spec_id,
+            body=page.body,
+            entry=entry,
+            public_api=public_api,
+        )
+        staged = contract_author.stage(draft)
+        ray.get(self._sm.record.remote(
+            "contract_drafted", spec_id, contract=name, files=list(staged.files),
+            staged_at=str(staged.directory), awaiting="human approval",
+        ))
+        return {
+            "contract": staged.name,
+            "spec_ref": staged.spec_ref,
+            "staged_at": str(staged.directory),
+            "files": list(staged.files),
+            "promoted": False,
+            "next": "a human reviews the draft, then approves promotion into specs/",
+        }
 
 
 @dataclass(frozen=True)

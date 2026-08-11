@@ -58,6 +58,10 @@ GUARDRAIL_PATHS: tuple[str, ...] = (
     "sis/contract.py",
     "sis/backtest.py",        # fixture parsing + the in-sandbox backtest script
     "sis/invariant.py",       # the domain-law gate + its in-sandbox script
+    # The only write path into specs/. It holds the approval gate that stands
+    # between a drafted exam and the exam the implementer is judged against,
+    # so a loop able to edit it could approve its own contract.
+    "sis/contract_author.py",
     "sis/clock.py",           # event time: what a replayed gate believes "now" is
     "sis/cost.py",            # spend accounting that feeds the brakes
     "sis/settings.py",        # secret loading + masking
