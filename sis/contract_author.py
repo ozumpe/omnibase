@@ -43,10 +43,14 @@ here in guardrail code rather than in a role actor's method.
 
 from __future__ import annotations
 
+import ast
+import re
 import shutil
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from sis import gauntlet
 from sis.paths import CONTRACT_STAGING_DIR, SPECS_DIR
 from sis.ports import RequiresHumanApproval
 
@@ -121,6 +125,99 @@ def _reject_unsafe_path(relative: str, *, contract: str) -> None:
 
 
 @dataclass(frozen=True)
+class Discrimination:
+    """Whether a drafted exam can tell a real implementation from nothing at all."""
+
+    checked: bool          # False when the check could not run (say so, don't guess)
+    discriminates: bool
+    detail: str
+
+    def summary(self) -> str:
+        if not self.checked:
+            return f"NOT CHECKED — {self.detail}"
+        return ("rejects a null implementation" if self.discriminates
+                else f"DOES NOT REJECT A NULL IMPLEMENTATION — {self.detail}")
+
+
+def null_implementation(public_api: tuple[str, ...]) -> str:
+    """Source for a module that exports the right names and does nothing useful.
+
+    Every function returns ``None`` and raises nothing. A drafted exam that
+    *passes* against this is asserting nothing about behaviour — which is the
+    cheapest and most likely defect in any generated test suite, and invisible to
+    a reviewer skimming plausible-looking code.
+    """
+    body = "\n\n".join(
+        f"def {name}(*args: object, **kwargs: object) -> None:\n"
+        f'    """Null implementation — exports the name, promises nothing."""\n'
+        f"    return None"
+        for name in public_api
+    )
+    return f'"""Null implementation, for the discrimination check."""\n\n\n{body}\n'
+
+
+def check_discrimination(
+    draft: ContractDraft, *, public_api: tuple[str, ...]
+) -> Discrimination:
+    """Run a draft's acceptance tests against a null implementation.
+
+    Returns whether they *failed*, which is the outcome we want: an exam that
+    passes against a module that does nothing is vacuous.
+
+    Runs in the gauntlet's sandbox, for the ordinary reason — the drafted tests
+    are generated code and generated code does not execute in the main process —
+    and reuses that machinery rather than growing a second sandbox with its own
+    subtly different guarantees.
+
+    A draft whose bodies are all ``NotImplementedError`` stubs "fails" here too,
+    of course, and that is reported honestly rather than counted as a pass:
+    ``detail`` says how many cases actually assert something, because "fails
+    against a stub because it is itself a stub" is not evidence of anything.
+    """
+    tests_source = draft.files.get("tests.py")
+    if tests_source is None:
+        return Discrimination(
+            checked=False, discriminates=False,
+            detail="the draft has no tests.py to run",
+        )
+    written = tests_source.count("assert ") + tests_source.count("pytest.raises")
+    if written == 0:
+        return Discrimination(
+            checked=True, discriminates=False,
+            detail="no case asserts anything yet — every body is still a stub",
+        )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        (tmp / "target.py").write_text(null_implementation(public_api), encoding="utf-8")
+        (tmp / "sitecustomize.py").write_text(gauntlet._NETWORK_GUARD, encoding="utf-8")
+        tests_dir = tmp / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "__init__.py").write_text("", encoding="utf-8")
+        (tests_dir / "test_target.py").write_text(tests_source, encoding="utf-8")
+        env = gauntlet._sandbox_env(home=tmpdir, pythonpath=tmpdir)
+        result = gauntlet._run(
+            [gauntlet._PY, "-m", "pytest", str(tests_dir), "-q", "--tb=no"], tmpdir, env
+        )
+
+    if result.returncode == 124:
+        return Discrimination(
+            checked=False, discriminates=False,
+            detail="the drafted tests timed out against a null implementation",
+        )
+    if result.returncode == 0:
+        return Discrimination(
+            checked=True, discriminates=False,
+            detail=f"all {written} assertion(s) passed against a module that returns "
+                   "None for everything",
+        )
+    return Discrimination(
+        checked=True, discriminates=True,
+        detail=f"{written} assertion(s), and they fail against a null implementation",
+    )
+
+
+@dataclass(frozen=True)
 class StagedContract:
     """A draft written to the staging area, waiting for a human."""
 
@@ -128,6 +225,10 @@ class StagedContract:
     spec_ref: str
     directory: Path
     files: tuple[str, ...]
+    # Whether the drafted exam can tell an implementation from nothing at all.
+    # Recorded rather than enforced: a human may still approve a vacuous exam —
+    # they are sovereign over their own contract — but never unknowingly.
+    discrimination: Discrimination | None = None
 
     @property
     def target(self) -> Path:
@@ -135,7 +236,12 @@ class StagedContract:
         return SPECS_DIR / self.name
 
 
-def stage(draft: ContractDraft, *, staging_dir: Path | None = None) -> StagedContract:
+def stage(
+    draft: ContractDraft,
+    *,
+    staging_dir: Path | None = None,
+    public_api: tuple[str, ...] = (),
+) -> StagedContract:
     """Write *draft* to the staging area and return what a human has to approve.
 
     The loop may call this freely. Staged files are inert: no gate reads them,
@@ -151,11 +257,31 @@ def stage(draft: ContractDraft, *, staging_dir: Path | None = None) -> StagedCon
         destination = root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(content, encoding="utf-8")
+    # Checked at stage time, not at promotion: the point is that a human sees
+    # the verdict *before* deciding, and a check that ran during approval would
+    # arrive after the judgement it is meant to inform.
+    discrimination = (
+        check_discrimination(draft, public_api=public_api) if public_api else None
+    )
+    if discrimination is not None:
+        # Appended to the staged copy rather than baked into the draft: the
+        # verdict is a property of *running* the draft, and a reviewer opening
+        # the directory should not have to go looking for it.
+        readme = root / "README.md"
+        existing = readme.read_text(encoding="utf-8") if readme.exists() else ""
+        readme.write_text(
+            f"{existing}\n## Does this exam discriminate?\n\n"
+            f"**{discrimination.summary()}**\n\n"
+            "An exam that passes against a module returning `None` for everything "
+            "asserts nothing about behaviour, and reads exactly like one that does.\n",
+            encoding="utf-8",
+        )
     return StagedContract(
         name=draft.name,
         spec_ref=draft.spec_ref,
         directory=root,
         files=tuple(sorted(draft.files)),
+        discrimination=discrimination,
     )
 
 
@@ -191,6 +317,97 @@ def promote(staged: StagedContract, *, approved: bool = False) -> Path:
 
 ACCEPTANCE_HEADING = "acceptance criteria"
 LAWS_HEADING = "domain laws"
+EXAMPLES_HEADING = "worked examples"
+
+# `to_roman(4) -> "IV"` / `plan([1, 2]) -> raises ValueError`
+_EXAMPLE = re.compile(
+    r"^(?P<entry>[A-Za-z_]\w*)\s*\((?P<args>.*)\)\s*(?:->|→|=)\s*(?P<expected>.+)$"
+)
+_RAISES = re.compile(r"^raises?\s+(?P<exc>[A-Za-z_]\w*)$", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class WorkedExample:
+    """One concrete case a human wrote down, transcribed rather than inferred.
+
+    ``args`` and ``expected`` are already-evaluated Python literals. Nothing here
+    is a guess: the values are exactly what the spec said, which is what makes a
+    generated assertion over them trustworthy in a way a generated *judgement*
+    would not be.
+    """
+
+    entry: str
+    args: tuple[object, ...]
+    expected: object = None
+    raises: str | None = None      # exception name, when the case is a rejection
+
+    @property
+    def is_rejection(self) -> bool:
+        return self.raises is not None
+
+
+def parse_worked_examples(body: str) -> list[WorkedExample]:
+    """Transcribe the concrete cases stated under a "worked examples" heading.
+
+    Accepts ``entry(args) -> literal`` and ``entry(args) -> raises SomeError``,
+    with backticks and list markers stripped.
+
+    **Values are read with ``ast.literal_eval``, never ``eval``.** A spec page is
+    prose from a document store — in a real deployment, prose an outside author
+    can influence — and executing it would make the intake channel an arbitrary
+    code path into the process that decides what "correct" means. Transcription
+    must be transcription all the way down.
+
+    A malformed example is skipped rather than raised on, because one mistyped
+    bullet in a long spec should not make the page undraftable; what it must not
+    do is silently become a *weaker* assertion, and skipping cannot.
+    """
+    examples: list[WorkedExample] = []
+    for line in _section(body, EXAMPLES_HEADING):
+        match = _EXAMPLE.match(line.strip().strip("`").strip())
+        if match is None:
+            continue
+        raw_args = match.group("args").strip()
+        expected_text = match.group("expected").strip().strip("`").strip()
+        try:
+            # A trailing comma makes a single argument parse as a 1-tuple, so
+            # `f(4)` and `f(4, 5)` come back in the same shape.
+            args = ast.literal_eval(f"({raw_args},)") if raw_args else ()
+        except (ValueError, SyntaxError):
+            continue
+        if not isinstance(args, tuple):
+            continue
+
+        rejection = _RAISES.match(expected_text)
+        if rejection is not None:
+            examples.append(WorkedExample(
+                entry=match.group("entry"), args=args, raises=rejection.group("exc")))
+            continue
+        try:
+            expected = ast.literal_eval(expected_text)
+        except (ValueError, SyntaxError):
+            continue
+        examples.append(
+            WorkedExample(entry=match.group("entry"), args=args, expected=expected))
+    return examples
+
+
+def _section(body: str, heading: str) -> list[str]:
+    """Bullet lines under the heading containing *heading*, in stated order."""
+    collected: list[str] = []
+    inside = False
+    for raw in body.splitlines():
+        line = raw.strip()
+        lowered = line.lstrip("#").strip().lower()
+        if line.startswith("#") or (line and line.rstrip(":").lower() in
+                                    (ACCEPTANCE_HEADING, LAWS_HEADING, EXAMPLES_HEADING)):
+            inside = heading in lowered
+            continue
+        if inside and line.startswith(("-", "*")):
+            text = line[1:].strip()
+            if text:
+                collected.append(text)
+    return collected
 
 
 def parse_spec(body: str) -> tuple[list[str], list[str]]:
@@ -206,26 +423,49 @@ def parse_spec(body: str) -> tuple[list[str], list[str]]:
     human wrote them in is information — the first criterion is usually the
     central one.
     """
-    criteria: list[str] = []
-    laws: list[str] = []
-    bucket: list[str] | None = None
-    for raw in body.splitlines():
-        line = raw.strip()
-        lowered = line.lstrip("#").strip().lower()
-        if line.startswith("#") or (line and line.rstrip(":").lower() in
-                                    (ACCEPTANCE_HEADING, LAWS_HEADING)):
-            if ACCEPTANCE_HEADING in lowered:
-                bucket = criteria
-            elif LAWS_HEADING in lowered:
-                bucket = laws
-            else:
-                bucket = None      # some other heading ends the current section
-            continue
-        if bucket is not None and line.startswith(("-", "*")):
-            text = line[1:].strip()
-            if text:
-                bucket.append(text)
-    return criteria, laws
+    return _section(body, ACCEPTANCE_HEADING), _section(body, LAWS_HEADING)
+
+
+def _worked_example_source(examples: list[WorkedExample]) -> str:
+    """Real, parametrised assertions built from transcribed values.
+
+    The only generated code in a draft with a body rather than a stub, and the
+    reason it is safe to have one: every value in it was written by a human in
+    the spec. The generator chooses the *shape* of the assertion — call the
+    entry, compare, or expect a raise — and nothing about what is correct.
+
+    Grouped into two parametrised tests rather than one per example so a spec
+    with thirty cases produces a readable file a human will actually read, which
+    is the whole premise of moving the burden from authoring to reviewing.
+    """
+    if not examples:
+        return ""
+    returns = [e for e in examples if not e.is_rejection]
+    rejects = [e for e in examples if e.is_rejection]
+    out: list[str] = [
+        "\n\n# --- worked examples, transcribed verbatim from the spec ---------------\n"
+        "# Values here were written by a human; only the assertion shape is generated.\n"
+    ]
+    if returns:
+        cases = ",\n".join(f"    ({e.args!r}, {e.expected!r})" for e in returns)
+        entry = returns[0].entry
+        out.append(
+            f'\n\n@pytest.mark.parametrize(("args", "expected"), [\n{cases},\n])\n'
+            f"def test_worked_examples(args: tuple, expected: object) -> None:\n"
+            f'    """Each case is stated in the spec."""\n'
+            f"    assert {entry}(*args) == expected\n"
+        )
+    if rejects:
+        cases = ",\n".join(f"    ({e.args!r}, {e.raises})" for e in rejects)
+        entry = rejects[0].entry
+        out.append(
+            f'\n\n@pytest.mark.parametrize(("args", "expected_error"), [\n{cases},\n])\n'
+            f"def test_worked_rejections(args: tuple, expected_error: type) -> None:\n"
+            f'    """Each rejection is stated in the spec."""\n'
+            f"    with pytest.raises(expected_error):\n"
+            f"        {entry}(*args)\n"
+        )
+    return "".join(out)
 
 
 def _identifier(text: str, *, prefix: str, index: int) -> str:
@@ -280,6 +520,7 @@ def skeleton_from_spec(
             f'    raise NotImplementedError("write this case from the spec")\n'
         )
 
+    tests.append(_worked_example_source(parse_worked_examples(body)))
     files = {"tests.py": "".join(tests)}
 
     if laws:
