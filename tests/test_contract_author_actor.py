@@ -39,7 +39,14 @@ def handles():  # type: ignore[no-untyped-def]
 
 @pytest.fixture
 def author(handles):  # type: ignore[no-untyped-def]
-    return ContractAuthor.remote()  # type: ignore[attr-defined]
+    actor = ContractAuthor.remote()  # type: ignore[attr-defined]
+    # Block until __init__ has run. Actor construction is asynchronous, so a
+    # test that only *queries* the SelfModel registry (rather than calling a
+    # method, which would force initialisation anyway) can otherwise look before
+    # the actor has registered itself. Serial runs were slow enough to hide it;
+    # under `-n auto` it fails.
+    ray.get(actor.__ray_ready__.remote())
+    return actor
 
 
 def _page(handles, body: str = SPEC_BODY):  # type: ignore[no-untyped-def]
@@ -139,3 +146,27 @@ def test_the_pure_gate_still_refuses_what_the_actor_staged(author, handles) -> N
             for child in sorted(staged_dir.rglob("*"), reverse=True):
                 child.unlink() if child.is_file() else child.rmdir()
             staged_dir.rmdir()
+
+
+def test_the_discriminates_field_is_a_bool_not_a_sentence(author, handles) -> None:  # type: ignore[no-untyped-def]
+    """Regression: it used to carry summary()'s prose.
+
+    A caller writing the natural `if result["discriminates"]:` took the success
+    branch for "DOES NOT REJECT A NULL IMPLEMENTATION", because a non-empty
+    string is truthy — so the one fact the field exists to surface was the one a
+    truthiness test could not see. None means "not checked", a third state.
+    """
+    page = _page(handles)
+    result = ray.get(author.draft.remote(
+        page.id, name="_actor_probe5", entry="plan", public_api=("plan",),
+    ))
+    staged = pathlib.Path(result["staged_at"])
+    try:
+        assert result["discriminates"] in (True, False, None)
+        # The prose is still available, under its own key.
+        assert isinstance(result["discrimination_detail"], str)
+    finally:
+        if staged.exists():
+            for child in sorted(staged.rglob("*"), reverse=True):
+                child.unlink() if child.is_file() else child.rmdir()
+            staged.rmdir()

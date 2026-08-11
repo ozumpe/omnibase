@@ -10,13 +10,17 @@ from __future__ import annotations
 
 import pathlib
 
+import pytest
+
 from sis.contract_author import (
     ContractDraft,
     check_discrimination,
     null_implementation,
+    parse_spec,
     parse_worked_examples,
     skeleton_from_spec,
     stage,
+    untranscribed_examples,
 )
 
 SPEC = """\
@@ -277,3 +281,229 @@ def test_the_generated_exam_passes_against_a_correct_implementation(
         [gauntlet._PY, "-m", "pytest", str(tests_dir), "-q"], str(tmp_path), env
     )
     assert result.returncode == 0, result.stdout
+
+
+# --- regressions from the OMNI-26 review ----------------------------------
+#
+# Every finding gets a test that fails against the original implementation.
+# The through-line worth remembering: the first version decided "the exam
+# discriminates" from pytest's *exit code*, which cannot tell a real assertion
+# failing from an unwritten stub raising from the module not importing. So the
+# one check that existed to catch a vacuous exam issued its strongest pass for
+# exams that asserted nothing at all.
+
+
+def test_a_stub_plus_a_null_passing_example_does_not_count_as_discriminating() -> None:
+    """The original defect, in its smallest form.
+
+    `f(1) -> None` passes against a null implementation, so this exam asserts
+    nothing about behaviour — but the criterion stub raises NotImplementedError,
+    which made pytest exit non-zero and the old check report "discriminates".
+    """
+    body = "## Acceptance criteria\n\n- crit one\n\n## Worked examples\n\n- f(1) -> None\n"
+    draft = skeleton_from_spec(
+        name="p", spec_ref="C-1", body=body, entry="f", public_api=("f",))
+    verdict = check_discrimination(draft, public_api=("f",))
+    assert verdict.checked
+    assert not verdict.discriminates
+    assert "passed against a module" in verdict.detail
+
+
+def test_prose_containing_the_word_assert_does_not_fake_an_assertion() -> None:
+    # The old vacuity guard was `tests_source.count("assert ")`, a raw substring
+    # scan over the whole file including the copied criterion docstring.
+    body = "## Acceptance criteria\n\n- The parser must assert the header is present\n"
+    draft = skeleton_from_spec(
+        name="p", spec_ref="C-1", body=body, entry="f", public_api=("f",))
+    verdict = check_discrimination(draft, public_api=("f",))
+    assert not verdict.discriminates
+    assert "still a stub" in verdict.detail
+
+
+def test_a_draft_that_cannot_be_collected_is_reported_as_unchecked() -> None:
+    """"Could not run" is not "rejects a null implementation".
+
+    A module that fails to import exits non-zero, which the old check read as
+    the strongest possible pass.
+    """
+    broken = ContractDraft(
+        name="broken", spec_ref="C-1",
+        files={"tests.py": "import nonexistent_module_xyz\n\ndef test_a() -> None:\n    pass\n"},
+    )
+    verdict = check_discrimination(broken, public_api=("f",))
+    assert not verdict.checked
+    assert not verdict.discriminates
+
+
+def test_a_multi_function_spec_never_cross_asserts() -> None:
+    """`from_roman("IV") -> 4` must not become `to_roman("IV") == 4`.
+
+    The old generator hard-coded `returns[0].entry` for every case, so a spec
+    naming two functions produced an assertion no human wrote — one that would
+    permanently reject correct code once promoted, while also failing against
+    the null implementation and so certifying itself as discriminating.
+    """
+    body = (
+        "## Acceptance criteria\n\n- c\n\n## Worked examples\n\n"
+        '- to_roman(4) -> "IV"\n- from_roman("IV") -> 4\n'
+    )
+    tests = skeleton_from_spec(
+        name="p", spec_ref="C-1", body=body, entry="to_roman",
+        public_api=("to_roman", "from_roman"),
+    ).files["tests.py"]
+    assert "def test_worked_examples_to_roman" in tests
+    assert "def test_worked_examples_from_roman" in tests
+    assert "assert to_roman(*args) == expected" in tests
+    assert "assert from_roman(*args) == expected" in tests
+
+
+def test_a_non_builtin_exception_is_not_emitted_and_is_reported() -> None:
+    # `raises MyDomainError` names something living in an implementation nobody
+    # has written yet, so the generated module cannot import it. Emitting it
+    # made every test in the file error at collection.
+    body = "## Worked examples\n\n- f(1) -> raises MyDomainError\n"
+    assert "MyDomainError" not in skeleton_from_spec(
+        name="p", spec_ref="C-1", body="## Acceptance criteria\n\n- c\n" + body,
+        entry="f", public_api=("f",)).files["tests.py"]
+    assert any("non-builtin exception" in d for d in untranscribed_examples(body))
+
+
+def test_a_value_with_no_literal_repr_is_not_emitted_and_is_reported() -> None:
+    # 1e400 evaluates to inf, whose repr is the bare name `inf` — undefined in
+    # the generated module, so it compiled and then died at collection.
+    body = "## Worked examples\n\n- f(1) -> 1e400\n"
+    assert untranscribed_examples(body)
+    assert "no literal repr" in untranscribed_examples(body)[0]
+
+
+def test_generated_tests_are_importable_not_merely_compilable() -> None:
+    """compile() accepted every one of the collection-time failures above.
+
+    Running them is the only check that catches an undefined name in a
+    parametrize list, which is where two of these defects lived.
+    """
+    body = (
+        "## Acceptance criteria\n\n- c\n\n## Worked examples\n\n"
+        '- f(1) -> 2\n- f(0) -> raises ValueError\n'
+    )
+    draft = skeleton_from_spec(
+        name="p", spec_ref="C-1", body=body, entry="f", public_api=("f",))
+    verdict = check_discrimination(draft, public_api=("f",))
+    assert verdict.checked, verdict.detail
+
+
+def test_spec_prose_cannot_execute_at_stage_time(tmp_path: pathlib.Path) -> None:
+    """A criterion bullet must not be able to close its docstring and run code.
+
+    stage() executes the drafted tests, and the criterion used to be
+    interpolated raw into a triple-quoted docstring — so a spec page, which is
+    prose an outside author can influence, was an arbitrary code path into the
+    process. The `literal_eval, never eval` guarantee covered the *values* and
+    was bypassed entirely through the docstring.
+    """
+    marker = tmp_path / "pwned"
+    body = (
+        '## Acceptance criteria\n\n'
+        f'- ok"""; __import__("pathlib").Path({str(marker)!r}).write_text("x"); """\n'
+    )
+    draft = skeleton_from_spec(
+        name="evil", spec_ref="C-1", body=body, entry="f", public_api=("f",))
+    check_discrimination(draft, public_api=("f",))
+    assert not marker.exists()
+    # The prose survives as data, just not as code.
+    assert "ok" in draft.files["tests.py"]
+
+
+def test_running_a_draft_takes_the_gauntlets_sandbox_preconditions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """M1: a real proposer's untrusted code requires the docker sandbox.
+
+    check_discrimination executes generated code through the same `_run` the
+    gates use, but originally skipped `ensure_sandbox_allows_proposer` — so a
+    `SIS_PROPOSER=claude` run executed spec-derived code in the soft sandbox,
+    where the host filesystem stays readable. A CLAUDE.md hard rule.
+    """
+    monkeypatch.setenv("SIS_PROPOSER", "claude")
+    monkeypatch.delenv("SIS_SANDBOX", raising=False)
+    draft = ContractDraft(
+        name="p", spec_ref="C-1", files={"tests.py": "def test_a() -> None:\n    assert 1\n"})
+    with pytest.raises(RuntimeError, match="docker"):
+        check_discrimination(draft, public_api=("f",))
+
+
+def test_a_heading_naming_two_sections_populates_exactly_one() -> None:
+    # Two independent substring tests put every bullet under "Acceptance
+    # criteria and domain laws" into both lists, drafting a test stub *and* a
+    # law predicate for each and doubling the README's counts.
+    criteria, laws = parse_spec(
+        "## Acceptance criteria and domain laws\n\n- Returns a plan\n- Cargo is conserved\n"
+    )
+    assert len(criteria) == 2
+    assert laws == []
+
+
+def test_individually_quoted_examples_parse() -> None:
+    # The common markdown form leaves an interior backtick that end-stripping
+    # cannot reach, and the example vanished with no diagnostic.
+    assert [e.expected for e in parse_worked_examples(
+        '## Worked examples\n\n- `to_roman(4)` -> `"IV"`\n')] == ["IV"]
+
+
+def test_a_value_containing_an_arrow_and_a_paren_parses() -> None:
+    # A greedy `\\((?P<args>.*)\\)` swallowed the paren inside the string.
+    assert [e.expected for e in parse_worked_examples(
+        '## Worked examples\n\n- f(1) -> "a) -> b"\n')] == ["a) -> b"]
+
+
+def test_a_rejection_with_a_message_or_a_dotted_name_parses() -> None:
+    examples = parse_worked_examples(
+        '## Worked examples\n\n- g(0) -> raises ValueError("nope")\n'
+        "- h(0) -> raises errs.ValueError\n"
+    )
+    assert [e.raises for e in examples] == ["ValueError", "ValueError"]
+
+
+def test_the_readme_describes_what_the_draft_actually_contains(
+    tmp_path: pathlib.Path,
+) -> None:
+    """It used to say "every generated body raises NotImplementedError".
+
+    With transcription that is false, and a reviewer trusting it would approve
+    real machine-shaped assertions believing nothing asserted — the exact
+    "looks authored, is not" failure this module exists to prevent.
+    """
+    body = (
+        "## Acceptance criteria\n\n- c\n\n## Worked examples\n\n"
+        '- f(1) -> 2\n- f(9) -> raises MyDomainError\n'
+    )
+    draft = skeleton_from_spec(
+        name="p", spec_ref="C-1", body=body, entry="f", public_api=("f",))
+    readme = draft.files["README.md"]
+    assert "real assertions" in readme
+    assert "1 worked examples" in readme
+    # And it names what it could not transcribe, rather than quietly omitting it.
+    assert "could NOT be transcribed" in readme
+    assert "non-builtin exception" in readme
+
+
+def test_the_verdict_survives_promotion(tmp_path: pathlib.Path) -> None:
+    # README.md was written by stage() but absent from staged.files, so
+    # promote() copied everything except the vacuous-exam warning.
+    vacuous = ContractDraft(
+        name="_verdict_probe", spec_ref="C-1",
+        files={"tests.py": "def test_a() -> None:\n    assert True\n"},
+    )
+    staged = stage(vacuous, staging_dir=tmp_path, public_api=("f",))
+    assert "README.md" in staged.files
+    target = staged.target
+    try:
+        from sis.contract_author import promote
+
+        promote(staged, approved=True)
+        assert "DOES NOT REJECT" in (target / "README.md").read_text(encoding="utf-8")
+    finally:
+        if target.exists():
+            for child in sorted(target.rglob("*"), reverse=True):
+                child.unlink() if child.is_file() else child.rmdir()
+            target.rmdir()

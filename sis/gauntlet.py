@@ -196,14 +196,22 @@ def _timeout_result(cmd: list[str], timeout: float) -> subprocess.CompletedProce
     )
 
 
-def _run(inner: list[str], tmpdir: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+def _run(
+    inner: list[str], tmpdir: str, env: dict[str, str], *, timeout: float | None = None
+) -> subprocess.CompletedProcess[str]:
     """Run one gate command (argv[0] == _PY) in the configured sandbox.
 
     A timeout is enforced so an infinite loop or pathologically slow candidate
     is killed rather than hanging the loop; it surfaces as a gate failure
     whose stderr says it timed out.
+
+    *timeout* overrides the per-gate default for callers that must not block
+    for the full ``SIS_GAUNTLET_TIMEOUT``. The contract-author's discrimination
+    check is one: it runs inside a single-threaded Ray actor, where a drafted
+    test containing an infinite loop would otherwise queue every other draft
+    behind it for two minutes.
     """
-    timeout = _timeout_seconds()
+    timeout = _timeout_seconds() if timeout is None else timeout
     mode = os.getenv("SIS_SANDBOX", "subprocess")
     if mode == "docker":
         image = os.getenv("SIS_SANDBOX_IMAGE", DEFAULT_SANDBOX_IMAGE)
@@ -501,6 +509,26 @@ def _gate_backtest(ctx: _GateContext) -> Result | None:
             errors=result.stderr.splitlines(),
         )
     return None
+
+
+def ensure_sandbox_ready() -> None:
+    """Every precondition for executing generated code. Call before any ``_run``.
+
+    Two checks that used to live inline in ``validate()``, hoisted because
+    ``validate`` stopped being the only caller that executes generated code:
+    ``sis.contract_author.check_discrimination`` runs a *drafted* test module,
+    which is generated code by any reasonable reading, and it initially ran it
+    without either check. A precondition that only one call site remembers is a
+    precondition waiting to be skipped, so there is now one function to call and
+    a test asserting both callers call it.
+    """
+    ensure_sandbox_allows_proposer()
+    if os.getenv("SIS_SANDBOX") == "docker" and shutil.which("docker") is None:
+        raise RuntimeError(
+            "SIS_SANDBOX=docker but the docker CLI was not found. Install Docker "
+            "and build the image (docker build -t sis-gauntlet:latest -f "
+            "Dockerfile.gauntlet .), or unset SIS_SANDBOX for the subprocess sandbox."
+        )
 
 
 def _timed_out(result: subprocess.CompletedProcess[str], gate: str) -> Result | None:
@@ -854,14 +882,7 @@ def validate(
     run_seed = random.randrange(2**31) if seed is None else seed
 
     # Backstop: never execute untrusted proposer code in a soft sandbox (M1).
-    ensure_sandbox_allows_proposer()
-
-    if os.getenv("SIS_SANDBOX") == "docker" and shutil.which("docker") is None:
-        raise RuntimeError(
-            "SIS_SANDBOX=docker but the docker CLI was not found. Install Docker "
-            "and build the image (docker build -t sis-gauntlet:latest -f "
-            "Dockerfile.gauntlet .), or unset SIS_SANDBOX for the subprocess sandbox."
-        )
+    ensure_sandbox_ready()
 
     # The code the candidate must beat: what the caller says the cycle is based
     # on (the merged target), NOT whatever happens to be on disk. Resolved only
