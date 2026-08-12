@@ -4,6 +4,8 @@ Detailed brief: @DESIGN.md — read it before starting.
 Actor roles, external subsystems & the self-model: @ACTORS.md
 New to the code? `docs/CODE_TOUR.md` (Python + Ray walkthrough). Contributor flow: `CONTRIBUTING.md`.
 Architecture diagram: `ray_self_improving_control_loop.svg` (this folder).
+Class 2 (feature construction) design: `docs/CLASS2_CONTRACT.md`. What comes after
+Class 2, toward omnitrack: `docs/OMNITRACK_VISION.md`.
 
 **Naming:** *omnibase* = this engine (the `sis/` package; `sis` is just the import handle).
 *omnitrack* = the future end product (modeling an external slice of the world).
@@ -47,20 +49,48 @@ internal target before it models anything external.
   per-gate timeout kills infinite loops. A real (non-stub) proposer writes untrusted code
   and REQUIRES `SIS_SANDBOX=docker` — the loop refuses otherwise (override:
   `SIS_ALLOW_UNSANDBOXED_LLM=1`); the subprocess sandbox leaves host files readable (M1).
-- Gauntlet gates hard (`sis/gauntlet.py`): `ast.parse` → no-op check →
-  `mypy --strict` → interface (exports the contract's entry point) → the
-  contract's acceptance tests → differential correctness on random inputs
-  (anti-gaming) + benchmark vs a freshly measured baseline (must clear the
-  contract's margin, ≥10% faster by default) → human PR. Generated code MUST be
-  fully typed. What counts as correct/better is per-target — see `sis/contract.py`.
+- **The contract selects which gates run** (`Contract.gate_profile()`,
+  `sis/gauntlet.py`); both task classes flow through one `validate()`:
+  - **Class 1** (`OptimizationContract` — make a working function faster):
+    `ast.parse` → no-op check → `mypy --strict` → interface → the contract's
+    acceptance tests → invariant gate → backtest gate → differential
+    correctness on random inputs (anti-gaming) + benchmark vs a freshly
+    measured baseline (must clear the contract's margin, ≥10% faster by
+    default).
+  - **Class 2** (`FeatureContract` — build what a spec describes, no
+    pre-existing version to diff against): `ast.parse` → `mypy --strict` →
+    interface → acceptance → invariant gate → backtest gate. No no-op (nothing
+    to be identical to) and no differential/benchmark (no reference exists,
+    and "faster" isn't what makes a feature correct).
+  - **Invariant gate** (`sis/invariant.py`, Hypothesis-generated inputs) and
+    **backtest gate** (`sis/backtest.py`, recorded-episode fixtures under
+    `specs/<name>/`, held-out split) are the anti-gaming layer for targets with
+    no reference oracle to differ against — domain laws over generated inputs,
+    and "does it reproduce recorded reality", respectively.
+  - Every gate ends in a human PR. Generated code MUST be fully typed. What
+    counts as correct/better is per-target — see `sis/contract.py`.
 - **Change-authorization policy (`sis/policy.py`) — what the loop may rewrite:**
-  - FORBIDDEN (never, no override): guardrail/safety code — the gauntlet, cost/brakes,
-    settings/secrets, the adapters, `Dockerfile.gauntlet`, and the policy itself.
+  - FORBIDDEN (never, no override): guardrail/safety code — the gauntlet, the
+    contract layer (`sis/contract.py`, `sis/backtest.py`, `sis/invariant.py`,
+    `sis/clock.py`), the contract-author approval gate (`sis/contract_author.py`),
+    `specs/` (the exam itself — oracles, acceptance tests, domain laws, backtest
+    fixtures), cost/brakes, settings/secrets, the adapters, `Dockerfile.gauntlet`,
+    and the policy itself.
   - STRICT (off-limits unless `SIS_ALLOW_STRICT_CHANGES=1`, then needs human approval +
     justification + passing checks): all other engine code.
   - SOFT (optimisable; checks + review): the designated target(s) —
-    `runtime/target.py` and `runtime/sort_target.py`, extendable via
+    `runtime/target.py`, `runtime/sort_target.py`, `runtime/roman.py` (Class 2,
+    deliberately absent until an implementer writes it), extendable via
     `SIS_TARGET_PATHS`. Guardrail classification always wins.
+- **The one write path into `specs/` is human-approved** (`sis/contract_author.py`,
+  OMNI-21/26): a spec drafts into `runtime/contract_staging/` (loop-writable, no
+  gate reads it), and `promote()` raises `RequiresHumanApproval` with no
+  override. Worked examples stated in a spec transcribe into real assertions
+  (values only, `ast.literal_eval` never `eval`); prose criteria and domain laws
+  draft as `NotImplementedError` stubs, because the system cannot invent
+  domain laws. A discrimination check runs the drafted exam against a null
+  implementation before a human sees it, so an exam that asserts nothing is
+  flagged rather than silently approved.
 - Branches: `feature/*` → `develop` → `main`. Never push to `develop`/`main` directly
   (see workflow below).
 - Secrets: `secrets.local.yml` (gitignored) locally; AWS Secrets Manager in cloud
@@ -128,6 +158,15 @@ internal target before it models anything external.
 ## Operational quick reference
 - Run a cycle: `poetry run python main.py` (in-memory, no creds).
 - Gates: `poetry run pytest` · `poetry run mypy --strict sis/ main.py scripts/` · `poetry run ruff check .`
+- **`pytest` defaults to `-m "not serve" -n auto`** (fast inner loop, ~45s,
+  parallel): it deselects the Ray Serve integration tests
+  (`test_live_canary.py`, `test_serve_cloud.py`, `test_serving.py`,
+  `test_loadgen.py`, `test_loop_serve.py`, ~65 tests), which stand up a real
+  cluster/Serve deployment and take minutes serially. **Not a full verification
+  by itself** — run `poetry run pytest -m serve -n 0` (serial: they share a
+  cluster and a port) before trusting a change touches Serve, or let CI run
+  both halves, which it always does explicitly (`tests/test_test_layout.py`
+  pins that it must, so the excluded half can never silently run nowhere).
 - Optional deps: `poetry install --with llm` (anthropic) · `--with real`
   (requests/boto3/pyyaml) · `--with analytics` (duckdb).
 - Env flags (full table in `README.md`): `SIS_PROPOSER` (stub|claude), `SIS_SANDBOX`
@@ -242,16 +281,87 @@ Released through **v0.1.4**. The bootstrap skeleton (original "first task") is
 - **`DevOps.canary()` can judge a candidate against real traffic**
   (`canary_backend="serve"`, OMNI-14; `--canary serve` / `SIS_CANARY=serve`;
   RUNBOOK Level 0e) — `sis.loadgen` fills the window itself (nothing external
-  calls the target yet), forces `SHADOW` mode (neither shipped contract has
-  invariants, so a split would have no live correctness signal at all), and a
-  live rejection now changes the cycle's own outcome
-  (`org.cycle_outcome`, pure) — QA approval alone no longer decides success.
-  `DevOps` holds one `ServeCloud` per contract (`Workspace.cloud` is a single,
-  contract-agnostic slot; `ServeCloud` needs a contract at construction) and
-  opts in per call, so the legacy in-memory recording — and a zero-setup
-  `main.py` — stay the default.
-- 308 tests; `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop → main`
-  enforced by both the client-side pre-push hook and active server-side rulesets.
+  calls the target yet), forces `SHADOW` mode when the contract has no
+  invariants (a split would have no live correctness signal), and a live
+  rejection now changes the cycle's own outcome (`org.cycle_outcome`, pure) —
+  QA approval alone no longer decides success. `DevOps` holds one `ServeCloud`
+  per contract (`Workspace.cloud` is a single, contract-agnostic slot;
+  `ServeCloud` needs a contract at construction) and opts in per call, so the
+  legacy in-memory recording — and a zero-setup `main.py` — stay the default.
+- **Class 2 (feature construction) shipped — the engine verifies two kinds of
+  target now, not one** (OMNI-3 epic, closed 2026-08-11 except two low/parked
+  items). `Contract.gate_profile()` (`sis/contract.py`) is what lets a
+  `FeatureContract` and an `OptimizationContract` flow through one
+  `gauntlet.validate()` with different gate stacks — see Hard rules above.
+  Landed as five stories:
+  - **OMNI-19 — `BacktestGate`** (`sis/backtest.py`): recorded episodes under
+    `specs/<name>/`, a held-out `Split`, and a comparator *named* by the
+    contract and resolved inside the sandbox (`specs/comparators.py` shared,
+    or contract-local) — the seam where a future stochastic contract plugs in
+    a proper scoring rule instead of `within_tolerance` without the gate
+    itself changing. Re-prioritised ahead of OMNI-17/18 because
+    `docs/OMNITRACK_VISION.md`'s Phases A/B (comparing model output against
+    recorded reality) *are* this gate.
+  - **OMNI-23 — `Clock` port** (`sis/clock.py`): `WallClock` (default) and
+    `ReplayClock` (event time driven by a trace), so a backtest fixture's
+    `event_time` is a parsed, timezone-aware instant, not an incidental string
+    — landed ahead of the fixtures that need it, because a fixture recorded
+    without event time can never be replayed and history can't be re-recorded.
+  - **OMNI-17 — `FeatureContract` + contract-selected gate profile**: adds
+    `determinism: Determinism` (default `DETERMINISTIC`) as a field on *any*
+    contract rather than a third contract class — a slow Monte Carlo
+    simulation is a stochastic Class-1 optimisation, which a linear
+    Class-1→2→3 ladder has nowhere to put. A `STOCHASTIC` contract's interface
+    gate additionally requires a `seed` parameter on the entry point. First
+    Class-2 target: `roman` (`to_roman`/`from_roman`, `specs/roman/`).
+  - **OMNI-18 — `InvariantGate`** (`sis/invariant.py`, Hypothesis): domain
+    laws over generated inputs, resolved by name inside the sandbox exactly
+    like `Backtest.compare`. Two predicate shapes — `check(args, output)` is
+    also usable by the live canary (`sis.canary.BoundInvariant`); `check(args,
+    output, impl)` gets the candidate module *and* its bound entry (for a
+    round-trip law that must call a sibling export) and is offline-only by
+    construction, since re-invoking a candidate on a live response would
+    change what production does. Every run is seeded and the seed rides in
+    the reject reason, because Hypothesis's example database is disabled in
+    the sandbox — the seed is the only way to reproduce a shrunk
+    counterexample later.
+  - **OMNI-21 + OMNI-26 — contract-author, the only write path into `specs/`**
+    (`sis/contract_author.py`): draft (in-process) → stage
+    (`runtime/contract_staging/`, loop-writable, no gate reads it) →
+    `specs/` (`promote()` raises `RequiresHumanApproval`, no override, no
+    `force`). Worked examples stated in a spec (`` `f(4) -> "IV"` ``) transcribe
+    into real parametrised assertions — values only, via `ast.literal_eval`,
+    **never `eval`**, since a spec page is prose an outside author can
+    influence. Prose criteria/laws draft as `NotImplementedError` stubs; the
+    system cannot invent domain laws, so a skeleton that guessed would produce
+    an exam that looks authored and checks nothing. `check_discrimination`
+    runs the drafted exam against a null implementation before a human sees
+    it and reports (not enforces) whether it asserts anything — a code-review
+    pass on the initial OMNI-26 landing found the first version of this check
+    read pytest's *exit code*, which a `NotImplementedError` stub always makes
+    non-zero, so it reported "discriminates" for exams asserting nothing; it
+    now parses JUnit XML per-test. That review also found unescaped spec
+    prose could break out of a generated docstring and execute at stage time
+    (fixed: `repr`, never raw interpolation) and that the check bypassed the
+    M1 sandbox backstop (fixed: `gauntlet.ensure_sandbox_ready()`, one
+    precondition called by every executor of generated code).
+  - Remaining in the epic, neither on the critical path: OMNI-24 (`SloGate` —
+    a latency/accuracy budget, explicitly *not* a correctness gate) and
+    OMNI-20 (`ToolchainAdapter` — language genericity), parked.
+- **`docs/OMNITRACK_VISION.md`** sequences what comes after Class 2: five new
+  components (`Sensor`+`Clock` ports, the determinism axis above,
+  stateful-actor swap, per-actor deploy slots, an emergence gate) across
+  phases A–F, plus an 11-decision register (D0–D12, each with a
+  recommendation and a "decide by" phase). **D0 — which real-world domain
+  omnitrack models first — is the open blocker for Phase A** (OMNI-25); four
+  candidates are recorded (bike-share, power grid, transit, air traffic) with
+  no selection made yet, deliberately, since it has no code dependency and
+  doesn't block Class-2 work.
+- 446 tests (`pytest -m "not serve" -n auto`, the default, ~45s; the ~65
+  Ray-Serve-integration tests run separately, see Operational quick reference
+  above); `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop
+  → main` enforced by both the client-side pre-push hook and active
+  server-side rulesets.
 
 **Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L
 severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
@@ -278,8 +388,9 @@ Two traps L5 surfaced, both worth knowing before writing similar code:
   `docs/KNOWN_ISSUES.md` (Resolved).
 
 **Next — the milestone plan is in Jira ([`OMNI`](https://olafzumpe.atlassian.net/browse/OMNI)),
-not here.** Three epics; design detail in the docs each links to. Check the board
-for current status rather than trusting this list:
+not here.** Check the board for current status rather than trusting this list —
+the Atlassian connection dropped mid-session on 2026-08-11 and this reflects
+state as last confirmed, not a live query:
 
 1. ~~**[OMNI-1](https://olafzumpe.atlassian.net/browse/OMNI-1) — L5 target
    contract** (Class 1)~~ — **done 2026-08-06** (OMNI-4/5/6/7). Two targets ship
@@ -291,9 +402,20 @@ for current status rather than trusting this list:
    live rejection now changes the cycle's outcome — and a human merge is
    observed and promotes automatically. Opt-in; the legacy in-memory path
    stays the default. Design: `docs/SERVE_CANARY.md`.
-3. **[OMNI-3](https://olafzumpe.atlassian.net/browse/OMNI-3) — Class 2**, feature
-   construction: `FeatureContract` + acceptance gates, `InvariantGate`, backtests,
-   `ToolchainAdapter`, the contract-author actor. Design: `docs/CLASS2_CONTRACT.md`.
+3. ~~**[OMNI-3](https://olafzumpe.atlassian.net/browse/OMNI-3) — Class 2**,
+   feature construction~~ — **effectively done 2026-08-11** (OMNI-17/18/19/21/
+   23/26; see "Current status" above for what each landed). `FeatureContract`
+   + the contract-selected gate profile, `InvariantGate`, `BacktestGate`, the
+   `Clock` port, and the contract-author write path all shipped. Only
+   OMNI-24 (`SloGate`, low priority) and OMNI-20 (`ToolchainAdapter`, parked)
+   remain, and neither is on the omnitrack critical path. Design:
+   `docs/CLASS2_CONTRACT.md`.
+4. **[OMNI-25](https://olafzumpe.atlassian.net/browse/OMNI-25) — D0: pick
+   omnitrack's first domain.** Open, no code dependency, blocks Phase A of
+   `docs/OMNITRACK_VISION.md` (the design for what comes after Class 2 — new
+   `Sensor`/`Clock` ports, the determinism axis, stateful actor swap,
+   per-actor slots, an emergence gate). Four candidates recorded in that doc;
+   none selected.
 
 Not yet scheduled: a small AWS run (one node, a few cycles) — watch the provenance
 graph and the bill; and the **atomic actor swap** for internal, never-served actors,
