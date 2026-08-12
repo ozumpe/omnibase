@@ -1,8 +1,10 @@
 # Class-2 gauntlet contract — verifying built *features*, not just optimizations
 
-**Status:** partly implemented. This is the plan for how the gauntlet verifies
-*feature construction* — the work omnitrack actually needs — as an extension of
-the existing `validate()` gate stack, not a redesign.
+**Status:** effectively done (2026-08-11), except two low-priority/parked items
+that are not on the omnitrack critical path. This was the plan for how the
+gauntlet verifies *feature construction* — the work omnitrack actually needs —
+as an extension of the existing `validate()` gate stack, not a redesign; see
+CLAUDE.md's "Current status" for what each story landed.
 
 | Piece | Status |
 |---|---|
@@ -10,10 +12,10 @@ the existing `validate()` gate stack, not a redesign.
 | `BacktestGate` + comparators + held-out splits | done ([OMNI-19](https://olafzumpe.atlassian.net/browse/OMNI-19)) |
 | `Clock` port + event time on fixtures | done ([OMNI-23](https://olafzumpe.atlassian.net/browse/OMNI-23)) |
 | `FeatureContract`, contract-selected gate profile, interface + acceptance gates | done ([OMNI-17](https://olafzumpe.atlassian.net/browse/OMNI-17)) |
-| `InvariantGate` (property-based anti-gaming) | [OMNI-18](https://olafzumpe.atlassian.net/browse/OMNI-18) |
-| `DomainSLO` / `SloGate` | [OMNI-24](https://olafzumpe.atlassian.net/browse/OMNI-24) |
-| `ToolchainAdapter` | [OMNI-20](https://olafzumpe.atlassian.net/browse/OMNI-20), parked |
-| Contract-author actor | [OMNI-21](https://olafzumpe.atlassian.net/browse/OMNI-21) |
+| `InvariantGate` (property-based anti-gaming) | done ([OMNI-18](https://olafzumpe.atlassian.net/browse/OMNI-18)) |
+| Contract-author actor + the human-approved write path into `specs/` | done ([OMNI-21](https://olafzumpe.atlassian.net/browse/OMNI-21) + [OMNI-26](https://olafzumpe.atlassian.net/browse/OMNI-26)) |
+| `DomainSLO` / `SloGate` | not started — [OMNI-24](https://olafzumpe.atlassian.net/browse/OMNI-24), low priority |
+| `ToolchainAdapter` | not started — [OMNI-20](https://olafzumpe.atlassian.net/browse/OMNI-20), parked |
 
 Two details below were revised in implementation and the text is left as
 originally written, with the deviation noted where it occurs: the gate stack is
