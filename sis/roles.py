@@ -571,10 +571,23 @@ class ContractAuthor(Role):
             entry=entry,
             public_api=public_api,
         )
-        staged = contract_author.stage(draft)
+        staged = contract_author.stage(draft, public_api=public_api)
+        # Structured, not just prose. `summary()` is a sentence, and a caller
+        # writing the natural `if result["discriminates"]:` would take the
+        # success branch for "DOES NOT REJECT A NULL IMPLEMENTATION" — a
+        # non-empty string is truthy, so the one fact the field exists to convey
+        # is the one a truthiness test cannot see. None means "not checked",
+        # which is a third state and not the same as False.
+        discrimination = staged.discrimination
+        discriminates: bool | None = (
+            None if discrimination is None or not discrimination.checked
+            else discrimination.discriminates
+        )
+        verdict = discrimination.summary() if discrimination is not None else "not checked"
         ray.get(self._sm.record.remote(
             "contract_drafted", spec_id, contract=name, files=list(staged.files),
             staged_at=str(staged.directory), awaiting="human approval",
+            discriminates=discriminates, discrimination_detail=verdict,
         ))
         return {
             "contract": staged.name,
@@ -582,6 +595,12 @@ class ContractAuthor(Role):
             "staged_at": str(staged.directory),
             "files": list(staged.files),
             "promoted": False,
+            # Surfaced in the return value, not only in the file: a caller that
+            # never opens the directory should still see that the drafted exam
+            # asserts nothing, because that is the failure a reviewer skimming
+            # plausible-looking test code is least likely to notice.
+            "discriminates": discriminates,          # True | False | None (not checked)
+            "discrimination_detail": verdict,
             "next": "a human reviews the draft, then approves promotion into specs/",
         }
 

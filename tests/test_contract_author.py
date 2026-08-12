@@ -19,7 +19,7 @@ from sis.contract_author import (
     skeleton_from_spec,
     stage,
 )
-from sis.paths import CONTRACT_STAGING_DIR, SPECS_DIR
+from sis.paths import CONTRACT_STAGING_DIR, PROJECT_ROOT, SPECS_DIR
 from sis.policy import ChangeTier, classify
 from sis.ports import RequiresHumanApproval
 
@@ -321,3 +321,17 @@ def test_a_drafted_skeleton_stages_without_touching_specs(
     staged = stage(draft, staging_dir=tmp_path)
     assert staged.directory.is_dir()
     assert sorted(p.name for p in SPECS_DIR.iterdir()) == before
+
+
+def test_every_path_that_runs_generated_code_takes_the_sandbox_preconditions() -> None:
+    """One precondition, called by every caller that executes generated code.
+
+    `validate()` checked the M1 backstop and the docker CLI inline, so when
+    `check_discrimination` became a second executor of generated code it simply
+    did not check either. Hoisting them into `ensure_sandbox_ready` only helps if
+    both callers actually call it, which is what this pins.
+    """
+    gauntlet_src = (PROJECT_ROOT / "sis/gauntlet.py").read_text(encoding="utf-8")
+    author_src = (PROJECT_ROOT / "sis/contract_author.py").read_text(encoding="utf-8")
+    assert "ensure_sandbox_ready()" in gauntlet_src
+    assert "gauntlet.ensure_sandbox_ready()" in author_src
