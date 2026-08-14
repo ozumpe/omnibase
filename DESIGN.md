@@ -141,6 +141,12 @@ cheapest, safest checks first:
   Documentation follows fixed Confluence templates, not free-form pages.
 - **Secrets:** `.env` in `.gitignore` for local dev only; AWS Secrets Manager / SSM
   Parameter Store with IAM roles in the cloud. Never commit tokens.
+- **Configuration:** every knob is declared once in `sis/config.py` and rendered
+  into a committed `config.yml` (CLI flag > env var > file > built-in default).
+  Both are guardrail code: the sandbox mode, the spend brakes and the policy's
+  own target list are all reachable from that one file, so the loop may not
+  write it at any tier — including via naming it as an optimisation target,
+  which guardrail precedence makes inert. Secrets never go in it; it is committed.
 - **Cost:** hard LLM budget cap + cost/benefit gate per cycle + the circuit breaker.
 
 ## 7. Metrics / SLOs to optimize against

@@ -86,7 +86,8 @@ type-annotated.
 | Ports & adapters | `sis/ports.py`, `adapters.py`, `adapters_real.py` | Add a real backend by implementing the Protocols. |
 | Actor org | `sis/roles.py`, `org.py` | The seven roles + the cycle. |
 | Shared state | `sis/workspace.py`, `self_model.py` | Named, detached Ray actors. |
-| Config & secrets | `sis/settings.py` | Local YAML ↔ AWS Secrets Manager. |
+| Configuration | `sis/config.py`, `config.yml` | Every knob, declared once. POLICY-FORBIDDEN. |
+| Secrets | `sis/settings.py` | Local YAML ↔ AWS Secrets Manager. Never `config.yml`. |
 | Cost accounting | `sis/cost.py` | Feeds the CEO's spend brakes. |
 
 ## Common extension points
@@ -98,6 +99,17 @@ type-annotated.
   `org.bootstrap()`. It coordinates through `Workspace` + `SelfModel`.
 - **A new gauntlet gate**: add it to `validate()` in cheapest-first order, run it
   through the sandbox helper `_run()`, and add both a pass and a fail test.
+- **A new configuration knob**: add one `Key(...)` to `SCHEMA` in
+  `sis/config.py`, then run `poetry run python -m sis.config --write` to
+  regenerate `config.yml`. That gives you the typed accessor, the `SIS_*`
+  environment variable, the `--section-name` CLI flag, and the documentation, all
+  from the one declaration — so **don't restate the default anywhere else**,
+  including in prose. A test regenerates the file and compares, and another
+  asserts no module reads the environment directly, so both halves of that are
+  enforced rather than remembered. Pick the tier (`forbidden_`/`strict_`/`soft_`)
+  by what a *human operator* should be allowed to change in the UI; the loop
+  cannot write the file at any tier. If a wrong value would fail silently and
+  unsafely, give the key `choices`.
 
 ## Secrets & safety
 
@@ -113,9 +125,12 @@ type-annotated.
 
 ## Reporting issues
 
-Include: what you ran (command + relevant `SIS_*` env vars), what you expected,
-what happened, and the `Result.reason` / traceback. For adapter issues against a
-real tenant, the exact API error (with credentials redacted) is gold.
+Include: what you ran, what you expected, what happened, the `Result.reason` /
+traceback, and the output of `poetry run python main.py --show-config` — which
+reports every setting *and which layer supplied it*, so a stale `export` in your
+shell that is silently overriding `config.yml` shows up instead of costing both
+of us an afternoon. For adapter issues against a real tenant, the exact API
+error (with credentials redacted) is gold; `--show-config` contains no secrets.
 
 ## License
 

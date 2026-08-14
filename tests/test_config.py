@@ -434,28 +434,39 @@ def test_ceo_brakes_resolve_through_the_whole_precedence_chain(
     assert cfg.budget_usd == 2.0
 
 
-def test_a_config_key_exists_for_every_documented_env_var() -> None:
-    """README's env table is now generated from the schema; this pins the claim.
+def test_every_env_var_named_in_the_docs_exists_in_the_schema() -> None:
+    """A variable documented but absent from ``SCHEMA`` is fiction.
 
-    If a variable is documented but absent from ``SCHEMA``, nothing reads it and
-    the documentation is fiction — the exact failure mode OMNI-27 was filed for.
+    Nothing reads it, so a reader who exports it gets silence — the exact
+    failure OMNI-27 was filed for, where README's table had drifted from the
+    code it described. Checking every markdown file, not just README, because
+    the same table existed twice: `docs/RUNBOOK.md` had its own copy, which had
+    drifted differently.
     """
+    import re
+
     from sis.paths import PROJECT_ROOT
 
     declared = {key.env for key in config.SCHEMA}
-    readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
-    # Secrets and test-only variables are documented elsewhere and deliberately
-    # not configuration; see test_no_credential_is_declared_as_configuration.
+    # Secrets and test-only variables are documented elsewhere and are
+    # deliberately not configuration; see test_no_credential_is_declared_as_configuration.
     exempt = {
         "SIS_ATLASSIAN_BASE_URL", "SIS_ATLASSIAN_EMAIL", "SIS_ATLASSIAN_API_TOKEN",
-        "SIS_GITHUB_TOKEN", "SIS_LOOP_INTERVAL_S", "SIS_FAKE_SECRET",
-        "SIS_TEST_FAKE_CREDENTIAL", "SIS_CLOCK",
+        "SIS_GITHUB_TOKEN", "SIS_FAKE_SECRET", "SIS_TEST_FAKE_CREDENTIAL",
     }
-    import re
-
-    mentioned = {m for m in re.findall(r"\bSIS_[A-Z_]+\b", readme)} - exempt
-    missing = sorted(mentioned - declared)
-    assert not missing, f"documented but not in the schema: {missing}"
+    skip_dirs = {".venv", "node_modules", ".git"}
+    undocumented: dict[str, str] = {}
+    for path in sorted(PROJECT_ROOT.rglob("*.md")):
+        if any(part in skip_dirs for part in path.parts):
+            continue
+        text = path.read_text(encoding="utf-8")
+        for name in re.findall(r"\bSIS_[A-Z_]+\b", text):
+            if name not in declared and name not in exempt:
+                undocumented[name] = path.relative_to(PROJECT_ROOT).as_posix()
+    assert not undocumented, (
+        "these are named in the docs but no longer exist in the schema: "
+        + ", ".join(f"{name} ({where})" for name, where in sorted(undocumented.items()))
+    )
 
 
 # --- types ----------------------------------------------------------------

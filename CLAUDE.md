@@ -74,14 +74,20 @@ internal target before it models anything external.
     contract layer (`sis/contract.py`, `sis/backtest.py`, `sis/invariant.py`,
     `sis/clock.py`), the contract-author approval gate (`sis/contract_author.py`),
     `specs/` (the exam itself — oracles, acceptance tests, domain laws, backtest
-    fixtures), cost/brakes, settings/secrets, the adapters, `Dockerfile.gauntlet`,
-    and the policy itself.
-  - STRICT (off-limits unless `SIS_ALLOW_STRICT_CHANGES=1`, then needs human approval +
-    justification + passing checks): all other engine code.
+    fixtures), cost/brakes, settings/secrets, **the configuration
+    (`sis/config.py` + `config.yml`, OMNI-27)**, the adapters,
+    `Dockerfile.gauntlet`, and the policy itself.
+  - STRICT (off-limits unless `policy.allow_strict_changes` /
+    `SIS_ALLOW_STRICT_CHANGES=1`, then needs human approval + justification +
+    passing checks): all other engine code.
   - SOFT (optimisable; checks + review): the designated target(s) —
     `runtime/target.py`, `runtime/sort_target.py`, `runtime/roman.py` (Class 2,
     deliberately absent until an implementer writes it), extendable via
-    `SIS_TARGET_PATHS`. Guardrail classification always wins.
+    `policy.target_paths` / `SIS_TARGET_PATHS`. **Guardrail classification always
+    wins** — and that ordering is now load-bearing rather than tidy, because the
+    target list is itself a config key: "name the config as a target, then
+    rewrite the spend cap" is inert only because `classify` checks the guardrail
+    list first. Asserted in `tests/test_config.py`.
 - **The one write path into `specs/` is human-approved** (`sis/contract_author.py`,
   OMNI-21/26): a spec drafts into `runtime/contract_staging/` (loop-writable, no
   gate reads it), and `promote()` raises `RequiresHumanApproval` with no
@@ -367,11 +373,26 @@ Released through **v0.1.4**. The bootstrap skeleton (original "first task") is
   candidates are recorded (bike-share, power grid, transit, air traffic) with
   no selection made yet, deliberately, since it has no code dependency and
   doesn't block Class-2 work.
-- 446 tests (`pytest -m "not serve" -n auto`, the default, ~45s; the ~65
+- **Configuration is one schema (OMNI-27, PR #92).** `sis/config.py` declares
+  every knob once; `config.yml` is generated from it and committed; precedence
+  is CLI flag > env var > file > built-in default; `main.py --show-config`
+  prints the effective values *and their source*. Every legacy `SIS_*` var
+  still works as the env layer. Both files are POLICY-FORBIDDEN. See the
+  Operational quick reference above for how to add a knob. Two silent failure
+  modes closed on the way: `SIS_SANDBOX=dcoker` used to compare unequal to
+  `"docker"` and run untrusted code in the *soft* sandbox saying nothing, and
+  `SIS_ALLOW_STRICT_CHANGES=yes` used to mean "disabled". Both now raise.
+- 481 tests (`pytest -m "not serve" -n auto`, the default, ~45s; the ~62
   Ray-Serve-integration tests run separately, see Operational quick reference
   above); `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop
   → main` enforced by both the client-side pre-push hook and active
   server-side rulesets.
+- **Two known test flakes, both pre-existing and both parallel-execution
+  artifacts** (ticketed 2026-08-14): `test_correct_but_not_faster_is_rejected`
+  measures a fresh baseline, which gets noisy under xdist CPU contention
+  (passes 5/5 in isolation); `test_a_drafted_skeleton_stages_without_touching_specs`
+  compares two `specs/` listings and races another worker creating
+  `specs/__pycache__`. Neither indicates a real defect — re-run before chasing.
 
 **Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L
 severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
@@ -425,7 +446,18 @@ state as last confirmed, not a live query:
    `docs/OMNITRACK_VISION.md` (the design for what comes after Class 2 — new
    `Sensor`/`Clock` ports, the determinism axis, stateful actor swap,
    per-actor slots, an emergence gate). Four candidates recorded in that doc;
-   none selected.
+   check the doc for whether a selection has since been made.
+5. ~~**[OMNI-27](https://olafzumpe.atlassian.net/browse/OMNI-27) — unified
+   config**~~ — PR #92, awaiting merge. One schema, `config.yml`, env/CLI
+   override; see "Current status" above.
+6. **[OMNI-28](https://olafzumpe.atlassian.net/browse/OMNI-28) — operator
+   frontend.** View system state, edit config gated by each key's tier
+   (`forbidden_` not editable, `strict_` behind confirmation, `soft_` free),
+   changes take effect on restart. **Depends on OMNI-27** for `config.yml` and
+   the effective-config-with-source model (`sis.config.effective()`, already
+   built and exercised by `main.py --show-config`). The UI stack is
+   undecided — worth a short design note first, in the style of
+   `docs/CLASS2_CONTRACT.md`, rather than presupposing one in the ticket.
 
 Not yet scheduled: a small AWS run (one node, a few cycles) — watch the provenance
 graph and the bill; and the **atomic actor swap** for internal, never-served actors,
