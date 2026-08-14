@@ -366,28 +366,48 @@ SIS_AWS_SECRET_ID=sis/prod/credentials` (region via `SIS_AWS_REGION`).
 
 ---
 
-## Environment-variable reference
+## Configuration reference
 
-| Variable | Default | Effect |
-|---|---|---|
-| `SIS_PROPOSER` | `stub` | non-stub = a real LLM via `sis.llm` (needs `--with llm` + a provider key) |
-| `SIS_LLM_PROVIDER` / `SIS_LLM_MODEL` | `anthropic` / provider default | which LLM backs the proposer (adapters in `sis/llm.py`) |
-| `SIS_SANDBOX` | `subprocess` | `docker` = kernel-enforced (needs the image); **required** when `SIS_PROPOSER` is not `stub` |
-| `SIS_ALLOW_UNSANDBOXED_LLM` | `0` | `1` = let a real proposer run in the soft subprocess sandbox (loud warning; unsafe — see M1) |
-| `SIS_SANDBOX_IMAGE` | `sis-gauntlet:latest` | image for docker mode |
-| `SIS_SANDBOX_MEMORY` / `SIS_SANDBOX_CPUS` | `1g` / `2` | per-container resource caps (docker mode) |
-| `SIS_GAUNTLET_TIMEOUT` | `120` | per-gate wall-clock cap (seconds); docker mode also kills the container |
-| `SIS_ADAPTERS` | `memory` | `real` = Confluence/Jira/GitHub/AWS (needs `--with real` + secrets) |
-| `SIS_HTTP_TIMEOUT` | `30` | per-request timeout (s) for real-adapter calls, so a wedged tenant API can't hang a cycle; a bad value fails loudly |
-| `SIS_ENV` | `local` | `aws` = secrets from AWS Secrets Manager |
-| `SIS_SECRETS_FILE` | `secrets.local.yml` | override local secrets path |
-| `SIS_AWS_SECRET_ID` / `SIS_AWS_REGION` | — | Secrets Manager secret id + region |
-| `SIS_TARGET_PATHS` | `runtime/target.py` | SOFT-tier paths the loop may optimize |
-| `SIS_ALLOW_STRICT_CHANGES` | `0` | `1` lets the loop touch non-guardrail engine code (still needs approval + justification) |
-| `SIS_BUDGET_USD` | `5.0` | CEO hard spend cap (USD) — set **tiny** for a first real run so the brakes trip early |
-| `SIS_BREAKER_THRESHOLD` / `SIS_MAX_COST_PER_ACCEPTED_USD` / `SIS_SLO_MIN_SPEND_USD` | `3` / `2.0` / `0.50` | the other CEO brakes; a bad value fails loudly |
-| `SIS_EPISODIC_STORE` | `jsonl` | provenance log backend: `jsonl` \| `duckdb` (needs `--with analytics`) \| `none` |
-| `ANTHROPIC_API_KEY` | — | required when `SIS_PROPOSER=claude` |
+Every knob lives in **[`config.yml`](../config.yml)** — one file, generated from
+the schema in `sis/config.py`, carrying each key's default, its documentation,
+its environment variable, and its CLI flag. Read it there rather than from a
+table here: this section used to *be* that table, and it had drifted (its
+`SIS_TARGET_PATHS` default still listed one path when the engine had three).
+
+```bash
+poetry run python main.py --show-config     # every value + which layer set it
+```
+
+```
+CLI flag  >  environment variable  >  config.yml  >  built-in default
+```
+
+Which means the `export SIS_…` lines throughout this runbook still work exactly
+as written — they are the environment layer — and each now has two other
+spellings if you prefer them:
+
+```bash
+export SIS_SANDBOX=docker                    # environment: applies to this shell
+poetry run python main.py --sandbox-mode docker   # CLI: applies to this run
+# or edit sandbox.forbidden_mode in config.yml    # file: applies to every run
+```
+
+Three notes that matter operationally:
+
+- **`--show-config` is the first thing to run when something behaves
+  unexpectedly.** It reports the *source* of each value, so a stale
+  `export SIS_BUDGET_USD` in your shell profile that is quietly overriding
+  `config.yml` shows up as `[from env]` instead of staying invisible.
+- **Bad values fail loudly, including typos in a choice.** `SIS_SANDBOX=dcoker`
+  is now rejected; it used to compare unequal to `"docker"` and silently run
+  untrusted code in the soft subprocess sandbox.
+- **`config.yml` is read once per process, at start-up.** Editing it mid-run
+  cannot change a running loop half-way through a cycle; restart to apply.
+
+**Not in `config.yml`:** credentials. `ANTHROPIC_API_KEY` and the
+Confluence/Jira/GitHub tokens are secrets and live in `secrets.local.yml` (or
+AWS Secrets Manager) — see Level 2. `config.yml` is committed, so anything in it
+is public by construction.
 
 ---
 

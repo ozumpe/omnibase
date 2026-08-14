@@ -31,11 +31,10 @@ it stays fully cacheable regardless of which contract is active.
 from __future__ import annotations
 
 import inspect
-import os
 import pathlib
 import re
 
-from sis import llm
+from sis import config, llm
 from sis.contract import OptimizationContract, default_contract
 from sis.paths import PROJECT_ROOT
 
@@ -97,7 +96,7 @@ def propose(
     _last_cost_usd = 0.0  # reset; the stub is free
     _last_model = None
     spec = contract if contract is not None else default_contract()
-    if os.getenv("SIS_PROPOSER", "stub") == "stub":
+    if config.get("proposer.backend") == "stub":
         return _stub_proposal(spec)
     return _llm_proposal(current_source, baseline_latency, spec)
 

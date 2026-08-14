@@ -1,0 +1,117 @@
+# config.yml — every knob the engine has, with its default.
+#
+# GENERATED FROM sis/config.py. Do not hand-edit the structure: run
+#     poetry run python -m sis.config --write
+# after changing SCHEMA. Values may be edited; keys and comments may not.
+#
+# Precedence: CLI flag > environment variable > this file > built-in default.
+#
+# The prefix on each key is its protection tier, and it governs what a
+# *human* may change through the operator UI — forbidden_ is not editable
+# there at all, strict_ needs an explicit confirmation, soft_ is free. The
+# self-improvement loop cannot write this file at any tier: it is
+# POLICY-FORBIDDEN (sis/policy.py), like the gauntlet and the contracts.
+#
+# Secrets do NOT belong here — this file is committed. See secrets.example.yml.
+
+brakes:
+  # Hard cap on total LLM spend, in USD.
+  # env: SIS_BUDGET_USD   flag: --brakes-budget-usd
+  forbidden_budget_usd: 5.0
+  # Consecutive failed cycles that trip the circuit breaker.
+  # env: SIS_BREAKER_THRESHOLD   flag: --brakes-breaker-threshold
+  forbidden_breaker_threshold: 3
+  # Economics SLO: USD per accepted improvement before the loop is frozen.
+  # env: SIS_MAX_COST_PER_ACCEPTED_USD   flag: --brakes-max-cost-per-accepted-usd
+  forbidden_max_cost_per_accepted_usd: 2.0
+  # Spend below which the economics SLO is not judged (too little signal).
+  # env: SIS_SLO_MIN_SPEND_USD   flag: --brakes-slo-min-spend-usd
+  forbidden_slo_min_spend_usd: 0.5
+
+sandbox:
+  # Isolation for generated code: 'subprocess' (soft) or 'docker' (kernel-enforced,
+  # --network none).
+  # env: SIS_SANDBOX   flag: --sandbox-mode
+  forbidden_mode: "subprocess"
+  # Container image for the docker sandbox.
+  # env: SIS_SANDBOX_IMAGE   flag: --sandbox-image
+  forbidden_image: "sis-gauntlet:latest"
+  # Memory ceiling for a docker-sandboxed gate.
+  # env: SIS_SANDBOX_MEMORY   flag: --sandbox-memory
+  forbidden_memory: "1g"
+  # CPU ceiling for a docker-sandboxed gate.
+  # env: SIS_SANDBOX_CPUS   flag: --sandbox-cpus
+  forbidden_cpus: "2"
+  # Wall-clock cap per gate — what contains an infinite loop in generated code.
+  # env: SIS_GAUNTLET_TIMEOUT   flag: --sandbox-timeout-seconds
+  forbidden_timeout_seconds: 120.0
+  # Override the rule that a real (non-stub) proposer requires the docker sandbox. Lets
+  # untrusted code read host files; for deliberate risk only.
+  # env: SIS_ALLOW_UNSANDBOXED_LLM   flag: --sandbox-allow-unsandboxed-llm
+  forbidden_allow_unsandboxed_llm: false
+
+policy:
+  # Repo-relative paths in the SOFT tier — the designated optimisation targets.
+  # Guardrail paths always win over this list.
+  # env: SIS_TARGET_PATHS   flag: --policy-target-paths
+  forbidden_target_paths: ["runtime/target.py", "runtime/sort_target.py", "runtime/roman.py"]
+  # Let the loop propose changes to STRICT engine code (still requires human approval
+  # and a justification).
+  # env: SIS_ALLOW_STRICT_CHANGES   flag: --policy-allow-strict-changes
+  forbidden_allow_strict_changes: false
+
+episodic:
+  # Episodic/provenance backend: 'jsonl', 'duckdb', or 'none'.
+  # env: SIS_EPISODIC_STORE   flag: --episodic-store
+  forbidden_store: "jsonl"
+
+adapters:
+  # 'memory' for in-process fakes, 'real' for Confluence/Jira/GitHub/AWS.
+  # env: SIS_ADAPTERS   flag: --adapters-mode
+  forbidden_mode: "memory"
+  # Deployment: 'local' (file secrets) or 'aws' (Secrets Manager).
+  # env: SIS_ENV   flag: --adapters-env
+  forbidden_env: "local"
+  # Path to the gitignored local secrets file.
+  # env: SIS_SECRETS_FILE   flag: --adapters-secrets-file
+  forbidden_secrets_file: "secrets.local.yml"
+  # AWS region for Secrets Manager and cloud adapters.
+  # env: SIS_AWS_REGION   flag: --adapters-aws-region
+  forbidden_aws_region: "us-east-1"
+  # Secrets Manager secret id (required when env=aws).
+  # env: SIS_AWS_SECRET_ID   flag: --adapters-aws-secret-id
+  forbidden_aws_secret_id: null
+  # Per-request timeout for real-adapter HTTP calls.
+  # env: SIS_HTTP_TIMEOUT   flag: --adapters-http-timeout-seconds
+  soft_http_timeout_seconds: 30.0
+
+proposer:
+  # 'stub' for the offline hand-written candidate; anything else is a real LLM and is
+  # treated as untrusted.
+  # env: SIS_PROPOSER   flag: --proposer-backend
+  strict_backend: "stub"
+  # LLM vendor backing a real proposer.
+  # env: SIS_LLM_PROVIDER   flag: --proposer-llm-provider
+  strict_llm_provider: "anthropic"
+  # Model id; unset uses the provider's default.
+  # env: SIS_LLM_MODEL   flag: --proposer-llm-model
+  strict_llm_model: null
+
+canary:
+  # 'serve' judges the canary against real Ray Serve traffic; unset uses the legacy
+  # in-memory recording.
+  # env: SIS_CANARY   flag: --canary-backend
+  strict_backend: null
+
+loop:
+  # Seconds between cycles in --loop mode.
+  # env: SIS_LOOP_INTERVAL   flag: --loop-interval-seconds
+  soft_interval_seconds: 30.0
+  # Stop after N cycles; unset runs until signalled.
+  # env: SIS_LOOP_MAX_CYCLES   flag: --loop-max-cycles
+  soft_max_cycles: null
+
+contracts:
+  # Default contract name; --contract still overrides it per cycle.
+  # env: SIS_CONTRACT   flag: --contracts-default
+  soft_default: null

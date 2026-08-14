@@ -44,32 +44,50 @@ Requirements: **Python 3.14** (standard CPython, not free-threaded — Ray ships
 
 ## Configuration & run modes
 
-Everything is controlled by environment variables; defaults need no setup,
-credentials, or extra installs. Set these to opt into more.
+**Every knob lives in [`config.yml`](config.yml)** — one file, generated from
+the schema in `sis/config.py`, with each key's default, its documentation, its
+environment variable, and its CLI flag written next to it. The defaults need no
+setup, credentials, or extra installs.
 
-| Variable | Default | Values / effect |
-|----------|---------|-----------------|
-| `SIS_PROPOSER` | `stub` | `stub` = offline hand-written candidate. Any other value = a real LLM via `sis.llm` (needs `poetry install --with llm` + a provider key). |
-| `SIS_LLM_PROVIDER` | `anthropic` | Which LLM backend the proposer uses. Adapters live in `sis/llm.py`; add a vendor with a small adapter + registry line. |
-| `SIS_LLM_MODEL` | provider default | Override the model within a provider (e.g. `claude-sonnet-5`). |
-| `SIS_SANDBOX` | `subprocess` | Gauntlet isolation. `subprocess` = scrubbed env + in-process egress block. `docker` = kernel-enforced (`--network none`, no creds; needs the image, see below). **Required** when `SIS_PROPOSER` is not `stub` — untrusted LLM code can read host files in `subprocess` mode. |
-| `SIS_ALLOW_UNSANDBOXED_LLM` | `0` | `1` lets a real proposer run in the soft `subprocess` sandbox (loud warning). Unsafe — the candidate can read local files; never use it with real credentials. |
-| `SIS_SANDBOX_IMAGE` | `sis-gauntlet:latest` | Image used when `SIS_SANDBOX=docker`. |
-| `SIS_SANDBOX_MEMORY` / `SIS_SANDBOX_CPUS` | `1g` / `2` | Per-container resource caps in `docker` mode. |
-| `SIS_GAUNTLET_TIMEOUT` | `120` | Per-gate wall-clock cap (seconds) — kills infinite loops (and, in docker mode, the container). |
-| `SIS_TARGET_PATHS` | `runtime/target.py,runtime/sort_target.py` | Comma-separated SOFT-tier paths the loop may optimise. Guardrail code can never be added. |
-| `SIS_CONTRACT` | *(bootstrap target)* | Which registered target a cycle optimises (`sum_of_divisors`, `sort`). Read inside the role actors, so it only takes effect if exported **before** launch — prefer `main.py --contract <name>` or `run_cycle(contract_name=...)`. |
-| `SIS_CANARY` | *(legacy in-memory)* | `serve` judges the candidate against a real Ray Serve canary and real dispatched traffic (OMNI-14); anything else keeps the zero-setup in-memory recording. Same before-launch caveat as `SIS_CONTRACT` — prefer `main.py --canary serve` or `run_cycle(canary_backend=...)`. |
-| `SIS_ALLOW_STRICT_CHANGES` | `0` | `1` lets the loop propose changes to non-guardrail engine code — still requires approval + justification + checks. |
-| `SIS_BUDGET_USD` | `5.0` | CEO hard spend cap (USD). Set a **tiny** value for a first real run so the brakes trip early. Also: `SIS_BREAKER_THRESHOLD` (`3`), `SIS_MAX_COST_PER_ACCEPTED_USD` (`2.0`), `SIS_SLO_MIN_SPEND_USD` (`0.50`). A bad value fails loudly. |
-| `SIS_EPISODIC_STORE` | `jsonl` | Provenance/episodic backend: `jsonl` (zero-dep), `duckdb` (SQL analytics; `poetry install --with analytics`), or `none`. |
-| `SIS_ADAPTERS` | `memory` | `memory` = in-memory artifact bus (no creds). `real` = Confluence/Jira/GitHub/AWS (needs `--with real` + secrets). |
-| `SIS_LOOP_INTERVAL` / `SIS_LOOP_MAX_CYCLES` | `30` / — | `main.py --loop` only: seconds between ticks, and an optional cycle bound (unset = run until Ctrl-C / SIGTERM). |
-| `SIS_HTTP_TIMEOUT` | `30` | Per-request timeout (seconds) for every real-adapter call, so a wedged tenant API can't hang a cycle. A bad value fails loudly. |
-| `SIS_ENV` | `local` | Secret source. `local` = `secrets.local.yml` → `SIS_*` env vars. `aws` = AWS Secrets Manager. |
-| `SIS_SECRETS_FILE` | `secrets.local.yml` | Override the local secrets file path. |
-| `SIS_AWS_SECRET_ID` / `SIS_AWS_REGION` | — | Secrets Manager secret id + region (when `SIS_ENV=aws`). |
-| `ANTHROPIC_API_KEY` | — | Required for the `anthropic` provider (the default when `SIS_PROPOSER` isn't `stub`). Other providers read their own key. |
+```
+CLI flag  >  environment variable  >  config.yml  >  built-in default
+```
+
+```bash
+poetry run python main.py --show-config      # every value + where it came from
+poetry run python main.py --sandbox-mode docker --brakes-budget-usd 0.05
+export SIS_BUDGET_USD=0.05                   # same key, environment layer
+```
+
+Keys are grouped by function (`brakes`, `sandbox`, `policy`, `episodic`,
+`adapters`, `proposer`, `canary`, `loop`, `contracts`) and each is prefixed with
+how strongly it is protected — `forbidden_`, `strict_`, `soft_`. That prefix
+governs what a **human operator** may change (the forthcoming UI won't offer a
+`forbidden_` key at all); it grants the loop nothing, because `config.yml` and
+`sis/config.py` are both POLICY-FORBIDDEN and the loop may not write either at
+any tier. Naming the config as an optimisation target doesn't help — guardrail
+classification is checked first (`tests/test_config.py`).
+
+Because this file is committed, **secrets do not go in it** — those live in the
+gitignored `secrets.local.yml`; see [Connecting to the real world](#connecting-to-the-real-world).
+
+The three worth knowing before a real run:
+
+| Key (env var) | Default | Why it matters |
+|---|---|---|
+| `sandbox.mode` (`SIS_SANDBOX`) | `subprocess` | `docker` is kernel-enforced (`--network none`, no creds). **Required** whenever `proposer.backend` isn't `stub` — untrusted LLM code can read host files in `subprocess` mode, and the loop refuses to start without it. |
+| `proposer.backend` (`SIS_PROPOSER`) | `stub` | `stub` is offline and free. Any other value is a real LLM via `sis.llm` (needs `poetry install --with llm` + a provider key) and is treated as untrusted. |
+| `brakes.budget_usd` (`SIS_BUDGET_USD`) | `5.0` | CEO hard spend cap. Set a **tiny** value for a first real run so the brakes trip early. A bad value fails loudly rather than reverting to the permissive default. |
+
+`ANTHROPIC_API_KEY` is not configuration and is not in `config.yml`: it is a
+credential, required for the `anthropic` provider. Other providers read their own key.
+
+`contracts.default` (`SIS_CONTRACT`) and `canary.backend` (`SIS_CANARY`) are read
+inside the role actors, which are separate processes that snapshot the
+environment when created — so the *environment* layer only reaches them if
+exported before launch. `config.yml` and the CLI flags do reach them; the
+per-cycle `main.py --contract <name>` / `run_cycle(contract_name=...)` remains
+the precise mechanism.
 
 ### Common workflows
 

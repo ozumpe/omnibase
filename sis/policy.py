@@ -23,11 +23,11 @@ rules.
 
 from __future__ import annotations
 
-import os
 import pathlib
 from dataclasses import dataclass
 from enum import Enum
 
+from sis import config
 from sis.paths import PROJECT_ROOT
 
 
@@ -68,6 +68,15 @@ GUARDRAIL_PATHS: tuple[str, ...] = (
     "sis/adapters.py",        # RequiresHumanApproval guardrails (in-memory)
     "sis/adapters_real.py",   # RequiresHumanApproval guardrails (real)
     "sis/serve_cloud.py",     # same guardrail, plus the green-replica env scrub
+    # The configuration schema and the file it renders. Every knob above is
+    # reachable from here — the sandbox mode, the spend brakes, this module's
+    # own target list — so a loop able to write either one could widen the SOFT
+    # tier to include the gauntlet, or set the budget to infinity, without
+    # touching a single guardrail *module*. The per-key `forbidden_`/`strict_`/
+    # `soft_` prefixes in config.yml are about what a **human** may edit in the
+    # operator UI; they grant the loop nothing, because the loop is stopped here.
+    "sis/config.py",
+    "config.yml",
     "Dockerfile.gauntlet",    # the sandbox image
 )
 
@@ -85,33 +94,23 @@ GUARDRAIL_DIRS: tuple[str, ...] = (
     "specs",
 )
 
-# The designated optimisation target(s) — the SOFT tier. Configurable via
-# SIS_TARGET_PATHS (comma-separated, repo-root-relative posix paths) so widening
-# what the loop may optimise is a deliberate, reviewed change. Guardrail paths
-# always win over this list (see classify), so a target can never silently
-# overlap safety code even if mis-configured here.
-DEFAULT_TARGET_PATHS: tuple[str, ...] = (
-    "runtime/target.py",
-    "runtime/sort_target.py",
-    # The first Class-2 target (contract `roman`). Unlike the two above, this
-    # file does not exist yet — that is the point of feature construction, and
-    # the tier has to be declared before the implementer may write it.
-    "runtime/roman.py",
-)
+# The designated optimisation target(s) — the SOFT tier. Re-exported from
+# sis.config, which declares it alongside the `policy.target_paths` key that
+# overrides it, so the default and its override cannot drift apart. Both modules
+# are FORBIDDEN, so moving the constant changes nothing about who may edit it.
+DEFAULT_TARGET_PATHS: tuple[str, ...] = config.DEFAULT_TARGET_PATHS
 
 
 def target_paths() -> tuple[str, ...]:
-    """The SOFT-tier optimisation targets (env-overridable)."""
-    raw = os.getenv("SIS_TARGET_PATHS")
-    if not raw:
-        return DEFAULT_TARGET_PATHS
-    return tuple(
-        # removeprefix, not lstrip("./") — lstrip strips `.`/`/` *characters*
-        # (mangling ".github/x" → "github/x", "../x" → "x"). Mirrors _rel (L4/L10).
-        part.strip().replace("\\", "/").removeprefix("./")
-        for part in raw.split(",")
-        if part.strip()
-    )
+    """The SOFT-tier optimisation targets.
+
+    Configurable (``policy.forbidden_target_paths`` / ``SIS_TARGET_PATHS``) so
+    widening what the loop may optimise is a deliberate, reviewed change.
+    Guardrail paths always win over this list (see :func:`classify`), so a
+    target can never silently overlap safety code even if mis-configured.
+    """
+    paths: tuple[str, ...] = config.get("policy.target_paths")
+    return paths or DEFAULT_TARGET_PATHS
 
 
 @dataclass(frozen=True)
@@ -151,7 +150,8 @@ class Decision:
 
 
 def _strict_enabled() -> bool:
-    return os.getenv("SIS_ALLOW_STRICT_CHANGES", "0") == "1"
+    enabled: bool = config.get("policy.allow_strict_changes")
+    return enabled
 
 
 def _rel(path: str | pathlib.Path) -> str:

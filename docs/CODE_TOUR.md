@@ -135,9 +135,10 @@ Read in this order — each builds on the last:
 9. **`main.py`** — the entry point.
 
 Also worth a look: **`sis/policy.py`** (§7a, what the loop may change),
+**`sis/config.py`** (§7c, every knob the engine has, declared once),
 **`sis/cost.py`** (LLM pricing feeding the CEO's spend brakes), and
 **`sis/llm.py`** — the proposer's model choice sits behind a small `Protocol`
-(`LLMClient`), so `SIS_PROPOSER=claude` isn't locked to one vendor; every
+(`LLMClient`), so a real proposer isn't locked to one vendor; every
 adapter returns cost alongside text so the spend brakes are vendor-agnostic
 too. When you're ready for the serving/canary layer (loaded once a candidate
 has already passed the gauntlet), see §8.
@@ -315,11 +316,12 @@ is proposed or written:
 | **STRICT** | all other engine code | Off-limits by default | when enabled (`SIS_ALLOW_STRICT_CHANGES=1`): pass checks **+ human-approved + justified** (exception or human request) |
 | **SOFT** | the designated target(s) | Yes | pass checks; review via QA + human merge |
 
-The **FORBIDDEN** set (`GUARDRAIL_PATHS`) includes the gauntlet, the spend
-brakes, secret handling, the adapter guardrails, the sandbox image — **and
-`policy.py` itself**, so the loop cannot loosen its own rules. There is no
-approval that unlocks FORBIDDEN; that's the load-bearing invariant (a rewriter
-that can edit its own validator can validate away its constraints).
+The **FORBIDDEN** set (`GUARDRAIL_PATHS`) includes the gauntlet, the contract
+layer, secret handling, the adapter guardrails, the sandbox image, **the
+configuration** (`sis/config.py` + `config.yml`, §7c) — **and `policy.py`
+itself**, so the loop cannot loosen its own rules. There is no approval that
+unlocks FORBIDDEN; that's the load-bearing invariant (a rewriter that can edit
+its own validator can validate away its constraints).
 
 Two enforcement points:
 
@@ -330,10 +332,18 @@ Two enforcement points:
   FORBIDDEN path with `RequiresHumanApproval`, regardless of caller — a hard
   belt-and-suspenders stop.
 
-**Widening scope** is a deliberate, reviewed change: set `SIS_TARGET_PATHS`
-(comma-separated, repo-relative) to add SOFT targets. Guardrail paths always
-win over that list (`classify` checks `GUARDRAIL_PATHS` first), so you can never
-accidentally make safety code writable by listing it as a target.
+**Widening scope** is a deliberate, reviewed change: set `policy.target_paths`
+(`SIS_TARGET_PATHS`, comma-separated, repo-relative) to add SOFT targets.
+Guardrail paths always win over that list (`classify` checks `GUARDRAIL_PATHS`
+first), so you can never accidentally make safety code writable by listing it as
+a target.
+
+That ordering carries more weight than it looks. The target list is *itself* a
+configuration key, so "name the configuration as an optimisation target, then
+let the loop rewrite its own spend cap" is the obvious escalation — and it is
+inert, because the guardrail check runs first and `config.yml` is in the
+FORBIDDEN set. `tests/test_config.py` asserts exactly that: the setting takes
+effect, and it buys nothing.
 
 > Pattern to copy: like `evaluate_brakes`, the whole policy is **pure functions
 > over data** (`classify`, `authorize_change`) — no Ray, no I/O — so it's
@@ -361,6 +371,54 @@ makes rollups identical across backends, and the DuckDB column schema is
 *asserted* against the dataclass so it can't drift. Postgres + pgvector can drop
 in later (multi-node cluster / embedding retrieval) without touching the loop —
 the same ports/adapters move as Confluence/Jira/GitHub.
+
+## 7c. Configuration — one schema, four layers (`sis/config.py`)
+
+Every knob the engine has is declared exactly once, in `SCHEMA`:
+
+```python
+Key("sandbox", "mode", ConfigTier.FORBIDDEN, Kind.STR, "subprocess",
+    "SIS_SANDBOX", "Isolation for generated code: 'subprocess' or 'docker'.",
+    choices=("subprocess", "docker")),
+```
+
+Everything else is *derived* from that one line: the typed `Config` object the
+engine reads, the committed `config.yml`, the `--sandbox-mode` CLI flag, and the
+`--show-config` view. Adding a knob is one `Key(...)` plus
+`python -m sis.config --write`; a test regenerates the file and compares, so the
+committed file cannot drift from the code.
+
+```
+CLI flag  >  environment variable  >  config.yml  >  built-in default
+```
+
+Three design points worth understanding before you add to it:
+
+- **Values are validated, and a typo in a security control is loud.**
+  `SIS_SANDBOX=dcoker` used to compare unequal to `"docker"` at every read site,
+  so the engine ran untrusted generated code in the *soft* sandbox and said
+  nothing at all. Anywhere a wrong value fails silently *and* unsafely, the key
+  declares `choices`.
+- **The `forbidden_`/`strict_`/`soft_` prefix is about human authority, not the
+  loop.** It gates what an operator may edit in the UI (OMNI-28). The loop is
+  stopped by `config.yml` and `sis/config.py` both being FORBIDDEN (§7a),
+  whatever any individual key says — and the file may not renegotiate its own
+  tiers, so writing `soft_budget_usd` is rejected rather than quietly accepted.
+- **The file layer reaches the Ray actors; the environment layer may not.** Role
+  actors are detached actors in their own OS processes and snapshot the
+  environment when they are *created*, so an `export` after `bootstrap()` is
+  invisible to them (the trap in §10's glossary, and the reason `--contract` is
+  passed as an argument). Each actor reads `config.yml` from disk itself, so the
+  file does reach them — and `apply_cli_overrides` writes CLI values through to
+  `os.environ` *before* bootstrap for the same reason. Without that,
+  `--sandbox-mode docker` would configure the driver and leave the actor that
+  actually runs the gauntlet on the subprocess sandbox.
+
+Secrets are deliberately **not** here: `config.yml` is committed, so anything in
+it is public. Credentials live in `secrets.local.yml` behind `sis/settings.py`,
+which masks them in `repr()` (§3).
+
+---
 
 ## 8. Serving a target and canarying it live (`sis/serving.py`, `sis/loadgen.py`, `sis/canary.py`, `sis/serve_cloud.py`, `sis/metrics.py`)
 
@@ -491,6 +549,7 @@ gate" — but permanently, not just until a human acts.
 ```bash
 poetry install
 poetry run python main.py        # one full org cycle (in-memory, no creds)
+poetry run python main.py --show-config          # every setting + where it came from
 poetry run pytest                # the full suite
 poetry run mypy --strict sis/ main.py scripts/   # the type gate
 ```

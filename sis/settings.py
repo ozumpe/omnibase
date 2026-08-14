@@ -25,6 +25,8 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, Protocol
 
+from sis import config
+
 DEFAULT_SECRETS_FILE = "secrets.local.yml"
 _MASK = "***redacted***"
 
@@ -125,17 +127,22 @@ class EnvSecretSource:
     """Reads secrets from ``SIS_*`` environment variables.
 
     Maps e.g. ``SIS_ATLASSIAN_API_TOKEN`` → ``atlassian_api_token``.
+
+    Everything :mod:`sis.config` declares is skipped: those variables are
+    *configuration*, they share the ``SIS_`` prefix by history, and scooping
+    them up here would file ``SIS_BUDGET_USD`` as a credential named
+    ``budget_usd``. The exclusion used to be a hand-written list of five names,
+    which was correct when there were five and quietly wrong once the engine had
+    twenty-seven — deriving it from the schema is what keeps it correct.
     """
 
     PREFIX = "SIS_"
 
     def load(self) -> dict[str, Any]:
+        not_secrets = {key.env for key in config.SCHEMA}
         out: dict[str, Any] = {}
         for key, value in os.environ.items():
-            if key.startswith(self.PREFIX) and key not in {"SIS_ENV", "SIS_ADAPTERS",
-                                                            "SIS_SECRETS_FILE",
-                                                            "SIS_AWS_SECRET_ID",
-                                                            "SIS_AWS_REGION"}:
+            if key.startswith(self.PREFIX) and key not in not_secrets:
                 out[key[len(self.PREFIX):].lower()] = value
         return out
 
@@ -204,7 +211,7 @@ def _build_settings(env: str, adapters: str, raw: dict[str, Any]) -> Settings:
         )
 
     aws = AwsSettings(
-        region=str(flat.get("aws_region", os.getenv("SIS_AWS_REGION", "us-east-1"))),
+        region=str(flat.get("aws_region") or config.get("adapters.aws_region")),
         secret_id=_opt_str(flat.get("aws_secret_id")),
     )
 
@@ -216,13 +223,12 @@ def _opt_str(value: Any) -> str | None:
 
 
 def _select_source() -> SecretSource:
-    env = os.getenv("SIS_ENV", "local")
-    if env == "aws":
-        secret_id = os.environ.get("SIS_AWS_SECRET_ID")
-        if not secret_id:
-            raise RuntimeError("SIS_ENV=aws requires SIS_AWS_SECRET_ID")
-        return AwsSecretsManagerSource(secret_id, os.getenv("SIS_AWS_REGION"))
-    secrets_file = Path(os.getenv("SIS_SECRETS_FILE", DEFAULT_SECRETS_FILE))
+    adapters = config.config().adapters
+    if adapters.env == "aws":
+        if not adapters.aws_secret_id:
+            raise RuntimeError("adapters.env=aws requires adapters.aws_secret_id")
+        return AwsSecretsManagerSource(adapters.aws_secret_id, adapters.aws_region)
+    secrets_file = Path(adapters.secrets_file)
     if secrets_file.exists():
         return FileSecretSource(secrets_file)
     return EnvSecretSource()
@@ -234,8 +240,8 @@ def load_settings(source: SecretSource | None = None) -> Settings:
     Always reads the source. The convenience accessors below go through
     :func:`cached_settings` instead — see the note there.
     """
-    env = os.getenv("SIS_ENV", "local")
-    adapters = os.getenv("SIS_ADAPTERS", "memory")
+    settings = config.config().adapters
+    env, adapters = settings.env, settings.mode
     src = source if source is not None else _select_source()
     try:
         raw = src.load()

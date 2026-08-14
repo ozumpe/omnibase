@@ -15,10 +15,11 @@ work identically regardless of vendor.
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
+
+from sis import config
 
 DEFAULT_PROVIDER = "anthropic"
 DEFAULT_ANTHROPIC_MODEL = "claude-opus-4-8"
@@ -79,13 +80,15 @@ _PROVIDERS: dict[str, Callable[[str | None], LLMClient]] = {
 
 
 def get_llm_client(provider: str | None = None, model: str | None = None) -> LLMClient:
-    """The configured LLM client (``SIS_LLM_PROVIDER`` / ``SIS_LLM_MODEL``)."""
-    name = (provider or os.getenv("SIS_LLM_PROVIDER") or DEFAULT_PROVIDER).lower()
+    """The configured LLM client (``proposer.llm_provider`` / ``proposer.llm_model``)."""
+    name = (provider or str(config.get("proposer.llm_provider"))).lower()
     factory = _PROVIDERS.get(name)
     if factory is None:
         known = ", ".join(sorted(_PROVIDERS))
-        raise ValueError(f"Unknown SIS_LLM_PROVIDER={name!r} (known: {known})")
-    return factory(model or os.getenv("SIS_LLM_MODEL"))
+        raise ValueError(
+            f"Unknown proposer.llm_provider={name!r} (SIS_LLM_PROVIDER; known: {known})"
+        )
+    return factory(model or config.get("proposer.llm_model"))
 
 
 def configured_model(provider: str | None = None, model: str | None = None) -> str:
