@@ -14,7 +14,6 @@ agent (the human PR is mandatory — gauntlet step 6).
 from __future__ import annotations
 
 import hashlib
-import os
 import pathlib
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
@@ -22,7 +21,7 @@ from typing import Any
 
 import ray
 
-from sis import contract, contract_author, gauntlet, policy, proposer
+from sis import config, contract, contract_author, gauntlet, policy, proposer
 from sis.canary import DEFAULT_MIN_CANARY_SAMPLES, CanaryMode, evaluate_canary
 from sis.paths import PROJECT_ROOT, TARGET_PATH
 from sis.ports import IssueStatus, IssueType, PullRequest
@@ -40,15 +39,19 @@ from sis.workspace import get_workspace
 LIVE_CANARY_REQUESTS = 150
 LIVE_CANARY_CONCURRENCY = 8
 
-# CEO spend-brake defaults — the single source of truth, shared by CEO.__init__
-# and ceo_config_from_env so an env-configured run and a default run agree.
 # Repo-relative key the contract registry is keyed by (see SelfModel).
 _TARGET_REL = TARGET_PATH.relative_to(PROJECT_ROOT).as_posix()
 
-DEFAULT_BUDGET_USD = 5.0
-DEFAULT_BREAKER_THRESHOLD = 3
-DEFAULT_MAX_COST_PER_ACCEPTED_USD = 2.0
-DEFAULT_SLO_MIN_SPEND_USD = 0.50
+# CEO spend-brake defaults, read off the config schema rather than restated here.
+# They were previously literals in this module *and* the documented defaults in
+# the README — the drift that OMNI-27 exists to end. One declaration in
+# sis/config.py now feeds CEO.__init__, ceo_config_from_env, config.yml, and the
+# --brakes-* flags, so a configured run and a default run cannot disagree.
+DEFAULT_BUDGET_USD: float = config.key_for("brakes.budget_usd").default
+DEFAULT_BREAKER_THRESHOLD: int = config.key_for("brakes.breaker_threshold").default
+DEFAULT_MAX_COST_PER_ACCEPTED_USD: float = config.key_for(
+    "brakes.max_cost_per_accepted_usd").default
+DEFAULT_SLO_MIN_SPEND_USD: float = config.key_for("brakes.slo_min_spend_usd").default
 
 # --------------------------------------------------------------------------
 # Shared helpers
@@ -65,39 +68,26 @@ class CEOConfig:
     slo_min_spend_usd: float = DEFAULT_SLO_MIN_SPEND_USD
 
 
-def _env_number(env: Mapping[str, str], name: str, default: float, *, cast: Any) -> Any:
-    """Parse an env var as a number, or fail loudly. A bad spend cap must never
-    silently fall back to the permissive default (a typo'd '0.1O' that becomes
-    $5 defeats the whole point of the budget gate) — so raise, don't shrug."""
-    raw = env.get(name)
-    if raw is None or raw == "":
-        return default
-    try:
-        value = cast(raw)
-    except ValueError:
-        raise ValueError(f"{name}={raw!r} is not a valid number") from None
-    if value < 0:
-        raise ValueError(f"{name}={raw!r} must not be negative")
-    return value
-
-
 def ceo_config_from_env(env: Mapping[str, str] | None = None) -> CEOConfig:
-    """Build the CEO's spend brakes from the environment (pure — unit-testable).
+    """Build the CEO's spend brakes from configuration (pure — unit-testable).
 
     Lets a run set a deliberately tiny budget without editing source
-    (KNOWN_ISSUES.md M5): ``SIS_BUDGET_USD``, ``SIS_BREAKER_THRESHOLD``,
-    ``SIS_MAX_COST_PER_ACCEPTED_USD``, ``SIS_SLO_MIN_SPEND_USD``. Each falls back
-    to its ``DEFAULT_*`` when unset; an unparseable/negative value raises.
+    (KNOWN_ISSUES.md M5), now through the whole precedence chain rather than the
+    environment alone: ``--brakes-budget-usd`` > ``SIS_BUDGET_USD`` >
+    ``config.yml``'s ``brakes.forbidden_budget_usd`` > the built-in default. An
+    unparseable or negative value raises rather than falling back — a typo'd
+    ``0.1O`` that quietly became $5 would defeat the whole point of the gate.
+
+    Keeps its *env mapping* parameter because that is what makes it unit-testable
+    without touching the process environment; the mapping is threaded into
+    :func:`sis.config.resolve` as that layer.
     """
-    e = os.environ if env is None else env
+    cfg = config.config(env=env).brakes
     return CEOConfig(
-        budget_usd=_env_number(e, "SIS_BUDGET_USD", DEFAULT_BUDGET_USD, cast=float),
-        breaker_threshold=_env_number(
-            e, "SIS_BREAKER_THRESHOLD", DEFAULT_BREAKER_THRESHOLD, cast=int),
-        max_cost_per_accepted_usd=_env_number(
-            e, "SIS_MAX_COST_PER_ACCEPTED_USD", DEFAULT_MAX_COST_PER_ACCEPTED_USD, cast=float),
-        slo_min_spend_usd=_env_number(
-            e, "SIS_SLO_MIN_SPEND_USD", DEFAULT_SLO_MIN_SPEND_USD, cast=float),
+        budget_usd=cfg.budget_usd,
+        breaker_threshold=cfg.breaker_threshold,
+        max_cost_per_accepted_usd=cfg.max_cost_per_accepted_usd,
+        slo_min_spend_usd=cfg.slo_min_spend_usd,
     )
 
 
@@ -156,7 +146,7 @@ class Role:
         ``run_cycle`` passes the same *name* to both for exactly that reason.
 
         Resolution order: the explicit *name* the caller passed, then
-        ``SIS_CONTRACT``, then the bootstrap target (the historical behaviour).
+        ``contracts.default``, then the bootstrap target (historical behaviour).
 
         The explicit argument is the primary mechanism, not a nicety: these are
         **detached Ray actors in their own processes**, which inherit the
@@ -164,19 +154,22 @@ class Role:
         ``bootstrap()`` — including anything a test sets with
         ``monkeypatch.setenv`` — is invisible to them. ``SIS_CONTRACT`` therefore
         only works when set before launch (``SIS_CONTRACT=sort python main.py``),
-        which is fine for the CLI and useless for anything programmatic.
+        which is fine for the CLI and useless for anything programmatic. The
+        ``config.yml`` layer does not have that limitation — each actor reads the
+        file from disk itself — but the explicit argument still wins, because a
+        per-cycle choice should not depend on a file that outlives the cycle.
 
         An unknown name raises rather than silently falling back — a typo'd
         contract name that quietly optimised a different target would be a
         confusing way to waste a cycle's spend.
         """
-        wanted = name or os.getenv("SIS_CONTRACT")
+        wanted = name or config.get("contracts.default")
         if wanted:
             named: contract.OptimizationContract | None = ray.get(
                 self._sm.contract_by_name.remote(wanted))
             if named is None:
                 known = [c.name for c in ray.get(self._sm.contracts.remote())]
-                source = "contract_name" if name else "SIS_CONTRACT"
+                source = "contract_name" if name else "contracts.default"
                 raise ValueError(
                     f"{source}={wanted!r} is not a registered contract; known: {known}")
             return named
@@ -682,13 +675,14 @@ class DevOps(Role):
         pr = ray.get(self._ws.get_pr.remote(pr_id))
         version = _version_for(pr)
 
-        # Explicit argument first, then the env var. Reading the env var
+        # Explicit argument first, then configuration. Reading an env var
         # "fresh" inside an already-running actor is not fresh at all: the
         # actor's os.environ is a snapshot from when its OS process was
         # spawned, so a test's monkeypatch.setenv() (a different process) can
-        # never reach it. Same trap as SIS_CONTRACT (docs/KNOWN_ISSUES.md, and
-        # Role._contract above); same fix.
-        backend = canary_backend or os.getenv("SIS_CANARY")
+        # never reach it. Same trap as contracts.default (docs/KNOWN_ISSUES.md,
+        # and Role._contract above); same fix. The config.yml layer is read from
+        # disk per process and so does reach here, but the argument still wins.
+        backend = canary_backend or config.get("canary.backend")
         self._pr_backend[pr_id] = "serve" if backend == "serve" else "legacy"
 
         if backend == "serve":

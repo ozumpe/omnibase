@@ -18,12 +18,11 @@ and every handoff is recorded in the SelfModel provenance graph.
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any
 
 import ray
 
-from sis import episodic, gauntlet, llm
+from sis import config, episodic, gauntlet, llm
 from sis.contract import DEFAULT_CONTRACTS
 from sis.roles import CEO, CTO, PM, QA, SWE, Designer, DevOps, ceo_config_from_env
 from sis.self_model import get_self_model
@@ -153,7 +152,7 @@ def run_cycle(
         handles["Designer"], handles["SWE"], handles["QA"], handles["DevOps"],
     )
 
-    proposer = os.getenv("SIS_PROPOSER", "stub")
+    proposer = str(config.get("proposer.backend"))
     # The model recorded in the episodic log = whichever provider/model is
     # configured (sis.llm), not a hardcoded vendor. None for the stub.
     model = llm.configured_model() if proposer != "stub" else None

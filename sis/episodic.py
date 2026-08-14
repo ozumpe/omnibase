@@ -21,13 +21,13 @@ retrieval) is a new backend implementing the same port — the loop doesn't chan
 from __future__ import annotations
 
 import json
-import os
 import uuid
 from collections import Counter
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import Any, Protocol
 
+from sis import config
 from sis.clock import Clock, now_iso
 from sis.paths import EPISODIC_DUCKDB, EPISODIC_JSONL
 
@@ -268,8 +268,8 @@ class DuckDBEpisodicStore:
 
 
 def get_episodic_store(kind: str | None = None) -> EpisodicStore:
-    """Return the configured store (``SIS_EPISODIC_STORE``: jsonl|duckdb|none)."""
-    kind = (kind or os.getenv("SIS_EPISODIC_STORE") or "jsonl").lower()
+    """Return the configured store (``episodic.store``: jsonl|duckdb|none)."""
+    kind = (kind or str(config.get("episodic.store"))).lower()
     if kind == "none":
         return NullEpisodicStore()
     if kind == "duckdb":

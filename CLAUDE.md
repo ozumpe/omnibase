@@ -169,19 +169,29 @@ internal target before it models anything external.
   pins that it must, so the excluded half can never silently run nowhere).
 - Optional deps: `poetry install --with llm` (anthropic) · `--with real`
   (requests/boto3/pyyaml) · `--with analytics` (duckdb).
-- Env flags (full table in `README.md`): `SIS_PROPOSER` (stub|claude), `SIS_SANDBOX`
-  (subprocess|docker), `SIS_ADAPTERS` (memory|real), `SIS_ENV` (local|aws),
-  `SIS_EPISODIC_STORE` (jsonl|duckdb|none), `SIS_TARGET_PATHS`,
-  `SIS_CONTRACT` (which target a cycle optimises: sum_of_divisors|sort —
-  must be set BEFORE launch; prefer `--contract`/`run_cycle(contract_name=)`),
-  `SIS_CANARY` (`serve` for a real Ray Serve canary judged against live
-  traffic, OMNI-14; unset = legacy in-memory recording; same BEFORE-launch
-  caveat as `SIS_CONTRACT` — prefer `--canary`/`run_cycle(canary_backend=)`),
-  `SIS_ALLOW_STRICT_CHANGES`, `SIS_GAUNTLET_TIMEOUT`, `SIS_SANDBOX_IMAGE`,
-  `SIS_ALLOW_UNSANDBOXED_LLM`, `SIS_BUDGET_USD` (CEO hard cap; + the other
-  brakes), `SIS_HTTP_TIMEOUT` (real-adapter request timeout), `SIS_LLM_PROVIDER`
-  / `SIS_LLM_MODEL` (which LLM backs the proposer; adapters in `sis/llm.py`),
-  `ANTHROPIC_API_KEY`.
+- **Configuration is one file: `config.yml`** (OMNI-27), generated from the
+  schema in `sis/config.py` — every key with its default, doc, env var, and CLI
+  flag. `poetry run python main.py --show-config` prints the effective values
+  **and where each came from**. Don't restate defaults in prose anywhere: this
+  list used to be a hand-maintained table in `README.md` and had already drifted.
+  - Precedence: **CLI flag > env var > `config.yml` > built-in default.** Every
+    legacy `SIS_*` var still works — it is the env layer.
+  - Sections: `brakes`, `sandbox`, `policy`, `episodic`, `adapters`, `proposer`,
+    `canary`, `loop`, `contracts`. Each key is prefixed `forbidden_` /
+    `strict_` / `soft_`.
+  - **The prefix gates the human operator UI (OMNI-28), not the loop.** The loop
+    is stopped by `config.yml` and `sis/config.py` both being POLICY-FORBIDDEN,
+    at every tier. Naming the config as an optimisation target buys nothing —
+    guardrail classification is checked first, and `tests/test_config.py` pins it.
+  - Add a knob by adding one `Key(...)` to `SCHEMA`, then
+    `poetry run python -m sis.config --write`. A test regenerates the file and
+    compares, so the committed file cannot drift from the code.
+  - Secrets are **not** here (`config.yml` is committed) — they stay in
+    `secrets.local.yml` behind `sis/settings.py`. `ANTHROPIC_API_KEY` is a
+    credential, not a config key.
+  - `SIS_CONTRACT`/`SIS_CANARY`'s BEFORE-launch caveat still applies to the *env*
+    layer only (actors snapshot the environment at creation); the file and CLI
+    layers do reach the actors. Prefer `--contract`/`run_cycle(contract_name=)`.
 - Real adapters: `cp secrets.example.yml secrets.local.yml`; then
   `poetry run python scripts/check_connections.py --deep` before a real cycle.
 - Docker sandbox image: `docker build -t sis-gauntlet:latest -f Dockerfile.gauntlet .`

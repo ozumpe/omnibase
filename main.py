@@ -5,6 +5,10 @@ Usage:
     poetry run python main.py --contract sort    # optimise a different target
     poetry run python main.py --canary serve     # judge the canary against real traffic
     poetry run python main.py --loop             # run as a server until Ctrl-C
+    poetry run python main.py --show-config      # effective config + where each value came from
+
+Every key in ``config.yml`` also has a ``--section-name`` flag (see
+``sis/config.py``), e.g. ``--sandbox-mode docker`` or ``--brakes-budget-usd 0.05``.
 
 The org cycle exercises the whole hierarchy on a simulated intake: a
 non-technical user drops a proposal into Confluence → PM writes a spec →
@@ -19,11 +23,9 @@ gracefully on SIGINT/SIGTERM (or after ``SIS_LOOP_MAX_CYCLES`` cycles).
 
 from __future__ import annotations
 
-import os
-
 import ray
 
-from sis import loop, org
+from sis import config, loop, org
 
 
 def run_org_cycle(contract_name: str | None = None, canary_backend: str | None = None) -> None:
@@ -65,8 +67,8 @@ def run_org_cycle(contract_name: str | None = None, canary_backend: str | None =
 def run_server_loop(canary_backend: str | None = None) -> None:
     handles = org.bootstrap()
     print("[main] server loop starting (Ctrl-C to stop gracefully)")
-    max_cycles_env = os.getenv("SIS_LOOP_MAX_CYCLES")
-    # repeat() never runs dry, so SIS_LOOP_MAX_CYCLES is a clean bound and an
+    pacing = config.config().loop
+    # repeat() never runs dry, so loop.max_cycles is a clean bound and an
     # unbounded run keeps improving until Ctrl-C (rather than idling after one).
     results = loop.serve(
         handles,
@@ -75,34 +77,36 @@ def run_server_loop(canary_backend: str | None = None) -> None:
             "The divisor-sum computation is too slow under load. "
             "Please make it faster without changing results.",
         ),
-        interval_s=float(os.getenv("SIS_LOOP_INTERVAL", "30")),
-        max_cycles=int(max_cycles_env) if max_cycles_env else None,
+        interval_s=pacing.interval_seconds,
+        max_cycles=pacing.max_cycles,
         canary_backend=canary_backend,
     )
     print(f"[main] loop stopped after {len(results)} cycle(s)")
 
 
-def _flag_value(argv: list[str], flag: str) -> str | None:
-    """``--flag value`` from argv, or None if absent. Fails loudly if the flag
-    is present with nothing after it, rather than silently taking the next
-    flag as its value."""
-    if flag not in argv:
-        return None
-    index = argv.index(flag)
-    if index + 1 >= len(argv):
-        raise SystemExit(f"{flag} needs a value")
-    return argv[index + 1]
-
-
 def main() -> None:
     import sys
 
-    # --contract/--canary are passed down as arguments rather than read from
-    # the environment inside the actors: they are separate processes and only
-    # see the env as it was when they were created (SIS_CONTRACT/SIS_CANARY
-    # still work, but only if exported before launch).
-    contract_name = _flag_value(sys.argv, "--contract")
-    canary_backend = _flag_value(sys.argv, "--canary")
+    # Every config key has a --section-name flag; `--contract` and `--canary`
+    # are the two older spellings. Applied BEFORE bootstrap() on purpose: the
+    # role actors are separate OS processes that snapshot the environment when
+    # they are created, so an override installed after bootstrap would configure
+    # this process and silently leave the actors on the old value.
+    overrides = config.parse_cli(sys.argv[1:])
+    config.apply_cli_overrides(overrides)
+
+    if "--show-config" in sys.argv:
+        for item in config.effective():
+            print(f"{item.key.path:<38} {str(item.value):<24} "
+                  f"[{item.key.tier.value}, from {item.source.value}]")
+        return
+
+    # Still passed down as explicit arguments rather than re-read inside the
+    # actors: a per-cycle choice belongs to the cycle, not to a file or an
+    # environment that outlives it.
+    settings = config.config()
+    contract_name = settings.contracts.default
+    canary_backend = settings.canary.backend
 
     if "--loop" in sys.argv:
         run_server_loop(canary_backend)

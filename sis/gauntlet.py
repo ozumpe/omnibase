@@ -51,6 +51,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from sis import config
 from sis.backtest import (
     EXIT_BAD_FIXTURE,
     EXIT_MISMATCH,
@@ -133,6 +134,19 @@ def _sandbox_env(home: str, pythonpath: str) -> dict[str, str]:
 # "subprocess" (default, soft guard) | "docker" (kernel-enforced isolation)
 DEFAULT_SANDBOX_IMAGE = "sis-gauntlet:latest"
 
+
+def sandbox_mode() -> str:
+    """Which sandbox contains generated code: ``subprocess`` or ``docker``.
+
+    One accessor rather than four ``os.getenv("SIS_SANDBOX")`` calls that each
+    had to spell the default identically. The schema restricts the value to the
+    two modes, which closes a genuinely nasty failure: ``SIS_SANDBOX=dcoker``
+    used to compare unequal to ``"docker"`` and silently run untrusted code in
+    the *soft* sandbox, reporting nothing.
+    """
+    mode: str = config.get("sandbox.mode")
+    return mode
+
 # The python executable inside a gate command. _run() substitutes the real
 # path (host) or "python" (container) for this sentinel as command argv[0].
 _PY = "PYTHON"
@@ -158,8 +172,8 @@ def _docker_args(tmpdir: str, env: dict[str, str], image: str, name: str) -> lis
         "--security-opt", "no-new-privileges",
         "--read-only",
         "--pids-limit", "256",
-        "--memory", os.getenv("SIS_SANDBOX_MEMORY", "1g"),
-        "--cpus", os.getenv("SIS_SANDBOX_CPUS", "2"),
+        "--memory", str(config.get("sandbox.memory")),
+        "--cpus", str(config.get("sandbox.cpus")),
         "-v", f"{tmpdir}:{tmpdir}:rw",
         "-w", tmpdir,
     ]
@@ -187,7 +201,8 @@ def _docker_kill(name: str) -> None:
 
 def _timeout_seconds() -> float:
     """Wall-clock cap per gate — contains infinite loops in generated code."""
-    return float(os.getenv("SIS_GAUNTLET_TIMEOUT", "120"))
+    seconds: float = config.get("sandbox.timeout_seconds")
+    return seconds
 
 
 def _timeout_result(cmd: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
@@ -212,9 +227,8 @@ def _run(
     behind it for two minutes.
     """
     timeout = _timeout_seconds() if timeout is None else timeout
-    mode = os.getenv("SIS_SANDBOX", "subprocess")
-    if mode == "docker":
-        image = os.getenv("SIS_SANDBOX_IMAGE", DEFAULT_SANDBOX_IMAGE)
+    if sandbox_mode() == "docker":
+        image = str(config.get("sandbox.image"))
         name = f"sis-gauntlet-{uuid.uuid4().hex[:12]}"
         cmd = _docker_args(tmpdir, env, image, name) + ["python", *inner[1:]]
         try:
@@ -278,33 +292,35 @@ def ensure_sandbox_allows_proposer() -> None:
     """Refuse to run an untrusted proposer's code without kernel isolation.
 
     The stub proposer returns a trusted, hand-written candidate, so the soft
-    ``subprocess`` sandbox is fine. A real LLM (``SIS_PROPOSER=claude``) writes
-    **untrusted** code: it must run in the ``docker`` sandbox, whose only mount
-    is the per-gate temp dir, so a malicious diff cannot read host credentials
-    (``secrets.local.yml``, ``~/.aws``, ...). The subprocess sandbox scrubs the
-    env and blocks egress, but the egress block is a monkeypatch untrusted code
-    could undo, and the host filesystem stays readable — see KNOWN_ISSUES.md M1.
+    ``subprocess`` sandbox is fine. A real LLM (``proposer.backend=claude``)
+    writes **untrusted** code: it must run in the ``docker`` sandbox, whose only
+    mount is the per-gate temp dir, so a malicious diff cannot read host
+    credentials (``secrets.local.yml``, ``~/.aws``, ...). The subprocess sandbox
+    scrubs the env and blocks egress, but the egress block is a monkeypatch
+    untrusted code could undo, and the host filesystem stays readable — see
+    KNOWN_ISSUES.md M1.
 
     Raises unless the sandbox is kernel-enforced. Explicit, loud override for
-    when you accept the risk: ``SIS_ALLOW_UNSANDBOXED_LLM=1``.
+    when you accept the risk: ``sandbox.allow_unsandboxed_llm``.
     """
-    proposer = os.getenv("SIS_PROPOSER", "stub")
-    if proposer == "stub" or os.getenv("SIS_SANDBOX") == "docker":
+    proposer = str(config.get("proposer.backend"))
+    if proposer == "stub" or sandbox_mode() == "docker":
         return
-    if os.getenv("SIS_ALLOW_UNSANDBOXED_LLM") == "1":
+    if config.get("sandbox.allow_unsandboxed_llm"):
         print(
-            f"WARNING: SIS_PROPOSER={proposer!r} is running untrusted LLM code in the "
-            "soft subprocess sandbox (SIS_ALLOW_UNSANDBOXED_LLM=1). It can read host "
-            "files such as secrets.local.yml. Use SIS_SANDBOX=docker for any real run.",
+            f"WARNING: proposer.backend={proposer!r} is running untrusted LLM code in "
+            "the soft subprocess sandbox (sandbox.allow_unsandboxed_llm). It can read "
+            "host files such as secrets.local.yml. Use sandbox.mode=docker "
+            "(--sandbox-mode docker) for any real run.",
             file=sys.stderr,
         )
         return
     raise RuntimeError(
-        f"SIS_PROPOSER={proposer!r} writes untrusted code, which must run in the "
+        f"proposer.backend={proposer!r} writes untrusted code, which must run in the "
         "kernel-enforced docker sandbox so it cannot read host credentials. Set "
-        "SIS_SANDBOX=docker (build it once: docker build -t sis-gauntlet:latest -f "
-        "Dockerfile.gauntlet .), or set SIS_ALLOW_UNSANDBOXED_LLM=1 to accept the "
-        "risk (not recommended)."
+        "sandbox.mode=docker (--sandbox-mode docker, or SIS_SANDBOX=docker; build the "
+        "image once: docker build -t sis-gauntlet:latest -f Dockerfile.gauntlet .), or "
+        "set sandbox.allow_unsandboxed_llm=true to accept the risk (not recommended)."
     )
 
 
@@ -523,11 +539,12 @@ def ensure_sandbox_ready() -> None:
     a test asserting both callers call it.
     """
     ensure_sandbox_allows_proposer()
-    if os.getenv("SIS_SANDBOX") == "docker" and shutil.which("docker") is None:
+    if sandbox_mode() == "docker" and shutil.which("docker") is None:
         raise RuntimeError(
-            "SIS_SANDBOX=docker but the docker CLI was not found. Install Docker "
+            "sandbox.mode=docker but the docker CLI was not found. Install Docker "
             "and build the image (docker build -t sis-gauntlet:latest -f "
-            "Dockerfile.gauntlet .), or unset SIS_SANDBOX for the subprocess sandbox."
+            "Dockerfile.gauntlet .), or set sandbox.mode=subprocess for the "
+            "subprocess sandbox."
         )
 
 

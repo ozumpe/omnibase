@@ -26,10 +26,10 @@ real pages, issues, branches, and PRs.
 from __future__ import annotations
 
 import base64
-import os
 import re
 from typing import TYPE_CHECKING, Any, cast
 
+from sis import config
 from sis.adapters import InMemoryTelemetry
 from sis.ports import (
     Branch,
@@ -55,18 +55,14 @@ DEFAULT_HTTP_TIMEOUT = 30.0
 
 
 def _http_timeout() -> float:
-    """The per-request timeout, from SIS_HTTP_TIMEOUT or the default. A bad value
-    fails loudly rather than silently reverting to "wait forever"."""
-    raw = os.getenv("SIS_HTTP_TIMEOUT")
-    if not raw:
-        return DEFAULT_HTTP_TIMEOUT
-    try:
-        value = float(raw)
-    except ValueError:
-        raise ValueError(f"SIS_HTTP_TIMEOUT={raw!r} is not a valid number") from None
-    if value <= 0:
-        raise ValueError(f"SIS_HTTP_TIMEOUT={raw!r} must be positive")
-    return value
+    """The per-request timeout (``adapters.http_timeout_seconds``).
+
+    A bad value fails loudly in :mod:`sis.config` rather than silently reverting
+    to "wait forever" — the schema marks the key ``positive``, so zero and
+    negative are both rejected at parse time.
+    """
+    seconds: float = config.get("adapters.http_timeout_seconds")
+    return seconds
 
 
 class _TimeoutHTTP:
