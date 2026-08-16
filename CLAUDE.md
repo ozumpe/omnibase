@@ -448,16 +448,17 @@ state as last confirmed, not a live query:
    per-actor slots, an emergence gate). Four candidates recorded in that doc;
    check the doc for whether a selection has since been made.
 5. ~~**[OMNI-27](https://olafzumpe.atlassian.net/browse/OMNI-27) — unified
-   config**~~ — PR #92, awaiting merge. One schema, `config.yml`, env/CLI
-   override; see "Current status" above.
+   config**~~ — **done 2026-08-16**, PR #92 merged to `develop`. One schema,
+   `config.yml`, env/CLI override; see "Current status" above.
 6. **[OMNI-28](https://olafzumpe.atlassian.net/browse/OMNI-28) — operator
    frontend.** View system state, edit config gated by each key's tier
    (`forbidden_` not editable, `strict_` behind confirmation, `soft_` free),
    changes take effect on restart. **Depends on OMNI-27** for `config.yml` and
    the effective-config-with-source model (`sis.config.effective()`, already
-   built and exercised by `main.py --show-config`). The UI stack is
-   undecided — worth a short design note first, in the style of
-   `docs/CLASS2_CONTRACT.md`, rather than presupposing one in the ticket.
+   built and exercised by `main.py --show-config`). **Stack decided
+   2026-08-16: Panel (built-in OAuth, unlike Streamlit) + GitHub OAuth,
+   served on 443 with TLS terminating in front of Panel's internal 8080.**
+   Not yet implemented. Design: `docs/OPERATOR_FRONTEND.md`.
 
 Not yet scheduled: a small AWS run (one node, a few cycles) — watch the provenance
 graph and the bill; and the **atomic actor swap** for internal, never-served actors,
