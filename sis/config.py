@@ -280,6 +280,29 @@ SCHEMA: tuple[Key, ...] = (
         "SIS_CONTRACT",
         "Default contract name; --contract still overrides it per cycle.",
         alias="--contract"),
+
+    # --- frontend: the operator UI (OMNI-28). --------------------------------
+    # Everything that decides *who gets in* is forbidden, because this is the
+    # one section describing the tool that edits this file. A login list an
+    # authenticated operator could append to is not an allowlist, and an auth
+    # mode reachable from inside a session is not authentication.
+    Key("frontend", "auth", ConfigTier.FORBIDDEN, Kind.STR, "github",
+        "SIS_FRONTEND_AUTH",
+        "Operator UI authentication: 'github' (OAuth) or 'none'. 'none' is "
+        "refused unless the UI is bound to loopback.",
+        choices=("github", "none")),
+    Key("frontend", "allowed_logins", ConfigTier.FORBIDDEN, Kind.STR_LIST, (),
+        "SIS_FRONTEND_ALLOWED_LOGINS",
+        "GitHub logins permitted to use the operator UI. Empty denies everyone: "
+        "an allowlist that defaults to 'anyone' only looks like a control."),
+    Key("frontend", "bind", ConfigTier.FORBIDDEN, Kind.STR, "127.0.0.1",
+        "SIS_FRONTEND_BIND",
+        "Interface the operator UI listens on. Loopback by default; a public "
+        "bind is what makes 'auth: none' refuse to start."),
+    Key("frontend", "port", ConfigTier.SOFT, Kind.INT, 8080,
+        "SIS_FRONTEND_PORT",
+        "Port the operator UI listens on inside the container. TLS terminates "
+        "in front of it (see docs/OPERATOR_FRONTEND.md).", positive=True),
 )
 
 SECTIONS: tuple[str, ...] = tuple(dict.fromkeys(key.section for key in SCHEMA))
@@ -689,6 +712,14 @@ class ContractsConfig:
 
 
 @dataclass(frozen=True)
+class FrontendConfig:
+    auth: str
+    allowed_logins: tuple[str, ...]
+    bind: str
+    port: int
+
+
+@dataclass(frozen=True)
 class Config:
     """The whole effective configuration, frozen."""
 
@@ -701,6 +732,7 @@ class Config:
     canary: CanaryConfig
     loop: LoopConfig
     contracts: ContractsConfig
+    frontend: FrontendConfig
 
 
 def _section(name: str, env: Mapping[str, str] | None) -> dict[str, Any]:
@@ -731,6 +763,7 @@ def config(*, env: Mapping[str, str] | None = None) -> Config:
         canary=CanaryConfig(**_section("canary", env)),
         loop=LoopConfig(**_section("loop", env)),
         contracts=ContractsConfig(**_section("contracts", env)),
+        frontend=FrontendConfig(**_section("frontend", env)),
     )
 
 
@@ -765,12 +798,22 @@ def _wrap(text: str, width: int, prefix: str) -> Iterator[str]:
         yield prefix + line
 
 
-def render_config_file() -> str:
-    """Render ``config.yml`` from the schema — defaults, tiers, and docs.
+def render_config_file(values: Mapping[str, Any] | None = None) -> str:
+    """Render ``config.yml`` from the schema — tiers, docs, and values.
 
-    The committed file is generated rather than hand-maintained so it cannot
-    drift from the code: ``tests/test_config.py`` regenerates it and compares.
+    *values* maps ``section.name`` to the value to write; anything absent falls
+    back to the key's built-in default. Passing nothing renders a pristine
+    defaults file, which is what ``--write`` does for a fresh checkout.
+
+    The **structure** is generated rather than hand-maintained so it cannot
+    drift from the code: ``tests/test_config.py`` re-renders the committed file
+    from its own values and compares, which catches an added or removed key, a
+    stale doc comment, a wrong tier prefix or reordering. It deliberately does
+    not pin the values, because the operator UI (OMNI-28) writes them here.
+    What *is* still pinned is that no ``forbidden_`` key may drift from its
+    default, so deleting this file can never weaken a guardrail.
     """
+    chosen = {} if values is None else values
     lines = [
         "# config.yml — every knob the engine has, with its default.",
         "#",
@@ -796,7 +839,8 @@ def render_config_file() -> str:
                 continue
             lines.extend(_wrap(key.doc, 88, "  # "))
             lines.append(f"  # env: {key.env}   flag: {key.flag}")
-            lines.append(f"  {key.yaml_key}: {_render_scalar(key.default)}")
+            value = chosen.get(key.path, key.default)
+            lines.append(f"  {key.yaml_key}: {_render_scalar(value)}")
     return "\n".join(lines) + "\n"
 
 
@@ -804,7 +848,9 @@ def _main() -> None:
     import sys
 
     if "--write" in sys.argv:
-        CONFIG_FILE.write_text(render_config_file(), encoding="utf-8")
+        # Re-render around the values already in the file, so adding a key to
+        # SCHEMA does not silently reset every knob an operator has set.
+        CONFIG_FILE.write_text(render_config_file(load_file()), encoding="utf-8")
         print(f"wrote {CONFIG_FILE}")
         return
     for item in effective():

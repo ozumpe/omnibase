@@ -78,12 +78,35 @@ class AwsSettings:
 
 
 @dataclass(frozen=True)
+class FrontendSettings:
+    """OAuth credentials for the operator UI (OMNI-28).
+
+    Credentials, so they live here rather than in ``config.yml`` — that file is
+    committed. Which *provider* to use and who may sign in are configuration
+    and stay in the schema; the client secret and the cookie key are not.
+    """
+
+    oauth_key: str = field(repr=False, default="")
+    oauth_secret: str = field(repr=False, default="")
+    # Signs the session cookie. Generated per-process when unset, which logs
+    # everyone out on restart — correct for a single-operator tool, and far
+    # better than shipping a constant that would let anyone forge a session.
+    cookie_secret: str = field(repr=False, default="")
+
+    def __repr__(self) -> str:
+        return (f"FrontendSettings(oauth_key={_mask(self.oauth_key)!r}, "
+                f"oauth_secret={_mask(self.oauth_secret)!r}, "
+                f"cookie_secret={_mask(self.cookie_secret)!r})")
+
+
+@dataclass(frozen=True)
 class Settings:
     env: str = "local"
     adapters: str = "memory"  # "memory" | "real"
     atlassian: AtlassianSettings | None = None
     github: GitHubSettings | None = None
     aws: AwsSettings | None = None
+    frontend: FrontendSettings | None = None
 
     def require_atlassian(self) -> AtlassianSettings:
         if self.atlassian is None:
@@ -215,7 +238,16 @@ def _build_settings(env: str, adapters: str, raw: dict[str, Any]) -> Settings:
         secret_id=_opt_str(flat.get("aws_secret_id")),
     )
 
-    return Settings(env=env, adapters=adapters, atlassian=atlassian, github=github, aws=aws)
+    frontend = FrontendSettings(
+        oauth_key=str(flat.get("frontend_oauth_key", "")),
+        oauth_secret=str(flat.get("frontend_oauth_secret", "")),
+        cookie_secret=str(flat.get("frontend_cookie_secret", "")),
+    )
+
+    return Settings(
+        env=env, adapters=adapters, atlassian=atlassian, github=github, aws=aws,
+        frontend=frontend,
+    )
 
 
 def _opt_str(value: Any) -> str | None:
