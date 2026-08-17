@@ -63,10 +63,31 @@ optional = true
 [tool.poetry.group.analytics.dependencies]
 duckdb = "^1.1"         # embedded analytical store for the episodic log
 
+# Operator frontend (OMNI-28). Optional: the engine runs headless without it.
+# Install with: poetry install --with ui
+[tool.poetry.group.ui]
+optional = true
+
+[tool.poetry.group.ui.dependencies]
+# Pinned to the 1.9 line, not ^1.5: `label=`/`color=` replaced the deprecated
+# `name=`/`button_type=` widget arguments, and this code uses the new spelling.
+panel = "^1.9"          # dashboard + built-in OAuth; chosen over Streamlit for the latter
+
 # Optional extras (only present with their groups); don't fail mypy when absent.
 [[tool.mypy.overrides]]
 module = ["yaml", "boto3", "requests", "requests.*", "anthropic", "duckdb"]
 ignore_missing_imports = true
+
+# Panel (operator UI) is only partly annotated, so under --strict it reports
+# `no-untyped-call` for every widget — but only on a machine where the `ui`
+# group happens to be installed. CI installs core+dev only, where the same code
+# is clean. `follow_imports = "skip"` removes that split: Panel is treated as
+# an untyped external boundary whether or not it is present, so the type gate
+# means the same thing everywhere. Our own code stays fully strict.
+[[tool.mypy.overrides]]
+module = ["panel"]
+ignore_missing_imports = true
+follow_imports = "skip"
 
 [build-system]
 requires = ["poetry-core>=1.9.0"]

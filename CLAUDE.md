@@ -174,7 +174,14 @@ internal target before it models anything external.
   both halves, which it always does explicitly (`tests/test_test_layout.py`
   pins that it must, so the excluded half can never silently run nowhere).
 - Optional deps: `poetry install --with llm` (anthropic) · `--with real`
-  (requests/boto3/pyyaml) · `--with analytics` (duckdb).
+  (requests/boto3/pyyaml) · `--with analytics` (duckdb) · `--with ui` (panel).
+- Operator UI (OMNI-28): `poetry run python -m sis.frontend`. Locally,
+  `SIS_FRONTEND_AUTH=none` on the default loopback bind needs no OAuth app —
+  GitHub exempts `localhost` from the HTTPS redirect rule. It refuses to start
+  unauthenticated on any non-loopback bind. Panel is only partly annotated, so
+  it is `follow_imports = "skip"` in the mypy overrides: otherwise the type
+  gate would mean something different on a machine that has the `ui` group
+  installed than in CI, which does not.
 - **Configuration is one file: `config.yml`** (OMNI-27), generated from the
   schema in `sis/config.py` — every key with its default, doc, env var, and CLI
   flag. `poetry run python main.py --show-config` prints the effective values
@@ -190,8 +197,13 @@ internal target before it models anything external.
     at every tier. Naming the config as an optimisation target buys nothing —
     guardrail classification is checked first, and `tests/test_config.py` pins it.
   - Add a knob by adding one `Key(...)` to `SCHEMA`, then
-    `poetry run python -m sis.config --write`. A test regenerates the file and
-    compares, so the committed file cannot drift from the code.
+    `poetry run python -m sis.config --write` (which re-renders *around the
+    values already in the file*, so adding a key doesn't reset operator edits).
+    A test re-renders the committed file from its own values and compares, so
+    its **structure** cannot drift from the code. Values may now differ from
+    their defaults, because the operator UI writes here (OMNI-28) — except for
+    `forbidden_` keys, which a separate test pins to their defaults so that
+    deleting `config.yml` can never weaken a guardrail.
   - Secrets are **not** here (`config.yml` is committed) — they stay in
     `secrets.local.yml` behind `sis/settings.py`. `ANTHROPIC_API_KEY` is a
     credential, not a config key.
@@ -382,7 +394,33 @@ Released through **v0.1.4**. The bootstrap skeleton (original "first task") is
   modes closed on the way: `SIS_SANDBOX=dcoker` used to compare unequal to
   `"docker"` and run untrusted code in the *soft* sandbox saying nothing, and
   `SIS_ALLOW_STRICT_CHANGES=yes` used to mean "disabled". Both now raise.
-- 481 tests (`pytest -m "not serve" -n auto`, the default, ~45s; the ~62
+- **Operator frontend, first slice (OMNI-28, PR #93).** Panel (`sis/frontend.py`,
+  `poetry install --with ui`, `python -m sis.frontend`) renders system state +
+  every config key with its tier and *source*. Four things worth knowing:
+  - **The tier gate is in `sis/operator.py`, not the browser.** A disabled
+    widget is a courtesy; `save_edits()` refuses a `forbidden_` key and an
+    unconfirmed `strict_` key whatever the caller sends, and edits are
+    all-or-nothing so a rejected third edit leaves the first two unwritten.
+  - **Operator edits land in `config.yml` itself** — no gitignored overlay, so
+    a changed knob stays a reviewable diff. That cost one guarantee and
+    replaced it with a sharper one: `render_config_file(values)` now renders
+    current values and the drift test re-renders from the file's *own* values
+    (still catching added/removed keys, stale docs, wrong tier prefix,
+    reordering), while a new test pins that **no `forbidden_` key may differ
+    from its default** — so deleting `config.yml` can never weaken a guardrail.
+  - **Auth is GitHub OAuth, and the settings that govern it are `forbidden_`**
+    (`frontend.auth`/`allowed_logins`/`bind`): an operator who could append a
+    login through the UI those settings guard would be escalating through its
+    own front door. Empty allowlist denies everyone; `auth: none` is refused on
+    a non-loopback bind (same shape as the M1 sandbox rule). Credentials go in
+    `secrets.local.yml`, never `config.yml`.
+  - **A shadowed key is shown as shadowed.** `config.yml` is the third of four
+    layers, so an edit to a key currently set by `SIS_*` saves correctly and
+    changes nothing; the UI says so at the point of editing.
+  - Design + the Caddy/TLS decision: `docs/OPERATOR_FRONTEND.md`. Deployment
+    artifacts (`Dockerfile.frontend`, `Caddyfile`) are deliberately not in this
+    slice.
+- 518 tests (`pytest -m "not serve" -n auto`, the default, ~46s; the ~62
   Ray-Serve-integration tests run separately, see Operational quick reference
   above); `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop
   → main` enforced by both the client-side pre-push hook and active
@@ -448,16 +486,17 @@ state as last confirmed, not a live query:
    per-actor slots, an emergence gate). Four candidates recorded in that doc;
    check the doc for whether a selection has since been made.
 5. ~~**[OMNI-27](https://olafzumpe.atlassian.net/browse/OMNI-27) — unified
-   config**~~ — PR #92, awaiting merge. One schema, `config.yml`, env/CLI
-   override; see "Current status" above.
+   config**~~ — **done 2026-08-16**, PR #92 merged to `develop`. One schema,
+   `config.yml`, env/CLI override; see "Current status" above.
 6. **[OMNI-28](https://olafzumpe.atlassian.net/browse/OMNI-28) — operator
-   frontend.** View system state, edit config gated by each key's tier
-   (`forbidden_` not editable, `strict_` behind confirmation, `soft_` free),
-   changes take effect on restart. **Depends on OMNI-27** for `config.yml` and
-   the effective-config-with-source model (`sis.config.effective()`, already
-   built and exercised by `main.py --show-config`). The UI stack is
-   undecided — worth a short design note first, in the style of
-   `docs/CLASS2_CONTRACT.md`, rather than presupposing one in the ticket.
+   frontend.** **First slice in PR #93** — Panel app, tier-gated write path,
+   GitHub OAuth, `frontend.*` schema keys; see "Current status" above for what
+   each decision cost. Still open: the deployment artifacts
+   (`Dockerfile.frontend` + `Caddyfile` for TLS on 443 in front of Panel's
+   8080), and whether this is exposed publicly at all — a tunnel or Tailscale
+   with a loopback bind is a stronger posture than any TLS config for a console
+   that edits the settings of a system which runs generated code. Design:
+   `docs/OPERATOR_FRONTEND.md`.
 
 7. **[OMNI-29](https://olafzumpe.atlassian.net/browse/OMNI-29) — first AWS
    run** (one node, a few supervised cycles — watch the provenance graph and

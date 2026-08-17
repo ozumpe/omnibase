@@ -114,25 +114,43 @@ def test_the_two_tier_enums_stay_in_step() -> None:
 # --- the committed file ---------------------------------------------------
 
 
-def test_the_committed_config_matches_the_built_in_defaults() -> None:
-    """No drift: the file a human reads is the file the code obeys.
-
-    A checkout with no ``config.yml`` at all must behave identically to this
-    one, which is what makes the built-in defaults a real fallback rather than a
-    second, quietly-different set of values.
-    """
+def test_the_committed_config_declares_every_key() -> None:
+    """The file a human reads describes every knob the code has."""
     from_file = config.load_file(config.CONFIG_FILE)
     assert from_file, "config.yml parsed to nothing — is it committed?"
     for key in config.SCHEMA:
         assert key.path in from_file, f"{key.path} is missing from config.yml"
-        assert from_file[key.path] == key.default, key.path
+
+
+def test_no_guardrail_key_drifts_from_its_built_in_default() -> None:
+    """Deleting ``config.yml`` must never weaken a guardrail.
+
+    Values here may legitimately differ from their defaults now that the
+    operator UI writes to this file (OMNI-28) — but only for ``soft_`` and
+    ``strict_`` keys. Every ``forbidden_`` key must still match ``SCHEMA``, so
+    a checkout with no ``config.yml`` at all falls back to exactly the spend
+    cap, sandbox mode, target list and episodic backend that shipped.
+
+    Changing a guardrail default is therefore a reviewed change to ``SCHEMA``,
+    not a quiet value edit in a generated file; a one-off run that needs a
+    different brake uses the environment layer, as ``sis/config.py`` says.
+    """
+    from_file = config.load_file(config.CONFIG_FILE)
+    for key in config.SCHEMA:
+        if key.tier is ConfigTier.FORBIDDEN:
+            assert from_file[key.path] == key.default, (
+                f"{key.path} is forbidden_ but config.yml disagrees with its "
+                f"built-in default ({from_file[key.path]!r} vs {key.default!r})"
+            )
 
 
 def test_the_committed_file_is_exactly_what_the_renderer_produces() -> None:
-    # Regenerating must be a no-op, so `--write` is safe to run at any time and
-    # a hand-edited *structure* is caught here rather than by a confusing parse
-    # error much later.
-    assert config.CONFIG_FILE.read_text(encoding="utf-8") == config.render_config_file()
+    # Re-rendered from the file's *own* values, so an operator-set value is not
+    # drift — but an added or removed key, a stale doc comment, a wrong tier
+    # prefix or reordering still is, and is caught here rather than surfacing as
+    # a confusing parse error much later.
+    rendered = config.render_config_file(config.load_file(config.CONFIG_FILE))
+    assert config.CONFIG_FILE.read_text(encoding="utf-8") == rendered
 
 
 def test_every_key_is_documented_and_tier_prefixed() -> None:

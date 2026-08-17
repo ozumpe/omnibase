@@ -51,6 +51,50 @@ poetry run python main.py                   # runtime/target.py (default)
 
 ---
 
+## Level 0a — the operator console (Panel)
+
+View system state and edit configuration in a browser. Independent of
+everything below it: the console never starts the engine, so "is it running?"
+stays a question it can answer honestly.
+
+```bash
+poetry install --with ui
+SIS_FRONTEND_AUTH=none poetry run python -m sis.frontend   # http://127.0.0.1:8080
+```
+
+`auth=none` is fine here and only here: it is **refused on any non-loopback
+bind**. Local development needs it because registering a GitHub OAuth app for
+`localhost` is busywork — and GitHub exempts `localhost` from its HTTPS
+redirect-URI rule, so nothing is being weakened that would otherwise apply.
+
+For the authenticated form, register an OAuth app, put its client id/secret in
+`secrets.local.yml` under `frontend:`, and list the logins that may sign in:
+
+```bash
+poetry run python -m sis.frontend --frontend-port 8080   # config.yml: forbidden_auth: "github"
+```
+
+What the page enforces, and what it merely displays:
+
+- **Displays** the tier badge and disables `forbidden_` widgets.
+- **Enforces**, in `sis/operator.py`, that a `forbidden_` key is never written
+  and a `strict_` one needs the confirmation checkbox — so driving the page
+  directly gains nothing.
+- **Warns** when a key is *shadowed*: `config.yml` is the third of four layers,
+  so editing a key that a `SIS_*` variable currently supplies will save and
+  still not take effect. Unset the variable, or use the environment layer.
+
+Edits apply on **restart**. A running loop keeps the configuration it started
+with, deliberately — see `sis/config.py`'s `file_layer()`.
+
+> **Exposure note.** TLS terminates in front of Panel, never in it; the design
+> and the Caddy config are in `docs/OPERATOR_FRONTEND.md`. Before putting this
+> on a public address at all, consider a tunnel or Tailscale with the loopback
+> bind: this console edits the settings of a system that executes generated
+> code, and not being reachable beats any cipher suite.
+
+---
+
 ## Level 0b — serve the target over HTTP (Ray Serve)
 
 The target behind a real endpoint, so a canary has somewhere to send traffic.
