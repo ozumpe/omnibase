@@ -398,10 +398,13 @@ This is development work, not configuration. Currently missing:
   (`--canary serve` / `SIS_CANARY=serve`); the in-memory recording stays the
   default. The **atomic actor swap**, for internal never-served actors, is
   still unbuilt — a different mechanism (DESIGN.md §4), no design doc yet.
-- **AWS provisioning.** `SIS_ENV=aws` + `SIS_AWS_SECRET_ID` switch secrets to
-  Secrets Manager (needs the secret + an IAM role with
-  `secretsmanager:GetSecretValue`), but there is no infra/deploy code — the
-  DevOps "provisions AWS" role is a stub.
+- ~~**AWS provisioning.**~~ **Terraformed (OMNI-29)** — `infra/aws/` stands up
+  the one-node run box (no-ingress SG, SSM-only access, instance role + one
+  Secrets Manager secret, artifacts bucket, budget alarm), and
+  `docs/AWS_RUN.md` is the design note + runbook for a *supervised* few-cycle
+  run. Deliberately not this Level's autonomous server: a human starts it,
+  watches it, stops it. The DevOps "provisions AWS" *role* (the actor doing it
+  itself) remains a stub.
 - **Error-driven cycles.** Fixing exceptions (vs. optimizing speed) isn't wired;
   the STRICT-tier policy path exists but nothing triggers it.
 
