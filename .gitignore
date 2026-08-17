@@ -22,6 +22,14 @@ runtime/contract_staging/
 .claude/settings.local.json
 .claude-code-gui/
 
+# Terraform (infra/aws). State records resource attributes and terraform.tfvars
+# holds the alert email; neither belongs in a public repo. The .terraform.lock.hcl
+# provider lock IS committed, by Terraform convention.
+*.tfstate
+*.tfstate.*
+.terraform/
+terraform.tfvars
+
 # Secrets (see DESIGN.md §6). Local dev only — never commit real credentials.
 # secrets.example.yml IS committed (template); secrets.local.yml is NOT.
 .env

@@ -459,6 +459,17 @@ state as last confirmed, not a live query:
    undecided — worth a short design note first, in the style of
    `docs/CLASS2_CONTRACT.md`, rather than presupposing one in the ticket.
 
-Not yet scheduled: a small AWS run (one node, a few cycles) — watch the provenance
-graph and the bill; and the **atomic actor swap** for internal, never-served actors,
+7. **[OMNI-29](https://olafzumpe.atlassian.net/browse/OMNI-29) — first AWS
+   run** (one node, a few supervised cycles — watch the provenance graph and
+   the bill). Designed + Terraformed: `docs/AWS_RUN.md` is the design note and
+   runbook, `infra/aws/` the (small) Terraform. One m7i.xlarge, **zero ingress
+   ports** (SSM Session Manager only; the OMNI-28 console stays loopback-bound,
+   reached over SSM port forwarding), instance role + one Secrets Manager
+   secret whose value never enters Terraform state, episodic log synced to S3
+   as the run's durable artifact, and two *independent* spend brakes
+   (`SIS_BUDGET_USD` in the loop; an AWS Budget alarm in billing). Not applied
+   yet. Explicitly **not** RUNBOOK Level 4: no autostart, no autonomy — a human
+   starts, watches, and stops it.
+
+Not yet scheduled: the **atomic actor swap** for internal, never-served actors,
 which `docs/SERVE_CANARY.md` scopes out and which has no design doc yet.
