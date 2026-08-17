@@ -115,3 +115,21 @@ contracts:
   # Default contract name; --contract still overrides it per cycle.
   # env: SIS_CONTRACT   flag: --contracts-default
   soft_default: null
+
+frontend:
+  # Operator UI authentication: 'github' (OAuth) or 'none'. 'none' is refused unless the
+  # UI is bound to loopback.
+  # env: SIS_FRONTEND_AUTH   flag: --frontend-auth
+  forbidden_auth: "github"
+  # GitHub logins permitted to use the operator UI. Empty denies everyone: an allowlist
+  # that defaults to 'anyone' only looks like a control.
+  # env: SIS_FRONTEND_ALLOWED_LOGINS   flag: --frontend-allowed-logins
+  forbidden_allowed_logins: []
+  # Interface the operator UI listens on. Loopback by default; a public bind is what
+  # makes 'auth: none' refuse to start.
+  # env: SIS_FRONTEND_BIND   flag: --frontend-bind
+  forbidden_bind: "127.0.0.1"
+  # Port the operator UI listens on inside the container. TLS terminates in front of it
+  # (see docs/OPERATOR_FRONTEND.md).
+  # env: SIS_FRONTEND_PORT   flag: --frontend-port
+  soft_port: 8080
