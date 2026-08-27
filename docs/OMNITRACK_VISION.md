@@ -1,14 +1,21 @@
 # From Class 2 to omnitrack — building a digital twin with omnibase
 
-**Status:** vision & sequencing (nothing here is implemented). This document *assumes*
-[OMNI-3](https://olafzumpe.atlassian.net/browse/OMNI-3) — currently **To Do** — has
-landed as designed: `FeatureContract`, the gate family
-(`InterfaceGate`/`AcceptanceGate`/`InvariantGate`/`BacktestGate`/`SloGate`),
-`ToolchainAdapter`, and the contract-author actor. The ✅ column in §2 describes that
-*designed* state, not shipped code — if OMNI-3's implementation drifts from
-[`CLASS2_CONTRACT.md`](CLASS2_CONTRACT.md), §2 drifts with it. Read that document first;
-this is its continuation. [`SERVE_CANARY.md`](SERVE_CANARY.md) is the online half of the
-same verification story and is reused wholesale here.
+**Status:** vision & sequencing. **None of E1–E5 is built** — with one exception, the
+`Clock` port, which D6 pulled forward into
+[OMNI-23](https://olafzumpe.atlassian.net/browse/OMNI-23) and which shipped as
+`sis/clock.py`.
+
+The Class-2 base this document builds on **has landed** (2026-08-11):
+`FeatureContract` with a contract-selected gate profile, `InterfaceGate`,
+`AcceptanceGate`, `InvariantGate`, `BacktestGate`, and the contract-author actor. Two
+pieces of [OMNI-3](https://olafzumpe.atlassian.net/browse/OMNI-3) did **not** ship and
+neither is on this document's path: `SloGate`
+([OMNI-24](https://olafzumpe.atlassian.net/browse/OMNI-24), low) and `ToolchainAdapter`
+([OMNI-20](https://olafzumpe.atlassian.net/browse/OMNI-20), parked) — the epic stays
+open for those two alone. The ✅ column in §2 therefore describes shipped code except
+where a cell says otherwise. Read [`CLASS2_CONTRACT.md`](CLASS2_CONTRACT.md) first; this
+is its continuation. [`SERVE_CANARY.md`](SERVE_CANARY.md) is the online half of the same
+verification story and is reused wholesale here.
 
 > Not yet mirrored in Confluence. When it is, it belongs in the SD space as a sibling of
 > the Class-2 contract page.
@@ -40,9 +47,9 @@ scalar for hundreds of components and nothing converges against it.
 |---|---|---|
 | Verify a built feature offline | ✅ `FeatureContract` + invariants + backtests | assumes a **deterministic** entry point |
 | Verify on live traffic | ✅ `ServeCloud` canary, same predicates | assumes a **stateless** target |
-| Any target, any language | ✅ contract + `ToolchainAdapter` | — |
+| Any target, any language | ⚠️ contract yes; `ToolchainAdapter` **parked** (OMNI-20) — Python only today | — |
 | Spec → contract | ✅ contract-author actor (human-reviewed) | — |
-| **Read the world** | ❌ | no `Sensor` port; no clock; no notion of event time |
+| **Read the world** | ⚠️ `Clock` port shipped (OMNI-23); no `Sensor` | no way to *read* the world — event time exists, readings don't |
 | **Know the model is wrong** | ❌ | trigger is "code is slow", not "model disagrees with reality" |
 | **Model non-deterministic reaction** | ❌ | every gate compares values, not distributions |
 | **Hold live state across a swap** | ❌ | canary works *because* the target is stateless |
@@ -61,6 +68,13 @@ None of this is an engine rewrite.
 A port like the existing five, with **two adapters from day one**: `RealSensor` (reads the
 world) and `SimSensor` (generates scenarios). Paired with a `Clock` port so the twin can
 run in event time, not wall-clock.
+
+**The clock half is already built** — `sis/clock.py` (OMNI-23) ships `WallClock`,
+`ReplayClock`, and timezone-required `event_time` parsing, so what remains of E1 is the
+`Sensor` port and its two adapters. Note what that module already settled, so E1 doesn't
+relitigate it: event time is *not* used for durations (the benchmark gate keeps
+`perf_counter`) and *not* for the audit trail (`SelfModel.record` stays on the wall
+clock). Only "when did something happen out there" goes behind the port.
 
 This single component pays for itself three times:
 1. it is the input to the twin;
@@ -240,7 +254,10 @@ Two rules hold the whole thing together, and both are carried over rather than i
 ## 6. Decisions to be made
 
 Numbers are stable identifiers, not an ordering — the → line on each gives its deadline.
-Recommendation given for each; D0 below is now a decision rather than a recommendation.
+Each entry states a recommendation; where a decision has been taken it follows below it and
+supersedes it. **Decided: D0–D9, D11, D12** (2026-08-27). **Still open: D10 alone** — does
+the emergence gate block promotion — which is not due until Phase F and cannot sensibly be
+settled before E5 has run advisory for a while.
 
 **D0 — What slice of the world does omnitrack model first? DECIDED: regional air traffic
 (OpenSky / ADS-B Exchange).**
@@ -275,7 +292,10 @@ The other three candidates considered, not selected:
 *Recommend one engine, N slots.* The engine is already target-agnostic; per-actor
 separation buys credit assignment and rollback granularity without a second engine.
 Separate instances become attractive only for independent failure domains and ownership.
-→ *Decide before Phase D; cheap to revisit.*
+→ *Decided before Phase D; cheap to revisit.*
+
+Decision:
+*One Engine with N Conttracts*
 
 **D2 — Where does twin state live: in the Ray actor, or behind a `StateStore` port?**
 The highest-leverage decision in this document. *Recommend externalising it.* If modelled
@@ -284,22 +304,49 @@ pattern that already works, and state migration becomes an ordinary schema migra
 its own contract. Keeping state in the actor means building drain/handoff, versioned state,
 and trajectory comparison from scratch — and Ray cannot hot-swap an actor class anyway, so
 you would be building that machinery regardless.
-→ *Decide before any twin code is written. Retrofitting is a rewrite.*
+→ *Decided before any twin code is written. Retrofitting is a rewrite.*
+
+Decision:
+The actor state needs to be externalized. Ideally in DuckDB and in a human readable way.
+Ideally, it should be possible to optionally store each transition with the clock time and the 
+cause for transitioning to be able to debug/follow reasoning (it may not even take too much 
+space if implemented right but it should probably not be the default).
 
 **D3 — What is a reaction model, as an artifact?**
 Generated Python with explicit parameters, a fitted statistical model, or an LLM called at
 runtime? This determines what the gauntlet is even checking. *Recommend generated,
 parameterised code — LLM at build time, not at runtime.* Runtime LLM calls put
 non-determinism, per-request cost, and an unauditable dependency inside the twin, and no
-gate in this document can verify them. If runtime LLM is ever wanted, it is a distinct risk
-class needing its own design.
-→ *Decide before Phase C.*
+gate in this document can verify them. If a runtime LLM is ever wanted, it is a distinct risk
+class that needs its own design.
+→ *Decided before Phase C.*
+
+Decision:
+Here we should compromise between using LLMs and still being able to test and simulate:
+The power of LLMs is indispensable for certain applications to get real world real-time digital twins and it is good to have the option to use LLM responses - within testable and simulatable boundaries.
+There will definitely be actors that need to use LLMs at some point and in some formalized ways - like expecting responses certain formats (e.g. JSON with specified fields)
+so it can be efficiently evaluated by code.
+If an actor depends on LLMs, we need to be able to simulate the LLM responses for testing and game playing/simulating scenarios (e.g. answering with pre-canned responses, pre-defined scenarios).
+In order to parameterize tests, we could have for each LLM dependent actor specialized LLM actors or interfaces (reverse of MCP servers), that can be mocked for testing purposes.
+
+However, this should be not relevant until we need actors that interact with LLMs.
+
+Points to remember:
+- mocks need to verify how actor's are handling the responses, never the LLM's behavior — so promotion evidence can't come purely from mocked responses, and the first LLM-dependent actor still needs its own design note
+    (the original "distinct risk class" point survives this D3 compromise).
+- Runtime LLM calls are per-request spend and must sit under the CEO brakes, which today only meter the proposer.
+- All LLM responses are untrusted input (like sensor data in §3's second trap — schema-validated, size-bounded, never interpolated raw. One genuine gap to name: an LLM-backed actor is STOCHASTIC on the E2 axis, but E2's hard requirement is "determinism under seed," which no LLM API can honor (temperature 0 is not determinism).
 
 **D4 — What evidence is required to promote: simulated, real, or both?**
 *Recommend real-trace evidence required for promotion; simulation for refutation and
 coverage only.* Needs to be a contract field, not a convention, or it erodes the first time
 real data is inconvenient.
 → *Decide with Phase A, enforce from Phase C.*
+
+Decision:
+As base for a promotion decision, recorded and human approved real world data is preferred, simulated data is to be used, if no recorded data is available (all tests must pass and it needs to be able to tolerate life traffic).
+
+Before a promotion we should expose the candidate to real world traffic and look at the error rate (if it can handle the format and the volume, and if there are no exceptions and probably if the responses are in an expected range)
 
 **D5 — How is holdout burn managed?**
 Options: rotating splits, a fixed evaluation budget, noised score reporting, or all three.
@@ -308,10 +355,15 @@ already being written). The alternative is silent overfitting that no gate repor
 Rotation implies ongoing writes into `specs/` — the ingestion path is **D12**.
 → *Decide with Phase C.*
 
+Decision:
+Go with the recommendation: budget + rotation, with burn measured from the episodic log.
+
 **D6 — Event time or wall-clock?**
 *Recommend event time behind a `Clock` port, with wall-clock as one adapter.* Backtest and
 replay are impossible without it, and it is nearly free at the start and painful later.
-→ *Decide with Phase A.*
+→ *Decided with Phase A.*
+
+Decided as recommended: event time behind a Clock port with wall-clock as one adapter
 
 **D7 — Is the simulator part of the exam or a target the loop may improve?**
 Tension: you want the simulator to get better, but it generates the test inputs.
@@ -320,6 +372,11 @@ reviewed data, and simulator improvements go through their own contract judged a
 held-out **real** traces. Never against itself.
 → *Decide before Phase C.*
 
+Decided as recommended:
+the simulator needs to be an improvable target. All improvements must only be judged against held-out real traces and 
+never ba judged against its own output, with a copy that generates the gauntlet inputs staying FORBIDDEN at a pinned 
+version, improvements reaching it via the human-approved promote path — is what prevents a closed loop.
+
 **D8 — Who decides what the modelled actors are?**
 Human/PM-authored ontology, or loop-proposed decomposition? *Recommend human-authored for
 v1.* This is the same input class as the domain invariants — a small, stable, high-value
@@ -327,12 +384,31 @@ human contribution. A loop that chooses its own decomposition is also choosing i
 scoring boundaries.
 → *Decide before Phase D.*
 
+Decided as recommended:
+A human should decide what the modelled actors are. However, this human decision can be driven by a 
+proposal.from any of the actors, but it must be approved by a human.
+
 **D9 — What counts as "the model is wrong enough to act"?**
 A per-actor prediction-error budget with a sustained-breach rule, mirroring the existing
 SLO trigger. The open question is whether the threshold is absolute, relative to the
 incumbent, or relative to climatology. *Recommend relative to climatology* — it is the only
 form that stays meaningful as the model improves.
 → *Decide with Phase B.*
+
+That's a decision to be made case by case, actor by actor and project by project. My opinion is to optimize the implementation
+of a model over time based on historic values/timelines. The situation for each actor can change suddenly and trastically - 
+even the climatology option can become unreliable quickly. It is paramount to keep a detailed history 
+of input values, and actions. Then come up with the most applicable model for each of the actors over time - maybe 
+through regression or an appropriate functions, backward propagation, what ever fits.
+
+What counts as a model is wrong enough to act? I think it depends on the context and the specific requirements of each actor but mainly two criteria:
+- Absolute error budget → "is the active twin fit for its purpose right now?" This is a safety or utility statement. Consequence: alert a human, downgrade confidence, stop trusting the output. 
+- Skill vs climatology → "is there recoverable headroom a code change could capture?" Consequence: spend LLM budget on a cycle.
+
+Ocasionally,
+(1) we need to spend money on a world that got harder rather than a model that got worse by initiating a self-improvement cycle because the absolute error rate is too high, while the skill didn't chang.
+(2) or if the model has drifted and the headroom is real, we need to spend money by firing when skill a decays while the absolute error still looks fine.
+(1) and (2) should not be the same trigger.
 
 **D10 — Does the emergence gate block promotion?**
 *Recommend advisory first, blocking once it has enough history to be trusted.* A blocking
@@ -346,6 +422,10 @@ per-actor shares* so one actor's productive streak isn't starved by an idle sibl
 the hard ceiling stays global.
 → *Decide with Phase D.*
 
+Recommendation sounds correct:
+- The total amount of money to be spend on the system must be capped globally.
+- the money spend on each actor should be allocated based on their contribution, impact and error rate.
+
 **D12 — Who writes real traces into the exam?**
 The held-out splits and scenario library live in POLICY-FORBIDDEN `specs/` (§5, rule 1),
 but the traces are produced at runtime by the system itself, and D5's rotation implies
@@ -356,6 +436,8 @@ promotion into `specs/` is a batched, human-approved operation — the same
 `RequiresHumanApproval` shape the adapters already use for destructive actions. The loop
 never holds write access to `specs/` at any point.
 → *Decide with Phase A (capture format), enforce from Phase C (first holdout).*
+
+The loop could propose its exam and a human can review/change/approve/reject it.
 
 ---
 
@@ -405,17 +487,26 @@ complexity:
 - `docs/KNOWN_ISSUES.md` — defects. This document is not a defect list; planned work lands
   in Jira.
 
-**Already on the board (2026-08-09).** Rather than wait for a Phase-A epic, the parts of
-this plan that the in-flight Class-2 epic ([OMNI-3](https://olafzumpe.atlassian.net/browse/OMNI-3))
-can absorb were folded into it, so Phases A and B are largely built as a side effect of
-finishing Class 2 instead of starting from scratch afterwards:
+**Already delivered via the Class-2 epic** (folded in 2026-08-09, shipped by 2026-08-11).
+Rather than wait for a Phase-A epic, the parts of this plan that the Class-2 epic
+([OMNI-3](https://olafzumpe.atlassian.net/browse/OMNI-3)) could absorb were folded into
+it. That paid off: the groundwork for Phases A and B exists as a side effect of finishing
+Class 2, so Phase A starts from the `Sensor` port rather than from scratch.
 
-| Ticket | Relationship to this document |
-|---|---|
-| [OMNI-19](https://olafzumpe.atlassian.net/browse/OMNI-19) — `BacktestGate` | Re-scoped and raised to Highest. Carries `split` (D5) and the pluggable `compare` comparator (E2). Was scheduled last on the theory that backtests need history; that is backwards here, where comparing against recorded reality *is* Phases A/B. |
-| [OMNI-23](https://olafzumpe.atlassian.net/browse/OMNI-23) — `Clock` + event time | New. D6, pulled forward: a fixture recorded without event time cannot be replayed, and the window to re-record may be gone. Must land before the first fixture. |
-| [OMNI-17](https://olafzumpe.atlassian.net/browse/OMNI-17) — `FeatureContract` | Now declares `determinism`, defaulting to deterministic, and requires a seeded entry point when stochastic. |
-| [OMNI-18](https://olafzumpe.atlassian.net/browse/OMNI-18) — `InvariantGate` | Now seeds generation explicitly and records the seed in the episodic log, so E2's gates inherit reproducibility. |
-| [OMNI-21](https://olafzumpe.atlassian.net/browse/OMNI-21) — contract-author actor | Now owns the *only* write path into `specs/`, built as a general human-approved ingestion mechanism so D12's trace pipeline reuses it. |
-| [OMNI-25](https://olafzumpe.atlassian.net/browse/OMNI-25) — D0 | Decided: regional air traffic. Update the ticket to reflect the decision. |
-| [OMNI-24](https://olafzumpe.atlassian.net/browse/OMNI-24) — `SloGate` · [OMNI-20](https://olafzumpe.atlassian.net/browse/OMNI-20) — `ToolchainAdapter` | Split out and parked respectively. Neither is on this document's path. |
+| Ticket | Status | Relationship to this document |
+|---|---|---|
+| [OMNI-19](https://olafzumpe.atlassian.net/browse/OMNI-19) — `BacktestGate` | ✅ Done | Re-scoped and raised to Highest. Carries `split` (D5) and the pluggable `compare` comparator (E2). Was scheduled last on the theory that backtests need history; that is backwards here, where comparing against recorded reality *is* Phases A/B. |
+| [OMNI-23](https://olafzumpe.atlassian.net/browse/OMNI-23) — `Clock` + event time | ✅ Done | D6, pulled forward: a fixture recorded without event time cannot be replayed, and the window to re-record may be gone. Landed as `sis/clock.py` before any fixture — the one piece of E1 that already exists. |
+| [OMNI-17](https://olafzumpe.atlassian.net/browse/OMNI-17) — `FeatureContract` | ✅ Done | Declares `determinism`, defaulting to deterministic, and requires a seeded entry point when stochastic. |
+| [OMNI-18](https://olafzumpe.atlassian.net/browse/OMNI-18) — `InvariantGate` | ✅ Done | Seeds generation explicitly and records the seed in the reject reason, so E2's gates inherit reproducibility. |
+| [OMNI-21](https://olafzumpe.atlassian.net/browse/OMNI-21) — contract-author actor | ✅ Done | Owns the *only* write path into `specs/`, built as a general human-approved ingestion mechanism so D12's trace pipeline reuses it. [OMNI-26](https://olafzumpe.atlassian.net/browse/OMNI-26) added worked-example transcription and the discrimination check. |
+| [OMNI-25](https://olafzumpe.atlassian.net/browse/OMNI-25) — D0 | ✅ Done | Decided: regional air traffic (§6, D0). |
+| [OMNI-24](https://olafzumpe.atlassian.net/browse/OMNI-24) — `SloGate` · [OMNI-20](https://olafzumpe.atlassian.net/browse/OMNI-20) — `ToolchainAdapter` | ⬜ To Do (low / parked) | Split out and parked respectively. Neither is on this document's path. Detached from OMNI-3 on 2026-08-27 so the completed epic could close; they stand alone in the backlog. |
+| [OMNI-3](https://olafzumpe.atlassian.net/browse/OMNI-3) — the Class-2 epic | ✅ Done | Closed 2026-08-27. |
+
+**Phase A is filed:
+[OMNI-30](https://olafzumpe.atlassian.net/browse/OMNI-30)** (2026-08-27) — the `Sensor`
+port, an OpenSky/ADS-B `RealSensor` with sanitisation in-scope, the `SimSensor`, the
+first recorded fixture, and prediction error computed but not acted on. It also carries
+the one OMNI-25 acceptance criterion that was never completed: checking the `Clock`
+shape against air traffic's actual data cadence before a fixture is recorded.
