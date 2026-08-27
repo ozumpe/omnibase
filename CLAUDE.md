@@ -413,11 +413,15 @@ Released through **v0.1.4**. The bootstrap skeleton (original "first task") is
     - **D7 — the simulator is an improvable target**, but improvements are
       judged only against held-out *real* traces, never its own output, with
       the copy that generates gauntlet inputs pinned and FORBIDDEN.
-    - **D9 — two triggers, deliberately not one.** An *absolute* error budget
-      answers "is the twin fit for purpose now" (→ alert a human, downgrade
-      confidence); *skill vs climatology* answers "is there headroom a code
-      change could capture" (→ spend LLM budget on a cycle). A world that got
-      harder and a model that got worse must not fire the same trigger.
+    - **D9 — two triggers, deliberately not one — but both spend.** An
+      *absolute* error budget answers "is the twin fit for purpose now"
+      (→ alert a human, downgrade confidence, *and* start a cycle — a harder
+      world absolutely triggers an improvement, since the twin must adapt to
+      the world as it now is); *skill vs climatology* answers "is there
+      headroom a code change could capture" (→ spend LLM budget on a cycle,
+      no human alert needed). They stay separate triggers because they detect
+      different situations — a world that got harder is not a model that got
+      worse — not because one of them is forbidden to spend.
     - **D8 / D12 — humans decide, actors may propose.** The loop can propose
       the actor decomposition and its own exam; a human reviews, edits,
       approves or rejects. `specs/` write access stays with the
