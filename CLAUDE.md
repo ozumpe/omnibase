@@ -386,10 +386,8 @@ Released through **v0.1.4**. The bootstrap skeleton (original "first task") is
   `Clock` half of E1 exists (`sis/clock.py`, OMNI-23); **Phase A is filed as
   OMNI-30** — the `Sensor` port, the first `RealSensor`, the `SimSensor`, and
   the first recorded fixture.
-  - **The register is settled as of 2026-08-27: D0–D9, D11 and D12 are all
-    decided; D10 alone stays open** (does the emergence gate block promotion —
-    not due until Phase F, and unanswerable before E5 has run advisory).
-    Read the doc for the full text; the load-bearing ones:
+  - **The register is fully settled as of 2026-08-28: all of D0–D12 are
+    decided.** Read the doc for the full text; the load-bearing ones:
     - **D0 — regional air traffic** (OpenSky / ADS-B Exchange), OMNI-25 Done.
       Richest, highest-frequency public data of the four candidates; also the
       heaviest scope/optics tax, the one candidate where "wrong is dangerous"
@@ -422,6 +420,14 @@ Released through **v0.1.4**. The bootstrap skeleton (original "first task") is
       no human alert needed). They stay separate triggers because they detect
       different situations — a world that got harder is not a model that got
       worse — not because one of them is forbidden to spend.
+    - **D10 — the emergence gate (E5) ships advisory, not blocking.** E5 has
+      no oracle and cannot attribute system-level degradation to an actor, so
+      a blocking version would be switched off the first time it fails good
+      work inexplicably — worse than advisory. It flips to blocking only when
+      its measured false-positive rate (from the episodic store: candidates
+      E5 flagged that a human merged anyway with no system-level problem) is
+      low enough to live with; the flip is a human config change, never the
+      loop's. The mandatory human merge is the enforcement in the meantime.
     - **D8 / D12 — humans decide, actors may propose.** The loop can propose
       the actor decomposition and its own exam; a human reviews, edits,
       approves or rejects. `specs/` write access stays with the

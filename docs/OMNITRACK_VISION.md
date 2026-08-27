@@ -255,9 +255,9 @@ Two rules hold the whole thing together, and both are carried over rather than i
 
 Numbers are stable identifiers, not an ordering — the → line on each gives its deadline.
 Each entry states a recommendation; where a decision has been taken it follows below it and
-supersedes it. **Decided: D0–D9, D11, D12** (2026-08-27). **Still open: D10 alone** — does
-the emergence gate block promotion — which is not due until Phase F and cannot sensibly be
-settled before E5 has run advisory for a while.
+supersedes it. **All of D0–D12 are decided** (register settled 2026-08-28). D10 decides
+the *mechanism* — advisory first, with an empirical criterion for the blocking flip —
+while the flip itself deliberately stays a Phase-F call; see its entry.
 
 **D0 — What slice of the world does omnitrack model first? DECIDED: regional air traffic
 (OpenSky / ADS-B Exchange).**
@@ -414,7 +414,30 @@ Occasionally,
 *Recommend advisory first, blocking once it has enough history to be trusted.* A blocking
 gate with a high false-positive rate will be switched off, and then it is worse than
 advisory.
-→ *Decide at Phase F.*
+→ *Decided before Phase F.*
+
+Background:
+The gate (E5 in docs/OMNITRACK_VISION.md) - once the twin consists of several modeled actors instead of one, previously checked per-actor contracts stop being sufficient: each actor can pass its own exam while the combination can be oscillating, deadlocking, or cascading. E5 is a second verification level — a system-level backtest over a multi-actor scenario, run every N cycles rather than every cycle. Structurally it's the same fast (gauntlet)/slow (canary) split that already exists, but one level higher - a system-level gate.
+
+The open question is what its verdict does:
+Blocking — it behaves like every gate in sis/gauntlet.py today: a bad verdict rejects the candidate, and no PR is opened.
+Advisory — it runs, records its verdict in the episodic store, and surfaces it to the human reviewing the PR, but a bad verdict doesn't stop the cycle by itself.
+
+My current decision is to implement E5 as an advisory gate.
+
+Why this isn't the obvious "of course it blocks"
+Every other gate in the system has an oracle it can point at. Differential correctness has the reference implementation; the invariant gate has domain laws a human wrote; the backtest gate has recorded reality. E5 has none of that — and the vision document states plainly: it can detect that a system-level backtest degraded, but it cannot attribute the degradation to an actor. Credit assignment across interacting stochastic models is an open research problem, not a task someone deferred.
+
+So E5's verdict is inherently noisy in a way mypy --strict is not. Combine that with the sparse-ground-truth problem — few historical episodes, weak statistical evidence — and you get a gate that will sometimes fail a genuinely good candidate for reasons no one can localize.
+
+That's the actual argument in the D10 text: a blocking gate with a high false-positive rate doesn't stay on. It fails good work, no one can explain why, and someone sets SIS_...=0 — at which point you have no signal at all. An advisory gate that everyone reads is strictly more information than a blocking gate that's been switched off. The failure mode of over-strictness here isn't "too safe," it's "silently disabled."
+
+What "enough history to be trusted" means concretely
+It's measurable from data the system already writes. The episodic store records every rejected diff and the gate that caught it. Run E5 advisory for a while, and you can ask: of the candidates E5 flagged, how many did a human then merge anyway and observe no system-level problem? That's the false-positive rate. Flip it to blocking when that number is low enough to live with — an empirical threshold, not a judgment call made in advance.
+
+Note the safety asymmetry that makes advisory-first affordable: the human merge is still mandatory (§7, "The human merge"). An advisory E5 isn't "no gate" — it's a gate whose enforcement is a human reading its verdict on the PR. Nothing promotes itself either way.
+
+Two operational notes: the false-positive measurement only accrues if humans sometimes *do* merge flagged candidates — an advisory verdict treated as de-facto blocking starves its own calibration (the mirror number, candidates E5 passed that later degraded the system backtest, lands in the same store, and the flip should weigh both); and the advisory→blocking flip is a human configuration change, never the loop's — E5's code and its mode are guardrail-tier like every other gate.
 
 **D11 — How is the budget split across N actors?**
 Global cap with per-actor shares, or per-actor caps? *Recommend a global cap with soft
