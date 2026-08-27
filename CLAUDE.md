@@ -373,19 +373,56 @@ Released through **v0.1.4**. The bootstrap skeleton (original "first task") is
     (fixed: `repr`, never raw interpolation) and that the check bypassed the
     M1 sandbox backstop (fixed: `gauntlet.ensure_sandbox_ready()`, one
     precondition called by every executor of generated code).
-  - Remaining in the epic, neither on the critical path: OMNI-24 (`SloGate` —
-    a latency/accuracy budget, explicitly *not* a correctness gate) and
-    OMNI-20 (`ToolchainAdapter` — language genericity), parked.
+  - **Epic closed 2026-08-27.** Two stories were detached to standalone
+    backlog items rather than closed with it, since both are still wanted and
+    neither is on the critical path: OMNI-24 (`SloGate` — a latency/accuracy
+    budget, explicitly *not* a correctness gate) and OMNI-20
+    (`ToolchainAdapter` — language genericity), parked.
 - **`docs/OMNITRACK_VISION.md`** sequences what comes after Class 2: five new
   components (`Sensor`+`Clock` ports, the determinism axis above,
   stateful-actor swap, per-actor deploy slots, an emergence gate) across
-  phases A–F, plus an 11-decision register (D0–D12, each with a
-  recommendation and a "decide by" phase). **D0 — which real-world domain
-  omnitrack models first — is the open blocker for Phase A** (OMNI-25); four
-  candidates are recorded (bike-share, power grid, transit, air traffic) with
-  no selection made yet, deliberately, since it has no code dependency and
-  doesn't block Class-2 work.
-- **Configuration is one schema (OMNI-27, PR #92).** `sis/config.py` declares
+  phases A–F, plus a 13-decision register (D0–D12, each with a
+  recommendation and a "decide by" phase). Of the five components only the
+  `Clock` half of E1 exists (`sis/clock.py`, OMNI-23); **Phase A is filed as
+  OMNI-30** — the `Sensor` port, the first `RealSensor`, the `SimSensor`, and
+  the first recorded fixture.
+  - **The register is settled as of 2026-08-27: D0–D9, D11 and D12 are all
+    decided; D10 alone stays open** (does the emergence gate block promotion —
+    not due until Phase F, and unanswerable before E5 has run advisory).
+    Read the doc for the full text; the load-bearing ones:
+    - **D0 — regional air traffic** (OpenSky / ADS-B Exchange), OMNI-25 Done.
+      Richest, highest-frequency public data of the four candidates; also the
+      heaviest scope/optics tax, the one candidate where "wrong is dangerous"
+      needs active management even for a passive twin.
+    - **D2 — twin state is externalised** behind a `StateStore` port, DuckDB
+      and human-readable, with an *optional, non-default* per-transition log
+      carrying clock time + cause so reasoning can be replayed.
+    - **D3 — runtime LLMs are allowed**, against the original recommendation,
+      but only within mockable boundaries: each LLM-dependent actor gets its
+      own LLM interface that tests can stub with canned responses; responses
+      are schema-constrained and treated as untrusted input; runtime calls
+      must come under the CEO brakes (which today meter only the proposer).
+      **Known gap:** an LLM-backed actor is STOCHASTIC on the E2 axis, but
+      E2 requires determinism under seed, which no LLM API provides
+      (temperature 0 is not determinism). First such actor needs its own
+      design note.
+    - **D4 — recorded, human-approved real data is the preferred promotion
+      evidence**; simulated data only where no recording exists; and a
+      candidate faces real traffic before promotion, judged on error rate,
+      format/volume handling, and responses landing in an expected range.
+    - **D7 — the simulator is an improvable target**, but improvements are
+      judged only against held-out *real* traces, never its own output, with
+      the copy that generates gauntlet inputs pinned and FORBIDDEN.
+    - **D9 — two triggers, deliberately not one.** An *absolute* error budget
+      answers "is the twin fit for purpose now" (→ alert a human, downgrade
+      confidence); *skill vs climatology* answers "is there headroom a code
+      change could capture" (→ spend LLM budget on a cycle). A world that got
+      harder and a model that got worse must not fire the same trigger.
+    - **D8 / D12 — humans decide, actors may propose.** The loop can propose
+      the actor decomposition and its own exam; a human reviews, edits,
+      approves or rejects. `specs/` write access stays with the
+      human-approved path.
+- **Configuration is one schema (OMNI-27, PR #92, merged 2026-08-16).** `sis/config.py` declares
   every knob once; `config.yml` is generated from it and committed; precedence
   is CLI flag > env var > file > built-in default; `main.py --show-config`
   prints the effective values *and their source*. Every legacy `SIS_*` var
@@ -426,7 +463,9 @@ Released through **v0.1.4**. The bootstrap skeleton (original "first task") is
   → main` enforced by both the client-side pre-push hook and active
   server-side rulesets.
 - **Two known test flakes, both pre-existing and both parallel-execution
-  artifacts** (ticketed 2026-08-14): `test_correct_but_not_faster_is_rejected`
+  artifacts** (noted 2026-08-14; **not ticketed** — no Jira issue exists for
+  either, confirmed against the board 2026-08-27):
+  `test_correct_but_not_faster_is_rejected`
   measures a fresh baseline, which gets noisy under xdist CPU contention
   (passes 5/5 in isolation); `test_a_drafted_skeleton_stages_without_touching_specs`
   compares two `specs/` listings and races another worker creating
@@ -457,9 +496,9 @@ Two traps L5 surfaced, both worth knowing before writing similar code:
   `docs/KNOWN_ISSUES.md` (Resolved).
 
 **Next — the milestone plan is in Jira ([`OMNI`](https://olafzumpe.atlassian.net/browse/OMNI)),
-not here.** Check the board for current status rather than trusting this list —
-the Atlassian connection dropped mid-session on 2026-08-11 and this reflects
-state as last confirmed, not a live query:
+not here.** Check the board for current status rather than trusting this list.
+**Last reconciled against a live query on 2026-08-27** (30 issues, OMNI-1
+through OMNI-30; 25 Done, 5 open):
 
 1. ~~**[OMNI-1](https://olafzumpe.atlassian.net/browse/OMNI-1) — L5 target
    contract** (Class 1)~~ — **done 2026-08-06** (OMNI-4/5/6/7). Two targets ship
@@ -472,19 +511,19 @@ state as last confirmed, not a live query:
    observed and promotes automatically. Opt-in; the legacy in-memory path
    stays the default. Design: `docs/SERVE_CANARY.md`.
 3. ~~**[OMNI-3](https://olafzumpe.atlassian.net/browse/OMNI-3) — Class 2**,
-   feature construction~~ — **effectively done 2026-08-11** (OMNI-17/18/19/21/
-   23/26; see "Current status" above for what each landed). `FeatureContract`
-   + the contract-selected gate profile, `InvariantGate`, `BacktestGate`, the
-   `Clock` port, and the contract-author write path all shipped. Only
-   OMNI-24 (`SloGate`, low priority) and OMNI-20 (`ToolchainAdapter`, parked)
-   remain, and neither is on the omnitrack critical path. Design:
-   `docs/CLASS2_CONTRACT.md`.
-4. **[OMNI-25](https://olafzumpe.atlassian.net/browse/OMNI-25) — D0: pick
-   omnitrack's first domain.** Open, no code dependency, blocks Phase A of
-   `docs/OMNITRACK_VISION.md` (the design for what comes after Class 2 — new
-   `Sensor`/`Clock` ports, the determinism axis, stateful actor swap,
-   per-actor slots, an emergence gate). Four candidates recorded in that doc;
-   check the doc for whether a selection has since been made.
+   feature construction~~ — **done 2026-08-11, epic closed 2026-08-27**
+   (OMNI-17/18/19/21/23/26; see "Current status" above for what each landed).
+   `FeatureContract` + the contract-selected gate profile, `InvariantGate`,
+   `BacktestGate`, the `Clock` port, and the contract-author write path all
+   shipped. OMNI-24 (`SloGate`, Low) and OMNI-20 (`ToolchainAdapter`,
+   Low/parked) were **detached** to standalone backlog items rather than closed
+   with the epic — both still wanted, neither on the omnitrack critical path.
+   Design: `docs/CLASS2_CONTRACT.md`.
+4. ~~**[OMNI-25](https://olafzumpe.atlassian.net/browse/OMNI-25) — D0: pick
+   omnitrack's first domain**~~ — **Done 2026-08-14: regional air traffic**
+   (OpenSky / ADS-B Exchange). It fixes the first `RealSensor` adapter and the
+   domain of Phase A. D8 (who decomposes it into modelled actors) is a
+   separate, still-open decision.
 5. ~~**[OMNI-27](https://olafzumpe.atlassian.net/browse/OMNI-27) — unified
    config**~~ — **done 2026-08-16**, PR #92 merged to `develop`. One schema,
    `config.yml`, env/CLI override; see "Current status" above.
@@ -510,5 +549,18 @@ state as last confirmed, not a live query:
    yet. Explicitly **not** RUNBOOK Level 4: no autostart, no autonomy — a human
    starts, watches, and stops it.
 
+8. **[OMNI-30](https://olafzumpe.atlassian.net/browse/OMNI-30) — omnitrack
+   Phase A: the `Sensor` port.** `To Do`, filed 2026-08-27 — the first epic of
+   omnitrack proper, unblocked by D0 and by OMNI-3 closing. `Sensor` port +
+   `SimSensor` default + an OpenSky/ADS-B `RealSensor`, the first recorded
+   fixture, and prediction error computed but not yet acted on (that is Phase
+   B). **Sanitising sensor input is inside the adapter story, not later
+   hardening** — ADS-B is outside-influenceable data that reaches scenario
+   libraries, backtest fixtures and potentially LLM prompts.
+
 Not yet scheduled: the **atomic actor swap** for internal, never-served actors,
-which `docs/SERVE_CANARY.md` scopes out and which has no design doc yet.
+which `docs/SERVE_CANARY.md` scopes out and which has no design doc yet. E3/D2 in
+`docs/OMNITRACK_VISION.md` either is that design or subsumes it — whoever
+schedules either piece writes the one document, so drain/handoff machinery isn't
+built twice. With D2 now decided (state externalised behind a `StateStore` port),
+that document has its central question already answered.
