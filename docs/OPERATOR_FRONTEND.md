@@ -239,16 +239,45 @@ at the point of editing rather than leaving the operator to discover it. This
 is the single most likely way for this tool to lie to someone, and it is a
 display problem, not a precedence problem — the precedence is correct.
 
+## Exposure: answered by OMNI-29 — not exposed
+
+This was the open question, and `docs/AWS_RUN.md` settled it for the current
+milestone: the console **is not publicly reachable at all**. The one-node AWS
+box has a security group with *zero* ingress rules — not 22, not 8080 — and the
+console stays loopback-bound, reached over SSM port forwarding from the
+operator's laptop. That is a stronger posture than any TLS configuration, for a
+console that edits the settings of a system which runs generated code.
+
+The consequences for everything above:
+
+- **The `Caddyfile` is not needed** and should not be written yet. Everything
+  in the TLS section above stays true and stays parked; it is the answer *if*
+  this ever has to be publicly reachable, and writing it now would mean
+  maintaining an untested config for a deployment that does not exist.
+- **The OAuth app question is deferred with it.** Nothing needs registering
+  while the only route in is an SSM tunnel the operator has already
+  authenticated to.
+- **`Dockerfile.frontend` has no consumer.** The AWS run executes the engine
+  directly on the box; Docker there is the gauntlet sandbox, not an app
+  container.
+
+### The one thing this costs, and where it is written down
+
+Running with `auth: none` requires the environment layer, and this is not
+incidental — it is the guardrail working as designed. The committed
+`config.yml` ships `forbidden_auth: "github"` with an empty allowlist, so
+`check_servable()` refuses to start. Both keys are `forbidden_`, so the
+operator UI will not edit them and the drift test pins them in the file, which
+leaves `SIS_FRONTEND_AUTH=none` as the only route — a per-run choice that
+cannot weaken what ships.
+
+Anyone starting the console on that box must know this or it simply will not
+come up, so the requirement and its reasoning live in `docs/AWS_RUN.md`
+alongside the port-forwarding command, not only here.
+
 ## Open questions
 
-- Where the GitHub OAuth app is registered, and how its client secret reaches
-  a deployed container.
-- Whether this is exposed publicly at all. A tunnel or Tailscale, with the app
-  bound to loopback, is a stronger posture than any TLS configuration for a
-  console that edits the settings of a system which executes generated code —
-  and Tailscale supplies an auto-renewing certificate on a real name, which
-  removes the certificate problem rather than solving it. Caddy is the answer
-  *if* it must be publicly reachable.
-- Deployment artifacts (`Dockerfile.frontend`, `Caddyfile`) — deliberately not
-  in the first PR, since neither can be meaningfully tested without a host and
-  a DNS name.
+- Whether a public deployment is ever wanted. If it is, the Caddy/TLS section
+  above is the design; a tunnel or Tailscale with a loopback bind remains the
+  stronger option, and Tailscale's auto-renewing certificate on a real name
+  removes the certificate problem rather than solving it.

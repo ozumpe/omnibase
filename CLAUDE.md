@@ -568,11 +568,16 @@ through OMNI-30; 25 Done, 5 open):
    the three parts of the ticket the first left out: the CEO brake panel, the
    episodic-history panel, and the justification a `strict_` edit now carries
    (plus `runtime/operator_audit.jsonl`). See "Current status" above for what
-   each decision cost. Still open: the deployment artifacts
-   (`Dockerfile.frontend` + `Caddyfile` for TLS on 443 in front of Panel's
-   8080), and whether this is exposed publicly at all — a tunnel or Tailscale
-   with a loopback bind is a stronger posture than any TLS config for a console
-   that edits the settings of a system which runs generated code. Design:
+   each decision cost. **The exposure question is answered: not exposed**
+   (OMNI-29, `docs/AWS_RUN.md`) — zero ingress, loopback bind, reached over SSM
+   port forwarding. `Caddyfile` and `Dockerfile.frontend` are therefore
+   *parked, not pending*: the first has no deployment to serve, the second no
+   consumer (the AWS run executes the engine directly on the box). One
+   consequence to know before starting the console anywhere: the committed
+   `config.yml` ships `forbidden_auth: "github"` with an empty allowlist, so it
+   **refuses to start** until `SIS_FRONTEND_AUTH=none` is set in the
+   environment — the only route in, since both keys are `forbidden_` and so
+   editable neither through the UI nor in the file. Design:
    `docs/OPERATOR_FRONTEND.md`.
 
 7. **[OMNI-29](https://olafzumpe.atlassian.net/browse/OMNI-29) — first AWS
