@@ -13,6 +13,9 @@ runtime/target.py.bak
 runtime/episodic.jsonl
 runtime/episodic_state.json
 runtime/episodic.duckdb
+# Who changed which config key, when, and why (OMNI-28) — a local operational
+# record of this machine's console, not source.
+runtime/operator_audit.jsonl
 # Drafted contracts awaiting human approval — local review state, not source.
 runtime/contract_staging/
 
