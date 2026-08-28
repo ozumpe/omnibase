@@ -431,13 +431,38 @@ Released through **v0.1.4**. The bootstrap skeleton (original "first task") is
   modes closed on the way: `SIS_SANDBOX=dcoker` used to compare unequal to
   `"docker"` and run untrusted code in the *soft* sandbox saying nothing, and
   `SIS_ALLOW_STRICT_CHANGES=yes` used to mean "disabled". Both now raise.
-- **Operator frontend, first slice (OMNI-28, PR #93).** Panel (`sis/frontend.py`,
-  `poetry install --with ui`, `python -m sis.frontend`) renders system state +
-  every config key with its tier and *source*. Four things worth knowing:
+- **Operator frontend (OMNI-28, PR #93 + the 2026-08-28 slice).** Panel
+  (`sis/frontend.py`, `poetry install --with ui`, `python -m sis.frontend`)
+  renders system state, the CEO's brakes, episodic history, and every config
+  key with its tier and *source*. Things worth knowing:
+  - **Four independent reads, four sections that degrade separately.**
+    SelfModel snapshot and brakes (`CEO.economics()` + `CEO.state_snapshot()`)
+    need a cluster; episodic history (`EpisodicStore.summary()`, incl. the
+    `rejected_by_gate` breakdown) and the config view do not. A console is most
+    useful when something is already broken, so one shared failure path that
+    blanks the page was the thing to avoid. The brakes are read from the *live
+    actor* rather than recomputed from the console's own config, because the
+    CEO snapshots its thresholds at creation and the two can legitimately
+    disagree.
   - **The tier gate is in `sis/operator.py`, not the browser.** A disabled
     widget is a courtesy; `save_edits()` refuses a `forbidden_` key and an
-    unconfirmed `strict_` key whatever the caller sends, and edits are
+    unjustified `strict_` key whatever the caller sends, and edits are
     all-or-nothing so a rejected third edit leaves the first two unwritten.
+  - **A `strict_` edit carries an `Approval`, not a boolean** —
+    `policy.Justification.HUMAN_REQUEST` plus a written note of at least
+    `MIN_JUSTIFICATION_CHARS`. Reusing the policy's enum is deliberate: the
+    loop's "a human asked for this" and the console's are the same claim, and
+    one being an enum while the other is a bool is how two meanings of
+    "approved" diverge. Confirmation and reason stay separate claims — prose
+    without a tick is refused, a tick without prose is refused, and `soft_`
+    keys demand neither (a console that wanted a justification to change a poll
+    interval would just train people to type "x").
+  - **Every committed change lands in `runtime/operator_audit.jsonl`**
+    (gitignored): timestamp, key, tier, file-layer before/after, justification.
+    Written by `save_edits()` itself, so the record is a property of the write
+    path rather than of the caller remembering to log. `soft_` edits included —
+    a log of only `strict_` edits can't answer "what changed here last week".
+    A refused edit is never audited; corrupt lines are skipped on read.
   - **Operator edits land in `config.yml` itself** — no gitignored overlay, so
     a changed knob stays a reviewable diff. That cost one guarantee and
     replaced it with a sharper one: `render_config_file(values)` now renders
@@ -529,7 +554,10 @@ through OMNI-30; 25 Done, 5 open):
    `config.yml`, env/CLI override; see "Current status" above.
 6. **[OMNI-28](https://olafzumpe.atlassian.net/browse/OMNI-28) — operator
    frontend.** **First slice in PR #93** — Panel app, tier-gated write path,
-   GitHub OAuth, `frontend.*` schema keys; see "Current status" above for what
+   GitHub OAuth, `frontend.*` schema keys. **Second slice 2026-08-28** closed
+   the three parts of the ticket the first left out: the CEO brake panel, the
+   episodic-history panel, and the justification a `strict_` edit now carries
+   (plus `runtime/operator_audit.jsonl`). See "Current status" above for what
    each decision cost. Still open: the deployment artifacts
    (`Dockerfile.frontend` + `Caddyfile` for TLS on 443 in front of Panel's
    8080), and whether this is exposed publicly at all — a tunnel or Tailscale

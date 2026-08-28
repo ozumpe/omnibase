@@ -42,6 +42,11 @@ CHARTER_TEXT = (
 # across runs instead of duplicating them into fresh anonymous namespaces (M2).
 NAMESPACE = "sis"
 
+# The CEO is looked up by name from outside a cycle — the operator console reads
+# its brakes (OMNI-28) — so the registered name is a constant rather than a
+# literal repeated at each lookup site, which is how the two come to disagree.
+CEO_NAME = "CEO"
+
 
 def _get_or_create(name: str, cls: Any, *args: Any) -> Any:
     # get_if_exists is atomic: it returns the existing detached actor or creates
@@ -71,7 +76,7 @@ def bootstrap() -> dict[str, Any]:
         "Workspace": workspace,
         "SelfModel": self_model,
         "CEO": _get_or_create(
-            "CEO", CEO, ceo_cfg.budget_usd, ceo_cfg.breaker_threshold,
+            CEO_NAME, CEO, ceo_cfg.budget_usd, ceo_cfg.breaker_threshold,
             ceo_cfg.max_cost_per_accepted_usd, ceo_cfg.slo_min_spend_usd, ceo_state),
         "PM": _get_or_create("PM", PM),
         "CTO": _get_or_create("CTO", CTO),

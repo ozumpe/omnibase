@@ -18,10 +18,22 @@ What it shows:
   is running, and an honest "not running" when it is not. The UI never starts
   Ray itself; a console that silently boots the thing it is meant to observe
   would make "is it up?" unanswerable.
+- **Brakes** — the CEO's spend against its cap, the consecutive-failure count,
+  and cost-per-accepted. Read from the live actor, so what is shown is what is
+  actually braking the loop rather than what this console's own configuration
+  says it should be.
+- **Episodic history** — accepted/rejected counts and the ``rejected_by_gate``
+  breakdown. Read from the store on disk, so it renders with no cluster at
+  all: the history of what happened outlives the process it happened in.
 - **Configuration** — every key with its value, its tier, and *where the value
-  came from*, with `forbidden_` read-only, `strict_` behind a confirmation, and
-  anything currently shadowed by an environment variable or CLI flag marked as
-  such at the point of editing.
+  came from*, with `forbidden_` read-only, `strict_` behind a justified
+  confirmation, and anything currently shadowed by an environment variable or
+  CLI flag marked as such at the point of editing.
+
+Each of those four degrades on its own. A cluster with no CEO still renders its
+episodic history; an unreadable episodic store still renders the brakes. The
+console is most useful when something is broken, which is exactly when a single
+shared failure path would blank the whole page.
 
 Panel is imported lazily throughout, because it is an optional dependency
 (``--with ui``) and the engine must import cleanly without it.
@@ -29,11 +41,12 @@ Panel is imported lazily throughout, because it is an optional dependency
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, cast
 
-from sis import config, operator, settings
+from sis import config, episodic, operator, settings
 from sis.config import ConfigTier, Source
-from sis.operator import Edit, EditRefused, KeyView
+from sis.operator import Approval, Edit, EditRefused, KeyView
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     import panel as pn
@@ -53,33 +66,47 @@ _TIER_BADGE = {
 # --------------------------------------------------------------------------
 
 
-def system_state() -> dict[str, Any]:
-    """The SelfModel snapshot, or an explanation of why there isn't one.
+def _attach() -> str | None:
+    """Attach to a already-running cluster. ``None`` on success, else why not.
 
-    Deliberately tolerant: the operator console is most useful exactly when
-    something is wrong, so a cluster that is down, unreachable, or has no
-    SelfModel yet must render as a readable status rather than a traceback.
+    Shared by every read that needs a live actor, so "is there a cluster?" is
+    answered once and identically. Deliberately tolerant: the operator console
+    is most useful exactly when something is wrong, so a cluster that is down or
+    unreachable must render as a readable status rather than a traceback.
     """
     try:
         import ray
     except ModuleNotFoundError:  # pragma: no cover - ray is a core dep
-        return {"running": False, "detail": "ray is not installed"}
+        return "ray is not installed"
+
+    from sis.org import NAMESPACE
+
+    if ray.is_initialized():
+        return None
+    try:
+        # `address="auto"` attaches to an existing cluster and fails if there
+        # is none, which is what we want: never start one from the console.
+        ray.init(
+            address="auto",
+            namespace=NAMESPACE,
+            ignore_reinit_error=True,
+            log_to_driver=False,
+        )
+    except Exception as exc:  # noqa: BLE001 - any failure means "no cluster"
+        return f"no running Ray cluster ({exc})"
+    return None
+
+
+def system_state() -> dict[str, Any]:
+    """The SelfModel snapshot, or an explanation of why there isn't one."""
+    detail = _attach()
+    if detail is not None:
+        return {"running": False, "detail": detail}
+
+    import ray
 
     from sis.org import NAMESPACE
     from sis.self_model import SELF_MODEL_NAME
-
-    if not ray.is_initialized():
-        try:
-            # `address="auto"` attaches to an existing cluster and fails if there
-            # is none, which is what we want: never start one from the console.
-            ray.init(
-                address="auto",
-                namespace=NAMESPACE,
-                ignore_reinit_error=True,
-                log_to_driver=False,
-            )
-        except Exception as exc:  # noqa: BLE001 - any failure means "no cluster"
-            return {"running": False, "detail": f"no running Ray cluster ({exc})"}
 
     try:
         model = ray.get_actor(SELF_MODEL_NAME, namespace=NAMESPACE)
@@ -88,6 +115,124 @@ def system_state() -> dict[str, Any]:
         return {"running": False, "detail": f"no SelfModel actor ({exc})"}
 
     return {"running": True, "snapshot": snapshot}
+
+
+# --------------------------------------------------------------------------
+# Brakes (CEO) — spend against the cap, the breaker, cost-per-accepted
+# --------------------------------------------------------------------------
+
+
+def brake_state() -> dict[str, Any]:
+    """What is currently braking the loop, read from the live CEO actor.
+
+    Read from the actor rather than reassembled from this console's own
+    configuration, because they can legitimately differ: the CEO snapshots its
+    thresholds when it is created, so a console started later with a different
+    ``config.yml`` would otherwise display a budget nothing is enforcing.
+    """
+    detail = _attach()
+    if detail is not None:
+        return {"running": False, "detail": detail}
+
+    import ray
+
+    from sis.org import CEO_NAME, NAMESPACE
+
+    try:
+        ceo = ray.get_actor(CEO_NAME, namespace=NAMESPACE)
+        # economics() carries the money; state_snapshot() carries the breaker's
+        # failure streak, which economics() has never exposed.
+        economics, snapshot = cast(
+            "list[dict[str, Any]]",
+            ray.get([ceo.economics.remote(), ceo.state_snapshot.remote()]),
+        )
+    except Exception as exc:  # noqa: BLE001 - actor absent or cluster mid-restart
+        return {"running": False, "detail": f"no CEO actor ({exc})"}
+
+    return {
+        "running": True,
+        "economics": dict(economics),
+        "consecutive_failures": int(snapshot.get("consecutive_failures", 0)),
+        "breaker_open": bool(snapshot.get("tripped", False)),
+    }
+
+
+def format_brakes(brakes: Mapping[str, Any]) -> str:
+    """Markdown for the brake table. Pure, so the wording is unit-testable."""
+    economics = brakes["economics"]
+    spent = float(economics["spent_usd"])
+    budget = float(economics["budget_usd"])
+    accepted = int(economics["accepted"])
+    cost_per_accepted = float(economics["cost_per_accepted_usd"])
+    # The CEO encodes "infinite" as -1.0, since a JSON `inf` is not portable.
+    # Rendering that as a number would report a negative cost per improvement.
+    per_accepted = (
+        "— (nothing accepted yet)"
+        if cost_per_accepted < 0
+        else f"${cost_per_accepted:,.4f}"
+    )
+    share = f"{spent / budget * 100:.1f}% of" if budget else "against a zero"
+    return (
+        "| brake | value |\n"
+        "| --- | --- |\n"
+        f"| spend | **${spent:,.4f}** — {share} the ${budget:,.2f} cap |\n"
+        f"| consecutive failures | {brakes['consecutive_failures']} |\n"
+        f"| accepted improvements | {accepted} |\n"
+        f"| cost per accepted | {per_accepted} |\n"
+    )
+
+
+# --------------------------------------------------------------------------
+# Episodic history — what the loop has actually done
+# --------------------------------------------------------------------------
+
+
+def episodic_state() -> dict[str, Any]:
+    """The episodic store's rollup. Needs no cluster — it reads the store.
+
+    Tolerant for a reason beyond symmetry: the configured backend may be one
+    whose optional dependency is not installed (``duckdb`` without
+    ``--with analytics``), and a console that dies on that is a console that
+    dies on exactly the machine where someone is trying to work out what broke.
+    """
+    try:
+        summary = episodic.get_episodic_store().summary()
+    except Exception as exc:  # noqa: BLE001 - missing backend, unreadable file
+        return {"available": False, "detail": f"episodic store unreadable ({exc})"}
+    return {"available": True, "summary": summary}
+
+
+def format_episodic(summary: Mapping[str, Any]) -> str:
+    """Markdown for the episodic rollup. Pure, like :func:`format_brakes`."""
+    total = int(summary.get("total", 0))
+    if not total:
+        return "No cycles recorded yet."
+
+    accepted = int(summary.get("accepted", 0))
+    lines = [f"**{accepted} accepted** of {total} recorded cycles."]
+
+    by_outcome = summary.get("by_outcome") or {}
+    if by_outcome:
+        lines.append(
+            "Outcomes: "
+            + ", ".join(f"`{name}` × {n}" for name, n in sorted(by_outcome.items()))
+        )
+
+    # The interesting half: which gate is doing the rejecting. An empty
+    # breakdown is stated rather than omitted — "no rejections" and "we did not
+    # record why" look identical if the line simply disappears.
+    rejected = summary.get("rejected_by_gate") or {}
+    lines.append(
+        "Rejected by gate: "
+        + ", ".join(f"`{gate}` × {n}" for gate, n in sorted(rejected.items()))
+        if rejected
+        else "No rejections recorded."
+    )
+
+    cost = summary.get("total_cost_usd")
+    if cost:
+        lines.append(f"Total spend across recorded cycles: ${float(cost):,.4f}.")
+    return "\n\n".join(lines)
 
 
 # --------------------------------------------------------------------------
@@ -152,22 +297,35 @@ def build_config_panel() -> pn.viewable.Viewable:
         label="I confirm the strict_ changes below — each one weakens a check",
         value=False,
     )
+    justification = pn.widgets.TextAreaInput(
+        label="Why (required for strict_ changes)",
+        placeholder="e.g. canary is flaky against the new target; disabling for "
+        "this week's runs while OMNI-31 is investigated",
+        height=70,
+    )
 
     def save(_event: Any) -> None:
         edits = _pending_edits(views, widgets)
         if not edits:
             _flash(status, "Nothing changed.", "light")
             return
+        # An unticked box is not a human request, so a strict_ key is refused
+        # even with prose in the note — the confirmation and the reason are two
+        # different claims and the write path wants both.
+        approval = (
+            Approval.human(justification.value) if confirm.value else operator.UNJUSTIFIED
+        )
         try:
-            operator.save_edits(edits, confirmed=confirm.value)
+            operator.save_edits(edits, approval=approval)
         except (EditRefused, ValueError, KeyError) as exc:
             _flash(status, f"Refused: {exc}", "danger")
             return
         changed = ", ".join(edit.path for edit in edits)
         _flash(
             status,
-            f"Saved {changed} to config.yml. **Restart to apply** — a running "
-            "loop keeps the configuration it started with.",
+            f"Saved {changed} to config.yml, and recorded in "
+            f"`{operator.OPERATOR_AUDIT_JSONL}`. **Restart to apply** — a "
+            "running loop keeps the configuration it started with.",
             "success",
         )
 
@@ -192,6 +350,7 @@ def build_config_panel() -> pn.viewable.Viewable:
         ),
         pn.Tabs(*sections),
         confirm,
+        justification,
         pn.Row(save_button),
         status,
     )
@@ -237,23 +396,58 @@ def _flash(alert: Any, message: str, kind: str) -> None:
 
 
 def build_state_panel() -> pn.viewable.Viewable:
+    """System state, brakes and history — each rendered independently.
+
+    Three separate reads against three separate sources, so one being
+    unavailable degrades to a note in its own section instead of blanking the
+    other two.
+    """
     import panel as pn
+
+    items: list[Any] = [pn.pane.Markdown("## System state")]
 
     state = system_state()
     if not state["running"]:
-        return pn.Column(
-            pn.pane.Markdown("## System state"),
+        items.append(
             pn.pane.Alert(
                 f"Not connected to a running system — {state['detail']}.\n\n"
                 "Start one with `poetry run python main.py --loop`. This console "
                 "deliberately does not start the engine itself.",
                 alert_type="warning",
-            ),
+            )
         )
-    return pn.Column(
-        pn.pane.Markdown("## System state"),
-        pn.pane.JSON(state["snapshot"], depth=3, name="SelfModel"),
-    )
+    else:
+        items.append(pn.pane.JSON(state["snapshot"], depth=3, name="SelfModel"))
+
+    items.append(pn.pane.Markdown("## Brakes"))
+    brakes = brake_state()
+    if not brakes["running"]:
+        items.append(
+            pn.pane.Alert(f"No brake status — {brakes['detail']}.", alert_type="warning")
+        )
+    else:
+        if brakes["breaker_open"]:
+            items.append(
+                pn.pane.Alert(
+                    "**The circuit breaker is open.** The loop is frozen and "
+                    "will not spend again until a human resets it. Clearing the "
+                    "breaker deliberately does not reset spend, so a cap trip "
+                    "re-trips until the budget itself is raised.",
+                    alert_type="danger",
+                )
+            )
+        items.append(pn.pane.Markdown(format_brakes(brakes)))
+
+    items.append(pn.pane.Markdown("## Episodic history"))
+    history = episodic_state()
+    if not history["available"]:
+        items.append(
+            pn.pane.Alert(f"No history — {history['detail']}.", alert_type="warning")
+        )
+    else:
+        items.append(pn.pane.Markdown(format_episodic(history["summary"])))
+
+    return pn.Column(*items)
 
 
 def build_app() -> pn.viewable.Viewable:
