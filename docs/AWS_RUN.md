@@ -75,11 +75,36 @@ on the box — which its own `check_servable()` enforces for `auth: none` — an
 is reached over SSM port forwarding:
 
 ```bash
+# On the box. SIS_FRONTEND_AUTH=none is required, see below.
+SIS_FRONTEND_AUTH=none poetry run python -m sis.frontend
+```
+
+```bash
+# From your laptop.
 aws ssm start-session --target <instance-id> \
   --document-name AWS-StartPortForwardingSession \
   --parameters '{"portNumber":["8080"],"localPortNumber":["8080"]}'
 # then browse http://127.0.0.1:8080
 ```
+
+**`SIS_FRONTEND_AUTH=none` is not optional here**, and the reason is worth
+understanding rather than pasting. The committed `config.yml` ships
+`forbidden_auth: "github"` with an empty `forbidden_allowed_logins`, so
+`check_servable()` refuses to start — correctly, since a GitHub login screen
+that admits nobody reads as a broken deployment rather than as a missing
+setting. Both keys are `forbidden_`, which closes the two obvious routes: the
+operator UI will not edit them (that would be escalation through its own front
+door), and a test pins every `forbidden_` key in the committed file to its
+default, so they cannot be changed there either. **The environment layer is the
+only way in, by design** — a one-run choice that leaves the shipped guardrail
+untouched. Turning authentication off is safe *only* because the bind is
+loopback and the security group has no ingress; `check_servable()` enforces
+exactly that pairing, and it is the whole reason this is defensible.
+
+The alternative, if you would rather have real auth on the box: register a
+GitHub OAuth app, put its credentials in the run's Secrets Manager document
+alongside the rest, and set `SIS_FRONTEND_ALLOWED_LOGINS`. Not needed while the
+console is reachable only through an SSM tunnel you already authenticated to.
 
 This resolves `docs/OPERATOR_FRONTEND.md`'s "expose publicly at all?" question
 for this milestone the sane way: not. Caddy/TLS/OAuth stay parked until
@@ -141,8 +166,14 @@ not. At the end of a session:
 
 ```bash
 aws s3 sync ~/omnibase/runtime/ s3://<artifacts-bucket>/runs/$(date +%Y%m%d-%H%M)/ \
-  --exclude "*" --include "episodic*"
+  --exclude "*" --include "episodic*" --include "operator_audit*"
 ```
+
+`operator_audit.jsonl` (OMNI-28) rides along for the same reason: it records
+which config key a human changed mid-run, when, and why. On a supervised run
+that is precisely the context needed to read the episodic log correctly — a
+cycle's outcome means something different if someone widened a threshold an
+hour earlier, and the instance it was recorded on is disposable.
 
 Between early runs, **stop** the instance rather than terminating it — a
 stopped instance costs only its EBS volume (~$3/month for 40 GB) and restarts
@@ -192,7 +223,7 @@ poetry run python main.py --loop --loop-max-cycles 3
 
 # 5. Keep the dataset, stop the meter.
 aws s3 sync runtime/ s3://<artifacts-bucket>/runs/$(date +%Y%m%d-%H%M)/ \
-  --exclude "*" --include "episodic*"
+  --exclude "*" --include "episodic*" --include "operator_audit*"
 ```
 
 Then stop the instance from your laptop:
