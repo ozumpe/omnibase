@@ -1,9 +1,12 @@
 # Operator frontend (OMNI-28) — design note
 
 **Status:** stack, auth and TLS decided (2026-08-16); first implementation slice
-in PR #93 — the schema keys, the tier-gated write path and the Panel app.
-Deployment artifacts (`Dockerfile.frontend`, `Caddyfile`) follow separately. See
-[OMNI-28](https://olafzumpe.atlassian.net/browse/OMNI-28). **Depends on OMNI-27**
+in PR #93 — the schema keys, the tier-gated write path and the Panel app. The
+second slice (2026-08-28) closed the three parts of the ticket the first left
+out: the CEO brake panel, the episodic-history panel, and the justification a
+`strict_` edit now has to carry. Deployment artifacts (`Dockerfile.frontend`,
+`Caddyfile`) follow separately.
+See [OMNI-28](https://olafzumpe.atlassian.net/browse/OMNI-28). **Depends on OMNI-27**
 (PR #92, merged 2026-08-16): `sis/config.py`'s schema, the committed `config.yml`, and
 `sis.config.effective()` (already exercised by `main.py --show-config`) are what
 this UI renders and edits.
@@ -12,14 +15,89 @@ this UI renders and edits.
 
 View system state; edit config gated by each key's `ConfigTier`
 (`sis/config.py`): `forbidden_` keys are not editable in the UI at all,
-`strict_` keys are editable behind an explicit confirmation, `soft_` keys are
+`strict_` keys are editable behind a justified confirmation, `soft_` keys are
 editable freely.
 
 **The gate lives in the write path, not in the UI.** `sis/operator.py` refuses
-a `forbidden_` edit, and an unconfirmed `strict_` edit, no matter what the
+a `forbidden_` edit, and an unjustified `strict_` edit, no matter what the
 browser sends — a widget that is merely disabled is not a gate, it is a
 suggestion. The Panel layer renders that same tier information, but nothing
 depends on it doing so.
+
+## What the read side shows
+
+Four independent reads, rendered as four sections that each degrade on their
+own. That independence is the design point: this console is most useful when
+something is already broken, and a single shared failure path would blank the
+whole page at exactly the wrong moment. A cluster with no CEO still shows its
+episodic history; an unreadable episodic store still shows the brakes.
+
+| Section | Source | Needs a cluster? |
+| --- | --- | --- |
+| System state | `SelfModel.snapshot()` — registry, deploy slots, provenance, substrate | yes |
+| Brakes | `CEO.economics()` + `CEO.state_snapshot()` | yes |
+| Episodic history | `EpisodicStore.summary()` | **no** — reads the store on disk |
+| Configuration | `config.effective()` | no |
+
+Two details that are decisions rather than plumbing:
+
+- **The brakes are read from the live actor, not recomputed from this
+  console's config.** They can legitimately disagree: the CEO snapshots its
+  thresholds when it is created, so a console started later against an edited
+  `config.yml` would otherwise display a budget that nothing is enforcing.
+  Showing an unenforced number next to real spend is the worst of both.
+- **`cost_per_accepted_usd` is `-1.0` when nothing has been accepted yet**,
+  because the CEO cannot put a JSON `inf` on the wire. Rendered verbatim that
+  reads as *earning* a dollar per improvement, so the formatter special-cases
+  it. Pinned by a test.
+
+The episodic section leads with the `rejected_by_gate` breakdown, since which
+gate is doing the rejecting is the operationally interesting half. An empty
+breakdown is stated rather than omitted — "nothing was rejected" and "we did
+not record why" must not look identical.
+
+## A strict_ edit has to say why
+
+The confirmation is an `Approval` (`sis/operator.py`), not a boolean:
+`Justification.HUMAN_REQUEST` from `sis/policy.py` plus a written note of at
+least `MIN_JUSTIFICATION_CHARS`. Reusing the policy's enum is deliberate — the
+loop's "a human asked for this" and the console's are the same claim about the
+same system, and letting one be an enum while the other is a bare boolean is
+how two subtly different meanings of "approved" come to exist.
+
+A `strict_` key is by definition one whose edit removes or weakens a check, so
+the interesting part was always *why*, and a checkbox cannot carry that. The
+confirmation and the reason stay two separate claims: prose without a ticked
+box is refused, and a ticked box without prose is refused.
+
+The threshold is deliberately low and deliberately not zero. It exists to stop
+a single keystroke standing in for a reason, not to judge whether the reason is
+a good one — no rule can do that, and one that pretended to would only teach
+operators to pad. For the same reason `soft_` keys demand nothing at all: a
+console that wanted a written justification to change a poll interval would
+train people to type "x", which is how the requirement stops meaning anything
+where it does matter.
+
+## Every committed change is recorded
+
+`save_edits()` appends to `runtime/operator_audit.jsonl` (gitignored, local
+operational state): timestamp, key, tier, before/after, and the justification.
+Three choices worth noting:
+
+- **The write path does the recording, not the UI** — so the record is a
+  property of saving, not of the caller remembering to log it.
+- **`soft_` edits are recorded too.** A log holding only `strict_` edits could
+  not answer "what changed on this box last week", which is the question it
+  will actually be asked.
+- **`before`/`after` are the *file* layer's values**, which is what the save
+  altered. The effective value can still differ from both when a `SIS_*`
+  variable shadows the key; recording the file layer keeps the log a true
+  statement about the write rather than a guess about the next process to read
+  it.
+
+A refused edit is never audited — the log records what happened, and a refusal
+changed nothing. Reads skip corrupt lines rather than raising, so a crash
+mid-append costs one entry and not the whole history.
 
 Separately, the loop's code-generation path never reaches `config.yml` at any
 tier, since both the file and `sis/config.py` are POLICY-FORBIDDEN

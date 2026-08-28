@@ -156,6 +156,129 @@ def test_a_cluster_without_a_selfmodel_is_reported_rather_than_raising(
     assert "SelfModel" in state["detail"]
 
 
+# --- brakes ----------------------------------------------------------------
+
+
+def _economics(**overrides: Any) -> dict[str, Any]:
+    base = {
+        "economics": {
+            "spent_usd": 0.25,
+            "budget_usd": 5.0,
+            "accepted": 2.0,
+            "cost_per_accepted_usd": 0.125,
+        },
+        "consecutive_failures": 1,
+        "breaker_open": False,
+    }
+    base.update(overrides)
+    return base
+
+
+def test_the_brake_table_reports_spend_against_the_cap() -> None:
+    """The acceptance criterion: spend state, visible without running Python."""
+    rendered = frontend.format_brakes(_economics())
+
+    assert "$0.2500" in rendered
+    assert "$5.00" in rendered
+    assert "5.0%" in rendered
+
+
+def test_no_acceptances_yet_is_not_rendered_as_a_negative_cost() -> None:
+    """The CEO encodes an infinite cost-per-accepted as -1.0.
+
+    Printing that verbatim would tell the operator each improvement earned them
+    a dollar, which is the opposite of what it means.
+    """
+    brakes = _economics()
+    brakes["economics"]["cost_per_accepted_usd"] = -1.0
+    brakes["economics"]["accepted"] = 0.0
+    rendered = frontend.format_brakes(brakes)
+
+    assert "-1" not in rendered
+    assert "nothing accepted yet" in rendered
+
+
+def test_a_zero_budget_does_not_divide_by_zero() -> None:
+    """`brakes.budget_usd` is settable to 0 for a deliberately frozen run."""
+    brakes = _economics()
+    brakes["economics"]["budget_usd"] = 0.0
+    assert "zero" in frontend.format_brakes(brakes)
+
+
+def test_the_failure_streak_is_shown() -> None:
+    assert "| consecutive failures | 3 |" in frontend.format_brakes(
+        _economics(consecutive_failures=3)
+    )
+
+
+def test_no_ceo_actor_is_reported_rather_than_raising(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cluster mid-restart must not blank the console."""
+    import ray
+
+    def _no_actor(_name: str, **_kwargs: Any) -> Any:
+        raise ValueError("Failed to look up actor with name 'CEO'")
+
+    monkeypatch.setattr(ray, "is_initialized", lambda: True)
+    monkeypatch.setattr(ray, "get_actor", _no_actor)
+
+    state = frontend.brake_state()
+    assert state["running"] is False
+    assert "CEO" in state["detail"]
+
+
+# --- episodic history ------------------------------------------------------
+
+
+def test_the_rejected_by_gate_breakdown_is_rendered() -> None:
+    """The ticket's read side names this breakdown specifically."""
+    rendered = frontend.format_episodic(
+        {
+            "total": 9,
+            "accepted": 3,
+            "by_outcome": {"promoted": 3, "rolled_back": 6},
+            "rejected_by_gate": {"mypy": 4, "benchmark": 2},
+            "total_cost_usd": 0.42,
+        }
+    )
+
+    assert "**3 accepted** of 9" in rendered
+    assert "`mypy` × 4" in rendered
+    assert "`benchmark` × 2" in rendered
+    assert "$0.4200" in rendered
+
+
+def test_an_empty_history_says_so_rather_than_rendering_an_empty_table() -> None:
+    assert "No cycles recorded yet." in frontend.format_episodic(
+        {"total": 0, "accepted": 0}
+    )
+
+
+def test_no_rejections_is_stated_not_omitted() -> None:
+    """"Nothing was rejected" and "we did not record why" must not look alike."""
+    rendered = frontend.format_episodic(
+        {"total": 2, "accepted": 2, "by_outcome": {"promoted": 2}}
+    )
+    assert "No rejections recorded." in rendered
+
+
+def test_an_unreadable_store_degrades_to_a_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A duckdb backend without duckdb installed must not break the page."""
+    from sis import episodic
+
+    def _boom(*_args: Any, **_kwargs: Any) -> Any:
+        raise ModuleNotFoundError("No module named 'duckdb'")
+
+    monkeypatch.setattr(episodic, "get_episodic_store", _boom)
+
+    state = frontend.episodic_state()
+    assert state["available"] is False
+    assert "duckdb" in state["detail"]
+
+
 # --- building the page -----------------------------------------------------
 
 

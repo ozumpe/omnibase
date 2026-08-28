@@ -14,7 +14,13 @@ import pytest
 
 from sis import config, operator
 from sis.config import ConfigTier, FrontendConfig
-from sis.operator import Edit, EditRefused, RefusesToServe
+from sis.operator import Approval, Edit, EditRefused, RefusesToServe
+from sis.policy import Justification
+
+# A confirmation that satisfies the write path: a human request with a reason
+# long enough to be one. Used wherever a test needs to get *past* the gate so
+# it can assert something else.
+_APPROVED = Approval.human("deliberately weakening this check for a test")
 
 
 @pytest.fixture
@@ -43,7 +49,7 @@ def test_every_forbidden_key_is_refused_by_the_write_path(
     for path in _paths(ConfigTier.FORBIDDEN):
         with pytest.raises(EditRefused, match="forbidden_"):
             operator.save_edits(
-                [Edit(path, "whatever")], confirmed=True, path=config_file
+                [Edit(path, "whatever")], approval=_APPROVED, path=config_file
             )
 
 
@@ -54,9 +60,56 @@ def test_a_strict_key_needs_an_explicit_confirmation(
         operator.save_edits([Edit("canary.backend", "serve")], path=config_file)
 
     operator.save_edits(
-        [Edit("canary.backend", "serve")], confirmed=True, path=config_file
+        [Edit("canary.backend", "serve")], approval=_APPROVED, path=config_file
     )
     assert config.load_file(config_file)["canary.backend"] == "serve"
+
+
+def test_a_strict_key_needs_a_justification_not_just_a_confirmation(
+    config_file: pathlib.Path,
+) -> None:
+    """A tick alone is not enough — a strict_ edit has to say why.
+
+    The distinction the `Approval` type exists for: a boolean could record only
+    *that* someone clicked, and a key whose edit weakens a check is one where
+    the reason is the interesting part.
+    """
+    with pytest.raises(EditRefused, match="at least"):
+        operator.save_edits(
+            [Edit("canary.backend", "serve")],
+            approval=Approval.human("meh"),
+            path=config_file,
+        )
+    assert config.load_file(config_file)["canary.backend"] != "serve"
+
+
+def test_whitespace_is_not_a_justification(config_file: pathlib.Path) -> None:
+    """Padding to the length threshold with spaces must not satisfy it."""
+    with pytest.raises(EditRefused, match="at least"):
+        operator.save_edits(
+            [Edit("canary.backend", "serve")],
+            approval=Approval.human(" " * 40),
+            path=config_file,
+        )
+
+
+def test_a_justification_without_a_human_request_is_refused(
+    config_file: pathlib.Path,
+) -> None:
+    """Prose alone does not confirm. The two claims are separate.
+
+    `Justification.EXCEPTION` is what the loop uses; it is not a human at a
+    console, so it must not unlock the console's write path however good the
+    accompanying note is.
+    """
+    with pytest.raises(EditRefused, match="human confirmation"):
+        operator.save_edits(
+            [Edit("canary.backend", "serve")],
+            approval=Approval(
+                Justification.EXCEPTION, "a thorough and lengthy explanation"
+            ),
+            path=config_file,
+        )
 
 
 def test_a_soft_key_is_edited_freely(config_file: pathlib.Path) -> None:
@@ -64,12 +117,19 @@ def test_a_soft_key_is_edited_freely(config_file: pathlib.Path) -> None:
     assert config.load_file(config_file)["loop.interval_seconds"] == 90.0
 
 
-def test_confirming_is_not_required_to_be_true_for_soft_keys(
+def test_a_soft_key_needs_no_approval_at_all(
     config_file: pathlib.Path,
 ) -> None:
-    """`confirmed` gates strict_ only — it must not become a blanket switch."""
+    """The approval gates strict_ only — it must not become a blanket demand.
+
+    A console that asked for a written justification to change a poll interval
+    would train its operators to type "x" into the box, which is exactly how
+    the requirement stops meaning anything where it does matter.
+    """
     operator.save_edits(
-        [Edit("frontend.port", 9000)], confirmed=False, path=config_file
+        [Edit("frontend.port", 9000)],
+        approval=operator.UNJUSTIFIED,
+        path=config_file,
     )
     assert config.load_file(config_file)["frontend.port"] == 9000
 
@@ -83,7 +143,7 @@ def test_the_ui_cannot_grant_itself_access(config_file: pathlib.Path) -> None:
     for path in ("frontend.allowed_logins", "frontend.auth", "frontend.bind"):
         with pytest.raises(EditRefused):
             operator.save_edits(
-                [Edit(path, "attacker")], confirmed=True, path=config_file
+                [Edit(path, "attacker")], approval=_APPROVED, path=config_file
             )
 
 
@@ -100,7 +160,7 @@ def test_naming_the_config_as_a_target_does_not_make_it_editable(
     with pytest.raises(EditRefused, match="forbidden_"):
         operator.save_edits(
             [Edit("policy.target_paths", "config.yml")],
-            confirmed=True,
+            approval=_APPROVED,
             path=config_file,
         )
 
@@ -119,7 +179,7 @@ def test_a_rejected_edit_leaves_the_file_untouched(
                 Edit("loop.interval_seconds", 90.0),   # fine on its own
                 Edit("brakes.budget_usd", 999.0),      # forbidden_
             ],
-            confirmed=True,
+            approval=_APPROVED,
             path=config_file,
         )
     assert config_file.read_text(encoding="utf-8") == before
@@ -131,7 +191,7 @@ def test_an_edit_inherits_the_schemas_own_validation(
     """The UI must not grow a second, quietly different set of checks."""
     with pytest.raises(ValueError):  # not in `choices`
         operator.save_edits(
-            [Edit("canary.backend", "sevre")], confirmed=True, path=config_file
+            [Edit("canary.backend", "sevre")], approval=_APPROVED, path=config_file
         )
     with pytest.raises(ValueError):  # `positive` — a 0 port is not a weaker port
         operator.save_edits([Edit("frontend.port", 0)], path=config_file)
@@ -184,6 +244,116 @@ def test_an_operator_edit_can_never_move_a_guardrail(
     for key in config.SCHEMA:
         if key.tier is ConfigTier.FORBIDDEN:
             assert saved[key.path] == key.default, key.path
+
+
+# --- the audit log --------------------------------------------------------
+
+
+def test_a_save_records_what_changed_and_why(config_file: pathlib.Path) -> None:
+    """The justification is written down, not just demanded and discarded."""
+    operator.save_edits(
+        [Edit("canary.backend", "serve")], approval=_APPROVED, path=config_file
+    )
+    entries = operator.read_audit(operator.audit_path_for(config_file))
+
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry.path == "canary.backend"
+    assert entry.tier == ConfigTier.STRICT.value
+    assert entry.after == "serve"
+    assert entry.justification == Justification.HUMAN_REQUEST.value
+    assert entry.note == _APPROVED.reason
+
+
+def test_the_audit_records_the_value_it_replaced(
+    config_file: pathlib.Path,
+) -> None:
+    """`before` makes the log a diff rather than a list of assertions."""
+    original = config.load_file(config_file)["loop.interval_seconds"]
+    operator.save_edits([Edit("loop.interval_seconds", 90.0)], path=config_file)
+    entry = operator.read_audit(operator.audit_path_for(config_file))[0]
+
+    assert entry.before == original
+    assert entry.after == 90.0
+
+
+def test_a_soft_edit_is_audited_too(config_file: pathlib.Path) -> None:
+    """Every committed change is recorded, not only the ones needing approval.
+
+    A log that held strict_ edits alone could not answer "what changed on this
+    box last week", which is the question it will actually be asked.
+    """
+    operator.save_edits([Edit("loop.interval_seconds", 90.0)], path=config_file)
+    entry = operator.read_audit(operator.audit_path_for(config_file))[0]
+
+    assert entry.tier == ConfigTier.SOFT.value
+    assert entry.justification == Justification.NONE.value
+    assert entry.note == ""
+
+
+def test_the_audit_log_is_append_only(config_file: pathlib.Path) -> None:
+    """History accumulates; a later save must not overwrite an earlier one."""
+    operator.save_edits([Edit("loop.interval_seconds", 90.0)], path=config_file)
+    operator.save_edits([Edit("frontend.port", 9000)], path=config_file)
+    entries = operator.read_audit(operator.audit_path_for(config_file))
+
+    assert [e.path for e in entries] == ["loop.interval_seconds", "frontend.port"]
+
+
+def test_every_key_in_a_batch_gets_its_own_entry(
+    config_file: pathlib.Path,
+) -> None:
+    operator.save_edits(
+        [Edit("loop.interval_seconds", 90.0), Edit("frontend.port", 9000)],
+        path=config_file,
+    )
+    entries = operator.read_audit(operator.audit_path_for(config_file))
+
+    assert len(entries) == 2
+    assert len({e.at for e in entries}) == 1  # one save, one timestamp
+
+
+def test_a_refused_edit_is_never_audited(config_file: pathlib.Path) -> None:
+    """The log records what happened. A refusal did not change anything."""
+    with pytest.raises(EditRefused):
+        operator.save_edits(
+            [Edit("brakes.budget_usd", 999.0)],
+            approval=_APPROVED,
+            path=config_file,
+        )
+    assert operator.read_audit(operator.audit_path_for(config_file)) == []
+
+
+def test_a_corrupt_line_does_not_make_the_history_unreadable(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A crash mid-append must cost one entry, not the whole log.
+
+    The log is most needed on the machine where something already went wrong,
+    so it fails soft in exactly the way the episodic store's state file does.
+    """
+    log = tmp_path / "operator_audit.jsonl"
+    log.write_text(
+        '{"at": "2026-08-28T00:00:00+00:00", "path": "loop.interval_seconds", '
+        '"tier": "soft", "before": 60.0, "after": 90.0, '
+        '"justification": "none", "note": ""}\n'
+        "{not json\n",
+        encoding="utf-8",
+    )
+    entries = operator.read_audit(log)
+
+    assert len(entries) == 1
+    assert entries[0].path == "loop.interval_seconds"
+
+
+def test_a_save_to_a_temporary_config_does_not_touch_the_real_log(
+    config_file: pathlib.Path,
+) -> None:
+    """The isolation the rest of these tests depend on, asserted directly."""
+    operator.save_edits([Edit("loop.interval_seconds", 90.0)], path=config_file)
+
+    assert operator.audit_path_for(config_file) != operator.OPERATOR_AUDIT_JSONL
+    assert operator.audit_path_for(config.CONFIG_FILE) == operator.OPERATOR_AUDIT_JSONL
 
 
 # --- shadowing: the way this tool could most easily lie -------------------
