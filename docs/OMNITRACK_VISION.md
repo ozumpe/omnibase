@@ -255,9 +255,9 @@ Two rules hold the whole thing together, and both are carried over rather than i
 
 Numbers are stable identifiers, not an ordering — the → line on each gives its deadline.
 Each entry states a recommendation; where a decision has been taken it follows below it and
-supersedes it. **Decided: D0–D9, D11, D12** (2026-08-27). **Still open: D10 alone** — does
-the emergence gate block promotion — which is not due until Phase F and cannot sensibly be
-settled before E5 has run advisory for a while.
+supersedes it. **All of D0–D12 are decided** (register settled 2026-08-28). D10 decides
+the *mechanism* — advisory first, with an empirical criterion for the blocking flip —
+while the flip itself deliberately stays a Phase-F call; see its entry.
 
 **D0 — What slice of the world does omnitrack model first? DECIDED: regional air traffic
 (OpenSky / ADS-B Exchange).**
@@ -295,7 +295,7 @@ Separate instances become attractive only for independent failure domains and ow
 → *Decided before Phase D; cheap to revisit.*
 
 Decision:
-*One Engine with N Conttracts*
+*One Engine with N Contracts*
 
 **D2 — Where does twin state live: in the Ray actor, or behind a `StateStore` port?**
 The highest-leverage decision in this document. *Recommend externalising it.* If modelled
@@ -324,27 +324,27 @@ class that needs its own design.
 Decision:
 Here we should compromise between using LLMs and still being able to test and simulate:
 The power of LLMs is indispensable for certain applications to get real world real-time digital twins and it is good to have the option to use LLM responses - within testable and simulatable boundaries.
-There will definitely be actors that need to use LLMs at some point and in some formalized ways - like expecting responses certain formats (e.g. JSON with specified fields)
+There will definitely be actors that need to use LLMs at some point and in some formalized ways - like expecting responses in certain formats (e.g. JSON with specified fields)
 so it can be efficiently evaluated by code.
 If an actor depends on LLMs, we need to be able to simulate the LLM responses for testing and game playing/simulating scenarios (e.g. answering with pre-canned responses, pre-defined scenarios).
 In order to parameterize tests, we could have for each LLM dependent actor specialized LLM actors or interfaces (reverse of MCP servers), that can be mocked for testing purposes.
 
-However, this should be not relevant until we need actors that interact with LLMs.
+However, this should not be relevant until we need actors that interact with LLMs.
 
 Points to remember:
-- mocks need to verify how actor's are handling the responses, never the LLM's behavior — so promotion evidence can't come purely from mocked responses, and the first LLM-dependent actor still needs its own design note
+- mocks need to verify how actors are handling the responses, never the LLM's behavior — so promotion evidence can't come purely from mocked responses, and the first LLM-dependent actor still needs its own design note
     (the original "distinct risk class" point survives this D3 compromise).
 - Runtime LLM calls are per-request spend and must sit under the CEO brakes, which today only meter the proposer.
-- All LLM responses are untrusted input (like sensor data in §3's second trap — schema-validated, size-bounded, never interpolated raw. One genuine gap to name: an LLM-backed actor is STOCHASTIC on the E2 axis, but E2's hard requirement is "determinism under seed," which no LLM API can honor (temperature 0 is not determinism).
+- All LLM responses are untrusted input (like sensor data in §3's second trap) — schema-validated, size-bounded, never interpolated raw. One genuine gap to name: an LLM-backed actor is STOCHASTIC on the E2 axis, but E2's hard requirement is "determinism under seed," which no LLM API can honor (temperature 0 is not determinism).
 
 **D4 — What evidence is required to promote: simulated, real, or both?**
 *Recommend real-trace evidence required for promotion; simulation for refutation and
 coverage only.* Needs to be a contract field, not a convention, or it erodes the first time
 real data is inconvenient.
-→ *Decide with Phase A, enforce from Phase C.*
+→ *Decided with Phase A, as required; enforce from Phase C.*
 
 Decision:
-As base for a promotion decision, recorded and human approved real world data is preferred, simulated data is to be used, if no recorded data is available (all tests must pass and it needs to be able to tolerate life traffic).
+As base for a promotion decision, recorded and human approved real world data is preferred, simulated data is to be used, if no recorded data is available (all tests must pass and it needs to be able to tolerate live traffic).
 
 Before a promotion we should expose the candidate to real world traffic and look at the error rate (if it can handle the format and the volume, and if there are no exceptions and probably if the responses are in an expected range)
 
@@ -353,7 +353,7 @@ Options: rotating splits, a fixed evaluation budget, noised score reporting, or 
 *Recommend budget + rotation, with burn measured from the episodic log* (the data is
 already being written). The alternative is silent overfitting that no gate reports.
 Rotation implies ongoing writes into `specs/` — the ingestion path is **D12**.
-→ *Decide with Phase C.*
+→ *Decided ahead of Phase C.*
 
 Decision:
 Go with the recommendation: budget + rotation, with burn measured from the episodic log.
@@ -370,61 +370,84 @@ Tension: you want the simulator to get better, but it generates the test inputs.
 *Recommend splitting it* — the generator mechanism is FORBIDDEN, the scenario library is
 reviewed data, and simulator improvements go through their own contract judged against
 held-out **real** traces. Never against itself.
-→ *Decide before Phase C.*
+→ *Decided before Phase C.*
 
 Decided as recommended:
 the simulator needs to be an improvable target. All improvements must only be judged against held-out real traces and 
-never ba judged against its own output, with a copy that generates the gauntlet inputs staying FORBIDDEN at a pinned 
-version, improvements reaching it via the human-approved promote path — is what prevents a closed loop.
+never be judged against its own output, with a copy that generates the gauntlet inputs staying FORBIDDEN at a pinned 
+version, improvements reaching it only via the human-approved promote path. This split is what prevents a closed loop.
 
 **D8 — Who decides what the modelled actors are?**
 Human/PM-authored ontology, or loop-proposed decomposition? *Recommend human-authored for
 v1.* This is the same input class as the domain invariants — a small, stable, high-value
 human contribution. A loop that chooses its own decomposition is also choosing its own
 scoring boundaries.
-→ *Decide before Phase D.*
+→ *Decided before Phase D.*
 
 Decided as recommended:
-A human should decide what the modelled actors are. However, this human decision can be driven by a 
-proposal.from any of the actors, but it must be approved by a human.
+A human should decide what the modelled actors are. However, this human decision can be driven by a
+proposal from any of the actors, but it must be approved by a human.
 
 **D9 — What counts as "the model is wrong enough to act"?**
 A per-actor prediction-error budget with a sustained-breach rule, mirroring the existing
 SLO trigger. The open question is whether the threshold is absolute, relative to the
 incumbent, or relative to climatology. *Recommend relative to climatology* — it is the only
 form that stays meaningful as the model improves.
-→ *Decide with Phase B.*
+→ *Decided ahead of Phase B (the two-trigger structure; per-actor thresholds stay case-by-case, see below).*
 
 That's a decision to be made case by case, actor by actor and project by project. My opinion is to optimize the implementation
-of a model over time based on historic values/timelines. The situation for each actor can change suddenly and trastically - 
+of a model over time based on historic values/timelines. The situation for each actor can change suddenly and drastically - 
 even the climatology option can become unreliable quickly. It is paramount to keep a detailed history 
 of input values, and actions. Then come up with the most applicable model for each of the actors over time - maybe 
-through regression or an appropriate functions, backward propagation, what ever fits.
+through regression or appropriate functions, backward propagation, whatever fits.
 
 What counts as a model is wrong enough to act? I think it depends on the context and the specific requirements of each actor but mainly two criteria:
-- Absolute error budget → "is the active twin fit for its purpose right now?" This is a safety or utility statement. Consequence: alert a human, downgrade confidence, stop trusting the output. 
+- Absolute error budget → "is the active twin fit for its purpose right now?" This is a safety or utility statement. Consequence: alert a human, downgrade confidence, stop trusting the output — and also initiate an improvement cycle, because an unfit twin must adapt to the world as it now is, whether or not the model itself got worse. 
 - Skill vs climatology → "is there recoverable headroom a code change could capture?" Consequence: spend LLM budget on a cycle.
 
-Ocasionally,
-(1) we need to spend money on a world that got harder rather than a model that got worse by initiating a self-improvement cycle because the absolute error rate is too high, while the skill didn't chang.
-(2) or if the model has drifted and the headroom is real, we need to spend money by firing when skill a decays while the absolute error still looks fine.
+Occasionally,
+(1) the world got harder rather than the model getting worse: the absolute error rate is too high while the skill didn't change. We still spend the money and initiate a self-improvement cycle — a harder world absolutely triggers an improvement, because the twin must adapt to the world as it now is.
+(2) or if the model has drifted and the headroom is real, we need to spend money by firing when a skill decays while the absolute error still looks fine.
 (1) and (2) should not be the same trigger.
 
 **D10 — Does the emergence gate block promotion?**
 *Recommend advisory first, blocking once it has enough history to be trusted.* A blocking
 gate with a high false-positive rate will be switched off, and then it is worse than
 advisory.
-→ *Decide at Phase F.*
+→ *Decided before Phase F.*
+
+Background:
+The gate (E5 in docs/OMNITRACK_VISION.md) - once the twin consists of several modeled actors instead of one, previously checked per-actor contracts stop being sufficient: each actor can pass its own exam while the combination can be oscillating, deadlocking, or cascading. E5 is a second verification level — a system-level backtest over a multi-actor scenario, run every N cycles rather than every cycle. Structurally it's the same fast (gauntlet)/slow (canary) split that already exists, but one level higher - a system-level gate.
+
+The open question is what its verdict does:
+Blocking — it behaves like every gate in sis/gauntlet.py today: a bad verdict rejects the candidate, and no PR is opened.
+Advisory — it runs, records its verdict in the episodic store, and surfaces it to the human reviewing the PR, but a bad verdict doesn't stop the cycle by itself.
+
+My current decision is to implement E5 as an advisory gate.
+
+Why this isn't the obvious "of course it blocks"
+Every other gate in the system has an oracle it can point at. Differential correctness has the reference implementation; the invariant gate has domain laws a human wrote; the backtest gate has recorded reality. E5 has none of that — and the vision document states plainly: it can detect that a system-level backtest degraded, but it cannot attribute the degradation to an actor. Credit assignment across interacting stochastic models is an open research problem, not a task someone deferred.
+
+So E5's verdict is inherently noisy in a way mypy --strict is not. Combine that with the sparse-ground-truth problem — few historical episodes, weak statistical evidence — and you get a gate that will sometimes fail a genuinely good candidate for reasons no one can localize.
+
+That's the actual argument in the D10 text: a blocking gate with a high false-positive rate doesn't stay on. It fails good work, no one can explain why, and someone sets SIS_...=0 — at which point you have no signal at all. An advisory gate that everyone reads is strictly more information than a blocking gate that's been switched off. The failure mode of over-strictness here isn't "too safe," it's "silently disabled."
+
+What "enough history to be trusted" means concretely
+It's measurable from data the system already writes. The episodic store records every rejected diff and the gate that caught it. Run E5 advisory for a while, and you can ask: of the candidates E5 flagged, how many did a human then merge anyway and observe no system-level problem? That's the false-positive rate. Flip it to blocking when that number is low enough to live with — an empirical threshold, not a judgment call made in advance.
+
+Note the safety asymmetry that makes advisory-first affordable: the human merge is still mandatory (§7, "The human merge"). An advisory E5 isn't "no gate" — it's a gate whose enforcement is a human reading its verdict on the PR. Nothing promotes itself either way.
+
+Two operational notes: the false-positive measurement only accrues if humans sometimes *do* merge flagged candidates — an advisory verdict treated as de-facto blocking starves its own calibration (the mirror number, candidates E5 passed that later degraded the system backtest, lands in the same store, and the flip should weigh both); and the advisory→blocking flip is a human configuration change, never the loop's — E5's code and its mode are guardrail-tier like every other gate.
 
 **D11 — How is the budget split across N actors?**
 Global cap with per-actor shares, or per-actor caps? *Recommend a global cap with soft
 per-actor shares* so one actor's productive streak isn't starved by an idle sibling, while
 the hard ceiling stays global.
-→ *Decide with Phase D.*
+→ *Decided ahead of Phase D.*
 
 Recommendation sounds correct:
-- The total amount of money to be spend on the system must be capped globally.
-- the money spend on each actor should be allocated based on their contribution, impact and error rate.
+- The total amount of money to be spent on the system must be capped globally.
+- The money spent on each actor should be allocated based on their contribution, impact and error rate.
 
 **D12 — Who writes real traces into the exam?**
 The held-out splits and scenario library live in POLICY-FORBIDDEN `specs/` (§5, rule 1),
@@ -435,7 +458,7 @@ authority:* traces land in an append-only staging partition of the episodic stor
 promotion into `specs/` is a batched, human-approved operation — the same
 `RequiresHumanApproval` shape the adapters already use for destructive actions. The loop
 never holds write access to `specs/` at any point.
-→ *Decide with Phase A (capture format), enforce from Phase C (first holdout).*
+→ *Decided with Phase A (capture format); enforce from Phase C (first holdout).*
 
 The loop could propose its exam and a human can review/change/approve/reject it.
 
@@ -448,7 +471,10 @@ complexity:
 
 - **Policy tiers.** Guardrails FORBIDDEN with no override; `specs/` FORBIDDEN; only the
   designated target is SOFT. Modelled-actor implementations are new SOFT targets; sensors,
-  scenario generators, invariants, and held-out data are not.
+  invariants, and held-out data are not. The simulator has **two copies** (D7): the
+  working copy is a SOFT target the loop may improve; the pinned exam copy that
+  generates gauntlet inputs stays FORBIDDEN and changes only through the
+  human-approved promote path.
 - **The sandbox.** Generated reaction models are untrusted code. Sampled runs, invariants,
   and backtests execute inside the sandbox, never the main process.
 - **The human merge.** Promotion still follows an *observed* merge. Nothing in this document
