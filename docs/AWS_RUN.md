@@ -42,8 +42,11 @@ dollar. **On-demand, not spot**, for the first runs: a spot interruption
 mid-cycle is a debugging session nobody needs yet. Revisit when runs are
 routine.
 
-Everything is in `infra/aws/` — small Terraform, deliberately readable in one
-sitting:
+Everything is in `infra/aws/` — a small Terraform config, deliberately readable
+in one sitting, driven with **OpenTofu** (`tofu`) rather than HashiCorp
+Terraform: same HCL and same `hashicorp/aws` provider, but MPL-2.0 rather than
+BSL-1.1, which keeps the infra consistent with the licensing stance `DESIGN.md`
+§2 already took for the runtime. See `infra/aws/README.md`.
 
 | Resource | Why |
 |---|---|
@@ -68,15 +71,25 @@ internet to find:
 
 ```bash
 aws ssm start-session --target <instance-id> --region us-east-1
+sudo -iu ubuntu          # first command of every session — see below
 ```
+
+**A session starts as `ssm-user`, not as `ubuntu`.** The agent creates that
+account itself, and it owns none of what the bootstrap installed: `~` is
+`/home/ssm-user`, so there is no `omnibase` checkout, no Poetry on `PATH`, and
+no membership in the `docker` group the gauntlet's sandbox needs. Every command
+below assumes you have become `ubuntu` first (`ssm-user` has passwordless sudo,
+so this always works). Use the `-i` login form rather than `sudo -u ubuntu`:
+Ubuntu's stock `~/.profile` is what puts `~/.local/bin` — and therefore
+`poetry`, installed there by `uv` — on the path.
 
 The operator console (OMNI-28) follows the same rule: it stays loopback-bound
 on the box — which its own `check_servable()` enforces for `auth: none` — and
 is reached over SSM port forwarding:
 
 ```bash
-# On the box. SIS_FRONTEND_AUTH=none is required, see below.
-SIS_FRONTEND_AUTH=none poetry run python -m sis.frontend
+# On the box, as ubuntu. SIS_FRONTEND_AUTH=none is required, see below.
+cd ~/omnibase && SIS_FRONTEND_AUTH=none poetry run python -m sis.frontend
 ```
 
 ```bash
@@ -165,6 +178,7 @@ The most durable thing a run produces is the episodic log — per CLAUDE.md,
 not. At the end of a session:
 
 ```bash
+# As ubuntu (sudo -iu ubuntu) — ssm-user has no checkout to sync.
 aws s3 sync ~/omnibase/runtime/ s3://<artifacts-bucket>/runs/$(date +%Y%m%d-%H%M)/ \
   --exclude "*" --include "episodic*" --include "operator_audit*"
 ```
@@ -177,7 +191,7 @@ hour earlier, and the instance it was recorded on is disposable.
 
 Between early runs, **stop** the instance rather than terminating it — a
 stopped instance costs only its EBS volume (~$3/month for 40 GB) and restarts
-with everything installed. `terraform destroy` when the experiment is over;
+with everything installed. `tofu destroy` when the experiment is over;
 the S3 bucket and its logs survive that too unless emptied deliberately.
 
 ## Bootstrap
@@ -190,7 +204,7 @@ in Terraform — and installs: docker + the AWS CLI, Python 3.14 via `uv`
 because 24.04's apt doesn't carry 3.14), Poetry, `poetry install --with real
 --with llm`, and builds `sis-gauntlet:latest` from `Dockerfile.gauntlet`.
 
-Expect ~10 minutes from `terraform apply` to ready. Check with:
+Expect ~10 minutes from `tofu apply` to ready. Check with:
 
 ```bash
 tail -f /var/log/sis-bootstrap.log   # inside an SSM session
@@ -198,7 +212,13 @@ tail -f /var/log/sis-bootstrap.log   # inside an SSM session
 
 ## The run itself
 
+The box runs whatever `var.repo_ref` pointed at when it booted — `develop` by
+default. Work sitting on an unmerged feature branch is *not* on the box; merge
+it first, or set `repo_ref` and re-apply. A run that silently exercises
+last week's engine is the kind of result that is worse than no result.
+
 ```bash
+sudo -iu ubuntu   # if you are not already — a session lands as ssm-user
 cd ~/omnibase
 
 # 1. Everything exported BEFORE the first poetry run — the role actors are

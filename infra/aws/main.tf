@@ -145,13 +145,21 @@ resource "aws_instance" "sis" {
     encrypted   = true
   }
 
-  # Five lines on purpose; the real bootstrap lives in the repo where it is
+  # Six lines on purpose; the real bootstrap lives in the repo where it is
   # versioned and reviewed (scripts/aws_bootstrap.sh).
+  #
+  # DPkg::Lock::Timeout is not a nicety: Ubuntu's cloud images run
+  # unattended-upgrades on the apt-daily timer at boot, which is exactly when
+  # user_data runs. Without it, apt loses the race, `set -e` aborts, and the
+  # box comes up with no repo and a truncated log — the classic user_data
+  # failure. Waiting is the whole fix; apt >= 2.1.10 (24.04 ships 2.7) honours
+  # this for its own locks as well as dpkg's.
   user_data = <<-EOT
     #!/bin/bash
     set -euo pipefail
     exec > /var/log/sis-bootstrap.log 2>&1
-    apt-get update && apt-get install -y git
+    apt-get -o DPkg::Lock::Timeout=600 update
+    apt-get -o DPkg::Lock::Timeout=600 install -y git
     git clone --branch ${var.repo_ref} ${var.repo_url} /home/ubuntu/omnibase
     chown -R ubuntu:ubuntu /home/ubuntu/omnibase
     bash /home/ubuntu/omnibase/scripts/aws_bootstrap.sh
