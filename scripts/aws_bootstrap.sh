@@ -10,8 +10,12 @@ set -euo pipefail
 REPO_DIR=/home/ubuntu/omnibase
 
 # --- system layer (root) --------------------------------------------------
-apt-get update
-DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io git curl jq unzip
+# The lock timeout matters at boot: unattended-upgrades runs on the apt-daily
+# timer at exactly the moment user_data does, and without waiting for the lock
+# `set -e` aborts the bootstrap partway (see the same option in main.tf).
+APT_WAIT="-o DPkg::Lock::Timeout=600"
+apt-get $APT_WAIT update
+DEBIAN_FRONTEND=noninteractive apt-get $APT_WAIT install -y docker.io git curl jq unzip
 systemctl enable --now docker
 usermod -aG docker ubuntu
 
