@@ -96,6 +96,12 @@ resource "aws_iam_instance_profile" "instance" {
 resource "aws_secretsmanager_secret" "credentials" {
   name        = var.secret_name
   description = "sis credentials — same JSON shape as secrets.local.yml; value set via put-secret-value, never via Terraform"
+
+  # Delete immediately on destroy. The default 30-day recovery window keeps the
+  # name reserved, so apply → destroy → apply-again (the normal rhythm of early
+  # runs) fails with "already scheduled for deletion". The value is only ever a
+  # copy of secrets.local.yml, so there is nothing to recover.
+  recovery_window_in_days = 0
 }
 
 # --------------------------------------------------------------------------

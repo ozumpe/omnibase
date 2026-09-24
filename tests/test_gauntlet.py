@@ -124,7 +124,14 @@ def test_sandbox_env_scrubs_credentials(monkeypatch) -> None:  # type: ignore[no
     assert env["PATH"]  # still runnable
 
 
-def test_docker_args_are_locked_down() -> None:
+@pytest.fixture
+def ordinary_user(monkeypatch):  # type: ignore[no-untyped-def]
+    """Pin the host uid/gid, so docker-arg tests don't depend on who runs them."""
+    monkeypatch.setattr(gauntlet.os, "getuid", lambda: 1000)
+    monkeypatch.setattr(gauntlet.os, "getgid", lambda: 1000)
+
+
+def test_docker_args_are_locked_down(ordinary_user: None) -> None:
     from sis.gauntlet import _docker_args
 
     args = _docker_args("/tmp/sandbox123", {"PYTHONPATH": "/tmp/sandbox123",
@@ -144,7 +151,7 @@ def test_docker_args_are_locked_down() -> None:
     assert "-e PATH=" not in joined
 
 
-def test_docker_args_forward_no_host_credentials() -> None:
+def test_docker_args_forward_no_host_credentials(ordinary_user: None) -> None:
     from sis.gauntlet import _docker_args
 
     # Only the scrubbed env keys are forwarded — a stray token must not appear.
@@ -153,7 +160,31 @@ def test_docker_args_forward_no_host_credentials() -> None:
     assert "TOKEN" not in joined and "SECRET" not in joined and "KEY" not in joined
 
 
-def test_docker_timeout_kills_the_container(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_docker_sandbox_runs_as_the_host_user(ordinary_user: None) -> None:
+    # Linux regression, found rehearsing OMNI-29: the temp dir is 0700 and owned
+    # by the host user, so a container running as the image's own uid (10001)
+    # got "Permission denied" opening the candidate on native Linux — every
+    # docker gate failed. Docker Desktop's file sharing ignores ownership, which
+    # is why no Mac run ever showed it. The container must run as the owner of
+    # the one directory it is given.
+    args = gauntlet._docker_args("/t", {"HOME": "/t"}, "img", "sis-gauntlet-x")
+    assert args[args.index("--user") + 1] == "1000:1000"
+
+
+def test_docker_sandbox_refuses_to_run_as_root(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # As root, the host uid would make candidate code root inside the container.
+    monkeypatch.setattr(gauntlet.os, "getuid", lambda: 0)
+    monkeypatch.setattr(gauntlet.os, "getgid", lambda: 0)
+    with pytest.raises(RuntimeError, match="will not run as root"):
+        gauntlet._docker_args("/t", {"HOME": "/t"}, "img", "sis-gauntlet-x")
+    # ...and the precondition says so up front, not halfway through a cycle.
+    monkeypatch.setenv("SIS_SANDBOX", "docker")
+    monkeypatch.setattr(gauntlet.shutil, "which", lambda _: "/usr/bin/docker")
+    with pytest.raises(RuntimeError, match="will not run as root"):
+        gauntlet.ensure_sandbox_ready()
+
+
+def test_docker_timeout_kills_the_container(monkeypatch, ordinary_user) -> None:  # type: ignore[no-untyped-def]
     # M1 regression: a SIGKILL to `docker run` leaves the container running, so
     # on timeout the gauntlet must `docker kill` it by name — otherwise an
     # infinite-loop candidate burns host CPU forever. Mocked: no real daemon.

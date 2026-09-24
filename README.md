@@ -256,9 +256,10 @@ runtime/                    # runtime-mutable state (kept apart from the engine)
   contract_staging/         # drafted exams awaiting human approval
   episodic.jsonl            # episodic store (gitignored; or episodic.duckdb)
 config.yml                  # every knob, with its default, env var and CLI flag
-tests/                      # 600 tests: 538 in the default run + 62 Ray Serve integration
+tests/                      # 612 tests: 550 in the default run + 62 Ray Serve integration
 infra/aws/                  # OpenTofu for the one-node AWS run (docs/AWS_RUN.md)
-scripts/                    # check_connections.py (read-only preflight), aws_bootstrap.sh
+scripts/                    # check_connections.py (read-only preflight); the AWS run's
+                            #   aws_bootstrap.sh, aws_secret.py, rehearse_aws_run.sh
 main.py                     # entry point
 secrets.example.yml         # secrets template (copy to secrets.local.yml)
 ```
@@ -355,7 +356,7 @@ been applied yet.
 ## Development
 
 ```bash
-poetry run pytest                  # 538 tests, parallel (default: -m "not serve" -n auto)
+poetry run pytest                  # 550 tests, parallel (default: -m "not serve" -n auto)
 poetry run pytest -m serve -n 0    # the 62 Ray Serve integration tests (serial)
 poetry run mypy --strict sis/ main.py scripts/
 poetry run ruff check .

@@ -19,6 +19,10 @@ FROM python:3.14-slim
 RUN pip install --no-cache-dir "mypy>=1.8" "pytest>=8.0" "hypothesis>=6.0"
 
 # Run as an unprivileged user (defence in depth alongside --cap-drop ALL).
+# This is only the default for a hand-run container: sis.gauntlet overrides it
+# with --user <host uid:gid>, because the bind-mounted temp dir is 0700 and owned
+# by the host user — on native Linux uid 10001 cannot even open the candidate
+# (see sis.gauntlet._container_user). Docker Desktop's file sharing hides that.
 RUN useradd --create-home --uid 10001 sandbox
 USER sandbox
 
