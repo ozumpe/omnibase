@@ -1,6 +1,7 @@
 # First AWS run (OMNI-29) — one node, a few cycles
 
-**Status:** designed + Terraformed (2026-08-16); not yet applied. See
+**Status:** designed (2026-08-16, PR #94) and pre-flighted (2026-08-30, PR #99 —
+two boot-time defects fixed, switched to OpenTofu); not yet applied. See
 [OMNI-29](https://olafzumpe.atlassian.net/browse/OMNI-29). This is the "small
 AWS run — watch the provenance graph and the bill" that CLAUDE.md carried as
 *not yet scheduled*: the full loop (real Claude proposer, real

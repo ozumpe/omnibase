@@ -388,17 +388,19 @@ This is development work, not configuration. Currently missing:
 - **A real monitor trigger.** The long-running loop exists — `poetry run python
   main.py --loop` runs cycles via `sis/loop.py` (pure `decide()` policy +
   injectable trigger, graceful SIGINT/SIGTERM stop, `SIS_LOOP_MAX_CYCLES` /
-  `SIS_LOOP_INTERVAL`). What's still simulated is the *trigger*: it runs on a
-  demo `repeat()`/`once()` intake, not a **sustained-SLO-breach detector over a
-  rolling metric window** — which needs a served endpoint producing real
-  metrics (the Ray Serve gap below).
+  `SIS_LOOP_INTERVAL`). What's still simulated is the *trigger* `--loop` wires
+  in: a demo `repeat()`/`once()` intake. The **sustained-SLO-breach detector**
+  itself now exists — `loop.breach_trigger()` reads a served endpoint's rolling
+  window (OMNI-10) and is unit-tested — but no entry point uses it yet; wiring
+  it into `--loop` is what's left.
 - ~~**Ray Serve canary.**~~ **Done** — `DevOps.canary(canary_backend="serve")`
   deploys the candidate behind a real Serve router, drives real traffic
   through it, and lets `evaluate_canary()` decide (OMNI-14; Level 0e). Opt-in
   (`--canary serve` / `SIS_CANARY=serve`); the in-memory recording stays the
   default. The **atomic actor swap**, for internal never-served actors, is
   still unbuilt — a different mechanism (DESIGN.md §4), no design doc yet.
-- ~~**AWS provisioning.**~~ **Terraformed (OMNI-29)** — `infra/aws/` stands up
+- ~~**AWS provisioning.**~~ **Written in OpenTofu (OMNI-29), not yet applied** —
+  `infra/aws/` stands up
   the one-node run box (no-ingress SG, SSM-only access, instance role + one
   Secrets Manager secret, artifacts bucket, budget alarm), and
   `docs/AWS_RUN.md` is the design note + runbook for a *supervised* few-cycle
