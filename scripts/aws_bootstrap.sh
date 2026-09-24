@@ -22,7 +22,9 @@ usermod -aG docker ubuntu
 # AWS CLI v2: not preinstalled on Ubuntu AMIs, needed for the secret fetch and
 # the artifacts sync (docs/AWS_RUN.md "The run itself").
 if ! command -v aws >/dev/null; then
-    curl -sSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o /tmp/awscliv2.zip
+    # `uname -m` is x86_64 or aarch64 — exactly AWS's two filenames, so this
+    # also works on Graviton (and in an arm64 rehearsal of this script).
+    curl -sSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip
     unzip -q /tmp/awscliv2.zip -d /tmp
     /tmp/aws/install
     rm -rf /tmp/aws /tmp/awscliv2.zip
@@ -39,7 +41,9 @@ uv python install 3.14
 uv tool install poetry
 cd "$HOME/omnibase"
 poetry env use "$(uv python find 3.14)"
-poetry install --with real --with llm
+# ui: the runbook starts the operator console on this box (sis.frontend needs
+# panel); without it that step dies with ModuleNotFoundError.
+poetry install --with real --with llm --with ui
 AS_UBUNTU
 
 # The kernel-enforced sandbox image. A real (non-stub) proposer REQUIRES

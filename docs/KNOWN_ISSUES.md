@@ -198,6 +198,33 @@ any long-lived cluster exists.
 
 ## Resolved
 
+- **The docker sandbox could not read its own temp dir on native Linux — so
+  it blamed every candidate** *(found and fixed 2026-09-23, rehearsing the
+  OMNI-29 box on a local Ubuntu 24.04 container)* — each validation's temp dir
+  comes from `tempfile`, so it is `0700` and owned by the host user, and the
+  container ran as `Dockerfile.gauntlet`'s `sandbox` user (uid 10001). On
+  native Linux that uid cannot open the candidate: `Permission denied`, and the
+  mypy gate — the first to execute in the sandbox — reported **`mypy --strict
+  failed`**, attributing a harness fault to the candidate. On the EC2 box every
+  real Claude proposal would have been rejected as badly typed, billed, filed
+  as a `TES` bug, and tripped the breaker after three cycles, all looking like
+  the model's fault. Every earlier docker run — including the 2026-07-28
+  first real-life test — was on Docker Desktop, whose file sharing ignores
+  ownership, so it never showed. Fix: the container runs as the host user's
+  `uid:gid` (`sis.gauntlet._container_user`), and refuses root, where that
+  mapping would make generated code root inside the container. Lessons: **a
+  sandbox verified only on Docker Desktop has not been verified on Linux** —
+  `scripts/rehearse_aws_run.sh` now rehearses on a real Linux daemon; and a
+  gate that cannot tell "the harness failed" from "the candidate failed" will
+  report the harness's faults as the candidate's (a docker-daemon error on
+  the mypy gate still reads as a type error — a follow-up worth doing).
+
+- **The AWS box could not start the operator console** *(found and fixed
+  2026-09-23, same rehearsal)* — `docs/AWS_RUN.md` starts `sis.frontend` on
+  the box, but `scripts/aws_bootstrap.sh` installed only `--with real --with
+  llm`, so it died with `ModuleNotFoundError: panel`. The bootstrap now
+  installs `--with ui` too.
+
 - **Serve replica CPU reservation deadlocked CI — `serve.run()` blocked
   forever on a constrained runner** *(found and fixed 2026-08-09, during
   OMNI-14's first CI run, which hung for 2h+ inside pytest)* — Ray Serve

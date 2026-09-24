@@ -45,7 +45,8 @@ internal target before it models anything external.
 ## Hard rules
 - Generated/untrusted code NEVER runs in the main process. The gauntlet sandboxes every
   gate: `SIS_SANDBOX=subprocess` (scrubbed env + in-process egress block, default) or
-  `docker` (kernel-enforced `--network none`, no creds, only the temp dir mounted). A
+  `docker` (kernel-enforced `--network none`, no creds, only the temp dir mounted,
+  run as the host user's uid — never root; see KNOWN_ISSUES "Resolved"). A
   per-gate timeout kills infinite loops. A real (non-stub) proposer writes untrusted code
   and REQUIRES `SIS_SANDBOX=docker` — the loop refuses otherwise (override:
   `SIS_ALLOW_UNSANDBOXED_LLM=1`); the subprocess sandbox leaves host files readable (M1).
@@ -493,7 +494,7 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   - Design + the Caddy/TLS decision: `docs/OPERATOR_FRONTEND.md`. Deployment
     artifacts (`Dockerfile.frontend`, `Caddyfile`) are deliberately not in this
     slice.
-- 538 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
+- 550 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
   Ray-Serve-integration tests run separately, see Operational quick reference
   above); `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop
   → main` enforced by both the client-side pre-push hook and active
@@ -599,8 +600,15 @@ through OMNI-36; 26 Done, 1 In Progress, 9 To Do):
    instance lifecycle: `user_data` racing Ubuntu's `unattended-upgrades` for
    the dpkg lock, and SSM sessions landing as `ssm-user` rather than `ubuntu`
    (every runbook step now starts with `sudo -iu ubuntu`). The box clones
-   `var.repo_ref` (`develop`), so unmerged work is not on it. **Not applied
-   yet** — what's left is `tofu apply`, the supervised cycles, `tofu destroy`.
+   `var.repo_ref` (`develop`), so unmerged work is not on it. **Rehearsed
+   2026-09-23** on a local Ubuntu 24.04 box (`scripts/rehearse_aws_run.sh`),
+   which found two more defects no read-through could: the docker sandbox
+   could not read its temp dir on native Linux (it now runs as the host uid),
+   and the bootstrap did not install the `ui` group the console needs.
+   `tofu plan` is clean against the account. **Not applied yet — what's left
+   needs credentials**, and the whole sequence is `docs/AWS_RUN.md` "Run day":
+   three tokens (Atlassian, GitHub PAT, Anthropic), `tofu apply`,
+   `scripts/aws_secret.py --upload`, the supervised cycles, `tofu destroy`.
    Explicitly **not** RUNBOOK Level 4: no autostart, no autonomy — a human
    starts, watches, and stops it.
 

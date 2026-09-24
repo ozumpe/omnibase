@@ -11,7 +11,7 @@ output "secret_name" {
 }
 
 output "put_secret_hint" {
-  value = "aws secretsmanager put-secret-value --secret-id ${aws_secretsmanager_secret.credentials.name} --region ${var.region} --secret-string file://secrets.aws.json"
+  value = "poetry run python scripts/aws_secret.py --upload --secret-id ${aws_secretsmanager_secret.credentials.name} --region ${var.region}"
 }
 
 output "ssm_session" {

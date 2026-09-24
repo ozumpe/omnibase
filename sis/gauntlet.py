@@ -162,11 +162,13 @@ def _docker_args(tmpdir: str, env: dict[str, str], image: str, name: str) -> lis
     ``--name`` lets the timeout handler kill the container by name (SIGKILL to
     the ``docker run`` client does not stop the container). ``--memory`` /
     ``--cpus`` bound a runaway candidate's resource use (override via
-    ``SIS_SANDBOX_MEMORY`` / ``SIS_SANDBOX_CPUS``).
+    ``SIS_SANDBOX_MEMORY`` / ``SIS_SANDBOX_CPUS``). ``--user`` is the host
+    user's uid, see :func:`_container_user`.
     """
     args = [
         "docker", "run", "--rm",
         "--name", name,
+        "--user", _container_user(),
         "--network", "none",
         "--cap-drop", "ALL",
         "--security-opt", "no-new-privileges",
@@ -182,6 +184,34 @@ def _docker_args(tmpdir: str, env: dict[str, str], image: str, name: str) -> lis
             args += ["-e", f"{key}={value}"]
     args.append(image)
     return args
+
+
+def _container_user() -> str:
+    """The ``uid:gid`` the sandbox container runs as: the host user's own.
+
+    The per-validation temp dir comes from ``tempfile``, so it is mode 0700 and
+    owned by whoever runs the gauntlet. On native Linux — the AWS run box — a
+    container running as any *other* uid cannot even open the candidate file,
+    and every docker gate fails with ``Permission denied``. Docker Desktop hid
+    this: its file-sharing layer ignores ownership, so the image's fixed
+    ``sandbox`` user (uid 10001) passed every local test and the first
+    real-life run, and the defect would only have surfaced on EC2. Running as
+    the host uid keeps the process unprivileged and able to touch exactly the
+    one directory mounted for it.
+
+    Refuses root: there the host uid would make candidate code root inside the
+    container. ``--cap-drop ALL`` and ``no-new-privileges`` would still apply,
+    but a sandbox that silently loosens itself depending on who launched it is
+    the wrong shape — run the loop as an ordinary user instead.
+    """
+    if os.getuid() == 0:
+        raise RuntimeError(
+            "sandbox.mode=docker will not run as root: the sandbox container runs "
+            "candidate code as the invoking user's uid (the owner of its temp dir), "
+            "and as root that would make generated code root inside the container. "
+            "Run the loop as an unprivileged user — on the AWS box, `sudo -iu ubuntu`."
+        )
+    return f"{os.getuid()}:{os.getgid()}"
 
 
 def _docker_kill(name: str) -> None:
@@ -546,6 +576,8 @@ def ensure_sandbox_ready() -> None:
             "Dockerfile.gauntlet .), or set sandbox.mode=subprocess for the "
             "subprocess sandbox."
         )
+    if sandbox_mode() == "docker":
+        _container_user()  # refuses root here, before a cycle does any work
 
 
 def _timed_out(result: subprocess.CompletedProcess[str], gate: str) -> Result | None:

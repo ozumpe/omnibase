@@ -23,5 +23,7 @@ tofu apply
 
 State is local and gitignored, like `terraform.tfvars`. The Secrets Manager
 secret is created empty on purpose: put the value in with
-`aws secretsmanager put-secret-value` (see the `put_secret_hint` output), never
-through the config, so it never enters state.
+`scripts/aws_secret.py --upload` (see the `put_secret_hint` output), never
+through the config, so it never enters state. The whole run-day sequence is at
+the top of `docs/AWS_RUN.md`; `scripts/rehearse_aws_run.sh` rehearses the box
+locally without AWS.

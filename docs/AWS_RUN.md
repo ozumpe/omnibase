@@ -1,7 +1,10 @@
 # First AWS run (OMNI-29) — one node, a few cycles
 
-**Status:** designed (2026-08-16, PR #94) and pre-flighted (2026-08-30, PR #99 —
-two boot-time defects fixed, switched to OpenTofu); not yet applied. See
+**Status:** designed (2026-08-16, PR #94), pre-flighted (2026-08-30, PR #99 —
+two boot-time defects fixed, switched to OpenTofu), and **rehearsed** end to end
+on a local Ubuntu 24.04 box (2026-09-23 — two more defects fixed, see
+[Rehearsal](#rehearsal)); `tofu plan` is clean against the account. Not yet
+applied: what is left needs credentials — see [Run day](#run-day). See
 [OMNI-29](https://olafzumpe.atlassian.net/browse/OMNI-29). This is the "small
 AWS run — watch the provenance graph and the bill" that CLAUDE.md carried as
 *not yet scheduled*: the full loop (real Claude proposer, real
@@ -14,6 +17,47 @@ deliberately the opposite: a human starts it, watches it, and stops it. No
 systemd unit, no autostart, no autoscaling. What it proves is that the engine's
 `SIS_ENV=aws` path, the docker sandbox, and the real adapters all hold up off
 the laptop — and what it produces is an episodic log worth keeping.
+
+## Run day
+
+Everything that needs no credentials is done and rehearsed. What is left, in
+order:
+
+1. **Three credentials** — nothing else is missing.
+   - Atlassian API token (id.atlassian.com → Security → API tokens) →
+     `atlassian.api_token` in `secrets.local.yml`.
+   - GitHub fine-grained PAT for `ozumpe/testrun` only, **Contents** and
+     **Pull requests** read/write → `github.token` in `secrets.local.yml`.
+   - An Anthropic API key → `export ANTHROPIC_API_KEY=...` in the shell you use
+     for step 4. (An `ant auth login` profile won't do: the box needs a key.)
+
+   `secrets.local.yml` must route to the scratch tenant (`TES`,
+   `ozumpe/testrun`); step 4's helper checks and refuses otherwise.
+2. **Prove them, read-only:**
+   `SIS_ADAPTERS=real poetry run python scripts/check_connections.py --deep` —
+   every line ✓.
+3. **Install the SSM plugin** once: `brew install --cask session-manager-plugin`
+   (`aws ssm start-session` needs it).
+4. **Stand it up:**
+   ```bash
+   cd infra/aws
+   echo 'alert_email = "you@example.com"' > terraform.tfvars   # gitignored
+   tofu init && tofu apply        # ~1 min; the box then bootstraps for ~10 min
+   cd ../.. && poetry run python scripts/aws_secret.py --upload
+   ```
+   The last line builds the secret from `secrets.local.yml` +
+   `$ANTHROPIC_API_KEY` and uploads it directly — no plaintext JSON file on
+   disk, nothing printed but routing and ✓/✗. Run it without `--upload` first
+   to see what it would send.
+5. **Run it:** `tofu -chdir=infra/aws output -raw ssm_session` prints the
+   session command; then [The run itself](#the-run-itself).
+6. **Stop the meter:** sync the episodic log (step 5 of the run), stop the
+   instance; `tofu destroy` when the experiment is over (see
+   [What persists](#what-persists)).
+
+If you have changed the bootstrap, `Dockerfile.gauntlet`, or `sis/gauntlet.py`
+since the last rehearsal, run `scripts/rehearse_aws_run.sh` first (~2 min,
+Docker only).
 
 ## Why AWS (and why the choice stays cheap)
 
@@ -132,22 +176,20 @@ exactly three permissions: the SSM managed policy (session access),
 artifacts bucket.
 
 The secret is a single JSON document, the same shape as `secrets.local.yml`
-(nested form; `sis/settings.py` flattens either). Terraform creates the empty
-secret; **the value is set out-of-band so it never enters Terraform state or
-the shell history of a committed file**:
-
-```bash
-aws secretsmanager put-secret-value \
-  --secret-id sis/first-run/credentials \
-  --secret-string file://secrets.aws.json && rm secrets.aws.json
-```
+(nested form; `sis/settings.py` flattens either), plus one key
+`secrets.local.yml` keeps in the environment locally: `anthropic: {api_key:
+...}`, exported at run time (below) — `sis/settings.py` ignores keys it doesn't
+recognise, so carrying it in the same secret is safe. Terraform creates the
+empty secret; **the value is set out-of-band so it never enters Terraform
+state**, by `scripts/aws_secret.py --upload`, which builds the document from
+`secrets.local.yml` + `$ANTHROPIC_API_KEY` and calls `put-secret-value`
+directly — there is no intermediate JSON file to forget to delete.
 
 Use the **same scratch tenant as Level 2**: `github.repo` pointing at
 `ozumpe/testrun`, `atlassian.jira_project: TES` — the loop files real
-artifacts, and they should land in the sandbox project, not `OMNI`. Add one key
-that `secrets.local.yml` keeps in the environment locally:
-`anthropic: {api_key: ...}`, exported at run time (below). `sis/settings.py`
-ignores keys it doesn't recognise, so carrying it in the same secret is safe.
+artifacts, and they should land in the sandbox project, not `OMNI`. The helper
+enforces that: it refuses to upload a document routed at `OMNI` or at
+`ozumpe/omnibase`.
 
 **Why the docker sandbox is non-negotiable here, beyond M1.** On EC2, the
 instance role's credentials are served by the metadata endpoint (IMDS) to any
@@ -166,7 +208,9 @@ credentials". Don't set it here, ever.
   80% and 100% of the cap (default $25). Know its limitation: budget data lags
   hours, so it is a backstop against a forgotten instance, not a real-time
   kill. The real-time infra control is that this stack is one instance and
-  you stop it when you leave.
+  you stop it when you leave. It has no cost filter, so it watches the
+  **whole account's** bill: anything else running in the account counts
+  toward the cap.
 
 They fail independently: a runaway loop is caught by the CEO brake regardless
 of what AWS billing knows, and a forgotten instance is caught by the budget
@@ -192,8 +236,12 @@ hour earlier, and the instance it was recorded on is disposable.
 
 Between early runs, **stop** the instance rather than terminating it — a
 stopped instance costs only its EBS volume (~$3/month for 40 GB) and restarts
-with everything installed. `tofu destroy` when the experiment is over;
-the S3 bucket and its logs survive that too unless emptied deliberately.
+with everything installed. `tofu destroy` when the experiment is over. Two
+things it does on purpose: it **stops with a `BucketNotEmpty` error** at the
+artifacts bucket once a log has been synced — everything else is gone, and the
+bucket and its logs survive unless emptied deliberately; and it **deletes the
+secret immediately** (`recovery_window_in_days = 0`), since the default 30-day
+window keeps the name reserved and would make the next `tofu apply` fail.
 
 ## Bootstrap
 
@@ -203,13 +251,40 @@ The script itself lives in the repo — versioned and reviewable, not embedded
 in Terraform — and installs: docker + the AWS CLI, Python 3.14 via `uv`
 (standard CPython, **not** free-threaded — Ray has no `cp314t` wheels; `uv`
 because 24.04's apt doesn't carry 3.14), Poetry, `poetry install --with real
---with llm`, and builds `sis-gauntlet:latest` from `Dockerfile.gauntlet`.
+--with llm --with ui` (`ui` because the operator console above runs on the
+box), and builds `sis-gauntlet:latest` from `Dockerfile.gauntlet`.
 
 Expect ~10 minutes from `tofu apply` to ready. Check with:
 
 ```bash
 tail -f /var/log/sis-bootstrap.log   # inside an SSM session
 ```
+
+### Rehearsal
+
+`scripts/rehearse_aws_run.sh` runs `user_data` and the bootstrap on a local
+Ubuntu 24.04 container, then the run's commands as `ubuntu` through a login
+shell, with the docker sandbox on a real Linux daemon: a full stub-proposer
+cycle must reach `verified_awaiting_human_merge` and the console must answer.
+No AWS, no credentials, about two minutes. Its header lists the few ways the
+container deliberately differs from EC2.
+
+The first rehearsal (2026-09-23) found two defects that neither the unit tests
+nor the #99 read-through could see, each of which would have cost a full
+instance lifecycle:
+
+- **The docker sandbox could not read its own temp dir on native Linux.** The
+  temp dir is `0700` and owned by the host user; the container ran as the
+  image's `sandbox` uid (10001) and got `Permission denied`. Docker Desktop's
+  file sharing ignores ownership, which is why every Mac run — including the
+  first real-life test — passed. Worse than a crash: the gate reported
+  `mypy --strict failed`, so on EC2 every Claude candidate would have been
+  rejected as badly typed, billed, filed as a `TES` bug, and tripped the
+  circuit breaker after three cycles. The container now runs as the host
+  user's uid (`sis.gauntlet._container_user`, which also refuses root).
+- **The operator console could not start on the box** — the bootstrap did not
+  install the `ui` group, so `python -m sis.frontend` died with
+  `ModuleNotFoundError: panel`.
 
 ## The run itself
 
