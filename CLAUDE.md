@@ -164,10 +164,10 @@ internal target before it models anything external.
 ## Operational quick reference
 - Run a cycle: `poetry run python main.py` (in-memory, no creds).
 - Gates: `poetry run pytest` · `poetry run mypy --strict sis/ main.py scripts/` · `poetry run ruff check .`
-- **`pytest` defaults to `-m "not serve" -n auto`** (fast inner loop, ~45s,
+- **`pytest` defaults to `-m "not serve" -n auto`** (fast inner loop, ~50s,
   parallel): it deselects the Ray Serve integration tests
   (`test_live_canary.py`, `test_serve_cloud.py`, `test_serving.py`,
-  `test_loadgen.py`, `test_loop_serve.py`, ~65 tests), which stand up a real
+  `test_loadgen.py`, `test_loop_serve.py`, 62 tests), which stand up a real
   cluster/Serve deployment and take minutes serially. **Not a full verification
   by itself** — run `poetry run pytest -m serve -n 0` (serial: they share a
   cluster and a port) before trusting a change touches Serve, or let CI run
@@ -226,8 +226,9 @@ internal target before it models anything external.
   live runs — don't put planning there.
 
 ## Current status — where to pick up
-Released through **v0.1.4**. The bootstrap skeleton (original "first task") is
-**done**, plus much more:
+Released through **v0.1.4** (2026-07-05) — and only that far: everything below
+dated after it (Level 2 onward) lives on `develop` and is unreleased. The
+bootstrap skeleton (original "first task") is **done**, plus much more:
 - Actor org + SelfModel + Workspace; one intake→deploy cycle runs locally and stops at
   the human PR merge.
 - Gauntlet hardened: differential-correctness anti-gaming, per-gate timeout, subprocess
@@ -492,7 +493,7 @@ Released through **v0.1.4**. The bootstrap skeleton (original "first task") is
   - Design + the Caddy/TLS decision: `docs/OPERATOR_FRONTEND.md`. Deployment
     artifacts (`Dockerfile.frontend`, `Caddyfile`) are deliberately not in this
     slice.
-- 518 tests (`pytest -m "not serve" -n auto`, the default, ~46s; the ~62
+- 538 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
   Ray-Serve-integration tests run separately, see Operational quick reference
   above); `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop
   → main` enforced by both the client-side pre-push hook and active
@@ -532,8 +533,8 @@ Two traps L5 surfaced, both worth knowing before writing similar code:
 
 **Next — the milestone plan is in Jira ([`OMNI`](https://olafzumpe.atlassian.net/browse/OMNI)),
 not here.** Check the board for current status rather than trusting this list.
-**Last reconciled against a live query on 2026-08-27** (30 issues, OMNI-1
-through OMNI-30; 25 Done, 5 open):
+**Last reconciled against a live query on 2026-09-23** (36 issues, OMNI-1
+through OMNI-36; 26 Done, 1 In Progress, 9 To Do):
 
 1. ~~**[OMNI-1](https://olafzumpe.atlassian.net/browse/OMNI-1) — L5 target
    contract** (Class 1)~~ — **done 2026-08-06** (OMNI-4/5/6/7). Two targets ship
@@ -557,14 +558,16 @@ through OMNI-30; 25 Done, 5 open):
 4. ~~**[OMNI-25](https://olafzumpe.atlassian.net/browse/OMNI-25) — D0: pick
    omnitrack's first domain**~~ — **Done 2026-08-14: regional air traffic**
    (OpenSky / ADS-B Exchange). It fixes the first `RealSensor` adapter and the
-   domain of Phase A. D8 (who decomposes it into modelled actors) is a
-   separate, still-open decision.
+   domain of Phase A. D8 (who decomposes it into modelled actors) was a
+   separate decision, since settled with the rest of the register (2026-08-28):
+   humans decide, actors may propose — see "Current status" above.
 5. ~~**[OMNI-27](https://olafzumpe.atlassian.net/browse/OMNI-27) — unified
    config**~~ — **done 2026-08-16**, PR #92 merged to `develop`. One schema,
    `config.yml`, env/CLI override; see "Current status" above.
-6. **[OMNI-28](https://olafzumpe.atlassian.net/browse/OMNI-28) — operator
-   frontend.** **First slice in PR #93** — Panel app, tier-gated write path,
-   GitHub OAuth, `frontend.*` schema keys. **Second slice 2026-08-28** closed
+6. ~~**[OMNI-28](https://olafzumpe.atlassian.net/browse/OMNI-28) — operator
+   frontend.**~~ — **done 2026-08-28.** **First slice in PR #93** — Panel app,
+   tier-gated write path, GitHub OAuth, `frontend.*` schema keys. **Second
+   slice 2026-08-28** (PRs #97/#98) closed
    the three parts of the ticket the first left out: the CEO brake panel, the
    episodic-history panel, and the justification a `strict_` edit now carries
    (plus `runtime/operator_audit.jsonl`). See "Current status" above for what
@@ -582,14 +585,23 @@ through OMNI-30; 25 Done, 5 open):
 
 7. **[OMNI-29](https://olafzumpe.atlassian.net/browse/OMNI-29) — first AWS
    run** (one node, a few supervised cycles — watch the provenance graph and
-   the bill). Designed + Terraformed: `docs/AWS_RUN.md` is the design note and
-   runbook, `infra/aws/` the (small) Terraform. One m7i.xlarge, **zero ingress
-   ports** (SSM Session Manager only; the OMNI-28 console stays loopback-bound,
-   reached over SSM port forwarding), instance role + one Secrets Manager
-   secret whose value never enters Terraform state, episodic log synced to S3
-   as the run's durable artifact, and two *independent* spend brakes
-   (`SIS_BUDGET_USD` in the loop; an AWS Budget alarm in billing). Not applied
-   yet. Explicitly **not** RUNBOOK Level 4: no autostart, no autonomy — a human
+   the bill). **In Progress:** designed 2026-08-16 (PR #94), pre-flighted
+   2026-08-30 (PR #99). `docs/AWS_RUN.md` is the design note and runbook,
+   `infra/aws/` a small Terraform-language config driven with **OpenTofu**
+   (`tofu`) — same HCL, provider and state format, but MPL-2.0 rather than
+   BSL-1.1, the same stance DESIGN.md §2 took for the runtime. One m7i.xlarge,
+   **zero ingress ports** (SSM Session Manager only; the OMNI-28 console stays
+   loopback-bound, reached over SSM port forwarding), instance role + one
+   Secrets Manager secret whose value never enters the state file, episodic log
+   synced to S3 as the run's durable artifact, and two *independent* spend
+   brakes (`SIS_BUDGET_USD` in the loop; an AWS Budget alarm in billing). The
+   pre-flight fixed two boot-time defects that would each have cost a full
+   instance lifecycle: `user_data` racing Ubuntu's `unattended-upgrades` for
+   the dpkg lock, and SSM sessions landing as `ssm-user` rather than `ubuntu`
+   (every runbook step now starts with `sudo -iu ubuntu`). The box clones
+   `var.repo_ref` (`develop`), so unmerged work is not on it. **Not applied
+   yet** — what's left is `tofu apply`, the supervised cycles, `tofu destroy`.
+   Explicitly **not** RUNBOOK Level 4: no autostart, no autonomy — a human
    starts, watches, and stops it.
 
 8. **[OMNI-30](https://olafzumpe.atlassian.net/browse/OMNI-30) — omnitrack
@@ -597,9 +609,25 @@ through OMNI-30; 25 Done, 5 open):
    omnitrack proper, unblocked by D0 and by OMNI-3 closing. `Sensor` port +
    `SimSensor` default + an OpenSky/ADS-B `RealSensor`, the first recorded
    fixture, and prediction error computed but not yet acted on (that is Phase
-   B). **Sanitising sensor input is inside the adapter story, not later
-   hardening** — ADS-B is outside-influenceable data that reaches scenario
-   libraries, backtest fixtures and potentially LLM prompts.
+   B). **Sanitising sensor input is its own story that lands before any real
+   adapter, not later hardening** — ADS-B is outside-influenceable data that
+   reaches scenario libraries, backtest fixtures and potentially LLM prompts.
+   Broken into six stories on 2026-08-29, all `To Do`:
+   - [OMNI-31](https://olafzumpe.atlassian.net/browse/OMNI-31) (High) — `Sensor`
+     port + `SimSensor` default adapter; a reading is an artifact with event time.
+   - [OMNI-32](https://olafzumpe.atlassian.net/browse/OMNI-32) (High) — sensor
+     input is untrusted: the sanitisation boundary, before any real adapter.
+   - [OMNI-33](https://olafzumpe.atlassian.net/browse/OMNI-33) (Medium) —
+     OpenSky/ADS-B `RealSensor`, and settle the trace capture format (D12).
+   - [OMNI-34](https://olafzumpe.atlassian.net/browse/OMNI-34) (Medium) —
+     `SimSensor` scenario generation: refutation inputs, and the gauntlet's
+     input generator (D7).
+   - [OMNI-35](https://olafzumpe.atlassian.net/browse/OMNI-35) (High) — the first
+     recorded fixture, a holding-pattern episode, plus the clock-cadence check
+     carried over from OMNI-25.
+   - [OMNI-36](https://olafzumpe.atlassian.net/browse/OMNI-36) (Medium) —
+     prediction error computed and reported: the Phase-A milestone, with
+     nothing acting on it yet.
 
 Not yet scheduled: the **atomic actor swap** for internal, never-served actors,
 which `docs/SERVE_CANARY.md` scopes out and which has no design doc yet. E3/D2 in
