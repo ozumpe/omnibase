@@ -406,7 +406,7 @@ Open bugs and limitations are tracked with stable IDs in
 | – | Operator console: state, brakes, episodic history, tier-gated config edits (OMNI-28) | ✅ (2026-08-28) |
 | – | First AWS run: one node, a few supervised cycles (OMNI-29) | designed + pre-flighted, not applied |
 | 5 | Language-agnostic `ToolchainAdapter` (build/verify non-Python targets, e.g. Java) (OMNI-20) | parked |
-| 6 | Model an external slice of the real world — omnitrack; first domain regional air traffic (Phase A: OMNI-30) | next |
+| 6 | Model an external slice of the real world — omnitrack; first domain the California gasoline market (Phase A: OMNI-30), second Iowa's spirits supply chain (OMNI-39) | next |
 
 The live plan is the Jira board ([`OMNI`](https://olafzumpe.atlassian.net/browse/OMNI));
 what comes after Class 2 is in [`docs/OMNITRACK_VISION.md`](docs/OMNITRACK_VISION.md).

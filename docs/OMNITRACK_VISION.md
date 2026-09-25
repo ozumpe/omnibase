@@ -207,7 +207,7 @@ Each phase ends in something runnable, in the style of the RUNBOOK levels.
 
 | Phase | Delivers | Milestone you can run |
 |---|---|---|
-| **A** | E1: `Sensor` + `Clock` ports, real + sim adapters, one toy domain | drive the twin from a recorded trace *and* from a generated scenario; prediction error computed, nothing acts on it |
+| **A** | E1: `Sensor` + `Clock` ports, real + sim adapters, one domain (the California gasoline market, D0) | drive the twin from a recorded trace *and* from a generated scenario; prediction error computed, nothing acts on it |
 | **B** | prediction error as trigger | a **sustained model-error breach** starts a cycle, exactly as a sustained SLO breach does today — reuses the existing monitor/brake shape; the error series lands in the Telemetry port + SelfModel, the same home as the SLO metrics it mirrors |
 | **C** | E2: the determinism axis + distributional comparators | one actor's reaction model passes/fails on calibration + skill + invariants, against a held-out split it never sees |
 | **D** | E4: per-actor slots | two modelled actors improving independently on one engine; roll one back without touching the other |
@@ -255,25 +255,123 @@ Two rules hold the whole thing together, and both are carried over rather than i
 
 Numbers are stable identifiers, not an ordering — the → line on each gives its deadline.
 Each entry states a recommendation; where a decision has been taken it follows below it and
-supersedes it. **All of D0–D12 are decided** (register settled 2026-08-28). D10 decides
+supersedes it. **All of D0–D12 are decided** (register settled 2026-08-28; D0 revised
+2026-09-24 — the California gasoline market replaces regional air traffic). D10 decides
 the *mechanism* — advisory first, with an empirical criterion for the blocking flip —
 while the flip itself deliberately stays a Phase-F call; see its entry.
 
-**D0 — What slice of the world does omnitrack model first? DECIDED: regional air traffic
-(OpenSky / ADS-B Exchange).**
+**D0 — What slice of the world does omnitrack model first? DECIDED (revised 2026-09-24):
+the California gasoline market first, read from EIA's weekly data; Iowa's spirits supply
+chain second.** This supersedes the first decision (2026-08-14, regional air traffic),
+which is kept below with the reason it was dropped.
 Everything in §8 — ground-truth density, episode frequency, sensor availability — is a
 property of this choice, and it determines the first `RealSensor` adapter and the domain
 of Phase A. **D8** then decides who decomposes the chosen domain into modelled actors.
-→ *Decided before Phase A, as required; every later decision is shaped by it.*
+→ *Decided before Phase A, as required; revised before any Phase-A code existed, so
+nothing built is thrown away.*
 
-Richest, highest-frequency public data of the four candidates considered, and the most
-visually compelling demo. Also the heaviest scope/optics tax — the one domain here where
-"wrong is dangerous" needs active management even for a passive, non-controlling twin —
-and a first fixture (holding-pattern/reroute vs. weather) is a bigger lift than one bike
-station.
+*Why it was revisited.* Air traffic was always an example of the idea, never the idea.
+The idea is a server that adapts itself to new tasks: a new domain arrives as a spec, and
+the running system extends itself to model it. omnibase is the engine that does the
+extending; the product is that self-adapting domain server, not the engine and not any
+one domain. Judged as a proof of concept of *that*, air traffic was interesting but of
+limited use — there is little anyone would do with a passive airspace twin, and it
+carried the heaviest optics tax of any candidate. The first domain should instead be one
+where a twin is useful; whose real data is still being published, because a live canary
+and D4's real-trace evidence both need a world that keeps producing readings; which is a
+supply chain, so there are actors reacting to each other and E5 has something to catch
+later; and which has recorded shocks to backtest against.
 
-The other three candidates considered, not selected:
+*Why fuel.* Every level of the chain has public data — refinery production and stocks,
+regional stocks, retail prices, and demand through miles driven (traffic is a demand
+sensor: fuel demand is roughly miles driven divided by fleet fuel economy). Shocks happen,
+and they are on record. And nobody will ridicule the domain: society depends on fuel far
+more than on anything that would draw that reaction, and no output of a passive market
+twin is safety-critical.
 
+*Why California first.* The US publishes fuel prices by area, not by station, so the
+first twin is an area twin — and California is the area where area-level effects show up
+most clearly. Its market is largely separate from the rest of the country's, and EIA
+publishes its prices at three levels (state, Los Angeles, San Francisco). The first
+episode is already in the data, verified 2026-09-24 against EIA's weekly series:
+California's regular reformulated retail price rose from $5.05 to $6.21 a gallon in the
+four weeks to 3 October 2022, while the US regular reformulated price rose $0.16 — the
+California premium doubled, from $1.03 to $2.03. West Coast (PADD 5) gasoline stocks
+bottomed the same week (24,675 thousand barrels on 30 September, down from 29,192 on
+5 August) and had rebuilt to 29,943 by 25 November, when the premium was back under $1.
+What caused it is not verified here; the fixture (OMNI-35) records what the series show,
+not a story about them.
+
+*Why Iowa second.* The Iowa liquor sales table is the one public dataset found that
+reaches every entity in a supply chain: each invoice line from the state — the sole
+wholesaler of spirits in Iowa — to each licensed store, naming the vendor, item, pack,
+bottle cost and retail price, and bottles sold. That is where the entity-level twin
+becomes possible, one modelled actor per store and per vendor, which is the long-term
+shape §1 describes. It is second rather than first for two reasons. An entity-level twin
+needs E4 (per-actor slots, Phase D) before it is more than one aggregate actor. And doing
+it second *is* the proof of concept: the second domain arrives as a spec on an engine the
+first one shaped, and the test is how much of it the running system builds itself. Two
+domains on one engine is what "adapts itself to new tasks" has to mean in practice. Its
+limits, known now: spirits only, and the rows are store orders from the state, not
+consumer sales. Filed as
+[OMNI-39](https://olafzumpe.atlassian.net/browse/OMNI-39), not yet broken into stories.
+
+*Data sources, verified 2026-09-24.* Licence and terms of use are checked separately, by
+a human, before any adapter is written against a source.
+
+| Source | What | Level | Cadence, latest | Access |
+|---|---|---|---|---|
+| EIA weekly petroleum data | retail gasoline prices; gasoline stocks; product supplied | prices for 29 areas, incl. California, Los Angeles, San Francisco; stocks by PADD and sub-PADD (West Coast = PADD 5, not California alone); product supplied US only | weekly; prices to 21 Sep 2026, stocks to the week ending 18 Sep 2026 | bulk file `PET.zip` (56 MB, last refreshed 24 Sep 2026) needs no key; API v2 needs a free key |
+| California Energy Commission, Weekly Fuels Watch | California refinery inputs, production and stocks | California refineries | weekly | dashboards; a machine-readable export is **not yet verified** |
+| Caltrans PeMS | freeway detector volumes | California freeways, 5-minute | live | site answers; access not yet verified |
+| FHWA Traffic Volume Trends | vehicle-miles travelled | by state | monthly, to July 2026 | public files |
+| FHWA monthly motor fuel | taxed fuel volumes | by state | **stale** — newest files Sep 2023 | public files; not usable as a live sensor |
+| Iowa liquor sales (BigQuery public copy) | invoice lines, state → store | per store, vendor, item | 34,016,839 rows, table modified 20 Sep 2026 | `bigquery-public-data.iowa_liquor_sales.sales`; the Iowa portal's old Socrata endpoint now returns 404 |
+| Station-level fuel prices | per-station retail prices | Germany (Tankerkönig / MTS-K), France (roulez-eco), Western Australia (FuelWatch) | live | Germany needs a free key, France and WA none; **no US equivalent found** |
+
+EIA series used above: `EMM_EPMRR_PTE_SCA_DPG`, `EMM_EPMRR_PTE_Y05LA_DPG` and
+`EMM_EPMRR_PTE_Y05SF_DPG` (California, Los Angeles, San Francisco regular reformulated
+retail), `EMM_EPMRR_PTE_NUS_DPG` (US), `WGTSTP51` (PADD 5 gasoline stocks). A second
+verified episode, outside California: the Colonial Pipeline shutdown (7–12 May 2021)
+shows in Lower Atlantic (PADD 1C, `WGTST1C1`) gasoline stocks as a drop from 24,621 to
+22,711 thousand barrels in one week, then an overshoot to 30,079 by 25 June — part of
+which may be seasonal. It is the candidate for a second area.
+
+*What the choice costs.*
+- **Few data points.** A weekly series gives 52 readings a year; the 2022 episode is
+  about a dozen. §8's sparse ground truth applies from the first day, and D5's holdout
+  budget is tight.
+- **Area level only, in the US.** No public per-station US price feed exists, so the
+  California twin is a market twin. Per-entity modelling waits for Iowa, or for a
+  non-US station feed.
+- **Series don't share a geography.** EIA's weekly stocks are for the West Coast region,
+  not California; California's own refinery stocks are the CEC's, and that source is not
+  yet verified as machine-readable.
+- **Series don't share a clock.** Weekly stocks are dated by a Friday week-ending, weekly
+  retail prices by a Monday, PeMS every five minutes and FHWA monthly. Merging them is
+  the first thing the clock-cadence check (OMNI-35) has to handle.
+- **A reading has two times.** The week it describes and the moment it became known are
+  different, and a backtest that sees a value before it was published is seeing the
+  future. The capture format (OMNI-33) records both.
+
+*What carried over.* Everything domain-agnostic about Phase A survived the switch: the
+`Sensor` port and `SimSensor`, the sanitisation boundary before any real adapter, the D7
+simulator split, a first recorded fixture with a clock-cadence check, and prediction
+error computed but not acted on. OMNI-30's stories were re-scoped on 2026-09-24, not
+replaced.
+
+Candidates considered and not selected:
+
+- **Regional air traffic** (OpenSky / ADS-B Exchange) — the 2026-08-14 decision,
+  superseded above. The richest, highest-frequency public data of every candidate and
+  the most visual demo; also the heaviest scope and optics tax — the one domain where
+  "wrong is dangerous" needs active management even for a passive twin — and, the reason
+  it was dropped, of limited use as a proof of concept.
+- **A beer supply chain** (brewery → distributor → bar: the bullwhip effect of MIT's Beer
+  Distribution Game). The right shape and the best E5 story, but no real data at any
+  level. Iowa is the same shape with real data.
+- **Retailer APIs** (e.g. Amazon's). They show one seller's view of a storefront, not the
+  chain behind it.
 - **Bike-share network** (station GBFS feeds + historical trip data). Best fit on all four
   selection criteria (public/cheap data, frequent events, real structure to model, low
   stakes if wrong) and on §1's actor-network shape: each station is an actor, the
@@ -526,13 +624,17 @@ Class 2, so Phase A starts from the `Sensor` port rather than from scratch.
 | [OMNI-17](https://olafzumpe.atlassian.net/browse/OMNI-17) — `FeatureContract` | ✅ Done | Declares `determinism`, defaulting to deterministic, and requires a seeded entry point when stochastic. |
 | [OMNI-18](https://olafzumpe.atlassian.net/browse/OMNI-18) — `InvariantGate` | ✅ Done | Seeds generation explicitly and records the seed in the reject reason, so E2's gates inherit reproducibility. |
 | [OMNI-21](https://olafzumpe.atlassian.net/browse/OMNI-21) — contract-author actor | ✅ Done | Owns the *only* write path into `specs/`, built as a general human-approved ingestion mechanism so D12's trace pipeline reuses it. [OMNI-26](https://olafzumpe.atlassian.net/browse/OMNI-26) added worked-example transcription and the discrimination check. |
-| [OMNI-25](https://olafzumpe.atlassian.net/browse/OMNI-25) — D0 | ✅ Done | Decided: regional air traffic (§6, D0). |
+| [OMNI-25](https://olafzumpe.atlassian.net/browse/OMNI-25) — D0 | ✅ Done | Decided 2026-08-14: regional air traffic. Revised 2026-09-24: the California gasoline market first, Iowa's spirits supply chain second (§6, D0). |
 | [OMNI-24](https://olafzumpe.atlassian.net/browse/OMNI-24) — `SloGate` · [OMNI-20](https://olafzumpe.atlassian.net/browse/OMNI-20) — `ToolchainAdapter` | ⬜ To Do (low / parked) | Split out and parked respectively. Neither is on this document's path. Detached from OMNI-3 on 2026-08-27 so the completed epic could close; they stand alone in the backlog. |
 | [OMNI-3](https://olafzumpe.atlassian.net/browse/OMNI-3) — the Class-2 epic | ✅ Done | Closed 2026-08-27. |
 
 **Phase A is filed:
-[OMNI-30](https://olafzumpe.atlassian.net/browse/OMNI-30)** (2026-08-27) — the `Sensor`
-port, an OpenSky/ADS-B `RealSensor` with sanitisation in-scope, the `SimSensor`, the
-first recorded fixture, and prediction error computed but not acted on. It also carries
-the one OMNI-25 acceptance criterion that was never completed: checking the `Clock`
-shape against air traffic's actual data cadence before a fixture is recorded.
+[OMNI-30](https://olafzumpe.atlassian.net/browse/OMNI-30)** (2026-08-27, re-scoped to
+the California gasoline market 2026-09-24) — the `Sensor` port, the sanitisation
+boundary, an EIA `RealSensor`, the `SimSensor`, the first recorded fixture (California,
+autumn 2022), and prediction error computed but not acted on. It also carries the one
+OMNI-25 acceptance criterion that was never completed: checking the `Clock` shape against
+the domain's actual data cadence before a fixture is recorded — now a merge of weekly
+series with different anchor days, plus monthly and five-minute ones. The second
+application, Iowa's spirits supply chain, is filed as
+[OMNI-39](https://olafzumpe.atlassian.net/browse/OMNI-39).
