@@ -721,7 +721,8 @@ class DevOps(Role):
         cloud = self._cloud_for(spec)
 
         # Forced, not configured: an OptimizationContract carries no
-        # invariants (Class 2 / OMNI-18, unbuilt), so SPLIT mode would have
+        # invariants (only FeatureContracts declare them, and none is served
+        # yet — OMNI-18 built the offline gate), so SPLIT mode would have
         # ZERO live correctness signal — only a speed comparison — and could
         # silently promote a fast, wrong candidate. Response agreement under
         # SHADOW is the only live correctness check available today.

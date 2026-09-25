@@ -3,8 +3,10 @@
 **Status:** **Parts 1–2 & 6 implemented (2026-07-29)** — the `sis` namespace +
 `get_if_exists` (M2) and CEO brake/spend state persisted to the episodic store and
 rehydrated on restart (L9), with a `reset_breaker()` RPC. **Parts 3–5 remain a
-design sketch** — the breaker-cause split and the oracle-versioned auto-reset need
-the L5 target contract to hash against (see the sequencing note at the end). See
+design sketch — unblocked but unscheduled:** the breaker-cause split and the
+oracle-versioned auto-reset needed the L5 target contract to hash against, and L5
+closed on 2026-08-06 (OMNI-1: `sis/contract.py` + the FORBIDDEN
+`specs/<name>/oracle.py` modules). No Jira story exists for them yet. See
 `docs/KNOWN_ISSUES.md` for the issue IDs and `docs/CLASS2_CONTRACT.md` for the
 target/oracle contract this builds on.
 
@@ -24,23 +26,22 @@ target/oracle contract this builds on.
 Together they answer one question: **what is the lifetime and meaning of the
 CEO's brake state on a real, persistent cluster — and when should it reset?**
 
-## Part 1 — M2: one shared namespace
+## Part 1 — M2: one shared namespace ✅ implemented
 
-`org.bootstrap()` calls `ray.init(...)` with no namespace, so every process gets a
-random one; `ray.get_actor("CEO")` from a later run misses the detached actor and
-duplicates it.
+`org.bootstrap()` called `ray.init(...)` with no namespace, so every process got a
+random one; `ray.get_actor("CEO")` from a later run missed the detached actor and
+duplicated it.
 
-**Fix (small):**
+**Fix:**
 - `ray.init(namespace="sis", ...)` (or `address="auto", namespace="sis"` on AWS) —
   one shared namespace so lookups find the existing actors across runs.
-- Replace the `try ray.get_actor / except ValueError: create` in `_get_or_create`
-  with Ray's atomic
+- The `try ray.get_actor / except ValueError: create` in `_get_or_create` was
+  replaced with Ray's atomic
   `Cls.options(name=..., namespace="sis", lifetime="detached", get_if_exists=True).remote()`
-  — closes the race where two concurrent bootstraps both create.
+  — closes the race where two concurrent bootstraps both create. On an existing
+  actor the constructor args are ignored (it keeps its live state).
 
-This is a genuine prerequisite before any persistent/AWS cluster.
-
-## Part 2 — L9: brake-state lifetime
+## Part 2 — L9: brake-state lifetime ✅ implemented (option b)
 
 On a persistent cluster you *want* brake state to persist across runs — the spend
 cap should span the cluster's life, not reset every `python main.py`. Two levels:
@@ -50,11 +51,15 @@ cap should span the cluster's life, not reset every `python main.py`. Two levels
 | **(a)** State stays in the CEO actor (M2 namespace makes the actor persist) + a `reset_breaker()` admin RPC | ✅ | ❌ (in-memory) | small |
 | **(b)** Persist CEO state to a durable store + rehydrate on bootstrap | ✅ | ✅ | medium (the real L9 fix) |
 
-**Recommendation:** ship **(a)** for the first small AWS run; do **(b)** when
-durability across restarts is needed. The oracle-hash mechanism below is part of
-**(b)**.
+**Shipped (b)** (2026-07-29) — the original recommendation was (a) for the first
+AWS run, but (b) landed directly: the episodic store gained `save_state` /
+`load_state` (latest-wins KV) on the port, with jsonl (sidecar json), duckdb
+(`kv_state` table) and null backends. The CEO gained `state_snapshot()` and
+rehydrates from a state dict on a *fresh* actor; the driver loads on bootstrap and
+persists after every cycle (single-writer). `reset_breaker()` clears the trip but
+**not** the spend (§4.1). So the spend cap and breaker survive a restart.
 
-## Part 3 — Two trip causes, not one
+## Part 3 — Two trip causes, not one *(design — not yet built)*
 
 The consecutive-failure breaker currently counts *every* `rolled_back` cycle the
 same way. The live L3 runs showed two very different causes hiding behind that:
@@ -75,7 +80,7 @@ These need different handling, and different reset semantics:
 - **Quality failure → the classic safety breaker** + page-a-human; cleared only by
   an explicit human reset (someone confirms the proposer issue is understood).
 
-## Part 4 — The oracle-versioned breaker
+## Part 4 — The oracle-versioned breaker *(design — not yet built)*
 
 **Idea:** persist the breaker state tagged with a **hash of the current oracle**,
 and auto-reset when that hash changes. Redefining the oracle *is* the reset signal
@@ -94,6 +99,7 @@ The CEO holds two kinds of state with different reset semantics:
 
 So the hash-reset is **selective**: clear the failure/breaker state, carry the
 spend total forward. Spend resets only on a deliberate budget-period boundary.
+*(This split is already honoured by the shipped `reset_breaker()`.)*
 
 ### 4.2 Hash only loop-**immutable** content (or the loop clears its own breaker)
 
@@ -124,7 +130,7 @@ Hash the *semantic* contract fields (entry symbol, reference oracle, inputs/sizi
 min-speedup margin) + the baseline, not the raw file bytes — so a cosmetic comment
 edit doesn't cost a re-converge cycle.
 
-## Part 5 — The resulting closed loop
+## Part 5 — The resulting closed loop *(design — not yet built)*
 
 ```
 converged target → benchmark-rejects at the noise floor → goal_exhausted trip
@@ -142,14 +148,16 @@ acknowledging a broken proposer. Mapped onto the org, a convergence trip is the
 loop reaching the edge of its current goal and asking leadership (PM/CTO) to set a
 new one — a concrete step toward self-directed goal-setting.
 
-## Part 6 — Where the persisted record lives
+## Part 6 — Where the persisted record lives ✅ implemented
 
 The episodic store (`sis/episodic.py`) is the natural home — it's already the
-durable substrate behind a port. It is append-only, so add a small **latest-wins
-`CEO state` record**: `{ oracle_hash, spent_usd, consecutive_failures,
-convergence_tripped, safety_tripped, accepted }`. On bootstrap the CEO rehydrates
-from it, compares the stored `oracle_hash` to the freshly-computed one, and clears
-the convergence breaker on mismatch while carrying spend forward.
+durable substrate behind a port. It is append-only, so a small **latest-wins
+`CEO state` record** was added (`save_state` / `load_state`), holding
+`{ spent_usd, consecutive_failures, accepted, tripped }` today
+(`CEO.state_snapshot()`). When Parts 3–5 land it extends to `{ oracle_hash,
+spent_usd, consecutive_failures, convergence_tripped, safety_tripped, accepted }`:
+on bootstrap the CEO compares the stored `oracle_hash` to the freshly-computed one
+and clears the convergence breaker on mismatch while carrying spend forward.
 
 ## Relationship to L5 & sequencing
 
@@ -158,12 +166,14 @@ per-target contract — i.e. **L5 Layer 1** (the `OptimizationContract`:
 `entry`/`reference`/`inputs`/`min_speedup`, in FORBIDDEN space). The hash in Part 4
 is computed over exactly that contract. Suggested order:
 
-1. **M2 + L9(a)** — namespace + `get_if_exists` + `reset_breaker()` + documented
-   persistent-cluster semantics. Small; unblocks AWS.
+1. ✅ **M2 + L9(b)** — namespace + `get_if_exists` + `reset_breaker()` + CEO
+   state persisted/rehydrated. *(Done 2026-07-29.)*
 2. **Breaker classification** — split `goal_exhausted` (convergence) from the safety
    breaker; make convergence benign-but-escalating. Small; fixes the run-4/5
    coin-flip-trip pathology.
-3. **L5 Layer 1** — the target/oracle contract, so "redefine the oracle" has
-   something to rewrite.
-4. **L9(b) + the oracle-versioned breaker** — persist CEO state with the oracle
-   hash; auto-reset the convergence breaker on change.
+3. ✅ **L5 Layer 1** — the target/oracle contract, so "redefine the oracle" has
+   something to rewrite. *(Done 2026-08-06, OMNI-1 — landed out of the order
+   listed here.)*
+4. **The oracle-versioned breaker** — persist CEO state with the oracle hash;
+   auto-reset the convergence breaker on change. Step 2 is now its only
+   remaining prerequisite.
