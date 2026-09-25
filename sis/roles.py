@@ -52,6 +52,7 @@ DEFAULT_BREAKER_THRESHOLD: int = config.key_for("brakes.breaker_threshold").defa
 DEFAULT_MAX_COST_PER_ACCEPTED_USD: float = config.key_for(
     "brakes.max_cost_per_accepted_usd").default
 DEFAULT_SLO_MIN_SPEND_USD: float = config.key_for("brakes.slo_min_spend_usd").default
+DEFAULT_SLO_FAILURE_WEIGHT: float = config.key_for("brakes.slo_failure_weight").default
 
 # --------------------------------------------------------------------------
 # Shared helpers
@@ -66,6 +67,37 @@ class CEOConfig:
     breaker_threshold: int = DEFAULT_BREAKER_THRESHOLD
     max_cost_per_accepted_usd: float = DEFAULT_MAX_COST_PER_ACCEPTED_USD
     slo_min_spend_usd: float = DEFAULT_SLO_MIN_SPEND_USD
+    slo_failure_weight: float = DEFAULT_SLO_FAILURE_WEIGHT
+
+    def __post_init__(self) -> None:
+        check_slo_failure_weight(self.slo_failure_weight)
+
+
+def check_slo_failure_weight(weight: float) -> float:
+    """Reject a weight outside (0, 1]. Pure.
+
+    The config schema already refuses zero and negatives; the upper bound lives
+    here because it is a property of the breaker, not of number parsing. Above
+    1.0 a correct-but-slow cycle would count for *more* than a wrong one, which
+    inverts the whole point of weighing them differently. Zero is refused for
+    the opposite reason: it would silently switch SLO failures off.
+    """
+    if not 0.0 < weight <= 1.0:
+        raise ValueError(
+            f"brakes.slo_failure_weight must be in (0, 1], got {weight} — 1.0 counts an "
+            "over-budget cycle like a wrong one; smaller values count it for less"
+        )
+    return weight
+
+
+def failure_weight(reject_gate: str | None, *, slo_failure_weight: float) -> float:
+    """How much one failed cycle adds to the consecutive-failure streak. Pure.
+
+    Only a correct-but-over-budget rejection (``slo``) is discounted. Everything
+    else — including ``slo_error``, a candidate that *raised* on the SLO
+    workload, which is a wrong answer rather than a slow one — counts in full.
+    """
+    return slo_failure_weight if reject_gate == "slo" else 1.0
 
 
 def ceo_config_from_env(env: Mapping[str, str] | None = None) -> CEOConfig:
@@ -88,14 +120,19 @@ def ceo_config_from_env(env: Mapping[str, str] | None = None) -> CEOConfig:
         breaker_threshold=cfg.breaker_threshold,
         max_cost_per_accepted_usd=cfg.max_cost_per_accepted_usd,
         slo_min_spend_usd=cfg.slo_min_spend_usd,
+        slo_failure_weight=cfg.slo_failure_weight,
     )
+
+
+# Tolerance for comparing the weighted failure streak with its threshold.
+_STREAK_EPSILON = 1e-9
 
 
 def evaluate_brakes(
     *,
     spent: float,
     budget: float,
-    consecutive_failures: int,
+    consecutive_failures: float,
     threshold: int,
     accepted: int,
     max_cost_per_accepted: float,
@@ -105,10 +142,17 @@ def evaluate_brakes(
 
     Order is intentional: the hard spend cap dominates, then the regression
     breaker, then the economics SLO (only judged once real money is spent).
+
+    *consecutive_failures* is a weighted streak (OMNI-24): a correct-but-over-
+    budget cycle adds ``brakes.slo_failure_weight`` rather than 1, so it may be
+    fractional. It is compared with a small tolerance: a weight like 0.1 summed
+    ten times is 0.9999999999999999 in binary floating point, and a breaker
+    that never reaches its threshold because of rounding is a breaker that
+    never trips.
     """
     if spent > budget:
         return "hard spend cap exceeded"
-    if consecutive_failures >= threshold:
+    if consecutive_failures + _STREAK_EPSILON >= threshold:
         return "consecutive failure threshold"
     cost_per_accepted = spent / accepted if accepted else float("inf")
     if spent >= slo_min_spend and cost_per_accepted > max_cost_per_accepted:
@@ -202,6 +246,7 @@ class CEO(Role):
         breaker_threshold: int = DEFAULT_BREAKER_THRESHOLD,
         max_cost_per_accepted_usd: float = DEFAULT_MAX_COST_PER_ACCEPTED_USD,
         slo_min_spend_usd: float = DEFAULT_SLO_MIN_SPEND_USD,
+        slo_failure_weight: float = DEFAULT_SLO_FAILURE_WEIGHT,
         state: dict[str, Any] | None = None,
     ) -> None:
         super().__init__("CEO", "CEO")
@@ -210,7 +255,9 @@ class CEO(Role):
         self._threshold = breaker_threshold
         self._max_cost_per_accepted = max_cost_per_accepted_usd
         self._slo_min_spend = slo_min_spend_usd  # don't judge the SLO on pennies
-        self._consecutive_failures = 0
+        self._slo_failure_weight = check_slo_failure_weight(slo_failure_weight)
+        # Weighted (OMNI-24): an over-budget cycle adds less than a wrong one.
+        self._consecutive_failures = 0.0
         self._accepted = 0
         self._tripped = False
         self._charter_id: str | None = None
@@ -219,7 +266,8 @@ class CEO(Role):
         # this path runs on first bootstrap or after a cluster/actor restart.
         if state:
             self._spent = float(state.get("spent_usd", 0.0))
-            self._consecutive_failures = int(state.get("consecutive_failures", 0))
+            # float(): pre-OMNI-24 snapshots stored an int, which still loads.
+            self._consecutive_failures = float(state.get("consecutive_failures", 0))
             self._accepted = int(state.get("accepted", 0))
             self._tripped = bool(state.get("tripped", False))
 
@@ -235,8 +283,15 @@ class CEO(Role):
                                      spent=self._spent, budget=self._budget))
         return True
 
-    def report_outcome(self, *, success: bool, cost_usd: float = 0.0) -> str | None:
+    def report_outcome(
+        self, *, success: bool, cost_usd: float = 0.0, reject_gate: str | None = None,
+    ) -> str | None:
         """Record real spend + outcome, then evaluate all three brakes.
+
+        *reject_gate* is the gauntlet gate that rejected a failed cycle
+        (``episodic.gate_from_reason``). It only changes how much the failure
+        counts: a correct-but-over-budget ``slo`` rejection adds
+        ``brakes.slo_failure_weight`` to the streak, anything else adds 1.
 
         Returns the brake reason **on a fresh trip** (None otherwise) so the
         caller can raise the alarm — per ACTORS.md, DevOps files the bug that
@@ -244,10 +299,11 @@ class CEO(Role):
         """
         self._spent += cost_usd
         if success:
-            self._consecutive_failures = 0
+            self._consecutive_failures = 0.0
             self._accepted += 1
         else:
-            self._consecutive_failures += 1
+            self._consecutive_failures += failure_weight(
+                reject_gate, slo_failure_weight=self._slo_failure_weight)
         return self._evaluate_brakes()
 
     def record_neutral(self, *, cost_usd: float = 0.0) -> str | None:
@@ -314,7 +370,7 @@ class CEO(Role):
         docs/BRAKE_STATE_AND_ORACLE.md §4.1). A spend-cap trip therefore re-trips on
         the next evaluation until the budget is raised."""
         self._tripped = False
-        self._consecutive_failures = 0
+        self._consecutive_failures = 0.0
         ray.get(self._ws.emit.remote("breaker.reset", **self.economics()))
         return True
 

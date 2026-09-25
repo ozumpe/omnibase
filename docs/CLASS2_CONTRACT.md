@@ -14,7 +14,7 @@ CLAUDE.md's "Current status" for what each story landed.
 | `FeatureContract`, contract-selected gate profile, interface + acceptance gates | done ([OMNI-17](https://olafzumpe.atlassian.net/browse/OMNI-17)) |
 | `InvariantGate` (property-based anti-gaming) | done ([OMNI-18](https://olafzumpe.atlassian.net/browse/OMNI-18)) |
 | Contract-author actor + the human-approved write path into `specs/` | done ([OMNI-21](https://olafzumpe.atlassian.net/browse/OMNI-21) + [OMNI-26](https://olafzumpe.atlassian.net/browse/OMNI-26)) |
-| `DomainSLO` / `SloGate` | not started — [OMNI-24](https://olafzumpe.atlassian.net/browse/OMNI-24), low priority |
+| `DomainSLO` / `SloGate` | done ([OMNI-24](https://olafzumpe.atlassian.net/browse/OMNI-24), 2026-09-25) — latency only; see below |
 | `ToolchainAdapter` | not started — [OMNI-20](https://olafzumpe.atlassian.net/browse/OMNI-20), parked |
 
 Two details below were revised in implementation and the text is left as
@@ -23,6 +23,23 @@ dispatched from a `GateName` table in `sis/gauntlet.py` rather than from `Gate`
 objects returned by the contract (so gate code stays concentrated in one
 POLICY-FORBIDDEN file), and the backtest gate runs *before* differential
 correctness rather than after, on cheapest-first grounds.
+
+**The SLO gate as built (OMNI-24)** differs from the sketch below in four
+deliberate ways. (1) **Latency only**: `DomainSLO(budget_ms, inputs | workload,
+percentile=95, max_repeats=3)` — accuracy is already decided by the acceptance,
+invariant and backtest gates, and a second accuracy verdict would be a second
+correctness gate. (2) **A fixed workload**, given either as literal argument
+tuples (`inputs`, carried into the sandbox via `repr` + `ast.literal_eval`) or as
+a named, deterministic function in the contract's oracle module (`workload`),
+never random inputs, which would make a percentile noisy. (3) **Cheap timing**:
+one warm-up call, then per input the best of up to `max_repeats` runs, stopping
+at the first run under budget — a fast candidate costs one timed call per input.
+(4) **Its own verdict, weighed lower**: rejection reads "slo exceeded … correct
+but over budget" and lands under reject gate `slo`; the CEO adds
+`brakes.slo_failure_weight` (default 0.5, bounded to (0, 1]) to the
+consecutive-failure streak instead of 1. A candidate that raises on the workload
+is `slo_error` and counts in full. Class 1 contracts have no SLO. Code:
+`sis/slo.py` (POLICY-FORBIDDEN, like the other gate modules).
 
 > Mirrored in Confluence (SD space) as a child of **The Validation Gauntlet**:
 > <https://olafzumpe.atlassian.net/wiki/spaces/SD/pages/6357056>. This repo copy is

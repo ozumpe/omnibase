@@ -186,6 +186,11 @@ SCHEMA: tuple[Key, ...] = (
     Key("brakes", "slo_min_spend_usd", ConfigTier.FORBIDDEN, Kind.FLOAT, 0.50,
         "SIS_SLO_MIN_SPEND_USD",
         "Spend below which the economics SLO is not judged (too little signal)."),
+    Key("brakes", "slo_failure_weight", ConfigTier.FORBIDDEN, Kind.FLOAT, 0.5,
+        "SIS_SLO_FAILURE_WEIGHT",
+        "How much a correct-but-over-budget cycle (reject gate `slo`) adds to the "
+        "consecutive-failure streak; a correctness failure adds 1.0. In (0, 1].",
+        positive=True),
 
     # --- sandbox: how untrusted, generated code is contained. ----------------
     Key("sandbox", "mode", ConfigTier.FORBIDDEN, Kind.STR, "subprocess",
@@ -655,6 +660,7 @@ class BrakesConfig:
     breaker_threshold: int
     max_cost_per_accepted_usd: float
     slo_min_spend_usd: float
+    slo_failure_weight: float
 
 
 @dataclass(frozen=True)

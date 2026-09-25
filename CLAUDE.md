@@ -60,9 +60,21 @@ internal target before it models anything external.
     default).
   - **Class 2** (`FeatureContract` — build what a spec describes, no
     pre-existing version to diff against): `ast.parse` → `mypy --strict` →
-    interface → acceptance → invariant gate → backtest gate. No no-op (nothing
-    to be identical to) and no differential/benchmark (no reference exists,
-    and "faster" isn't what makes a feature correct).
+    interface → acceptance → invariant gate → backtest gate → SLO gate. No
+    no-op (nothing to be identical to) and no differential/benchmark (no
+    reference exists, and "faster" isn't what makes a feature correct).
+  - **SLO gate** (`sis/slo.py`, OMNI-24): an optional latency *budget* from
+    the spec (`FeatureContract.slo = DomainSLO(...)`), explicitly **not** a
+    correctness gate — it runs last, only on an already-correct candidate, and
+    rejects under its own reject gate `slo` ("correct but over budget"). Fixed
+    workload (literal `inputs` or a named `workload` function in the
+    contract's oracle), best of up to `max_repeats` per input stopping at the
+    first run under budget, nearest-rank percentile vs the budget. The CEO
+    counts an `slo` rejection at `brakes.slo_failure_weight` (default 0.5)
+    toward the consecutive-failure breaker; a candidate that *raises* on the
+    workload is `slo_error` and counts in full. Class 1 has no SLO — its
+    benchmark already answers the performance question. No shipped contract
+    declares one yet.
   - **Invariant gate** (`sis/invariant.py`, Hypothesis-generated inputs) and
     **backtest gate** (`sis/backtest.py`, recorded-episode fixtures under
     `specs/<name>/`, held-out split) are the anti-gaming layer for targets with
@@ -73,7 +85,8 @@ internal target before it models anything external.
 - **Change-authorization policy (`sis/policy.py`) — what the loop may rewrite:**
   - FORBIDDEN (never, no override): guardrail/safety code — the gauntlet, the
     contract layer (`sis/contract.py`, `sis/backtest.py`, `sis/invariant.py`,
-    `sis/clock.py`), the contract-author approval gate (`sis/contract_author.py`),
+    `sis/slo.py`, `sis/clock.py`), the contract-author approval gate
+    (`sis/contract_author.py`),
     `specs/` (the exam itself — oracles, acceptance tests, domain laws, backtest
     fixtures), cost/brakes, settings/secrets, **the configuration
     (`sis/config.py` + `config.yml`, OMNI-27)**, the adapters,
@@ -377,9 +390,9 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
     precondition called by every executor of generated code).
   - **Epic closed 2026-08-27.** Two stories were detached to standalone
     backlog items rather than closed with it, since both are still wanted and
-    neither is on the critical path: OMNI-24 (`SloGate` — a latency/accuracy
-    budget, explicitly *not* a correctness gate) and OMNI-20
-    (`ToolchainAdapter` — language genericity), parked.
+    neither is on the critical path: OMNI-24 (`SloGate` — a latency budget,
+    explicitly *not* a correctness gate; **shipped 2026-09-25**, see Hard
+    rules) and OMNI-20 (`ToolchainAdapter` — language genericity), parked.
 - **`docs/OMNITRACK_VISION.md`** sequences what comes after Class 2: five new
   components (`Sensor`+`Clock` ports, the determinism axis above,
   stateful-actor swap, per-actor deploy slots, an emergence gate) across
@@ -572,6 +585,7 @@ through OMNI-40; 26 Done, 1 In Progress, 13 To Do):
    shipped. OMNI-24 (`SloGate`, Low) and OMNI-20 (`ToolchainAdapter`,
    Low/parked) were **detached** to standalone backlog items rather than closed
    with the epic — both still wanted, neither on the omnitrack critical path.
+   OMNI-24 has since shipped (2026-09-25); OMNI-20 stays parked.
    Design: `docs/CLASS2_CONTRACT.md`.
 4. ~~**[OMNI-25](https://olafzumpe.atlassian.net/browse/OMNI-25) — D0: pick
    omnitrack's first domain**~~ — **Done 2026-08-14 (regional air traffic),

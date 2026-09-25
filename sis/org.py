@@ -77,7 +77,8 @@ def bootstrap() -> dict[str, Any]:
         "SelfModel": self_model,
         "CEO": _get_or_create(
             CEO_NAME, CEO, ceo_cfg.budget_usd, ceo_cfg.breaker_threshold,
-            ceo_cfg.max_cost_per_accepted_usd, ceo_cfg.slo_min_spend_usd, ceo_state),
+            ceo_cfg.max_cost_per_accepted_usd, ceo_cfg.slo_min_spend_usd,
+            ceo_cfg.slo_failure_weight, ceo_state),
         "PM": _get_or_create("PM", PM),
         "CTO": _get_or_create("CTO", CTO),
         "Designer": _get_or_create("Designer", Designer),
@@ -219,7 +220,11 @@ def run_cycle(
                         "provenance": ray.get(sm.provenance.remote())}, cost_usd)
 
     if not impl["passed"]:
-        trip = ray.get(ceo.report_outcome.remote(success=False, cost_usd=cost_usd))
+        # The gate is passed so the CEO can weigh a correct-but-over-budget
+        # rejection (``slo``, OMNI-24) below a wrong one.
+        trip = ray.get(ceo.report_outcome.remote(
+            success=False, cost_usd=cost_usd,
+            reject_gate=episodic.gate_from_reason(impl.get("reason"))))
         # Failures become artifacts (ACTORS.md: DevOps files bug/defect Jiras).
         bug_id = ray.get(devops.file_bug.remote(
             f"Cycle failed for {story_id}: {impl['reason']}"))

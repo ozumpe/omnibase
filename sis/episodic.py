@@ -308,6 +308,14 @@ def gate_from_reason(reason: str | None) -> str | None:
     # happened, and for a world-model the second is the evidence that counts.
     if r.startswith("backtest failed"):
         return "backtest"
+    # The SLO gate (sis/slo.py, OMNI-24): correct, but over the spec's latency
+    # budget. Its own name because the CEO weighs it below a correctness
+    # failure. A candidate that *raises* on the workload is a different fact —
+    # a wrong answer — and gets its own name so it is weighed in full.
+    if r.startswith("slo exceeded"):
+        return "slo"
+    if r.startswith("slo workload raised"):
+        return "slo_error"
     # The offline invariant gate (sis/invariant.py). The reason says "in
     # sandbox" specifically because the canary's own violation reason starts
     # "invariant violated" too — the same predicates, applied to live traffic.

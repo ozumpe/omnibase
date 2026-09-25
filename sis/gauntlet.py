@@ -39,6 +39,7 @@ the candidate passes all gates.
 """
 
 import ast
+import json
 import os
 import pathlib
 import random
@@ -81,6 +82,9 @@ from sis.invariant import EXIT_NO_ENTRY as EXIT_NO_ENTRY_INV
 from sis.invariant import build_script as invariant_script
 from sis.invariant import plan_entry as invariant_plan_entry
 from sis.paths import COMPARATORS_PATH, INVARIANTS_PATH, PROJECT_ROOT
+from sis.slo import EXIT_BAD_WORKLOAD, EXIT_NO_WORKLOAD, EXIT_RAISED, evaluate_slo
+from sis.slo import EXIT_NO_ENTRY as EXIT_NO_ENTRY_SLO
+from sis.slo import build_script as slo_script
 
 # Back-compat alias: the margin is now per-contract
 # (``OptimizationContract.max_latency_ratio``), because what counts as a
@@ -878,6 +882,85 @@ def _gate_differential_benchmark(ctx: _GateContext) -> Result | None:
 # Which gate name runs which implementation. The *contract* chooses the profile
 # (``Contract.gate_profile``); this table is the only place an implementation is
 # named, so a gate cannot be selected that does not exist.
+def _gate_slo(ctx: _GateContext) -> Result | None:
+    """Time the candidate against the spec's latency budget (OMNI-24).
+
+    Last in the profile, so everything reaching it is already correct; a
+    rejection here means "correct but over budget", reported under its own
+    reject gate (``slo``) so the CEO can weigh it below a correctness failure.
+    The timing runs in the sandbox like every other gate; the verdict is
+    computed here by :func:`sis.slo.evaluate_slo`, a pure function.
+
+    A candidate that *raises* on a workload input is not an SLO miss — it is a
+    wrong answer the correctness gates happened not to cover — so it is
+    reported under ``slo_error`` and weighed as a full failure.
+    """
+    spec = ctx.contract
+    slo = spec.slo
+    if slo is None:
+        return None
+    if slo.workload is not None and ctx.oracle is None:
+        return Result(
+            passed=False,
+            reason=f"harness: the SLO names workload {slo.workload!r} but the contract's "
+                   "oracle module is missing — the slo gate cannot run",
+        )
+
+    script = slo_script(
+        candidate_path=str(ctx.candidate),
+        oracle_path=str(ctx.oracle) if ctx.oracle is not None else None,
+        entry=spec.entry,
+        slo=slo,
+    )
+    result = _run([_PY, "-c", script], ctx.tmpdir, ctx.env)
+    if timed_out := _timed_out(result, "slo"):
+        return timed_out
+    if result.returncode == EXIT_NO_ENTRY_SLO:
+        return Result(
+            passed=False,
+            reason=f"interface: candidate does not export {spec.entry!r} "
+                   f"(required by contract {spec.name!r})",
+            errors=result.stdout.splitlines(),
+        )
+    if result.returncode in (EXIT_NO_WORKLOAD, EXIT_BAD_WORKLOAD):
+        return Result(
+            passed=False,
+            reason=f"harness: the SLO workload {slo.workload!r} could not be produced "
+                   f"({result.stdout.strip()}) — the slo gate cannot run",
+            errors=result.stdout.splitlines(),
+        )
+    if result.returncode == EXIT_RAISED:
+        return Result(
+            passed=False,
+            reason="slo workload raised: the candidate raised on an SLO workload input "
+                   f"({result.stdout.strip().removeprefix('RAISED').strip()})",
+            errors=result.stdout.splitlines(),
+        )
+    out = result.stdout.strip()
+    if result.returncode != 0 or not out.startswith("TIMINGS"):
+        return Result(
+            passed=False,
+            reason="harness: the slo timing script crashed",
+            errors=result.stderr.splitlines(),
+        )
+    try:
+        bests = [float(t) for t in json.loads(out.removeprefix("TIMINGS"))]
+    except (ValueError, TypeError):
+        return Result(
+            passed=False,
+            reason="harness: the slo timing script returned unreadable timings",
+            errors=result.stdout.splitlines(),
+        )
+    verdict = evaluate_slo(slo, bests)
+    if not verdict.passed:
+        return Result(passed=False, reason=verdict.reason, latency_seconds=verdict.observed_seconds)
+    # A Class-2 profile has no benchmark, so this is the only latency the
+    # cycle has to report; never overwrite a benchmark's measurement.
+    if ctx.candidate_latency is None:
+        ctx.candidate_latency = verdict.observed_seconds
+    return None
+
+
 _GATES: dict[GateName, Callable[[_GateContext], Result | None]] = {
     GateName.AST: _gate_ast,
     GateName.NOOP: _gate_noop,
@@ -887,6 +970,7 @@ _GATES: dict[GateName, Callable[[_GateContext], Result | None]] = {
     GateName.INVARIANT: _gate_invariant,
     GateName.BACKTEST: _gate_backtest,
     GateName.DIFFERENTIAL_BENCHMARK: _gate_differential_benchmark,
+    GateName.SLO: _gate_slo,
 }
 
 # Gates that need the baseline written into the sandbox.
