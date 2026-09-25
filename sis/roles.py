@@ -96,6 +96,12 @@ def failure_weight(reject_gate: str | None, *, slo_failure_weight: float) -> flo
     Only a correct-but-over-budget rejection (``slo``) is discounted. Everything
     else — including ``slo_error``, a candidate that *raised* on the SLO
     workload, which is a wrong answer rather than a slow one — counts in full.
+
+    ``harness`` (a broken sandbox, OMNI-37) also counts in full, deliberately.
+    A broken sandbox fails *every* cycle, and each one spends on a proposal
+    first, so the breaker stopping the loop after N of them is the right
+    outcome. What OMNI-37 fixed is the attribution — the bug says the
+    infrastructure failed, not the candidate — not whether it counts.
     """
     return slo_failure_weight if reject_gate == "slo" else 1.0
 

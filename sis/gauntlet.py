@@ -599,6 +599,101 @@ def _timed_out(result: subprocess.CompletedProcess[str], gate: str) -> Result | 
     return None
 
 
+# Exit codes ``docker run`` uses for its *own* failures: 125 = the daemon or
+# the run itself failed, 126 = the command could not be invoked, 127 = not
+# found. Reported in a harness reason as a diagnosis, never used as the
+# decision: docker passes a container's exit code straight through, so a
+# candidate that calls ``sys.exit(125)`` produces exactly the same number, and
+# trusting it would let a bad candidate launder its failure into "harness" and
+# out of the circuit breaker. The probe below decides (OMNI-37).
+DOCKER_FAULT_CODES = frozenset({125, 126, 127})
+
+# Gates that never touch the sandbox; a failure there cannot be a sandbox fault.
+_IN_PROCESS_GATES = frozenset({GateName.AST, GateName.NOOP})
+
+# The probe is a handful of file operations; it must not inherit a two-minute
+# gate timeout when the sandbox it is checking may be the thing that hangs.
+PROBE_TIMEOUT_SECONDS = 30.0
+
+_PROBE_TOKEN = "sis-sandbox-probe-ok"
+
+
+def probe_sandbox(tmpdir: str, env: dict[str, str]) -> str | None:
+    """Run a known-good program in the sandbox. Returns None if it works, else why not.
+
+    Exercises exactly what every gate needs and a candidate can't influence:
+    read a file the *host* wrote into the temp dir (the check that would have
+    caught the OMNI-29 uid bug, which surfaced as mypy's own "can't read file"),
+    write a file back that the host then reads, and import a module from the
+    temp dir. Trusted code only — nothing of the candidate's is loaded — so if
+    this fails, whatever a gate just said about the candidate is not evidence.
+
+    Uses its own files under a probe subdirectory, so it cannot disturb a
+    validation that is still using *tmpdir*.
+    """
+    probe_dir = pathlib.Path(tmpdir) / "_sis_probe"
+    probe_dir.mkdir(exist_ok=True)
+    (probe_dir / "probe_in.txt").write_text(_PROBE_TOKEN, encoding="utf-8")
+    (probe_dir / "sis_probe_mod.py").write_text(f"TOKEN = {_PROBE_TOKEN!r}\n", encoding="utf-8")
+    out = probe_dir / "probe_out.txt"
+    script = textwrap.dedent(
+        f"""\
+        import sys
+        sys.path.insert(0, {str(probe_dir)!r})
+        with open({str(probe_dir / "probe_in.txt")!r}, encoding="utf-8") as fh:
+            token = fh.read()
+        import sis_probe_mod
+        assert token == sis_probe_mod.TOKEN, "probe token mismatch"
+        with open({str(out)!r}, "w", encoding="utf-8") as fh:
+            fh.write(token)
+        """
+    )
+    result = _run([_PY, "-c", script], tmpdir, env,
+                  timeout=min(PROBE_TIMEOUT_SECONDS, _timeout_seconds()))
+    if result.returncode != 0:
+        tail = (result.stderr or result.stdout).strip().splitlines()[-1:] or ["no output"]
+        # Safe to name here and only here: the probe is trusted code, so a
+        # docker exit code from *it* really is docker's.
+        what = (
+            "docker could not run the container"
+            if sandbox_mode() == "docker" and result.returncode in DOCKER_FAULT_CODES
+            else "self-check"
+        )
+        return f"{what} exited {result.returncode} ({tail[0][:200]})"
+    try:
+        written = out.read_text(encoding="utf-8")
+    except OSError as exc:
+        return f"self-check wrote nothing the host can read back ({exc})"
+    if written != _PROBE_TOKEN:
+        return "self-check wrote back the wrong content"
+    return None
+
+
+def _attribute(failure: Result, gate: GateName, ctx: _GateContext) -> Result:
+    """Decide whether a gate's failure is the candidate's or the sandbox's.
+
+    Probe-before-blame (OMNI-37): a gate that ran in the sandbox and failed is
+    only the candidate's fault if a known-good program still runs there. Costs
+    one probe on the failure path and nothing when the candidate passes.
+
+    Left alone: in-process gates (they never touched the sandbox), results that
+    already name the harness, and timeouts (their own reject gate, and a probe
+    against a hung sandbox would only add a second wait).
+    """
+    reason = failure.reason.lower()
+    if gate in _IN_PROCESS_GATES or reason.startswith("harness:") or "timed out" in reason:
+        return failure
+    fault = probe_sandbox(ctx.tmpdir, ctx.env)
+    if fault is None:
+        return failure
+    return Result(
+        passed=False,
+        reason=f"harness: the sandbox failed its self-check after the {gate.value} gate "
+               f"failed — {fault}; the candidate was not judged",
+        errors=[f"original {gate.value} verdict: {failure.reason}", *failure.errors],
+    )
+
+
 def _gate_ast(ctx: _GateContext) -> Result | None:
     """Syntax. The nearest thing Python has to "does it compile"."""
     try:
@@ -1074,7 +1169,7 @@ def validate(
 
         for gate_name in profile:
             if failure := _GATES[gate_name](ctx):
-                return failure
+                return _attribute(failure, gate_name, ctx)
 
         return Result(
             passed=True, reason="all gates passed", latency_seconds=ctx.candidate_latency
@@ -1143,9 +1238,15 @@ def measure_baseline(
             # Advisory only (validate() measures its own baseline), so a failure
             # falls back to 0.0 — but say so loudly instead of silently feeding a
             # bogus number into prompts and the episodic log (L7).
+            # Say whether the sandbox itself is broken: in the OMNI-29 rehearsal
+            # this printed returncode=125 and the cycle carried on to blame the
+            # candidate at a later gate (OMNI-37). validate() now probes before
+            # blaming; this makes the advisory number's failure legible too.
+            fault = probe_sandbox(tmpdir, env)
+            diagnosis = f" The sandbox itself is broken: {fault}." if fault else ""
             print(
                 "WARNING: measure_baseline() could not parse a latency from the "
-                f"sandbox (returncode={result.returncode}); returning 0.0. "
+                f"sandbox (returncode={result.returncode}); returning 0.0.{diagnosis} "
                 f"stderr: {result.stderr.strip()[:200]}",
                 file=sys.stderr,
             )

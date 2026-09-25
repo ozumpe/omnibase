@@ -50,6 +50,14 @@ internal target before it models anything external.
   per-gate timeout kills infinite loops. A real (non-stub) proposer writes untrusted code
   and REQUIRES `SIS_SANDBOX=docker` — the loop refuses otherwise (override:
   `SIS_ALLOW_UNSANDBOXED_LLM=1`); the subprocess sandbox leaves host files readable (M1).
+  **A broken sandbox is never blamed on the candidate** (OMNI-37): when a
+  sandboxed gate fails, the gauntlet first runs a trusted self-check in the
+  same sandbox (`gauntlet.probe_sandbox`); if that fails too, the verdict is
+  `harness:`. Docker exit codes 125–127 are reported but never trusted on
+  their own — docker passes a container's exit code through, so a candidate
+  could exit 125 to launder its failure. A harness fault still counts in full
+  toward the breaker (a broken sandbox fails every cycle); only the bug's
+  attribution changed.
 - **The contract selects which gates run** (`Contract.gate_profile()`,
   `sis/gauntlet.py`); both task classes flow through one `validate()`:
   - **Class 1** (`OptimizationContract` — make a working function faster):

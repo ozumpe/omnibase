@@ -220,14 +220,19 @@ def run_cycle(
                         "provenance": ray.get(sm.provenance.remote())}, cost_usd)
 
     if not impl["passed"]:
+        gate = episodic.gate_from_reason(impl.get("reason"))
         # The gate is passed so the CEO can weigh a correct-but-over-budget
         # rejection (``slo``, OMNI-24) below a wrong one.
         trip = ray.get(ceo.report_outcome.remote(
-            success=False, cost_usd=cost_usd,
-            reject_gate=episodic.gate_from_reason(impl.get("reason"))))
+            success=False, cost_usd=cost_usd, reject_gate=gate))
         # Failures become artifacts (ACTORS.md: DevOps files bug/defect Jiras).
-        bug_id = ray.get(devops.file_bug.remote(
-            f"Cycle failed for {story_id}: {impl['reason']}"))
+        # A harness fault is filed as what it is (OMNI-37): the sandbox broke,
+        # the candidate was never judged, and the fix is in the infrastructure.
+        headline = (
+            f"Infrastructure fault (sandbox) during {story_id} — the candidate was not judged"
+            if gate == "harness" else f"Cycle failed for {story_id}"
+        )
+        bug_id = ray.get(devops.file_bug.remote(f"{headline}: {impl['reason']}"))
         breaker_bug_id = (
             ray.get(devops.file_bug.remote(
                 f"CIRCUIT BREAKER OPEN — human attention required: {trip}"))
