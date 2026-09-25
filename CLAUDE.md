@@ -551,8 +551,8 @@ Two traps L5 surfaced, both worth knowing before writing similar code:
 
 **Next — the milestone plan is in Jira ([`OMNI`](https://olafzumpe.atlassian.net/browse/OMNI)),
 not here.** Check the board for current status rather than trusting this list.
-**Last reconciled against a live query on 2026-09-24** (39 issues, OMNI-1
-through OMNI-39; 26 Done, 1 In Progress, 12 To Do):
+**Last reconciled against a live query on 2026-09-25** (40 issues, OMNI-1
+through OMNI-40; 26 Done, 1 In Progress, 13 To Do):
 
 1. ~~**[OMNI-1](https://olafzumpe.atlassian.net/browse/OMNI-1) — L5 target
    contract** (Class 1)~~ — **done 2026-08-06** (OMNI-4/5/6/7). Two targets ship
@@ -662,6 +662,15 @@ through OMNI-39; 26 Done, 1 In Progress, 12 To Do):
    - [OMNI-36](https://olafzumpe.atlassian.net/browse/OMNI-36) (Medium) —
      prediction error computed and reported against a persistence baseline: the
      Phase-A milestone, with nothing acting on it yet.
+   - [OMNI-40](https://olafzumpe.atlassian.net/browse/OMNI-40) (Medium, filed
+     2026-09-25, off the critical path) — the twin viewer: a separate read-only
+     Panel app (not a console tab) that draws the chain as physical things
+     (tank, pump), marks not-yet-sensed nodes, replays in time with a
+     "what was published by then" toggle, and plots prediction vs reality.
+     Scenario sliders follow; a **geo heat map** is the deferred third slice —
+     a true point map for Iowa (`store_location`), likely for PeMS detectors
+     (coordinates unverified), but only a choropleth for US fuel prices, which
+     are published by area, not station.
 
 9. **[OMNI-39](https://olafzumpe.atlassian.net/browse/OMNI-39) — omnitrack
    second application: Iowa's spirits supply chain**, an entity-level twin.
