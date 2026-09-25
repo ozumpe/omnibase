@@ -152,7 +152,8 @@ def brake_state() -> dict[str, Any]:
     return {
         "running": True,
         "economics": dict(economics),
-        "consecutive_failures": int(snapshot.get("consecutive_failures", 0)),
+        # A float since OMNI-24: an over-budget cycle adds a fractional weight.
+        "consecutive_failures": float(snapshot.get("consecutive_failures", 0)),
         "breaker_open": bool(snapshot.get("tripped", False)),
     }
 
@@ -176,7 +177,7 @@ def format_brakes(brakes: Mapping[str, Any]) -> str:
         "| brake | value |\n"
         "| --- | --- |\n"
         f"| spend | **${spent:,.4f}** — {share} the ${budget:,.2f} cap |\n"
-        f"| consecutive failures | {brakes['consecutive_failures']} |\n"
+        f"| consecutive failures | {float(brakes['consecutive_failures']):g} |\n"
         f"| accepted improvements | {accepted} |\n"
         f"| cost per accepted | {per_accepted} |\n"
     )

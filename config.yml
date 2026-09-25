@@ -27,6 +27,10 @@ brakes:
   # Spend below which the economics SLO is not judged (too little signal).
   # env: SIS_SLO_MIN_SPEND_USD   flag: --brakes-slo-min-spend-usd
   forbidden_slo_min_spend_usd: 0.5
+  # How much a correct-but-over-budget cycle (reject gate `slo`) adds to the
+  # consecutive-failure streak; a correctness failure adds 1.0. In (0, 1].
+  # env: SIS_SLO_FAILURE_WEIGHT   flag: --brakes-slo-failure-weight
+  forbidden_slo_failure_weight: 0.5
 
 sandbox:
   # Isolation for generated code: 'subprocess' (soft) or 'docker' (kernel-enforced,

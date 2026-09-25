@@ -54,3 +54,22 @@ def test_fresh_ceo_rehydrates_persisted_state(handles) -> None:  # type: ignore[
     assert snap["spent_usd"] == pytest.approx(3.25)
     assert snap["accepted"] == 1
     assert ray.get(ceo.economics.remote())["spent_usd"] == pytest.approx(3.25)
+
+
+def test_an_over_budget_cycle_counts_for_less_than_a_wrong_one(handles) -> None:  # type: ignore[no-untyped-def]
+    # OMNI-24: with the default weight 0.5, two correct-but-slow (`slo`) cycles
+    # fill the streak as much as one wrong one does.
+    ceo = CEO.remote(budget_usd=10.0, breaker_threshold=2)
+    ray.get(ceo.report_outcome.remote(success=False, reject_gate="slo"))
+    ray.get(ceo.report_outcome.remote(success=False, reject_gate="slo"))
+    assert ray.get(ceo.state_snapshot.remote())["consecutive_failures"] == pytest.approx(1.0)
+    assert ray.get(ceo.breaker_open.remote()) is False
+    ray.get(ceo.report_outcome.remote(success=False, reject_gate="correctness"))
+    assert ray.get(ceo.breaker_open.remote()) is True
+
+
+def test_a_pre_omni_24_integer_streak_still_rehydrates(handles) -> None:  # type: ignore[no-untyped-def]
+    state = {"spent_usd": 0.0, "consecutive_failures": 1, "accepted": 0, "tripped": False}
+    ceo = CEO.remote(budget_usd=10.0, breaker_threshold=3, state=state)
+    ray.get(ceo.report_outcome.remote(success=False, reject_gate="slo"))
+    assert ray.get(ceo.state_snapshot.remote())["consecutive_failures"] == pytest.approx(1.5)

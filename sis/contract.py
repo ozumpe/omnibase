@@ -33,6 +33,7 @@ from typing import Protocol
 from sis.backtest import Backtest
 from sis.invariant import DEFAULT_INVARIANT_EXAMPLES, Invariant
 from sis.paths import PROJECT_ROOT
+from sis.slo import DomainSLO
 
 
 class Determinism(str, Enum):
@@ -80,6 +81,10 @@ class GateName(str, Enum):
     INVARIANT = "invariant"
     BACKTEST = "backtest"
     DIFFERENTIAL_BENCHMARK = "differential_benchmark"
+    # A latency *budget*, not a correctness gate (OMNI-24, sis.slo). Last in any
+    # profile that asks for it: only a candidate that is already correct is
+    # worth timing.
+    SLO = "slo"
 
 
 class Contract(Protocol):
@@ -123,6 +128,11 @@ class Contract(Protocol):
 
     def gate_profile(self) -> tuple[GateName, ...]:
         """Which gates run, cheapest first."""
+        ...
+
+    @property
+    def slo(self) -> DomainSLO | None:
+        """The spec's latency budget, or None when it declares none."""
         ...
 
     @property
@@ -253,6 +263,18 @@ class OptimizationContract:
             )
 
     @property
+    def slo(self) -> DomainSLO | None:
+        """Always None: a Class-1 contract's performance question is the benchmark.
+
+        "Is it faster than the baseline?" is already answered by the
+        differential+benchmark gate, and adding an absolute budget on top would
+        be a second timing verdict over the same candidate. The profile does not
+        include ``GateName.SLO`` either; this property exists so the gate can
+        read any contract uniformly.
+        """
+        return None
+
+    @property
     def target_file(self) -> str:
         return str(PROJECT_ROOT / self.target_path)
 
@@ -304,8 +326,8 @@ class FeatureContract:
     - **differential + benchmark** — both presuppose a reference implementation
       that can be evaluated on demand. Keeping the benchmark would also quietly
       re-import the wrong success criterion: a feature that is correct and slow
-      has passed, and a latency budget belongs in a ``DomainSLO`` (OMNI-24),
-      which is explicitly not a correctness gate.
+      has passed, and a latency budget belongs in the ``slo`` field
+      (``DomainSLO``, OMNI-24), which is explicitly not a correctness gate.
 
     ``spec_ref`` is the Confluence page the feature was specified in — the
     provenance root, so ``spec → contract → branch/PR → verdict → outcome``
@@ -339,8 +361,17 @@ class FeatureContract:
     # Mirrors ``diff_trials``' role: statistical power is a property of the
     # target, not of the engine, so it is a contract field rather than a constant.
     invariant_examples: int = DEFAULT_INVARIANT_EXAMPLES
+    # A latency budget from the spec (OMNI-24). None — the default, and every
+    # shipped contract today — skips the gate entirely. A workload-form SLO
+    # resolves its function in ``oracle_path``, so it needs one.
+    slo: DomainSLO | None = None
 
     def __post_init__(self) -> None:
+        if self.slo is not None and self.slo.workload is not None and self.oracle_path is None:
+            raise ValueError(
+                f"contract {self.name!r}: its SLO names workload {self.slo.workload!r}, "
+                "which is resolved in the contract's oracle module, but oracle_path is None"
+            )
         if self.entry not in self.public_api:
             raise ValueError(
                 f"contract {self.name!r}: entry {self.entry!r} is not in public_api "
@@ -363,6 +394,7 @@ class FeatureContract:
             GateName.ACCEPTANCE,
             GateName.INVARIANT,
             GateName.BACKTEST,
+            GateName.SLO,
         )
 
     @property

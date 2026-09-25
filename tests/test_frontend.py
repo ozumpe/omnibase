@@ -211,6 +211,14 @@ def test_the_failure_streak_is_shown() -> None:
     )
 
 
+def test_a_fractional_streak_is_shown_as_is() -> None:
+    # OMNI-24: an over-budget cycle adds a fractional weight, and truncating it
+    # to an int would show 0 while the breaker is already half-way to tripping.
+    assert "| consecutive failures | 0.5 |" in frontend.format_brakes(
+        _economics(consecutive_failures=0.5)
+    )
+
+
 def test_no_ceo_actor_is_reported_rather_than_raising(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

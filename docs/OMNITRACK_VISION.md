@@ -8,11 +8,12 @@
 The Class-2 base this document builds on **has landed** (2026-08-11):
 `FeatureContract` with a contract-selected gate profile, `InterfaceGate`,
 `AcceptanceGate`, `InvariantGate`, `BacktestGate`, and the contract-author actor. Two
-pieces of [OMNI-3](https://olafzumpe.atlassian.net/browse/OMNI-3) did **not** ship and
-neither is on this document's path: `SloGate`
-([OMNI-24](https://olafzumpe.atlassian.net/browse/OMNI-24), low) and `ToolchainAdapter`
-([OMNI-20](https://olafzumpe.atlassian.net/browse/OMNI-20), parked) — the epic stays
-open for those two alone. The ✅ column in §2 therefore describes shipped code except
+pieces of [OMNI-3](https://olafzumpe.atlassian.net/browse/OMNI-3) did **not** ship with
+it and neither is on this document's path: `SloGate`
+([OMNI-24](https://olafzumpe.atlassian.net/browse/OMNI-24), low — shipped separately on
+2026-09-25) and `ToolchainAdapter`
+([OMNI-20](https://olafzumpe.atlassian.net/browse/OMNI-20), parked) — both were
+detached as standalone backlog items when the epic closed. The ✅ column in §2 therefore describes shipped code except
 where a cell says otherwise. Read [`CLASS2_CONTRACT.md`](CLASS2_CONTRACT.md) first; this
 is its continuation. [`SERVE_CANARY.md`](SERVE_CANARY.md) is the online half of the same
 verification story and is reused wholesale here.
@@ -625,7 +626,7 @@ Class 2, so Phase A starts from the `Sensor` port rather than from scratch.
 | [OMNI-18](https://olafzumpe.atlassian.net/browse/OMNI-18) — `InvariantGate` | ✅ Done | Seeds generation explicitly and records the seed in the reject reason, so E2's gates inherit reproducibility. |
 | [OMNI-21](https://olafzumpe.atlassian.net/browse/OMNI-21) — contract-author actor | ✅ Done | Owns the *only* write path into `specs/`, built as a general human-approved ingestion mechanism so D12's trace pipeline reuses it. [OMNI-26](https://olafzumpe.atlassian.net/browse/OMNI-26) added worked-example transcription and the discrimination check. |
 | [OMNI-25](https://olafzumpe.atlassian.net/browse/OMNI-25) — D0 | ✅ Done | Decided 2026-08-14: regional air traffic. Revised 2026-09-24: the California gasoline market first, Iowa's spirits supply chain second (§6, D0). |
-| [OMNI-24](https://olafzumpe.atlassian.net/browse/OMNI-24) — `SloGate` · [OMNI-20](https://olafzumpe.atlassian.net/browse/OMNI-20) — `ToolchainAdapter` | ⬜ To Do (low / parked) | Split out and parked respectively. Neither is on this document's path. Detached from OMNI-3 on 2026-08-27 so the completed epic could close; they stand alone in the backlog. |
+| [OMNI-24](https://olafzumpe.atlassian.net/browse/OMNI-24) — `SloGate` · [OMNI-20](https://olafzumpe.atlassian.net/browse/OMNI-20) — `ToolchainAdapter` | ✅ Done (OMNI-24, 2026-09-25) / ⬜ parked (OMNI-20) | Split out and parked respectively; OMNI-24 later shipped as a latency-only budget gate. Neither is on this document's path. Detached from OMNI-3 on 2026-08-27 so the completed epic could close; they stand alone in the backlog. |
 | [OMNI-3](https://olafzumpe.atlassian.net/browse/OMNI-3) — the Class-2 epic | ✅ Done | Closed 2026-08-27. |
 
 **Phase A is filed:
