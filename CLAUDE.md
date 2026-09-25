@@ -389,11 +389,28 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   OMNI-30** — the `Sensor` port, the first `RealSensor`, the `SimSensor`, and
   the first recorded fixture.
   - **The register is fully settled as of 2026-08-28: all of D0–D12 are
-    decided.** Read the doc for the full text; the load-bearing ones:
-    - **D0 — regional air traffic** (OpenSky / ADS-B Exchange), OMNI-25 Done.
-      Richest, highest-frequency public data of the four candidates; also the
-      heaviest scope/optics tax, the one candidate where "wrong is dangerous"
-      needs active management even for a passive twin.
+    decided** (D0 revised 2026-09-24). Read the doc for the full text; the
+    load-bearing ones:
+    - **D0 — the California gasoline market first, Iowa's spirits supply chain
+      second** (revised 2026-09-24; OMNI-25, which stays Done). Supersedes
+      regional air traffic (2026-08-14): air traffic was always an example of
+      the idea, and as a proof of concept of a server that adapts itself to new
+      tasks, a passive airspace twin was of limited use. Fuel is a supply chain
+      with public data at every level, still being published, with recorded
+      shocks and no optics problem; the US publishes it by area, not station,
+      so the first twin is an area twin, and California is where area effects
+      show most clearly. First fixture, verified in EIA's weekly series: the
+      California premium over the US reformulated price doubled ($1.03 → $2.03)
+      in the four weeks to 3 Oct 2022 while West Coast stocks bottomed. Iowa's
+      liquor sales table (BigQuery public copy) reaches every store and vendor,
+      so it is where the entity-level twin becomes possible; it is second
+      because it needs per-actor slots (Phase D), and because a second domain
+      arriving as a spec *is* the "adapts to new tasks" test (OMNI-39). The
+      doc's D0 entry has the verified source inventory and what the choice
+      costs — weekly cadence means few data points, series anchored on
+      different weekdays, and every reading carrying two times (the week it
+      describes, and when it became known). **Data-source licences and terms
+      are checked by a human** before any adapter is written.
     - **D2 — twin state is externalised** behind a `StateStore` port, DuckDB
       and human-readable, with an *optional, non-default* per-transition log
       carrying clock time + cause so reasoning can be replayed.
@@ -534,8 +551,8 @@ Two traps L5 surfaced, both worth knowing before writing similar code:
 
 **Next — the milestone plan is in Jira ([`OMNI`](https://olafzumpe.atlassian.net/browse/OMNI)),
 not here.** Check the board for current status rather than trusting this list.
-**Last reconciled against a live query on 2026-09-23** (36 issues, OMNI-1
-through OMNI-36; 26 Done, 1 In Progress, 9 To Do):
+**Last reconciled against a live query on 2026-09-24** (39 issues, OMNI-1
+through OMNI-39; 26 Done, 1 In Progress, 12 To Do):
 
 1. ~~**[OMNI-1](https://olafzumpe.atlassian.net/browse/OMNI-1) — L5 target
    contract** (Class 1)~~ — **done 2026-08-06** (OMNI-4/5/6/7). Two targets ship
@@ -557,11 +574,13 @@ through OMNI-36; 26 Done, 1 In Progress, 9 To Do):
    with the epic — both still wanted, neither on the omnitrack critical path.
    Design: `docs/CLASS2_CONTRACT.md`.
 4. ~~**[OMNI-25](https://olafzumpe.atlassian.net/browse/OMNI-25) — D0: pick
-   omnitrack's first domain**~~ — **Done 2026-08-14: regional air traffic**
-   (OpenSky / ADS-B Exchange). It fixes the first `RealSensor` adapter and the
-   domain of Phase A. D8 (who decomposes it into modelled actors) was a
-   separate decision, since settled with the rest of the register (2026-08-28):
-   humans decide, actors may propose — see "Current status" above.
+   omnitrack's first domain**~~ — **Done 2026-08-14 (regional air traffic),
+   revised 2026-09-24: the California gasoline market first, Iowa's spirits
+   supply chain second** — see "Current status" above for why. It fixes the
+   first `RealSensor` adapter (EIA) and the domain of Phase A. D8 (who
+   decomposes it into modelled actors) was a separate decision, since settled
+   with the rest of the register (2026-08-28): humans decide, actors may
+   propose.
 5. ~~**[OMNI-27](https://olafzumpe.atlassian.net/browse/OMNI-27) — unified
    config**~~ — **done 2026-08-16**, PR #92 merged to `develop`. One schema,
    `config.yml`, env/CLI override; see "Current status" above.
@@ -614,28 +633,46 @@ through OMNI-36; 26 Done, 1 In Progress, 9 To Do):
 
 8. **[OMNI-30](https://olafzumpe.atlassian.net/browse/OMNI-30) — omnitrack
    Phase A: the `Sensor` port.** `To Do`, filed 2026-08-27 — the first epic of
-   omnitrack proper, unblocked by D0 and by OMNI-3 closing. `Sensor` port +
-   `SimSensor` default + an OpenSky/ADS-B `RealSensor`, the first recorded
-   fixture, and prediction error computed but not yet acted on (that is Phase
-   B). **Sanitising sensor input is its own story that lands before any real
-   adapter, not later hardening** — ADS-B is outside-influenceable data that
-   reaches scenario libraries, backtest fixtures and potentially LLM prompts.
-   Broken into six stories on 2026-08-29, all `To Do`:
+   omnitrack proper, unblocked by D0 and by OMNI-3 closing; **re-scoped
+   2026-09-24 to the California gasoline market** with the D0 revision (no
+   Phase-A code existed, so nothing was thrown away). `Sensor` port +
+   `SimSensor` default + an EIA `RealSensor`, the first recorded fixture, and
+   prediction error computed but not yet acted on (that is Phase B).
+   **Sanitising sensor input is its own story that lands before any real
+   adapter, not later hardening** — public statistics carry free text,
+   non-numeric markers and moving endpoints, and the second application's
+   store names are written by outsiders; all of it can reach scenario
+   libraries, backtest fixtures and potentially LLM prompts. Six stories, all
+   `To Do`:
    - [OMNI-31](https://olafzumpe.atlassian.net/browse/OMNI-31) (High) — `Sensor`
-     port + `SimSensor` default adapter; a reading is an artifact with event time.
+     port + `SimSensor` default adapter; a reading carries two times, `event_time`
+     and `known_at`.
    - [OMNI-32](https://olafzumpe.atlassian.net/browse/OMNI-32) (High) — sensor
      input is untrusted: the sanitisation boundary, before any real adapter.
    - [OMNI-33](https://olafzumpe.atlassian.net/browse/OMNI-33) (Medium) —
-     OpenSky/ADS-B `RealSensor`, and settle the trace capture format (D12).
+     EIA `RealSensor`, and settle the trace capture format (D12), vintages and
+     reconstructed `known_at` for backfilled history included.
    - [OMNI-34](https://olafzumpe.atlassian.net/browse/OMNI-34) (Medium) —
-     `SimSensor` scenario generation: refutation inputs, and the gauntlet's
-     input generator (D7).
+     `SimSensor` scenario generation (supply, outage, demand and data-event
+     scenarios): refutation inputs, and the gauntlet's input generator (D7).
    - [OMNI-35](https://olafzumpe.atlassian.net/browse/OMNI-35) (High) — the first
-     recorded fixture, a holding-pattern episode, plus the clock-cadence check
-     carried over from OMNI-25.
+     recorded fixture, California autumn 2022, plus the clock-cadence check
+     carried over from OMNI-25 (Friday stocks vs Monday prices; replay ordered
+     by when a value became known).
    - [OMNI-36](https://olafzumpe.atlassian.net/browse/OMNI-36) (Medium) —
-     prediction error computed and reported: the Phase-A milestone, with
-     nothing acting on it yet.
+     prediction error computed and reported against a persistence baseline: the
+     Phase-A milestone, with nothing acting on it yet.
+
+9. **[OMNI-39](https://olafzumpe.atlassian.net/browse/OMNI-39) — omnitrack
+   second application: Iowa's spirits supply chain**, an entity-level twin.
+   `To Do`, Low, filed 2026-09-24 as a placeholder epic — deliberately not
+   broken into stories until Phases A–C exist to write them against.
+
+Also on the board since the OMNI-29 rehearsal (2026-09-23), both `To Do`:
+[OMNI-37](https://olafzumpe.atlassian.net/browse/OMNI-37) (the gauntlet reports
+sandbox harness faults as candidate failures) and
+[OMNI-38](https://olafzumpe.atlassian.net/browse/OMNI-38) (wire the live
+SLO-breach trigger into `main.py --loop`).
 
 Not yet scheduled: the **atomic actor swap** for internal, never-served actors,
 which `docs/SERVE_CANARY.md` scopes out and which has no design doc yet. E3/D2 in
