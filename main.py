@@ -28,17 +28,27 @@ import ray
 from sis import config, gauntlet, loop, org
 
 
+def _proposal(contract_name: str | None) -> tuple[str, str]:
+    """The intake page a cycle starts from, named for the target it optimises.
+
+    It used to say "divisor-sum" whatever the contract, so a `sort` run on the
+    real tenant filed Confluence and Jira artifacts about the wrong function.
+    """
+    target = contract_name or "sum_of_divisors"
+    return (f"Speed up the {target} target",
+            f"The {target} target is too slow under load. "
+            "Please make it faster without changing results.")
+
+
 def run_org_cycle(contract_name: str | None = None, canary_backend: str | None = None) -> None:
     handles = org.bootstrap()
     print("[main] org bootstrapped:", ", ".join(handles))
 
+    title, body = _proposal(contract_name)
     result = org.run_cycle(
         handles,
-        proposal_title="Speed up divisor-sum endpoint",
-        proposal_body=(
-            "The divisor-sum computation is too slow under load. "
-            "Please make it faster without changing results."
-        ),
+        proposal_title=title,
+        proposal_body=body,
         contract_name=contract_name,
         canary_backend=canary_backend,
     )
@@ -64,19 +74,19 @@ def run_org_cycle(contract_name: str | None = None, canary_backend: str | None =
               f" parent={info['parent']}")
 
 
-def run_server_loop(canary_backend: str | None = None) -> None:
+def run_server_loop(
+    canary_backend: str | None = None, contract_name: str | None = None
+) -> None:
     handles = org.bootstrap()
     print("[main] server loop starting (Ctrl-C to stop gracefully)")
     pacing = config.config().loop
     # repeat() never runs dry, so loop.max_cycles is a clean bound and an
     # unbounded run keeps improving until Ctrl-C (rather than idling after one).
+    # The contract itself reaches every cycle through contracts.default, which
+    # --contract set before bootstrap (the role actors read it at creation).
     results = loop.serve(
         handles,
-        loop.repeat(
-            "Speed up divisor-sum endpoint",
-            "The divisor-sum computation is too slow under load. "
-            "Please make it faster without changing results.",
-        ),
+        loop.repeat(*_proposal(contract_name)),
         interval_s=pacing.interval_seconds,
         max_cycles=pacing.max_cycles,
         canary_backend=canary_backend,
@@ -113,7 +123,7 @@ def main() -> None:
     gauntlet.ensure_canary_allows_proposer(canary_backend)
 
     if "--loop" in sys.argv:
-        run_server_loop(canary_backend)
+        run_server_loop(canary_backend, contract_name)
     else:
         run_org_cycle(contract_name, canary_backend)
 

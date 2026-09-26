@@ -181,6 +181,16 @@ resource "aws_instance" "sis" {
   EOT
 
   tags = { Name = var.name_prefix }
+
+  lifecycle {
+    # OMNI-63: a release tag unless someone says otherwise, out loud. A
+    # precondition rather than a variable validation so the rule can read both
+    # variables, and so it fails at plan time — before anything is created.
+    precondition {
+      condition     = can(regex("^v[0-9]+\\.[0-9]+\\.[0-9]+$", var.repo_ref)) || var.allow_branch_ref
+      error_message = "repo_ref must be a release tag (vX.Y.Z); to run a branch, also set allow_branch_ref = true."
+    }
+  }
 }
 
 # --------------------------------------------------------------------------

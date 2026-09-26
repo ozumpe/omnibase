@@ -317,8 +317,9 @@ internal target before it models anything external.
   live runs — don't put planning there.
 
 ## Current status — where to pick up
-Released through **v0.1.4** (2026-07-05) — and only that far: everything below
-dated after it (Level 2 onward) lives on `develop` and is unreleased. The
+Released through **v0.2.0** (2026-09-26, OMNI-63) — the first release since
+v0.1.4 (2026-07-05): everything below through the OMNI-29 prerequisites is in
+it, and the AWS box runs that tag, not `develop`. The
 bootstrap skeleton (original "first task") is **done**, plus much more:
 - Actor org + SelfModel + Workspace; one intake→deploy cycle runs locally and stops at
   the human PR merge.
@@ -601,9 +602,9 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   - Design + the Caddy/TLS decision: `docs/OPERATOR_FRONTEND.md`. Deployment
     artifacts (`Dockerfile.frontend`, `Caddyfile`) are deliberately not in this
     slice.
-- 789 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
+- 795 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
   Ray-Serve-integration tests run separately, see Operational quick reference
-  above; 851 total — corrected 2026-09-26, a multi-dimension review found the
+  above; 857 total — corrected 2026-09-26, a multi-dimension review found the
   previously-documented 616/678 stale); `ruff`/`mypy --strict`/`pytest` clean;
   CI green; `feature → develop → main` enforced by both the client-side
   pre-push hook and active server-side rulesets.
@@ -747,7 +748,9 @@ KNOWN_ISSUES backfill, see "Known issues" above):
    instance lifecycle: `user_data` racing Ubuntu's `unattended-upgrades` for
    the dpkg lock, and SSM sessions landing as `ssm-user` rather than `ubuntu`
    (every runbook step now starts with `sudo -iu ubuntu`). The box clones
-   `var.repo_ref` (`develop`), so unmerged work is not on it. **Rehearsed
+   the release tag in `var.repo_ref` (`v0.2.0`; a branch needs
+   `allow_branch_ref = true`, OMNI-63) and every run records the commit it
+   ran; run day uses `--contract sort`. **Rehearsed
    2026-09-23** on a local Ubuntu 24.04 box (`scripts/rehearse_aws_run.sh`),
    which found two more defects no read-through could: the docker sandbox
    could not read its temp dir on native Linux (it now runs as the host uid),
@@ -839,9 +842,9 @@ has the defect write-ups and the ID → ticket table:
   the merged target (M22, unblocked by OMNI-51), OMNI-59 tests inherit `SIS_*`
   env (M23).
 - **Before OMNI-29 (run day):** OMNI-60–63, filed with OMNI-51 as its
-  prerequisites (each `Blocks` OMNI-29). OMNI-60 (CI fast path), OMNI-61
-  (brake state, `sis.admin`) and OMNI-62 (SNS pager) done 2026-09-26; OMNI-63
-  (release tag, run-day contract `sort`) remains.
+  prerequisites (each `Blocks` OMNI-29). All done 2026-09-26: OMNI-60 (CI
+  fast path), OMNI-61 (brake state, `sis.admin`), OMNI-62 (SNS pager), OMNI-63
+  (the box runs release tag `v0.2.0`; run day uses `--contract sort`).
 
 Not yet scheduled: the **atomic actor swap** for internal, never-served actors,
 which `docs/SERVE_CANARY.md` scopes out and which has no design doc yet. E3/D2 in

@@ -9,6 +9,12 @@ set -euo pipefail
 
 REPO_DIR=/home/ubuntu/omnibase
 
+# The exact code this box runs, first line of the log (OMNI-63). `describe`
+# says v0.2.0 for a release tag; `|| echo` because the rehearsal copies a
+# working tree that may carry no .git.
+echo "sis code: $(git -C "$REPO_DIR" describe --tags --always --dirty 2>/dev/null || echo unknown)" \
+     "@ $(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null || echo unknown)"
+
 # --- system layer (root) --------------------------------------------------
 # The lock timeout matters at boot: unattended-upgrades runs on the apt-daily
 # timer at exactly the moment user_data does, and without waiting for the lock

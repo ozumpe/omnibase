@@ -33,9 +33,20 @@ variable "repo_url" {
 }
 
 variable "repo_ref" {
-  description = "Branch or tag to check out on the box."
+  description = <<-EOT
+    Release tag to check out on the box (OMNI-63). A tag, not a branch: a run's
+    results are only worth something if they name the code that produced them,
+    and a branch names whatever it pointed at when the box booted. A branch
+    needs allow_branch_ref = true as well.
+  EOT
   type        = string
-  default     = "develop"
+  default     = "v0.2.0"
+}
+
+variable "allow_branch_ref" {
+  description = "Deliberately run a branch (e.g. develop) instead of a release tag."
+  type        = bool
+  default     = false
 }
 
 variable "secret_name" {

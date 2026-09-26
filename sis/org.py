@@ -40,6 +40,7 @@ from sis.roles import (
 )
 from sis.self_model import get_self_model
 from sis.settings import space_keys
+from sis.version import code_version
 from sis.workspace import get_workspace
 
 CHARTER_TEXT = (
@@ -151,6 +152,17 @@ def bootstrap() -> dict[str, Any]:
     # so a detached SelfModel surviving a restart just re-learns the same map.
     for contract in DEFAULT_CONTRACTS:
         ray.get(self_model.register_contract.remote(contract))
+
+    # Name the code this run executes (OMNI-63): the provenance graph and the
+    # episodic store both carry it, so a log synced off the box says which
+    # commit made its decisions — and whether the tree was dirty.
+    version = code_version()
+    ray.get(self_model.record.remote("code", version["sha"], describe=version["describe"]))
+    try:
+        store.save_state("code_version", version)
+    except Exception as exc:  # noqa: BLE001 - provenance must not stop a run
+        print(f"[sis] WARNING: code version not persisted: {exc}", file=sys.stderr)
+    print(f"[sis] running {version['describe']} ({version['sha']})", file=sys.stderr)
 
     if held_open:
         page(workspace, store, Severity.CRITICAL, "brakes held open at startup",
