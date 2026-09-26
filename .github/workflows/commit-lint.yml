@@ -37,8 +37,25 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          THIS_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+
+          # A release PR (this repo's develop -> main, OMNI-63) is not
+          # re-judged. Every commit on develop entered it through a PR this
+          # check already ran on (direct pushes are blocked by the ruleset),
+          # or predates the rule -- v0.2.0 carried 25 July commits from
+          # before it existed, and failing them would block every release
+          # forever for history nobody can reword. Same-repo only: a fork's
+          # branch that happens to be named develop is checked like any other.
+          if [ "$HEAD_REF" = "develop" ] && [ "$BASE_REF" = "main" ] \
+             && [ "$HEAD_REPO" = "$THIS_REPO" ]; then
+            echo "Release PR (develop -> main): its commits were checked on the way into develop."
+            exit 0
+          fi
 
           merge_base="$(git merge-base "$BASE_SHA" "$HEAD_SHA")"
           fail=0

@@ -222,7 +222,10 @@ internal target before it models anything external.
   server-side backstop for the Jira-key convention above, for when
   `hooks/commit-msg` is bypassed or not enabled in a given clone. Runs on a PR
   against any base, same as `ci.yml` now. Required status-check context:
-  `commit-lint`.
+  `commit-lint`. **Except the release PR** (this repo's `develop` → `main`,
+  OMNI-63): its commits were checked on the way into `develop`, or predate the
+  rule — v0.2.0 carried 25 July commits from before it existed. Same-repo only,
+  so a fork's branch named `develop` is still checked.
 - After ANY `pyproject.toml` change, run `poetry lock` — CI fails on a stale lock file.
 - `pyproject.toml`'s `version` tracks the last git tag (bump it as part of cutting
   a release, e.g. `git tag v0.1.5`); it had drifted to `0.1.0` across five
@@ -602,9 +605,9 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   - Design + the Caddy/TLS decision: `docs/OPERATOR_FRONTEND.md`. Deployment
     artifacts (`Dockerfile.frontend`, `Caddyfile`) are deliberately not in this
     slice.
-- 795 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
+- 796 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
   Ray-Serve-integration tests run separately, see Operational quick reference
-  above; 857 total — corrected 2026-09-26, a multi-dimension review found the
+  above; 858 total — corrected 2026-09-26, a multi-dimension review found the
   previously-documented 616/678 stale); `ruff`/`mypy --strict`/`pytest` clean;
   CI green; `feature → develop → main` enforced by both the client-side
   pre-push hook and active server-side rulesets.

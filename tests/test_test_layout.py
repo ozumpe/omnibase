@@ -209,3 +209,18 @@ def test_every_test_that_reads_the_repos_markdown_is_marked_docs() -> None:
                 f"{path.name} reads the repo's Markdown but is not marked `docs`, so a "
                 "docs-only PR would skip it in CI"
             )
+
+
+def test_commit_lint_lets_only_this_repos_release_pr_through() -> None:
+    """OMNI-63: develop -> main is not re-judged, and nothing else escapes.
+
+    The exemption is keyed on head *and* base *and* the head repository — on a
+    public repo a fork can name its branch `develop`, and that PR must be
+    checked like any other.
+    """
+    workflow = (PROJECT_ROOT / ".github/workflows/commit-lint.yml").read_text(encoding="utf-8")
+    lines = workflow.splitlines()
+    at = next(i for i, line in enumerate(lines) if '"$HEAD_REF" = "develop"' in line)
+    condition = " ".join(lines[at:at + 2])  # the if spans two lines
+    assert '"$BASE_REF" = "main"' in condition
+    assert '"$HEAD_REPO" = "$THIS_REPO"' in condition
