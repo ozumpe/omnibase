@@ -14,6 +14,40 @@ bottom with the PR.
 > **H1** and its coupled no-op short-circuit **M3** were fixed together (see
 > Resolved).
 
+> **2026-09-26 review.** H3–H4, M8–M23 and L15–L43 come from a multi-dimension
+> review: six review lenses, an adversarial skeptic pass on every finding (two
+> skeptics for high-severity ones), and a completeness critic. The reviewers
+> produced 57 findings: 54 survived verification, and the 3 refuted ones are not
+> listed. The critic added 3 more that no skeptic checked: H4 (reproduced
+> independently afterwards), M11 (reproduced by the critic) and L41 (from reading
+> the workflow file). Overlapping findings are merged into one entry.
+> Severities are the skeptics' corrected ratings, usually lower than the
+> reviewers' own, because several paths are opt-in (`--canary serve`) or latent
+> (Class 2 isn't wired into the loop yet). Each entry says whether it was
+> reproduced or only confirmed by reading the code.
+>
+> | ID | Jira |
+> |---|---|
+> | H2, M8, M9, M11 | [OMNI-45](https://olafzumpe.atlassian.net/browse/OMNI-45) (epic [OMNI-43](https://olafzumpe.atlassian.net/browse/OMNI-43)) |
+> | H4 | [OMNI-46](https://olafzumpe.atlassian.net/browse/OMNI-46) (epic OMNI-43) |
+> | M10 | [OMNI-47](https://olafzumpe.atlassian.net/browse/OMNI-47) (epic OMNI-43) |
+> | H3 | [OMNI-48](https://olafzumpe.atlassian.net/browse/OMNI-48) (epic [OMNI-44](https://olafzumpe.atlassian.net/browse/OMNI-44)) |
+> | M19 | [OMNI-49](https://olafzumpe.atlassian.net/browse/OMNI-49) (epic OMNI-44) — **blocks OMNI-29** |
+> | M20, M21 | [OMNI-50](https://olafzumpe.atlassian.net/browse/OMNI-50) (epic OMNI-44) |
+> | M15 | [OMNI-51](https://olafzumpe.atlassian.net/browse/OMNI-51) — **blocks OMNI-29** |
+> | M12 | [OMNI-52](https://olafzumpe.atlassian.net/browse/OMNI-52) |
+> | M13 | [OMNI-53](https://olafzumpe.atlassian.net/browse/OMNI-53) |
+> | M14 | [OMNI-54](https://olafzumpe.atlassian.net/browse/OMNI-54) |
+> | M16 (and L30) | [OMNI-55](https://olafzumpe.atlassian.net/browse/OMNI-55) |
+> | M17 | [OMNI-56](https://olafzumpe.atlassian.net/browse/OMNI-56) — partly done by #108 (QA returns its reason; neutral verdicts routed) |
+> | M18 | [OMNI-57](https://olafzumpe.atlassian.net/browse/OMNI-57) |
+> | M22 | [OMNI-58](https://olafzumpe.atlassian.net/browse/OMNI-58) — blocked by OMNI-51 |
+> | M23 | [OMNI-59](https://olafzumpe.atlassian.net/browse/OMNI-59) |
+> | L21, L23 | [OMNI-61](https://olafzumpe.atlassian.net/browse/OMNI-61) (brake state fails closed; `sis.admin`) — **blocks OMNI-29** |
+> | L24 | [OMNI-62](https://olafzumpe.atlassian.net/browse/OMNI-62) (Notifier port) — **blocks OMNI-29** |
+> | M7 | none yet — natural to do with OMNI-45 |
+> | other L15–L43 | no individual tickets; fix opportunistically or in batches, as L10–L14 were. L39 belongs with [OMNI-42](https://olafzumpe.atlassian.net/browse/OMNI-42). |
+
 ## High
 
 - **H2 — The benchmark verdict can be forged from inside the measured
@@ -41,6 +75,46 @@ bottom with the PR.
   strict-xfail `test_a_candidate_cannot_forge_the_verdict_through_the_harness_itself`,
   which flips to a failure the day this is fixed.
 
+- **H3 — A Serve-canary candidate runs as a full Ray control-plane worker, not
+  in any sandbox** *(found 2026-09-26 by a multi-dimension review; confirmed by
+  two independent skeptics reading the code, not run against a live cluster)* —
+  `TargetDeployment._load` (`sis/serving.py:125`) `exec`s the candidate's source
+  inside a Serve replica, which is an ordinary Ray worker on the same cluster as
+  the detached, named `sis`-namespace actors. The OMNI-13 env scrub only
+  blanks environment variables; it does nothing about cluster membership. Any
+  worker can call `ray.get_actor(name, namespace="sis")` — the exact seam
+  `tests/test_merge_observation.py::_mark_merged` already uses, with its own
+  docstring warning "the agent may not" — and use `__ray_call__` to run
+  arbitrary code inside `Workspace`, `CEO`, `SelfModel` or `DevOps`. A candidate
+  could merge its own PR (`Workspace.vcs` holds an authenticated session under
+  real adapters), promote itself once `observe_merge` sees that merge, reset
+  the circuit breaker, or read tokens held in memory. The canary runs **before**
+  the mandatory human PR merge, so that review does not cover this, and the
+  offline gauntlet cannot catch a payload gated on `ray.is_initialized()`
+  (never true inside the docker sandbox). Fix: never `exec` candidate source in
+  a process attached to the control-plane cluster — a scrubbed subprocess or
+  container fed candidate calls over stdio/a socket, with no Ray connection.
+  Until that lands, refuse `canary.backend=serve` for a non-stub proposer, the
+  same way `ensure_sandbox_allows_proposer` refuses the soft sandbox for M1.
+
+- **H4 — An output type that overrides `__eq__`/`__ne__` defeats every
+  correctness gate, offline and online** *(found 2026-09-26 by a completeness
+  critic; reproduced)* — every gate compares a candidate's output with a plain
+  `==`/`!=`, candidate value on the left, so Python calls the candidate's own
+  `__eq__` first: the Class-1 differential loop (`cand_fn(*args) !=
+  oracle.reference(*args)`), every acceptance-test assertion, the roman
+  round-trip invariant, and the backtest comparators' exact-match branches.
+  Reproduced against the default contract: `class _Liar(int)` with `__eq__` →
+  `True`, `__ne__` → `False`, `__hash__` → `0`, returned from
+  `sum_of_divisors`, type-checks under `mypy --strict` (the declared return
+  type is `int`) and gets `"all gates passed"` — instantly, since the "answer"
+  never has to be computed. The same shape passes the roman acceptance cases
+  and round-trip law with a `str` subclass. Only the mandatory human PR review
+  stands between this and a merge. Fix: canonicalise candidate output to a
+  plain, hashable value built from only builtin `int`/`float`/`str`/`bool`/
+  `None`/`list`/`tuple`/`dict` before any comparison, in every gate script
+  (differential, acceptance conftest shim, invariant, backtest).
+
 ## Medium
 
 - **M7 — The benchmark's false-accept rate at the margin is a few times the
@@ -56,9 +130,376 @@ bottom with the PR.
   Winsorized ratio. Natural to do together with H2, which rebuilds the
   measurement anyway.
 
+- **M8 — Every non-benchmark gate accepts exit code 0 as a pass, with no
+  positive verdict token** *(found 2026-09-26; reproduced)* — `_gate_interface`,
+  `_gate_acceptance`, `_gate_invariant` and `_gate_backtest` only check
+  `returncode != 0`. A Class-2 candidate that calls `os._exit(0)` at import
+  ends each gate's subprocess with code 0 before any assertion runs.
+  Reproduced against `roman`: `to_roman`/`from_roman` return wrong values and
+  the module calls `os._exit(0)`; `validate()` returns `"all gates passed"`.
+  **Not reachable through the loop today** — `roman`/Class-2 contracts aren't
+  in `DEFAULT_CONTRACTS` (`sis/contract.py` says wiring them in is its own
+  change) — so this is latent, not live, but it must close before that wiring
+  lands. Fix: require a positive, host-verified completion signal per gate
+  (e.g. pytest `--junitxml` with the expected test count and zero failures; a
+  per-run nonce for interface/invariant/backtest), never a bare exit code.
+
+- **M9 — The per-validation temp directory is shared, writable, and reused
+  across every gate, so a candidate can rewrite the exam files later gates
+  trust** *(found 2026-09-26; reproduced)* — `validate()` writes `oracle.py`,
+  `baseline.py` and `sitecustomize.py` once, then hands the same directory
+  (on `PYTHONPATH`, mounted `:rw` in docker, owned by the host user in both
+  sandbox modes) to every gate. The candidate runs first, in the interface
+  gate, and can overwrite those files before the differential, benchmark,
+  invariant and backtest gates read them. Reproduced against
+  `sum_of_divisors`: a candidate using the naive (wrong-above-9000) algorithm
+  appends matching wrong behaviour to `oracle.py` and a `sleep`-padded wrapper
+  to `baseline.py` at import; `validate()` returns `"all gates passed"`
+  reporting a fabricated 45µs. **Distinct from H2** — nothing here touches the
+  harness process, only files on disk, so H2's proposed worker-process fix
+  would not close it by itself. Fix: mount trusted files read-only (docker
+  `:ro`; `chmod 0444` in subprocess mode) in a directory separate from the
+  candidate's own writable scratch space, which should sit off `sys.path`
+  ahead of stdlib; verify a hash of every trusted file before each gate.
+
+- **M10 — Candidate and reference/baseline share mutable argument objects, so
+  a candidate can sabotage its own comparison** *(found 2026-09-26;
+  reproduced)* — the differential loop calls `cand_fn(*args)` before
+  `oracle.reference(*args)` on the same list objects; the paired benchmark
+  passes the same `batch` lists to `timed(cand_fn, batch)` and
+  `timed(base_fn, batch)`. Reproduced against `sort`: a candidate that returns
+  `[]` for any list longer than 5 (clearing its input first) passes every
+  gate; so does a plain, no-faster bubble sort that appends to the shared list
+  so the baseline side looks slower. `specs/sort/tests.py::
+  test_does_not_mutate_its_input` only exercises a 3-element list, so the size
+  threshold slips past it, and the sort contract declares no invariants or
+  backtest to catch it another way. Fix: `copy.deepcopy` each side's
+  arguments, computed outside the timed window, in both the differential and
+  benchmark scripts.
+
+- **M11 — A candidate's own exception inside the invariant or backtest gate is
+  filed as a harness/sandbox fault, not a candidate failure** *(found
+  2026-09-26 by a completeness critic; reproduced)* — `sis/invariant.py`'s
+  property wrapper catches only `AssertionError` around the candidate's call;
+  `sis/backtest.py` catches nothing at all around it. Any other exception
+  (e.g. an `IndexError` on an input the acceptance tests don't cover) makes
+  the gate script exit non-zero for a reason that isn't the counted
+  violation, and `_gate_invariant`/`_gate_backtest` map any other non-zero
+  exit to `"harness: ... crashed"` — precisely the misattribution **OMNI-37**
+  exists to prevent, in two gates it didn't reach. Reproduced against
+  `roman`: a candidate whose `to_roman` raises `IndexError` for
+  `2000 <= value < 3000` (outside the acceptance range) gets
+  `"harness: the invariant script crashed"`, and
+  `episodic.gate_from_reason` records `"harness"` — an operator would debug a
+  healthy sandbox, and reject-by-gate analytics under-count invariant
+  failures. Fix: wrap only the candidate's own call inside each gate script
+  and turn any exception into a counted violation (e.g. re-raise as an
+  `AssertionError` naming the candidate's exception, so Hypothesis can shrink
+  it and the seed still rides in the reason).
+
+- **M12 — A `soft_` operator config edit can rewrite `forbidden_` keys through
+  unescaped YAML rendering** *(found 2026-09-26; reproduced end to end
+  through the real `operator.save_edits`)* — `_render_scalar`
+  (`sis/config.py`) wraps string values in `f'"{value}"'` with no escaping;
+  `contracts.default` is a `soft_` `OPT_STR` key with no `choices`, so
+  `parse_value` accepts arbitrary text for it; `save_edits` never re-parses
+  the file it just wrote to check it matches what was intended. PyYAML keeps
+  the *last* of two duplicate top-level keys. Reproduced: one
+  `contracts.default` edit containing an embedded `brakes:`/`policy:` block
+  raised the effective spend cap to $1,000,000, enabled STRICT changes, and
+  widened `target_paths` — while `runtime/operator_audit.jsonl` recorded only
+  the harmless `soft_` edit. A lone stray `"` in the value makes `config.yml`
+  fail to parse (every engine process then refuses to start). Fix: render
+  every scalar with `json.dumps` (valid YAML, escapes quotes/newlines/
+  backslashes) or `yaml.safe_dump`; in `save_edits`, re-parse the rendered
+  result and refuse the write unless it round-trips to exactly the intended
+  values; write via a temp file + `os.replace`.
+
+- **M13 — GitHub OAuth is never actually installed on the operator console;
+  the server runs unauthenticated** *(found 2026-09-26; reproduced against
+  the installed Panel version, without starting Ray)* — `_install_oauth`
+  (`sis/frontend.py`) only sets `pn.config.oauth_provider`/etc. and returns
+  `{}`; `serve()` calls `pn.serve(...)` without passing `oauth_provider=` as
+  an argument, and Panel's `get_server` only builds an auth provider when
+  that *argument* (not the `pn.config` attribute) is set. Reproduced: the
+  server's `auth_provider` comes back `NullAuth`, `sign_sessions=False`.
+  Browser requests are refused with a 403 (the `authorize` callback receives
+  `user_info=None` and raises on `.get`), but the Bokeh websocket path
+  accepts an unsigned session token without ever calling the authorize
+  callback, so a non-browser client can open a full session and save edits —
+  including, combined with M12, `forbidden_` ones. Mitigated today only by
+  the loopback-only bind (OMNI-29); this fails as soon as anything binds
+  `SIS_FRONTEND_BIND` beyond loopback believing OAuth protects it. Fix: pass
+  `oauth_provider`, `oauth_key`/`oauth_secret` and a `cookie_secret` to
+  `pn.serve`; enable signed sessions; add a test asserting the built server's
+  `auth_provider` is not `NullAuth`.
+
+- **M14 — A worked example in a spec page can name any callable, so spec
+  prose becomes executed code** *(found 2026-09-26; reproduced)* —
+  `_worked_example_source` (`sis/contract_author.py`) emits
+  `` assert {entry}(*args) == expected `` for any `\w+` identifier, never
+  checking `entry` against the contract's `public_api`; builtins such as
+  `exec`, `eval`, `open` and `__import__` resolve in the generated test
+  module. Reproduced: a spec bullet `` `exec("...")` -> `None` `` produces a
+  test that executes the quoted string, and `untranscribed_examples` reports
+  nothing wrong with it. `check_discrimination` runs this draft before any
+  human sees it; under the default (stub proposer) configuration that runs in
+  the subprocess sandbox, which leaves the host filesystem readable (M1 only
+  requires docker for a non-stub *proposer*, not for staging a document-store
+  draft). Fix: transcribe an example only when `entry in public_api` (the
+  caller already has `public_api` in hand); report anything else through
+  `untranscribed_examples` as "names a function outside the contract's public
+  API".
+
+- **M15 — The real GitHub adapter and the SWE's policy check both hardcode
+  `runtime/target.py`, so every non-default contract is judged against the
+  wrong baseline on real adapters** *(found 2026-09-26 from three independent
+  angles by the same review; confirmed by reading the code, not run against
+  live GitHub)* — `TARGET_REPO_PATH = "runtime/target.py"`
+  (`sis/adapters_real.py`) is used by `live_target_source`, `open_pr` and
+  `get_pr` regardless of which contract is active; `SWE.implement`'s policy
+  check (`sis/roles.py`) authorizes that same constant instead of
+  `spec.target_path`. `SIS_ADAPTERS=real --contract sort` would give
+  `measure_baseline` the `sum_of_divisors` module as "the current source", so
+  the benchmark's baseline call raises `AttributeError` (misattributed to the
+  candidate as a benchmark crash); for a Class-2 contract needing no
+  baseline, the resulting PR would overwrite `runtime/target.py` with
+  unrelated code, and the policy check approves that write because it
+  matches the path it was told to authorize. **Matters directly for OMNI-29**
+  if the run uses any contract other than the default. Fix: thread
+  `spec.target_path` through the `VersionControl` port (`live_target_source`,
+  `open_pr`, `get_pr`) and through `policy.authorize_change`, dropping the
+  hardcoded constant.
+
+- **M16 — Any exception after the LLM call loses that call's spend from the
+  CEO ledger and the episodic log, strands the branch/PR, and can kill
+  `--loop`** *(found 2026-09-26; confirmed by reading the code — the
+  triggering case is the already-documented L6 403)* — `run_cycle`
+  (`sis/org.py`) has no exception handling around the role calls; the cost is
+  known to the driver only via each method's return value, so a later raise
+  (an under-scoped PAT's 403 at `open_pr`, a transient Jira 500 on a status
+  transition, or a Serve error mid-canary) never reaches
+  `CEO.report_outcome`/`record_neutral`. Re-running repeats the same
+  untracked spend, so the hard cap never sees it, and `run_loop`
+  (`sis/loop.py`) has no per-cycle exception handling either — the whole
+  process exits. Fix: charge spend as soon as it's incurred (or recover it
+  via `try/finally`); wrap each `run_cycle` stage so an exception becomes a
+  recorded, breaker-counted `error` outcome — and, if a canary was live,
+  retires it — instead of an unhandled exception.
+
+- **M17 — A QA-stage rejection drops the gauntlet's reject reason** *(found
+  2026-09-26; confirmed by reading the code)* — when QA's own re-run of the
+  gauntlet rejects a candidate, the episodic record loses `reject_gate`, the
+  `slo` failure-weight discount, and the OMNI-37 harness/candidate
+  distinction that the SWE-stage rejection path already carries. Fix: thread
+  the gauntlet `Result` through QA's rejection path the same way `SWE.
+  implement`'s does.
+
+- **M18 — A PR a human closes without merging holds the canary — and, under
+  `loop.serve(watch_merges=True)`, the whole loop — open indefinitely**
+  *(found 2026-09-26 from two angles, `sis/loop.py` and `sis/roles.py`;
+  confirmed by reading the code)* — `observe_merge` and the poll loop only
+  check for a merge; there is no "closed, not merged" terminal state, so a
+  human declining a change leaves green attached and the next cycle blocked
+  forever rather than resuming. Fix: poll the PR's actual state, not just
+  mergedness, and retire the canary + resume the loop on `closed`.
+
+- **M19 — On the AWS run box, a `--canary serve` green replica can reach IMDS
+  instance-role credentials and read other processes' environment via
+  `/proc`** *(found 2026-09-26 from two angles; confirmed by reading the
+  infra config, not run on a live EC2 instance)* — `build_candidate`
+  (`sis/serving.py`) only blanks `runtime_env.env_vars`; the replica is an
+  ordinary host process, so IMDSv2 (whose hop-limit-1 default only stops
+  containers behind a bridge, not host processes) and
+  `/proc/<raylet-or-driver-pid>/environ` (readable by any same-uid process)
+  are both open to it, and the instance role can call
+  `secretsmanager:GetSecretValue` on the one secret holding the Atlassian,
+  GitHub and Anthropic tokens (`infra/aws/main.tf`). `docs/AWS_RUN.md`
+  currently states the opposite — that the gauntlet's `--network none` is
+  what stands between candidate code and IMDS — which is true for the
+  gauntlet but not for the Serve canary. Fix: land alongside H3's isolation
+  redesign; until then, refuse `canary.backend=serve` when `SIS_ENV=aws` or
+  the proposer isn't the stub, and correct the doc.
+
+- **M20 — The live canary's p95/p99 gate is close to a coin flip for targets
+  where dispatch overhead dominates compute** *(found 2026-09-26; simulated
+  through the real `evaluate_canary`)* — Gate 4 compares nearest-rank p95/p99
+  of two **unpaired** marginal latency arrays (~150 samples) at
+  `max_latency_ratio=1.0` with no allowance on p95 (only p99 got the #107
+  10% allowance). `tests/test_live_canary.py` already documents "there is no
+  candidate that reliably passes here." Simulated (lognormal σ=0.35, n=150,
+  2000 trials) through `evaluate_canary` itself: an equal-speed candidate is
+  rejected **~56%** of the time (mostly on p95); a candidate ~3% slower still
+  passes **~44%** of the time. Every false reject counts in full toward the
+  circuit breaker and files a bug. Fix: store paired `(blue, green)`
+  latencies per shadow sample (the router already has both in hand; it
+  throws the pairing away when it records each side separately) and decide
+  the way `gauntlet.benchmark_decision` does — a paired-bootstrap accept /
+  reject / inconclusive, inconclusive neutral.
+
+- **M21 — The live canary never judges error rate, and SHADOW mode drops any
+  pair where green failed** *(found 2026-09-26 from three independent
+  reviews; simulated through the real `evaluate_canary`)* — `_canary_live`
+  (`sis/roles.py`) discards both error counts that `live_window` returns;
+  `evaluate_canary` (`sis/canary.py`) has no error-rate parameter at all; and
+  `CanaryRouter.route` only records a `LiveSample` when *both* sides
+  succeeded, so a request where green raised never reaches the agreement
+  gate (survivorship bias) — yet green's failed calls still land in its
+  latency array, and because failures return fast, they pull green's
+  percentiles *down*. Simulated: 105 paired samples plus 45 fast green
+  errors (dropped from pairing, counted in latency) still returns
+  `passed=True`. The evidence floor (`min(100, 150)=100`) leaves room for up
+  to a third of live traffic to fail on green and still certify it. Fix:
+  pass both error counts into `evaluate_canary` and reject when green's error
+  rate exceeds blue's; in SHADOW, record a blue-ok/green-error pair as a
+  disagreement rather than dropping it.
+
+- **M22 — The Serve baseline (blue) is the local target file, not the merged
+  base, and reverts to it whenever `ServeCloud` is rebuilt** *(found
+  2026-09-26; confirmed by reading the code)* — unlike the offline gauntlet
+  (fixed under H1 to benchmark against `live_target_source()`), the Serve
+  canary's blue deployment is seeded from the local `runtime/*.py` file, so a
+  rebuilt `ServeCloud` (e.g. after a DevOps restart) can silently regress
+  blue to stale code. Fix: seed blue from `live_target_source()` too.
+
+- **M23 — The test suite inherits real `SIS_*` environment variables from the
+  developer's shell** *(found 2026-09-26; confirmed by reading
+  `tests/conftest.py`)* — nothing clears `SIS_*`/adapter-credential
+  variables before the suite runs, so a shell configured for a real run
+  (real adapters, the real Claude proposer, or the real episodic store)
+  silently changes what `pytest` exercises, with no visible signal that it
+  happened. Fix: snapshot and clear the relevant env vars in a session-scoped
+  autouse fixture, with an explicit opt-in fixture for the handful of tests
+  that intentionally want a real backend.
+
 ## Low
 
-*(none open)*
+- **L15** — `validate()` can be made to raise instead of returning a
+  `Result` (a gate script crash that escapes the harness's own exception
+  handling), losing the episodic record, the breaker increment, and the
+  accounted spend for that cycle. Fix: wrap `validate()`'s gate dispatch in a
+  catch-all that returns a `harness:` `Result` instead of propagating.
+- **L16** — The OMNI-37 sandbox self-check (`probe_sandbox`) loads
+  `sitecustomize.py` from the same writable directory a failing candidate can
+  also write to (see M9), so a candidate that wants its own rejection blamed
+  on the harness can corrupt the probe too. Fix: give the probe its own
+  read-only directory, not the candidate's.
+- **L17** — `NaN` passes `config.py`'s number validation and silently
+  disables the spend cap and cost-per-accepted SLO (a threshold compared
+  against `NaN` is never true). Fix: reject non-finite floats in
+  `parse_value`.
+- **L18** — `policy.classify()` is case-sensitive, so on a case-insensitive
+  filesystem a different-case path to guardrail code classifies as STRICT
+  rather than FORBIDDEN. Fix: normalise case via the resolved path.
+- **L19** — `contract_author.promote()` copies whatever is currently in the
+  loop-writable staging directory at promotion time, not necessarily the
+  content a human reviewed if the draft was rewritten in between. Fix: hash
+  the draft at review time and refuse `promote()` on a mismatch.
+- **L20** — The operator audit log (`runtime/operator_audit.jsonl`) path
+  depends on the process's working directory, and entries don't record which
+  operator made the edit. Fix: resolve the path against a fixed root; add the
+  OAuth-authenticated login to each record.
+- **L21** — CEO brake-state persistence fails open: a corrupt, unwritable, or
+  newly-switched state store silently resets `spent=0` and clears the
+  breaker trip rather than refusing to start. Fix: an unparseable-but-present
+  state file should trip the breaker with a `state_unreadable` reason, not
+  reset it.
+- **L22** — PRs from QA-rejected, QA-inconclusive and canary-rejected cycles
+  stay open with nothing tracking them; merging one later promotes nothing
+  but leaves a merged-looking PR with no effect. Fix: close (not merge) the
+  PR as part of recording the rejected outcome.
+- **L23** — `CEO.reset_breaker()` has no caller anywhere outside tests; in
+  practice the only reset is deleting the state file, which also zeroes
+  spend. Fix: expose it through an admin entry point that resets the trip
+  without touching spend.
+- **L24** — Budget exhaustion stops `--loop` silently; `loop.decide()`'s own
+  comment says a human is paged, but nothing files anything. Fix: route it
+  through the same alerting path as a breaker trip.
+- **L25** — Unknown/unpriced Anthropic model ids are silently billed at
+  `claude-opus-4-8` rates in `cost.py`, which can undercount a pricier
+  model's actual spend against the hard cap. Fix: fail loudly (or price at
+  the most expensive known tier) on an unrecognised model id.
+- **L26** — A live-canary rejection files two bugs for the same event. Fix:
+  file one.
+- **L27** — `episodic.gate_from_reason` matches `"timed out"`/`"timeout"`
+  anywhere in the reject reason, including text a candidate itself printed,
+  so a counted correctness failure can be mislabelled as an infrastructure
+  timeout. Fix: match only the harness's own timeout sentinel.
+- **L28** — Candidate return values are unpickled by value inside the
+  (unscrubbed) router and DevOps processes during a live canary — a second,
+  more roundabout way for candidate code to run outside any sandbox, lower
+  severity than H3/M19 because it needs a return type whose deserialisation
+  itself runs code. Fix: deserialise live-canary responses into a
+  restricted, data-only representation.
+- **L29** — A live canary has no per-call timeout, and SHADOW mode awaits
+  green fully before answering the caller, so a slow or hung candidate stalls
+  every live client and can wedge DevOps. Fix: bound the green call with its
+  own timeout, independent of the client's.
+- **L30** — An exception after the green deploy during a live canary leaves
+  green attached and the PR pending with no verdict, bug, or spend recorded
+  — the live-path sibling of M16. Fix: the same accounting fix as M16,
+  applied to `_canary_live`.
+- **L31** — Promotion serves the source snapshotted at canary time, not
+  necessarily what a human actually merged if the PR was amended after the
+  canary started. Fix: re-fetch the merged source at `observe_merge` time and
+  compare shas before promoting.
+- **L32** — Canary backend routing silently falls back to the legacy
+  in-memory path when `retire_canary` is called without a `pr_id`, or after a
+  DevOps restart — leaving Serve's green attached, or "promoting" only in
+  bookkeeping with nothing changing online. Fix: make the fallback loud.
+- **L33** — `AnthropicClient.complete` never checks `stop_reason`; output
+  truncated by `max_tokens` (8000, shared with adaptive thinking at
+  `effort=high`) is silently treated as complete, and any resulting gate
+  failure is blamed on the candidate. Fix: check `stop_reason`; retry or fail
+  loudly on `max_tokens`.
+- **L34** — The real GitHub adapter's `_get_file` treats any error
+  (including a transient 5xx) the same as "file absent" and silently falls
+  back to the stale local baseline. Fix: distinguish 404 from other errors;
+  let a real error retry or fail the cycle loudly.
+- **L35** — `ConfluenceDocumentStore.create_page` overwrites any existing
+  page with the same title, including a human-authored one, without
+  approval. Fix: require the destructive-Confluence-action approval gate
+  here too.
+- **L36** — `scripts/aws_secret.py`'s routing guard checks the Jira project
+  and GitHub repo but not the Confluence space, which defaults to the real
+  `SD` space. Fix: add the same allowlist check for the Confluence space key.
+- **L37** — `scripts/check_connections.py` doesn't preflight the Anthropic
+  API key/model; a bad `SIS_LLM_MODEL` or key only fails inside
+  `SWE.implement`, after Jira/Confluence artifacts already exist for the
+  cycle. Fix: add an Anthropic check to `--deep`.
+- **L38** — `Dockerfile.gauntlet` installs `mypy`/`pytest`/`hypothesis`
+  unpinned, so the docker sandbox's gate toolchain can drift from
+  `poetry.lock` (and thus from what CI and the subprocess sandbox actually
+  run) whenever the image is rebuilt. Fix: pin from an exported, hash-locked
+  requirements file; check the pin at `ensure_sandbox_ready()` time.
+- **L39** — `tests/test_contract_author.py::
+  test_a_drafted_skeleton_stages_without_touching_specs` (OMNI-42) has a
+  second, independent cause beyond the `specs/__pycache__` race already
+  ticketed: another test in the suite writes a real directory into `specs/`
+  during the run. Fix: locate and fix that test alongside OMNI-42.
+- **L40** — CI never installs the `analytics` (duckdb) or `ui` (panel)
+  dependency groups, so the tests behind those groups are silently skipped
+  rather than run and reported. Fix: install both groups in CI.
+- **L41** — `commit-lint` exempts any commit whose subject starts with
+  `fixup!`/`squash!` from needing an OMNI key or `No-Ticket:` trailer, on the
+  assumption they're rebased away before merge — nothing enforces that
+  assumption, so a `--no-verify` commit titled `fixup! ...` can reach
+  `develop` with neither. Fix: fail on a `fixup!`/`squash!` subject reaching
+  CI instead of exempting it.
+- **L42** — The SLO gate (`sis/slo.py`) replays a fixed workload the same way
+  the pre-OMNI-41 benchmark did, and has the same memoisation hole (noted in
+  the OMNI-41 Resolved entry below, previously without an ID). No shipped
+  contract declares an SLO yet, so this is latent. Fix: apply the OMNI-41
+  fresh-input design here too before any contract ships an SLO.
+- **L43** — CLAUDE.md's Hard Rules describe "cost/brakes" as one FORBIDDEN
+  unit, but only `sis/cost.py` (spend accounting) actually is; the
+  breaker/threshold decision logic (`evaluate_brakes`, `failure_weight`,
+  `CEO.report_outcome`) lives in `sis/roles.py`, which is STRICT — a test
+  pins that classification deliberately. A STRICT change (human-approved)
+  can therefore weaken the circuit breaker without touching anything the doc
+  calls FORBIDDEN. Fix: word CLAUDE.md precisely, and consider extracting the
+  pure brake-decision functions into their own FORBIDDEN module so
+  safety-critical logic doesn't share a STRICT file with ordinary actor code.
 
 ## Resolved (Low)
 
@@ -275,7 +716,8 @@ any long-lived cluster exists.
   contains it from the *host*, not from the measurement; the durable fix is
   feeding inputs from the parent one at a time. **(2)** the SLO gate
   (`sis/slo.py`) still replays a fixed workload and has the same memoisation
-  hole; no shipped contract declares an SLO yet, so it is latent.
+  hole; no shipped contract declares an SLO yet, so it is latent. (Point (1)
+  is **H2**; point (2) is now **L42**.)
 
 - **The docker sandbox could not read its own temp dir on native Linux — so
   it blamed every candidate** *(found and fixed 2026-09-23, rehearsing the

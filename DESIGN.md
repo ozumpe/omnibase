@@ -163,7 +163,11 @@ Goal: a small set of files, runnable locally with Ray, that exercise the whole l
 on a trivial internal target — something to run and read while relearning Python.
 
 This is **done**; the single-file sketch grew into the `sis/` package. The realized
-shape:
+shape, as of the *original bootstrap milestone* (this section is a historical
+snapshot, not current documentation — `validate()`'s signature, its gate list,
+and the fixed `pytest`-only correctness check below are all superseded; see
+`CLAUDE.md`'s Hard Rules for the current per-contract gate profile and
+`docs/KNOWN_ISSUES.md` for open gaps in it):
 
 - `pyproject.toml` — Poetry-managed; deps: `ray[serve]`, `mypy`, `pytest`,
   optionally `anthropic` (`--with llm`) and the real adapters (`--with real`).
