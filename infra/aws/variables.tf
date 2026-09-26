@@ -60,6 +60,6 @@ variable "monthly_budget_usd" {
 }
 
 variable "alert_email" {
-  description = "Where the budget alarm goes. Set it in terraform.tfvars (gitignored)."
+  description = "Where the budget alarm and the loop's pages (SNS) go. Set it in terraform.tfvars (gitignored)."
   type        = string
 }

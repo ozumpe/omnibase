@@ -43,6 +43,7 @@ are the actors' shared coordination + memory substrate.
 | Version Control & Review  | GitHub (GitHub MCP / `gh`) | Branches, commits, PRs, CI |
 | Cloud / Infra             | AWS                        | Compute, networking, deploy targets |
 | Telemetry                 | cluster + cloud metrics    | Logs, metrics, traces |
+| Notifier                  | AWS SNS                    | Pages a human: breaker trip, spend-cap hit, broken sandbox, a loop that stopped (OMNI-62) |
 
 Same adapter mechanism later connects **domain** actors to the modeled world's APIs
 (traffic sensors, building systems, etc.) — the "real world" connection is uniform.

@@ -25,6 +25,7 @@ import ray
 
 from sis import config, episodic, gauntlet, llm
 from sis.contract import DEFAULT_CONTRACTS
+from sis.ports import Severity
 from sis.roles import (
     CEO,
     CTO,
@@ -69,6 +70,33 @@ def _get_or_create(name: str, cls: Any, *args: Any) -> Any:
     ).remote(*args)
 
 
+def page(
+    workspace: Any, store: episodic.EpisodicStore, severity: Severity, title: str, body: str
+) -> dict[str, str]:
+    """Page a human through the Workspace's notifier (OMNI-62). Never raises.
+
+    The notifier already reports its own failures; this adds the durable half —
+    a page that could not be sent is recorded in the episodic store, so the
+    run's own record says when nobody was told.
+    """
+    outcome: dict[str, str] = ray.get(workspace.notify.remote(severity, title, body))
+    record_page_outcome(store, severity, title, outcome)
+    return outcome
+
+
+def record_page_outcome(
+    store: episodic.EpisodicStore, severity: Severity, title: str, outcome: dict[str, str]
+) -> None:
+    """Keep a failed page in the episodic store's state. Never raises."""
+    if "error" not in outcome:
+        return
+    try:
+        store.save_state("notifier", {"last_failure": {
+            "title": title, "severity": severity.value, "error": outcome["error"]}})
+    except Exception:  # noqa: BLE001 - notify() has already printed and emitted it
+        pass
+
+
 def bootstrap() -> dict[str, Any]:
     """Start Ray, the shared substrate, and the named role actors."""
     # Before anything starts: brakes that reset on every restart are refused
@@ -89,13 +117,16 @@ def bootstrap() -> dict[str, Any]:
     # breaker survive a cluster/actor restart; an already-running detached CEO keeps
     # its live state (get_if_exists ignores these args).
     ceo_cfg = ceo_config_from_env()
+    store = episodic.get_episodic_store()
+    held_open: str | None = None
     try:
-        ceo_state = episodic.get_episodic_store().load_state("ceo")
+        ceo_state = store.load_state("ceo")
     except episodic.StateUnreadable as exc:
         # Fail closed (OMNI-61): unreadable is not "no state". The CEO boots
         # with the breaker open and says why, instead of at spent=0.
         ceo_state = unreadable_brake_state(str(exc))
-        print(f"[sis] BRAKES HELD OPEN: {ceo_state['trip_reason']}", file=sys.stderr)
+        held_open = str(ceo_state["trip_reason"])
+        print(f"[sis] BRAKES HELD OPEN: {held_open}", file=sys.stderr)
 
     handles = {
         "Workspace": workspace,
@@ -120,6 +151,10 @@ def bootstrap() -> dict[str, Any]:
     # so a detached SelfModel surviving a restart just re-learns the same map.
     for contract in DEFAULT_CONTRACTS:
         ray.get(self_model.register_contract.remote(contract))
+
+    if held_open:
+        page(workspace, store, Severity.CRITICAL, "brakes held open at startup",
+             f"The CEO booted with its circuit breaker open: {held_open}")
     return handles
 
 
@@ -214,6 +249,26 @@ def run_cycle(
             ws.emit.remote("brake_state.save_failed", error=str(exc))
         return res
 
+    def _breaker_alarm(trip: str | None) -> str | None:
+        """File the breaker bug and page a human — on a fresh trip only.
+
+        The bug is the audit trail; the page is what reaches a person (OMNI-62).
+        One helper for every place the CEO can report a trip, so no path files
+        the bug and forgets the page.
+        """
+        if not trip:
+            return None
+        bug_id = str(ray.get(devops.file_bug.remote(
+            f"CIRCUIT BREAKER OPEN — human attention required: {trip}")))
+        econ = ray.get(ceo.economics.remote())
+        page(ws, store, Severity.CRITICAL, f"circuit breaker open: {trip}",
+             f"The loop has stopped starting cycles: {trip}.\n"
+             f"Spent ${econ['spent_usd']:.4f} of ${econ['budget_usd']:.2f}; "
+             f"accepted {int(econ['accepted'])}. Filed as {bug_id}.\n"
+             "Inspect with `python -m sis.admin status`; clear it deliberately with "
+             "`python -m sis.admin reset-breaker --reason \"...\"` (spend is not reset).")
+        return bug_id
+
     # 1. Budget & goal gate (CEO). A pause is checked first and recorded as
     # its own status: an operator's decision, not a brake that tripped.
     if (paused := ray.get(ceo.pause_reason.remote())) is not None:
@@ -223,6 +278,11 @@ def run_cycle(
     if ray.get(ceo.breaker_open.remote()):
         return _record({"status": "circuit_breaker_open"})
     if not ray.get(ceo.approve_budget.remote(estimate_usd)):
+        econ = ray.get(ceo.economics.remote())
+        page(ws, store, Severity.CRITICAL, "spend cap reached: cycle refused",
+             f"A cycle estimated at ${estimate_usd:.2f} would exceed the budget: "
+             f"spent ${econ['spent_usd']:.4f} of ${econ['budget_usd']:.2f}. No cycle "
+             "runs until the budget (brakes.budget_usd) is raised.")
         return _record({"status": "budget_denied"})
 
     # 2. Intake: a non-technical user drops a proposal into the proposal space.
@@ -251,11 +311,7 @@ def run_cycle(
     neutral_status = None if impl["passed"] else episodic.neutral_status(impl.get("reason"))
     if neutral_status:
         trip = ray.get(ceo.record_neutral.remote(cost_usd=cost_usd))
-        breaker_bug_id = (
-            ray.get(devops.file_bug.remote(
-                f"CIRCUIT BREAKER OPEN — human attention required: {trip}"))
-            if trip else None
-        )
+        breaker_bug_id = _breaker_alarm(trip)
         return _record({"status": neutral_status, "reason": impl["reason"],
                         "spec_id": spec_id, "story_id": story_id,
                         "candidate_sha": impl.get("candidate_sha"),
@@ -277,11 +333,13 @@ def run_cycle(
             if gate == "harness" else f"Cycle failed for {story_id}"
         )
         bug_id = ray.get(devops.file_bug.remote(f"{headline}: {impl['reason']}"))
-        breaker_bug_id = (
-            ray.get(devops.file_bug.remote(
-                f"CIRCUIT BREAKER OPEN — human attention required: {trip}"))
-            if trip else None
-        )
+        if gate == "harness":
+            # A broken sandbox fails every cycle after this one too, and nothing
+            # a proposer does will fix it — worth a person now, not after the
+            # breaker has counted three of them (OMNI-62).
+            page(ws, store, Severity.WARNING, f"sandbox broken during {story_id}",
+                 f"The candidate was not judged: {impl['reason']}\nFiled as {bug_id}.")
+        breaker_bug_id = _breaker_alarm(trip)
         return _record({"status": "rolled_back", "reason": impl["reason"],
                         "spec_id": spec_id, "story_id": story_id,
                         "candidate_sha": impl.get("candidate_sha"),
@@ -299,11 +357,7 @@ def run_cycle(
     qa_neutral = None if approved else episodic.neutral_status(qa_reason)
     if qa_neutral:
         trip = ray.get(ceo.record_neutral.remote(cost_usd=cost_usd))
-        breaker_bug_id = (
-            ray.get(devops.file_bug.remote(
-                f"CIRCUIT BREAKER OPEN — human attention required: {trip}"))
-            if trip else None
-        )
+        breaker_bug_id = _breaker_alarm(trip)
         return _record({"status": qa_neutral, "reason": qa_reason,
                         "spec_id": spec_id, "story_id": story_id,
                         "pr_id": impl["pr_id"],
@@ -336,11 +390,7 @@ def run_cycle(
             f"QA rejected {story_id} (PR {impl['pr_id']})"))
     else:
         bug_id = None
-    breaker_bug_id = (
-        ray.get(devops.file_bug.remote(
-            f"CIRCUIT BREAKER OPEN — human attention required: {trip}"))
-        if trip else None
-    )
+    breaker_bug_id = _breaker_alarm(trip)
 
     return _record({
         "status": status,

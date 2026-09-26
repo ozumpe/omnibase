@@ -251,6 +251,13 @@ SCHEMA: tuple[Key, ...] = (
     Key("adapters", "http_timeout_seconds", ConfigTier.SOFT, Kind.FLOAT, 30.0,
         "SIS_HTTP_TIMEOUT",
         "Per-request timeout for real-adapter HTTP calls.", positive=True),
+    # Where a breaker trip, a spend-cap hit or a broken sandbox pages a human
+    # (OMNI-62). Forbidden: a loop, or a console session, able to point it
+    # elsewhere could silence the page that says the loop needs stopping.
+    Key("adapters", "notify_sns_topic_arn", ConfigTier.FORBIDDEN, Kind.OPT_STR, None,
+        "SIS_NOTIFY_SNS_TOPIC_ARN",
+        "SNS topic that pages the operator. Unset: pages are only recorded in "
+        "memory, and a real-adapter run warns that nobody will be paged."),
 
     # --- proposer: who writes the candidate, and with what model. ------------
     # Strict rather than forbidden: switching proposer changes *who* writes the
@@ -692,6 +699,7 @@ class AdaptersConfig:
     aws_region: str
     aws_secret_id: str | None
     http_timeout_seconds: float
+    notify_sns_topic_arn: str | None
 
 
 @dataclass(frozen=True)

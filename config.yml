@@ -88,6 +88,10 @@ adapters:
   # Per-request timeout for real-adapter HTTP calls.
   # env: SIS_HTTP_TIMEOUT   flag: --adapters-http-timeout-seconds
   soft_http_timeout_seconds: 30.0
+  # SNS topic that pages the operator. Unset: pages are only recorded in memory, and a
+  # real-adapter run warns that nobody will be paged.
+  # env: SIS_NOTIFY_SNS_TOPIC_ARN   flag: --adapters-notify-sns-topic-arn
+  forbidden_notify_sns_topic_arn: null
 
 proposer:
   # 'stub' for the offline hand-written candidate; anything else is a real LLM and is

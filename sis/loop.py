@@ -62,12 +62,35 @@ class Tick:
 def decide(tick: Tick) -> Action:
     """Pure loop policy. No Ray, no time, no I/O — just the decision."""
     if tick.breaker_open or not tick.budget_ok:
-        return Action.STOP  # frozen loop / out of money: the human was already paged
+        return Action.STOP  # frozen loop / out of money: run_loop's on_stop pages
     if tick.paused:
         return Action.SKIP  # an operator said wait; keep polling for resume
     if tick.work is None:
         return Action.SKIP  # nothing triggered this tick
     return Action.RUN
+
+
+def stop_alert(tick: Tick, cycles_run: int) -> tuple[str, str] | None:
+    """The page a loop stop needs, as (title, body), or None. Pure (OMNI-62).
+
+    A STOP means no further cycle will start until a human acts, so it pages —
+    once. A breaker that tripped during this run was already paged at the trip
+    (``org.run_cycle``); one that was open before the first cycle was not, and
+    a budget that ran out stopped the loop silently (KNOWN_ISSUES L24) while
+    this module's own comment claimed "the human was already paged".
+    """
+    if tick.breaker_open:
+        if cycles_run:
+            return None  # paged when it tripped
+        return ("loop did not start: circuit breaker already open",
+                "The loop found the breaker open before running a single cycle — "
+                "tripped in an earlier run, or held open because brake state was "
+                "unreadable. Inspect with `python -m sis.admin status`.")
+    if not tick.budget_ok:
+        return ("loop stopped: spend budget exhausted",
+                f"After {cycles_run} cycle(s) the next estimate would exceed "
+                "brakes.budget_usd. No cycle starts until the budget is raised.")
+    return None
 
 
 def run_loop(
@@ -78,11 +101,16 @@ def run_loop(
     max_cycles: int | None = None,
     stop_event: threading.Event | None = None,
     sleep: Callable[[float], None] | None = None,
+    on_stop: Callable[[Tick, int], None] | None = None,
 ) -> list[dict[str, Any]]:
     """Drive cycles until a stop condition. Returns the results of cycles run.
 
     Everything time/Ray-shaped is injected, so this is fully unit-testable and
     always terminates: pass ``max_cycles`` and/or a pre-set ``stop_event``.
+
+    ``on_stop`` is called with the tick that made :func:`decide` return STOP
+    and the number of cycles run — not on ``max_cycles`` or a stop event, which
+    are an operator's choices rather than a condition someone must act on.
     """
     stop = stop_event or threading.Event()
     # Default sleep is the *interruptible* wait, so setting the stop event wakes
@@ -95,6 +123,8 @@ def run_loop(
             break
         action = decide(tick := poll())
         if action is Action.STOP:
+            if on_stop is not None:
+                on_stop(tick, cycles)
             break
         if action is Action.RUN:
             assert tick.work is not None  # decide() guarantees this
@@ -335,5 +365,12 @@ def serve(
         return org.run_cycle(handles, work.title, work.body, estimate_usd=estimate_usd,
                              canary_backend=canary_backend)
 
+    def on_stop(tick: Tick, cycles_run: int) -> None:
+        if (alert := stop_alert(tick, cycles_run)) is not None:
+            from sis import episodic
+            from sis.ports import Severity
+
+            org.page(workspace, episodic.get_episodic_store(), Severity.CRITICAL, *alert)
+
     return run_loop(poll, run_cycle, interval_s=interval_s,
-                    max_cycles=max_cycles, stop_event=stop)
+                    max_cycles=max_cycles, stop_event=stop, on_stop=on_stop)
