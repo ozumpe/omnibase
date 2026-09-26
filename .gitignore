@@ -11,6 +11,18 @@ __pycache__/
 # with the note on why ripgrep still sees it).
 .mcp.json
 GEMINI.md
+# graft's per-machine install. Its helpers bake an absolute path into the
+# installer's node_modules, and its .claude/settings.json registers hooks on
+# every session, prompt, tool call and stop — committed, both would break or
+# fail for anyone without graft. The rest only point at the (also ignored)
+# graft/ cache. Named precisely, so a genuinely shared file in these
+# directories can still be committed on purpose.
+.claude/settings.json
+.claude/helpers/
+.claude/skills/graft/
+.agents/skills/graft/
+.github/copilot-instructions.md
+.ignore
 
 # Runtime-mutable state produced by the loop.
 # runtime/target.py is the committed naive baseline; the loop overwrites it

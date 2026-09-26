@@ -33,6 +33,18 @@ from sis.metrics import percentile
 # requests is not a measurement, it is one request wearing a hat.
 DEFAULT_MIN_CANARY_SAMPLES = 100
 
+# Extra allowance on the p99 comparison only, as a fraction of the p99 limit.
+# p95 gets none. The asymmetry is statistical: nearest-rank p99 is decided by
+# the slowest ~1% of the window, so at the live path's ~150 requests it is the
+# *second-slowest request* — one GC pause or scheduler hiccup on a shared host
+# moves it. CI measured exactly that: a known-good candidate rejected on p99
+# 118.5 ms vs 117.4 ms, a 1% "regression" that is noise. 10% absorbs that while
+# a real tail regression (tens of percent, or a stuck request) still fails.
+DEFAULT_P99_NOISE_TOLERANCE = 0.10
+# Upper bound on the allowance, so it can be tuned but never set to "anything
+# passes": beyond this it is no longer noise tolerance, it is not checking p99.
+MAX_P99_NOISE_TOLERANCE = 0.5
+
 
 class CanaryMode(str, Enum):
     """How the canary sees traffic — a per-target choice, not a global one.
@@ -149,6 +161,7 @@ def evaluate_canary(
     mode: CanaryMode = CanaryMode.SHADOW,
     min_samples: int = DEFAULT_MIN_CANARY_SAMPLES,
     max_latency_ratio: float = 1.0,
+    p99_noise_tolerance: float = DEFAULT_P99_NOISE_TOLERANCE,
 ) -> CanaryVerdict:
     """Decide whether ``version`` may be offered for promotion. Pure.
 
@@ -160,15 +173,23 @@ def evaluate_canary(
        candidate cannot special-case inputs it never sees coming.
     3. **Agreement (hard, SHADOW only).** Blue and green answered every sampled
        request identically.
-    4. **Performance (graded).** Candidate p95 *and* p99 within
-       ``max_latency_ratio`` of baseline's. Default 1.0 = "not worse"; pass e.g.
-       0.9 to demand the offline gate's 10% margin.
+    4. **Performance (graded).** Candidate p95 within ``max_latency_ratio`` of
+       baseline's, and p99 within that times ``1 + p99_noise_tolerance``.
+       Default ratio 1.0 = "not worse"; pass e.g. 0.9 to demand the offline
+       gate's 10% margin. The p99 allowance (default 10%, see
+       ``DEFAULT_P99_NOISE_TOLERANCE``) exists because p99 over a live window
+       of ~150 requests is one or two requests; p95 gets no allowance.
 
     Passing is *not* promotion — it only makes the candidate eligible for the
     human PR merge, which is what actually promotes (``CLAUDE.md`` hard rules).
     """
     if max_latency_ratio <= 0:
         raise ValueError(f"max_latency_ratio must be > 0, got {max_latency_ratio}")
+    if not 0.0 <= p99_noise_tolerance <= MAX_P99_NOISE_TOLERANCE:
+        raise ValueError(
+            f"p99_noise_tolerance must be in [0, {MAX_P99_NOISE_TOLERANCE}], got "
+            f"{p99_noise_tolerance} — above that the gate no longer checks the tail"
+        )
 
     b_p95, b_p99 = percentile(baseline_latencies, 95), percentile(baseline_latencies, 99)
     c_p95, c_p99 = percentile(candidate_latencies, 95), percentile(candidate_latencies, 99)
@@ -223,12 +244,16 @@ def evaluate_canary(
         )
 
     # --- Gate 4: performance (graded) ---
-    for label, baseline, candidate in (("p95", b_p95, c_p95), ("p99", b_p99, c_p99)):
-        if candidate > baseline * max_latency_ratio:
+    limits = (
+        ("p95", b_p95, c_p95, max_latency_ratio),
+        ("p99", b_p99, c_p99, max_latency_ratio * (1.0 + p99_noise_tolerance)),
+    )
+    for label, baseline, candidate, ratio in limits:
+        if candidate > baseline * ratio:
             return verdict(
                 False,
                 f"live {label} regression: candidate {candidate:.6f}s vs baseline "
-                f"{baseline:.6f}s (need <= {baseline * max_latency_ratio:.6f}s)",
+                f"{baseline:.6f}s (need <= {baseline * ratio:.6f}s)",
             )
 
     return verdict(True, f"canary passed on {len(samples)} live samples")

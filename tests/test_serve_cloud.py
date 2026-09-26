@@ -6,6 +6,8 @@ Serve at all; the live half pays one Serve startup for the module.
 """
 
 import os
+import re
+import time
 
 import pytest
 
@@ -165,10 +167,24 @@ def _reset(c, mode, *, blue_source=None) -> None:  # type: ignore[no-untyped-def
     deletes the green application; repeatedly deleting applications is the churn
     that made this module flaky. Detaching green and clearing the window is
     equivalent here and costs two RPCs.
+
+    It then waits until blue *answers* with the source it was just given.
+    ``serve.run`` returns once the new replica is up, but the router's handle
+    learns the new replica set asynchronously, so for a moment a request can
+    still reach the outgoing replica — typically the previous test's promoted
+    candidate. That is what made ``test_promotion_makes_the_candidate_the_new_baseline``
+    fail its *first* assertion in CI (``'green-answer' == [1, 2, 3]``) on
+    three unrelated diffs. The version can't tell the two apart: every reset
+    is "v1", including over a previous v1 running ``_IDENTITY_SRC``.
     """
     c.serve_blue(source=blue_source, version="v1")
     router = c._require_router()
     router.detach_green.remote().result()
+    # Before the window is cleared, so these probes are not in it.
+    if blue_source is None:
+        _post_until(lambda a: a.get("result") == [1, 2, 3], [[3, 1, 2]])
+    elif blue_source is _IDENTITY_SRC:
+        _post_until(_is_identity_answer, [[1]])
     router.reset.remote().result()
     c._green_source = c._green_version = None
     c.set_mode(mode)
@@ -191,6 +207,26 @@ def shadow(_live):  # type: ignore[no-untyped-def]
 def _post(args, url="http://127.0.0.1:8000/sort"):  # type: ignore[no-untyped-def]
     requests = pytest.importorskip("requests")
     return requests.post(url, json={"args": args}, timeout=10).json()
+
+
+def _post_until(ready, args, timeout=15.0):  # type: ignore[no-untyped-def]
+    """POST until *ready(answer)* holds, or give up after *timeout*.
+
+    For the moments right after a redeploy — see ``_reset``. The caller still
+    asserts on what comes back, so a deployment that never moves fails the
+    test; it just isn't failed by the next packet.
+    """
+    deadline = time.monotonic() + timeout
+    answer = _post(args)
+    while not ready(answer) and time.monotonic() < deadline:
+        time.sleep(0.1)
+        answer = _post(args)
+    return answer
+
+
+def _is_identity_answer(answer) -> bool:  # type: ignore[no-untyped-def]
+    result = answer.get("result")
+    return isinstance(result, str) and re.fullmatch(r"[0-9a-f]{8}", result) is not None
 
 
 def test_blue_serves_the_committed_target(cloud) -> None:  # type: ignore[no-untyped-def]
@@ -267,7 +303,7 @@ def test_promotion_makes_the_candidate_the_new_baseline(cloud) -> None:  # type:
 
     assert record.slot == "blue" and record.live is True
     assert cloud.live_version() == "v2"
-    answer = _post([[3, 1, 2]])
+    answer = _post_until(lambda a: a.get("version") == "v2", [[3, 1, 2]])
     assert answer["result"] == "green-answer", "blue is not running the candidate"
     assert answer["slot"] == "blue"
     assert cloud.status()["green_version"] is None, "green must be retired"

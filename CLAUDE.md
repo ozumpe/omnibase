@@ -553,12 +553,25 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   above); `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop
   → main` enforced by both the client-side pre-push hook and active
   server-side rulesets.
-- **One known test flake under `-n auto`**:
-  `test_a_drafted_skeleton_stages_without_touching_specs` is **test-only** —
-  [OMNI-42](https://olafzumpe.atlassian.net/browse/OMNI-42) (Low). It
-  compares two `specs/` listings and races another worker creating
-  `specs/__pycache__`; `stage()` never writes into `specs/`. Re-run before
-  chasing it.
+- **Two known test flakes** — re-run before chasing either:
+  - `test_a_drafted_skeleton_stages_without_touching_specs` (under `-n auto`)
+    is **test-only** — [OMNI-42](https://olafzumpe.atlassian.net/browse/OMNI-42)
+    (Low). It compares two `specs/` listings and races another worker creating
+    `specs/__pycache__`; `stage()` never writes into `specs/`.
+  - `tests/test_serve_cloud.py::test_promotion_makes_the_candidate_the_new_baseline`
+    (Serve half, CI) — **unticketed** (noted 2026-09-26). One asynchronous
+    race in two places: `serve.run` returns once a redeployed replica is up,
+    but the router's handle learns the new replica set later. After
+    `promote()` a request can still reach the outgoing blue (`009727b`, a
+    bounded wait for the promoted version). Every CI failure on record was the
+    *other* place, the pre-promote check (`assert 'green-answer' == [1, 2, 3]`):
+    right after the fixture's `_reset` redeploys blue as v1, a request was still
+    answered by the previous test's promoted candidate. Seen on `develop`
+    (`0cb407e`), `feature/OMNI-25` and #107 — three unrelated diffs. **Both
+    fixed in #107**: `_reset` now waits until blue *answers* with the source it
+    was just given (matched on the answer, since every reset is "v1"), so the
+    test's own assertions stay strict. Drop this entry once the Serve half has
+    stayed green for a while.
 - **The other former flake was a real gate defect, now fixed** —
   [OMNI-41](https://olafzumpe.atlassian.net/browse/OMNI-41), Done 2026-09-26.
   `test_correct_but_not_faster_is_rejected` flaked because the Class-1
