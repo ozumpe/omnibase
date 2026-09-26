@@ -559,15 +559,16 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
     (Serve half, CI) — **unticketed** (noted 2026-09-26). One asynchronous
     race in two places: `serve.run` returns once a redeployed replica is up,
     but the router's handle learns the new replica set later. After
-    `promote()` a request can still reach the outgoing blue — fixed in #107
-    (`009727b`, a bounded wait for the promoted version). But every CI failure
-    on record is the *other* place, the pre-promote check
-    (`assert 'green-answer' == [1, 2, 3]`): right after the fixture's
-    `_reset` redeploys blue as v1, a request is still answered by the previous
-    test's candidate code. Seen on `develop` (`0cb407e`), `feature/OMNI-25`
-    and #107 — three unrelated diffs. The fix belongs in `_reset` (wait until
-    blue answers v1 before the test body runs), so the test's own assertions
-    stay strict.
+    `promote()` a request can still reach the outgoing blue (`009727b`, a
+    bounded wait for the promoted version). Every CI failure on record was the
+    *other* place, the pre-promote check (`assert 'green-answer' == [1, 2, 3]`):
+    right after the fixture's `_reset` redeploys blue as v1, a request was still
+    answered by the previous test's promoted candidate. Seen on `develop`
+    (`0cb407e`), `feature/OMNI-25` and #107 — three unrelated diffs. **Both
+    fixed in #107**: `_reset` now waits until blue *answers* with the source it
+    was just given (matched on the answer, since every reset is "v1"), so the
+    test's own assertions stay strict. Drop this entry once the Serve half has
+    stayed green for a while.
 - **The other former flake was a real gate defect, now fixed** —
   [OMNI-41](https://olafzumpe.atlassian.net/browse/OMNI-41), Done 2026-09-26.
   `test_correct_but_not_faster_is_rejected` flaked because the Class-1
