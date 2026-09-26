@@ -352,12 +352,29 @@ it on a noisy machine, OMNI-41.) Three
 consecutive real failures trip the circuit breaker: it files a
 second, distinctly-titled `CIRCUIT BREAKER OPEN` bug and every further cycle
 returns `circuit_breaker_open` without spending anything. The breaker + spend
-state is **persisted to the episodic store** and rehydrated on bootstrap (unless
-`SIS_EPISODIC_STORE=none`), so it survives a restart and spans a persistent/AWS
-cluster (detached actors share the `sis` Ray namespace). To clear a trip
-deliberately, call the CEO's `reset_breaker()` RPC — it clears the failure streak
-but **not** the accumulated spend (the hard cap can't be bypassed by a reset). See
-`docs/BRAKE_STATE_AND_ORACLE.md`.
+state is **persisted to the episodic store** (written atomically) and
+rehydrated on bootstrap, so it survives a restart and spans a persistent/AWS
+cluster (detached actors share the `sis` Ray namespace). It **fails closed**
+(OMNI-61): a state file that exists but cannot be read boots the CEO with the
+breaker *open* and a reason naming the file, and the store refuses to overwrite
+it — it used to read as "nothing spent". `SIS_EPISODIC_STORE=none` keeps brake
+state per-process, so it is refused with a real proposer or real adapters.
+
+Operate a running loop with `sis.admin` (each change needs `--reason`, and lands
+in `runtime/operator_audit.jsonl`):
+
+```bash
+poetry run python -m sis.admin status
+poetry run python -m sis.admin pause --reason "looking into a spend spike"
+poetry run python -m sis.admin resume --reason "spike explained: one retried call"
+poetry run python -m sis.admin reset-breaker --reason "state file repaired; spend checked"
+```
+
+`pause` refuses new cycles without tripping anything (the loop idles, and picks
+up on `resume`); `reset-breaker` clears the trip and failure streak but **not**
+the accumulated spend (the hard cap can't be bypassed by a reset). After an
+unreadable-state boot, repair or move the state file aside *before* resetting,
+or nothing gets persisted. See `docs/BRAKE_STATE_AND_ORACLE.md`.
 
 ---
 

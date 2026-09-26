@@ -54,12 +54,17 @@ class Tick:
     breaker_open: bool
     budget_ok: bool
     work: Work | None
+    # An operator's pause (sis.admin, OMNI-61). Unlike an open breaker it
+    # does not stop the loop: it idles, and picks up again on resume.
+    paused: bool = False
 
 
 def decide(tick: Tick) -> Action:
     """Pure loop policy. No Ray, no time, no I/O — just the decision."""
     if tick.breaker_open or not tick.budget_ok:
         return Action.STOP  # frozen loop / out of money: the human was already paged
+    if tick.paused:
+        return Action.SKIP  # an operator said wait; keep polling for resume
     if tick.work is None:
         return Action.SKIP  # nothing triggered this tick
     return Action.RUN
@@ -307,6 +312,7 @@ def serve(
         econ = ray.get(ceo.economics.remote())  # read-only; no telemetry side effects
         budget_ok = econ["spent_usd"] + estimate_usd <= econ["budget_usd"]
         breaker_open = bool(ray.get(ceo.breaker_open.remote()))
+        paused = ray.get(ceo.pause_reason.remote()) is not None
         held_by = None
         if one_canary_in_flight and not breaker_open:
             deployment = ray.get(self_model.deployment.remote())
@@ -321,8 +327,9 @@ def serve(
                 ray.get(workspace.emit.remote("loop.held_for_canary", version=held_by))
         # Don't pull new work while frozen or while a canary is still being
         # evaluated — decide() will SKIP/STOP on a None work item.
-        work = None if (breaker_open or held_by) else trigger()
-        return Tick(breaker_open=breaker_open, budget_ok=budget_ok, work=work)
+        work = None if (breaker_open or held_by or paused) else trigger()
+        return Tick(breaker_open=breaker_open, budget_ok=budget_ok, work=work,
+                    paused=paused)
 
     def run_cycle(work: Work) -> dict[str, Any]:
         return org.run_cycle(handles, work.title, work.body, estimate_usd=estimate_usd,

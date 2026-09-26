@@ -166,6 +166,63 @@ def evaluate_brakes(
     return None
 
 
+def brake_persistence_problem(
+    store: str, proposer_backend: str, adapters_mode: str
+) -> str | None:
+    """Why this configuration may not run with ephemeral brakes, or None. Pure.
+
+    OMNI-61, decided 2026-09-26: ``episodic.store = none`` is refused only when
+    the brakes protect something. With ``none``, every ``python main.py``
+    rehydrates nothing and starts at ``spent=0`` — repeated runs have no spend
+    cap at all — and the episodic log reconciled against the provider's bill is
+    discarded too. That matters when a real proposer spends money or real
+    adapters touch real systems; with the stub and in-memory adapters (the
+    default run and the whole test suite) nothing is spent and nothing leaves
+    the process, so per-process brakes cost nothing.
+
+    No override flag, deliberately unlike M1: ``jsonl`` writes to the gitignored
+    ``runtime/``, so the safe alternative costs nothing, and an override on a
+    spend guardrail would be a permanent off-switch.
+    """
+    if store != "none" or (proposer_backend == "stub" and adapters_mode != "real"):
+        return None
+    return (
+        f"episodic.store=none with proposer.backend={proposer_backend!r} and "
+        f"adapters.mode={adapters_mode!r}: brake state would be per-process, so "
+        "every restart starts at spent=0 (no durable spend cap), and the episodic "
+        "log that reconciles spend against the bill is discarded (no audit trail). "
+        "Use episodic.store=jsonl (the default; it writes to the gitignored runtime/)."
+    )
+
+
+def ensure_brake_persistence() -> None:
+    """Raise if the configured store cannot back the brakes (see above)."""
+    problem = brake_persistence_problem(
+        str(config.get("episodic.store")), str(config.get("proposer.backend")),
+        str(config.get("adapters.mode")))
+    if problem:
+        raise RuntimeError(problem)
+
+
+def unreadable_brake_state(detail: str) -> dict[str, Any]:
+    """The state a CEO boots with when its persisted state cannot be read. Pure.
+
+    Fails closed (OMNI-61): the breaker is open and says why. Spend is unknown,
+    not zero — so no cycle runs until a human has looked, repaired or moved the
+    file aside, and reset the breaker on purpose (``python -m sis.admin
+    reset-breaker``). The store refuses to overwrite the unreadable file, so the
+    evidence survives until then.
+    """
+    return {
+        "tripped": True,
+        "trip_reason": (
+            f"brake state unreadable ({detail}); spend and failure streak are unknown. "
+            "Inspect it, repair it or move it aside, then run "
+            "`python -m sis.admin reset-breaker`."
+        ),
+    }
+
+
 def _version_for(pr: PullRequest) -> str:
     """The deployed-version string for a PR's candidate. Pure.
 
@@ -266,6 +323,12 @@ class CEO(Role):
         self._consecutive_failures = 0.0
         self._accepted = 0
         self._tripped = False
+        # Why the breaker is open, for the operator (OMNI-61) — a brake name, or
+        # "brake state unreadable" when the CEO failed closed at boot.
+        self._trip_reason: str | None = None
+        # An operator's pause (sis.admin): refuses new cycles without tripping
+        # the breaker or touching any counter. The reason, or None.
+        self._paused: str | None = None
         self._charter_id: str | None = None
         # Rehydrate persisted brake/spend state (L9) — only on a *fresh* actor.
         # A detached CEO that already exists (get_if_exists) keeps its live state;
@@ -276,6 +339,8 @@ class CEO(Role):
             self._consecutive_failures = float(state.get("consecutive_failures", 0))
             self._accepted = int(state.get("accepted", 0))
             self._tripped = bool(state.get("tripped", False))
+            self._trip_reason = state.get("trip_reason")
+            self._paused = state.get("paused")
 
     def approve_budget(self, estimate_usd: float) -> bool:
         """Goal/cost gate: refuse if this attempt would breach the hard cap."""
@@ -339,6 +404,7 @@ class CEO(Role):
         )
         if reason and not self._tripped:
             self._tripped = True
+            self._trip_reason = reason
             ray.get(self._ws.emit.remote("breaker.tripped", reason=reason,
                                          **self.economics()))
             return reason
@@ -368,7 +434,32 @@ class CEO(Role):
             "consecutive_failures": self._consecutive_failures,
             "accepted": self._accepted,
             "tripped": self._tripped,
+            "trip_reason": self._trip_reason,
+            "paused": self._paused,
         }
+
+    def pause_reason(self) -> str | None:
+        """Why an operator paused the loop, or None when it is not paused."""
+        return self._paused
+
+    def pause(self, reason: str) -> dict[str, Any]:
+        """Refuse new cycles until :meth:`resume` (``sis.admin pause``).
+
+        Not a trip: the failure streak, spend and breaker are untouched, so
+        resuming puts the loop back exactly where it was. Human-only by
+        convention, **not** by construction — any code that can reach this
+        named actor can call it, which is why OMNI-48/49 keep candidate code
+        away from the cluster rather than trusting this method to.
+        """
+        self._paused = reason
+        ray.get(self._ws.emit.remote("loop.paused", reason=reason))
+        return self.state_snapshot()
+
+    def resume(self) -> dict[str, Any]:
+        """Undo :meth:`pause`. The breaker, if open, stays open."""
+        self._paused = None
+        ray.get(self._ws.emit.remote("loop.resumed"))
+        return self.state_snapshot()
 
     def reset_breaker(self) -> bool:
         """Admin reset of the circuit breaker (clears the tripped flag + failure
@@ -377,6 +468,7 @@ class CEO(Role):
         docs/BRAKE_STATE_AND_ORACLE.md §4.1). A spend-cap trip therefore re-trips on
         the next evaluation until the budget is raised."""
         self._tripped = False
+        self._trip_reason = None
         self._consecutive_failures = 0.0
         ray.get(self._ws.emit.remote("breaker.reset", **self.economics()))
         return True

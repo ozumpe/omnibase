@@ -50,7 +50,7 @@ reference with no link target below.
 > | M18 | [OMNI-57](https://olafzumpe.atlassian.net/browse/OMNI-57) |
 > | M22 | [OMNI-58](https://olafzumpe.atlassian.net/browse/OMNI-58) — blocked by OMNI-51 |
 > | M23 | [OMNI-59](https://olafzumpe.atlassian.net/browse/OMNI-59) |
-> | L21, L23 | [OMNI-61](https://olafzumpe.atlassian.net/browse/OMNI-61) (brake state fails closed; `sis.admin`) — **blocks OMNI-29** |
+> | L21, L23 | [OMNI-61](https://olafzumpe.atlassian.net/browse/OMNI-61) (brake state fails closed; `sis.admin`) — **fixed** |
 > | L24 | [OMNI-62](https://olafzumpe.atlassian.net/browse/OMNI-62) (Notifier port) — **blocks OMNI-29** |
 > | M7 | [OMNI-88] — **won't fix** for now (label `wont-fix`); see the Won't fix section |
 > | L15–L20, L22, L25–L29, L31–L38, L40–L43 | one ticket each, [OMNI-64]–[OMNI-87], on each entry below. Each is linked (Relates) in Jira to the ticket it should ship with. |
@@ -325,19 +325,10 @@ reference with no link target below.
   depends on the process's working directory, and entries don't record which
   operator made the edit. Fix: resolve the path against a fixed root; add the
   OAuth-authenticated login to each record.
-- [OMNI-61] **L21** — CEO brake-state persistence fails open: a corrupt, unwritable, or
-  newly-switched state store silently resets `spent=0` and clears the
-  breaker trip rather than refusing to start. Fix: an unparseable-but-present
-  state file should trip the breaker with a `state_unreadable` reason, not
-  reset it.
 - [OMNI-70] **L22** — PRs from QA-rejected, QA-inconclusive and canary-rejected cycles
   stay open with nothing tracking them; merging one later promotes nothing
   but leaves a merged-looking PR with no effect. Fix: close (not merge) the
   PR as part of recording the rejected outcome.
-- [OMNI-61] **L23** — `CEO.reset_breaker()` has no caller anywhere outside tests; in
-  practice the only reset is deleting the state file, which also zeroes
-  spend. Fix: expose it through an admin entry point that resets the trip
-  without touching spend.
 - [OMNI-62] **L24** — Budget exhaustion stops `--loop` silently; `loop.decide()`'s own
   comment says a human is paged, but nothing files anything. Fix: route it
   through the same alerting path as a breaker trip.
@@ -626,6 +617,31 @@ any long-lived cluster exists.
   front.
 
 ## Resolved
+
+- [OMNI-61] **L21** — CEO brake-state persistence fails open: a corrupt, unwritable, or
+  newly-switched state store silently resets `spent=0` and clears the
+  breaker trip rather than refusing to start. Fix: an unparseable-but-present
+  state file should trip the breaker with a `state_unreadable` reason, not
+  reset it.
+  **Fixed 2026-09-26:** unreadable state raises `episodic.StateUnreadable`
+  instead of reading as `None`; the CEO then boots with the breaker open and
+  a `trip_reason` naming the file (`roles.unreadable_brake_state`), and
+  `save_state` refuses to overwrite a file it could not read, so the
+  evidence survives. Writes are atomic (`sis/atomic.py`: temp file, fsync,
+  `os.replace`). `episodic.store = none` — the "newly-switched store" half —
+  is refused with a real proposer or real adapters
+  (`roles.brake_persistence_problem`, at bootstrap and per cycle, no
+  override). Tests: `tests/test_brake_state.py`, `tests/test_ceo_fail_closed.py`.
+
+- [OMNI-61] **L23** — `CEO.reset_breaker()` has no caller anywhere outside tests; in
+  practice the only reset is deleting the state file, which also zeroes
+  spend. Fix: expose it through an admin entry point that resets the trip
+  without touching spend.
+  **Fixed 2026-09-26:** `python -m sis.admin reset-breaker` (plus `status`,
+  `pause`, `resume`), each change needing a written `--reason` and landing in
+  `runtime/operator_audit.jsonl`. Spend is still never reset. Human-only by
+  convention, not construction — the CEO actor is reachable by anything on
+  the cluster, which is why candidate code is kept off it (OMNI-48/49).
 
 - [OMNI-51] **M15 — The real GitHub adapter and the SWE's policy check both hardcode
   `runtime/target.py`, so every non-default contract is judged against the

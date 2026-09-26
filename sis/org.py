@@ -18,13 +18,25 @@ and every handoff is recorded in the SelfModel provenance graph.
 from __future__ import annotations
 
 import logging
+import sys
 from typing import Any
 
 import ray
 
 from sis import config, episodic, gauntlet, llm
 from sis.contract import DEFAULT_CONTRACTS
-from sis.roles import CEO, CTO, PM, QA, SWE, Designer, DevOps, ceo_config_from_env
+from sis.roles import (
+    CEO,
+    CTO,
+    PM,
+    QA,
+    SWE,
+    Designer,
+    DevOps,
+    ceo_config_from_env,
+    ensure_brake_persistence,
+    unreadable_brake_state,
+)
 from sis.self_model import get_self_model
 from sis.settings import space_keys
 from sis.workspace import get_workspace
@@ -59,6 +71,13 @@ def _get_or_create(name: str, cls: Any, *args: Any) -> Any:
 
 def bootstrap() -> dict[str, Any]:
     """Start Ray, the shared substrate, and the named role actors."""
+    # Before anything starts: brakes that reset on every restart are refused
+    # whenever they protect real money or real systems (OMNI-61).
+    ensure_brake_persistence()
+    if str(config.get("episodic.store")) == "none":
+        print("[sis] note: episodic.store=none — brake state is per-process and "
+              "resets on restart (fine for the stub + in-memory adapters)", file=sys.stderr)
+
     ray.init(namespace=NAMESPACE, ignore_reinit_error=True, logging_level=logging.ERROR)
 
     # Shared substrate first, so role __init__ can register against it.
@@ -70,7 +89,13 @@ def bootstrap() -> dict[str, Any]:
     # breaker survive a cluster/actor restart; an already-running detached CEO keeps
     # its live state (get_if_exists ignores these args).
     ceo_cfg = ceo_config_from_env()
-    ceo_state = episodic.get_episodic_store().load_state("ceo")
+    try:
+        ceo_state = episodic.get_episodic_store().load_state("ceo")
+    except episodic.StateUnreadable as exc:
+        # Fail closed (OMNI-61): unreadable is not "no state". The CEO boots
+        # with the breaker open and says why, instead of at spent=0.
+        ceo_state = unreadable_brake_state(str(exc))
+        print(f"[sis] BRAKES HELD OPEN: {ceo_state['trip_reason']}", file=sys.stderr)
 
     handles = {
         "Workspace": workspace,
@@ -150,6 +175,9 @@ def run_cycle(
     # requires the kernel-enforced docker sandbox so its code can't read host
     # credentials (KNOWN_ISSUES.md M1). validate() re-checks as a backstop.
     gauntlet.ensure_sandbox_allows_proposer()
+    # Backstop for bootstrap()'s check: configuration can change between the
+    # two (a CLI overlay, an edited config.yml), and this is before any spend.
+    ensure_brake_persistence()
     # Same moment, same reason: the Serve canary runs candidate code as an
     # ordinary Ray worker, so it refuses anything but the stub's (OMNI-49).
     gauntlet.ensure_canary_allows_proposer(canary_backend)
@@ -178,11 +206,20 @@ def run_cycle(
         try:
             # Persist the CEO's brake/spend state so it survives a restart (L9).
             store.save_state("ceo", ray.get(ceo.state_snapshot.remote()))
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            # Still never breaks the cycle — but never silent either. A refused
+            # save is usually the store declining to overwrite state it could
+            # not read, which the next bootstrap turns into an open breaker.
+            print(f"[sis] WARNING: brake state not persisted: {exc}", file=sys.stderr)
+            ws.emit.remote("brake_state.save_failed", error=str(exc))
         return res
 
-    # 1. Budget & goal gate (CEO).
+    # 1. Budget & goal gate (CEO). A pause is checked first and recorded as
+    # its own status: an operator's decision, not a brake that tripped.
+    if (paused := ray.get(ceo.pause_reason.remote())) is not None:
+        # "pause_reason", not "reason": the episodic log reads "reason" as a
+        # gauntlet rejection, and an operator's note is not one.
+        return _record({"status": "paused", "pause_reason": paused})
     if ray.get(ceo.breaker_open.remote()):
         return _record({"status": "circuit_breaker_open"})
     if not ray.get(ceo.approve_budget.remote(estimate_usd)):
