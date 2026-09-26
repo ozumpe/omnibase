@@ -150,6 +150,9 @@ def run_cycle(
     # requires the kernel-enforced docker sandbox so its code can't read host
     # credentials (KNOWN_ISSUES.md M1). validate() re-checks as a backstop.
     gauntlet.ensure_sandbox_allows_proposer()
+    # Same moment, same reason: the Serve canary runs candidate code as an
+    # ordinary Ray worker, so it refuses anything but the stub's (OMNI-49).
+    gauntlet.ensure_canary_allows_proposer(canary_backend)
 
     ws = handles["Workspace"]
     sm = handles["SelfModel"]

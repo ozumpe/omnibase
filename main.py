@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import ray
 
-from sis import config, loop, org
+from sis import config, gauntlet, loop, org
 
 
 def run_org_cycle(contract_name: str | None = None, canary_backend: str | None = None) -> None:
@@ -107,6 +107,10 @@ def main() -> None:
     settings = config.config()
     contract_name = settings.contracts.default
     canary_backend = settings.canary.backend
+
+    # Before bootstrap, not at the first cycle: `--loop` may idle for a long
+    # time before a breach starts one, and a refusal belongs at startup (OMNI-49).
+    gauntlet.ensure_canary_allows_proposer(canary_backend)
 
     if "--loop" in sys.argv:
         run_server_loop(canary_backend)
