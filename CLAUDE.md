@@ -112,7 +112,9 @@ internal target before it models anything external.
     `sis/slo.py`, `sis/clock.py`), the contract-author approval gate
     (`sis/contract_author.py`),
     `specs/` (the exam itself — oracles, acceptance tests, domain laws, backtest
-    fixtures), cost/brakes, settings/secrets, **the configuration
+    fixtures), cost accounting (`sis/cost.py` — the breaker/threshold logic
+    itself lives in `sis/roles.py`, which is only STRICT; see KNOWN_ISSUES
+    L43), settings/secrets, **the configuration
     (`sis/config.py` + `config.yml`, OMNI-27)**, the adapters,
     `Dockerfile.gauntlet`, and the policy itself.
   - STRICT (off-limits unless `policy.allow_strict_changes` /
@@ -556,11 +558,12 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   - Design + the Caddy/TLS decision: `docs/OPERATOR_FRONTEND.md`. Deployment
     artifacts (`Dockerfile.frontend`, `Caddyfile`) are deliberately not in this
     slice.
-- 616 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
+- 627 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
   Ray-Serve-integration tests run separately, see Operational quick reference
-  above); `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop
-  → main` enforced by both the client-side pre-push hook and active
-  server-side rulesets.
+  above; 689 total — corrected 2026-09-26, a multi-dimension review found the
+  previously-documented 616/678 stale); `ruff`/`mypy --strict`/`pytest` clean;
+  CI green; `feature → develop → main` enforced by both the client-side
+  pre-push hook and active server-side rulesets.
 - **Two known test flakes** — re-run before chasing either:
   - `test_a_drafted_skeleton_stages_without_touching_specs` (under `-n auto`)
     is **test-only** — [OMNI-42](https://olafzumpe.atlassian.net/browse/OMNI-42)
@@ -601,8 +604,21 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
 
 **Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L
 severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
-the IDs in commits/PRs. **Open: H2 and M7** (2026-09-26, both in the OMNI-41
-benchmark gate — see Hard rules); Low is clear; L5 (the target
+the IDs in commits/PRs. **Open after a 2026-09-26 multi-dimension review with
+adversarial verification: H2–H4, M7–M23, L15–L43.** The headline, before
+trusting any gauntlet verdict: **the gate scripts judge a candidate inside its
+own process**. A candidate can rewrite the exam files later gates read (M9),
+defeat every equality-based check by returning a type that overrides `__eq__`
+(H4 — reproduced against the default contract), sabotage the reference through
+shared mutable arguments (M10), or exit 0 with no verdict (M8). One redesign
+closes most of these and H2 (epic
+[OMNI-43](https://olafzumpe.atlassian.net/browse/OMNI-43)). Separately, the
+Serve canary runs candidate code as a full Ray worker in the control-plane
+cluster, before human review (H3, epic
+[OMNI-44](https://olafzumpe.atlassian.net/browse/OMNI-44)) — don't combine
+`--canary serve` with a real proposer until that lands. M12–M23 are
+guardrail/loop gaps with one story each (OMNI-51–59); the Lows are untracked in
+Jira. The ID → ticket table is at the top of KNOWN_ISSUES. L5 (the target
 contract / benchmark oracle) resolved 2026-08-06. Planned work lives in Jira
 ([`OMNI`](https://olafzumpe.atlassian.net/browse/OMNI)), defects here.
 
@@ -626,8 +642,8 @@ Two traps L5 surfaced, both worth knowing before writing similar code:
 
 **Next — the milestone plan is in Jira ([`OMNI`](https://olafzumpe.atlassian.net/browse/OMNI)),
 not here.** Check the board for current status rather than trusting this list.
-**Last reconciled against a live query on 2026-09-26** (42 issues, OMNI-1
-through OMNI-42; 29 Done, 1 In Progress, 12 To Do):
+**Last reconciled against a live query on 2026-09-26** (59 issues, OMNI-1
+through OMNI-59; 29 Done, 1 In Progress, 29 To Do):
 
 1. ~~**[OMNI-1](https://olafzumpe.atlassian.net/browse/OMNI-1) — L5 target
    contract** (Class 1)~~ — **done 2026-08-06** (OMNI-4/5/6/7). Two targets ship
@@ -766,6 +782,26 @@ Also on the board, outside the numbered epics:
   gaming hole (see Hard rules and the flake note above).
 - [OMNI-42](https://olafzumpe.atlassian.net/browse/OMNI-42) (Low, `To Do`,
   filed 2026-09-26) — the `specs/` listing race in a contract-author test.
+  The review found a second cause (L39).
+
+Filed 2026-09-26 from the multi-dimension review, all `To Do`. KNOWN_ISSUES
+has the defect write-ups and the ID → ticket table:
+- **[OMNI-43](https://olafzumpe.atlassian.net/browse/OMNI-43) (epic, High) —
+  gate integrity.** OMNI-45 worker-process isolation (H2/M8/M9/M11), OMNI-46
+  canonicalise output before comparing (H4), OMNI-47 deep-copy shared
+  arguments (M10). The highest-value engineering item on the board.
+- **[OMNI-44](https://olafzumpe.atlassian.net/browse/OMNI-44) (epic, High) —
+  Serve-canary isolation.** OMNI-48 green not a Ray worker (H3), OMNI-49
+  refuse `--canary serve` with a real proposer until then (M19), OMNI-50
+  paired canary statistics and an error-rate check (M20/M21).
+- **Standalone:** OMNI-51 contract target path through the VCS port (M15,
+  High; relates to OMNI-29 — land it first if run day uses any contract other
+  than the default), OMNI-52 config YAML injection (M12), OMNI-53 OAuth never
+  installed (M13), OMNI-54 worked examples limited to the public API (M14),
+  OMNI-55 spend lost on exceptions (M16), OMNI-56 QA-stage reject reason
+  (M17), OMNI-57 PR closed without merging (M18), OMNI-58 Serve baseline from
+  the merged target (M22, blocked by OMNI-51), OMNI-59 tests inherit `SIS_*`
+  env (M23).
 
 Not yet scheduled: the **atomic actor swap** for internal, never-served actors,
 which `docs/SERVE_CANARY.md` scopes out and which has no design doc yet. E3/D2 in
