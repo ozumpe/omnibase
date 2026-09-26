@@ -261,6 +261,11 @@ def test_promotion_makes_the_candidate_the_new_baseline(cloud) -> None:  # type:
     # to actually move the code, not just record that it did. Blue must serve
     # the candidate's answers afterwards and green must be gone.
     cloud.deploy_canary("v2", source=_DIFFERENT_SRC)
+    # deploy_canary attaches green at DEFAULT_CANARY_WEIGHT, not 0: without this
+    # the request below reached green one run in twenty, which is what failed
+    # in CI as 'green-answer' == [1, 2, 3]. With green dark it cannot, so this
+    # stays a strict check that blue is still the old code.
+    cloud.shift_traffic("v2", 0.0)
     assert _post([[3, 1, 2]])["result"] == [1, 2, 3]     # blue still the old code
 
     record = cloud.promote("v2")
