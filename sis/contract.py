@@ -183,6 +183,39 @@ DEFAULT_MAX_LATENCY_RATIO = 0.90
 # gate well under a second for a microsecond-scale target.
 DEFAULT_DIFF_TRIALS = 300
 
+# --- Benchmark measurement (OMNI-41) -----------------------------------------
+# The benchmark gate times candidate and baseline in *interleaved pairs* over
+# freshly generated inputs and decides on total cost, sum(candidate) /
+# sum(baseline), with a paired-bootstrap interval (gauntlet.benchmark_decision).
+# These knobs are the measurement, not the pass mark: ``max_latency_ratio``
+# above is still what "better" means.
+#
+# Many tightly-paired samples, not a few big ones. Measured on a 12-core box
+# under full CPU saturation, comparing an implementation against a semantically
+# identical one (true ratio ~1.0, must be rejected at a 0.90 margin):
+#
+#   scheme                  95% interval on the per-pair median ratio
+#   9 pairs x 10 inputs     up to [0.191, 1.181]
+#   21 pairs x 10 inputs    up to [0.506, 1.003]
+#   99 pairs x 1 input      [0.922, 0.934]
+#
+# The reason is adjacency, not sample size: the two halves of a pair cancel
+# shared drift only to the extent they are close together in time, so a *larger*
+# timing window makes the pairing worse, not better.
+#
+# Every sample is always taken. An early stop was tried and removed: a
+# candidate slow only on the rarer, expensive inputs slips past a small sample.
+DEFAULT_BENCH_SAMPLES = 99
+# Fresh inputs timed together per measurement. 1 is the tightest pairing and the
+# right default; raise it only for a target whose single call is below the
+# clock's resolution, where one call cannot be timed at all. Inputs are never
+# reused within or across windows — that is what stops a memoised candidate
+# measuring as fast (see the regression test in tests/test_adversarial.py).
+DEFAULT_BENCH_BATCH = 1
+# Two-sided coverage of the bootstrap interval on the total-time ratio. The
+# gate accepts only when the interval's upper end clears the margin.
+DEFAULT_BENCH_CONFIDENCE = 0.95
+
 
 @dataclass(frozen=True)
 class OptimizationContract:
@@ -201,6 +234,12 @@ class OptimizationContract:
     tests_path: str     # repo-relative; FORBIDDEN — acceptance tests, run in-sandbox
     max_latency_ratio: float = DEFAULT_MAX_LATENCY_RATIO
     diff_trials: int = DEFAULT_DIFF_TRIALS
+    # How the benchmark is *measured* (OMNI-41); the pass mark stays
+    # max_latency_ratio. Per-target because only the contract knows whether a
+    # single call is long enough to time on its own.
+    bench_samples: int = DEFAULT_BENCH_SAMPLES
+    bench_batch: int = DEFAULT_BENCH_BATCH
+    bench_confidence: float = DEFAULT_BENCH_CONFIDENCE
     # repo-relative; the stub proposer's canned answer for this contract
     # (SIS_PROPOSER=stub, the offline/zero-cost/CI default). None means the stub
     # has nothing to offer here — SIS_PROPOSER=claude is required for this
@@ -252,6 +291,17 @@ class OptimizationContract:
                 f"max_latency_ratio must be in (0.0, 1.0], got {self.max_latency_ratio} "
                 "(1.0 = 'no slower'; 0.90 = 'at least 10% faster')"
             )
+        # A measurement that can never reach a verdict would look like a gate
+        # while deciding nothing: every candidate "inconclusive", i.e. neutral.
+        if self.bench_samples < 10:
+            raise ValueError(
+                f"bench_samples must be >= 10 (the gate's minimum to decide), "
+                f"got {self.bench_samples}")
+        if self.bench_batch < 1:
+            raise ValueError(f"bench_batch must be >= 1, got {self.bench_batch}")
+        if not 0.5 < self.bench_confidence < 1.0:
+            raise ValueError(
+                f"bench_confidence must be in (0.5, 1.0), got {self.bench_confidence}")
         if self.diff_trials < 1:
             raise ValueError(f"diff_trials must be >= 1, got {self.diff_trials}")
         names = [b.name for b in self.backtests]

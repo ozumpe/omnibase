@@ -313,7 +313,8 @@ class CEO(Role):
         return self._evaluate_brakes()
 
     def record_neutral(self, *, cost_usd: float = 0.0) -> str | None:
-        """Record a neutral cycle — the loop found nothing to improve (a no-op).
+        """Record a neutral cycle — nothing to improve (a no-op), or a benchmark
+        that saw the candidate as faster but could not prove it (OMNI-41).
 
         Not a failure (no regression) and not an acceptance (nothing shipped),
         so the failure and accept counters are left untouched — a no-op must
@@ -553,12 +554,22 @@ class QA(Role):
     def __init__(self) -> None:
         super().__init__("QA", "QA", parent="CTO")
 
-    def review(self, story_id: str, pr_id: str, contract_name: str | None = None) -> bool:
+    def review(
+        self, story_id: str, pr_id: str, contract_name: str | None = None
+    ) -> tuple[bool, str | None]:
+        """Verify the PR against its story; returns ``(approved, gauntlet_reason)``.
+
+        The reason is the re-run gauntlet's (``None`` if it never ran), so the
+        org can tell a real rejection from a neutral one — an *inconclusive*
+        benchmark (OMNI-41) is the same fact at QA as at the SWE stage and must
+        not become a bug and a breaker count just because QA re-measured.
+        """
         issue = ray.get(self._ws.get_issue.remote(story_id))
         pr = ray.get(self._ws.get_pr.remote(pr_id))
         # Deterministic gate already ran in the SWE step; QA confirms the
         # artifact exists, matches the story, and re-runs the gauntlet.
         ok = bool(pr.artifact) and issue.status == IssueStatus.READY_FOR_REVIEW
+        reason: str | None = None
         if ok:
             # Re-run the gauntlet: the candidate executes ONLY inside its sandbox.
             # Benchmark against the same merged baseline the SWE used (the target
@@ -573,12 +584,13 @@ class QA(Role):
             report = gauntlet.validate(
                 pr.artifact, 0.0, baseline_source=baseline_source, contract=spec)
             ok = report.passed
+            reason = report.reason
         if ok:
             ray.get(self._ws.transition.remote(story_id, IssueStatus.DONE, "QA verified"))
         else:
             ray.get(self._ws.transition.remote(story_id, IssueStatus.TBD, "QA found discrepancy"))
         ray.get(self._sm.record.remote("outcome", story_id, passed=ok, by="QA"))
-        return ok
+        return ok, reason
 
 
 @ray.remote

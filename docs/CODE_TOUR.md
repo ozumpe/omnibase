@@ -171,7 +171,12 @@ refuses*, which is the clearest statement of the safety contract.
    contract's *independent* reference on **random** inputs (catches code that
    special-cases the known test inputs but is wrong elsewhere — "benchmark
    gaming"), then timed against that same `baseline_source`; it must clear the
-   contract's `max_latency_ratio` (10% faster by default).
+   contract's `max_latency_ratio` (10% faster by default). The timing is
+   *paired*: candidate and baseline run back-to-back on the same fresh input,
+   ~100 times, and `benchmark_decision` compares **total** time with a
+   bootstrap interval — accept, reject, or **inconclusive** when the candidate
+   looks faster but the machine is too noisy to prove it (OMNI-41; recorded
+   as neutral, like a no-op).
 
 What "correct" and "better" mean is **not** baked into the gauntlet — it comes
 from an `OptimizationContract` (`sis/contract.py`). The declarative half (entry

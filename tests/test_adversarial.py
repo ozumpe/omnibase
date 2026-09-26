@@ -69,7 +69,119 @@ def benchmark(n: int = 10_000, repetitions: int = 5) -> float:
 '''
     result = _validate(code)
     assert not result.passed
-    assert "no improvement" in result.reason
+    # OMNI-41: never accepted. Rejected outright, or — if the machine is too
+    # noisy to separate it from the margin — inconclusive, which the org treats
+    # as neutral. Both are correct; acceptance is the only wrong answer.
+    assert result.reason.startswith(("no improvement", "benchmark inconclusive")), result.reason
+
+
+def test_memoised_naive_impl_cannot_game_a_replayed_workload() -> None:
+    # OMNI-41. The algorithm is the naive O(n) definition — no faster at all —
+    # but it is wrapped in functools.cache. Correct (memoising a pure function
+    # changes nothing), fully typed, and it agrees with the reference on every
+    # random differential trial, so every earlier gate passes it.
+    #
+    # It beats the benchmark purely as an artifact of *how the benchmark was
+    # measured*: the old gate timed five repetitions over the same fixed
+    # oracle.BENCH_INPUTS list and kept the best, so repetitions 2-5 were cache
+    # hits costing nothing. "Fastest of 5 over a replayed workload" measured the
+    # cache, not the algorithm.
+    #
+    # Fresh inputs per round are what close this: the candidate never sees an
+    # argument twice, so the cache can never hit and the naive cost is exposed.
+    code = '''
+import functools
+import time
+
+
+@functools.cache
+def sum_of_divisors(n: int) -> int:
+    return sum(i for i in range(1, n + 1) if n % i == 0)
+
+
+def benchmark(n: int = 10_000, repetitions: int = 5) -> float:
+    start = time.perf_counter()
+    for _ in range(repetitions):
+        sum_of_divisors(n)
+    return (time.perf_counter() - start) / repetitions
+'''
+    result = _validate(code)
+    assert not result.passed, (
+        "a memoised naive implementation gamed the benchmark: it is not faster, "
+        f"it only replays cached inputs (reason: {result.reason!r})"
+    )
+    # Decided BY THE BENCHMARK, not incidentally by an earlier gate — otherwise
+    # this test would keep passing with the hole reopened. Rejected, or under
+    # heavy -n auto load inconclusive (neutral); never accepted (OMNI-41 AC).
+    assert result.reason.startswith(("no improvement", "benchmark inconclusive")), result.reason
+
+
+def test_fast_on_typical_inputs_but_slower_in_total_is_rejected() -> None:
+    # OMNI-41, found by the pre-merge review of the first fix, which decided on
+    # the MEDIAN per-input ratio. O(√n) below n=14000 (70% of random inputs),
+    # the naive definition run four times above it. Correct and typed; fast on
+    # the typical input; ~2x SLOWER in total, because the expensive inputs carry
+    # most of the cost. The median rule passed it; total cost must not.
+    code = '''
+import math
+
+
+def _fast(n: int) -> int:
+    total = 0
+    for i in range(1, math.isqrt(n) + 1):
+        if n % i == 0:
+            total += i
+            if i != n // i:
+                total += n // i
+    return total
+
+
+def sum_of_divisors(n: int) -> int:
+    if n < 14_000:
+        return _fast(n)
+    for _ in range(3):
+        sum(i for i in range(1, n + 1) if n % i == 0)
+    return sum(i for i in range(1, n + 1) if n % i == 0)
+
+
+def benchmark(n: int = 10_000, repetitions: int = 5) -> float:
+    return 1.0
+'''
+    result = _validate(code)
+    assert not result.passed, f"a candidate ~2x slower in total was accepted: {result.reason!r}"
+    assert result.reason.startswith("no improvement"), result.reason
+
+
+def test_a_candidate_cannot_forge_the_benchmark_verdict_from_stdout() -> None:
+    # OMNI-41, found by the pre-merge review: the naive algorithm, unchanged,
+    # plus an atexit hook printing a fabricated "much faster" measurement. The
+    # first fix's parser took the last matching line, and this passed every
+    # gate. The harness now owns a private copy of stdout; the candidate's
+    # prints — and its atexit hooks — go to /dev/null.
+    code = '''
+import atexit
+import sys
+
+
+def sum_of_divisors(n: int) -> int:
+    return sum(i for i in range(1, n + 1) if n % i == 0)
+
+
+def _forge() -> None:
+    sys.stdout.write("PAIRS " + " ".join(["1e-09,0.001"] * 99) + "\\n")
+    sys.stdout.write("BASELINE 0.001\\nEND\\n")
+    sys.stdout.flush()
+
+
+atexit.register(_forge)
+
+
+def benchmark(n: int = 10_000, repetitions: int = 5) -> float:
+    return 1.0
+'''
+    result = _validate(code)
+    assert not result.passed, f"a forged stdout verdict was believed: {result.reason!r}"
+    assert result.reason.startswith(("no improvement", "benchmark inconclusive")), result.reason
 
 
 def test_untyped_fast_impl_is_rejected() -> None:

@@ -63,9 +63,11 @@ def _shuffled(seed: int, length: int) -> list[int]:
     return [rng.randint(-10_000, 10_000) for _ in range(length)]
 
 
-# The fixed workload both candidate and baseline are timed over, so the
-# comparison is like-for-like. Deliberately mixed: random, already-sorted,
-# reverse-sorted and heavy-duplicate shapes, because sort implementations have
+# Fixed inputs the benchmark gate times ONCE each (OMNI-41), mixed in among
+# fresh random pairs — random_input only produces shuffled lists, so these
+# are where the sorted/reversed shapes enter the verdict. Deliberately mixed:
+# random, already-sorted, reverse-sorted and heavy-duplicate shapes, because
+# sort implementations have
 # wildly different best/worst cases and timing only one shape would flatter
 # whichever algorithm happens to suit it.
 BENCH_INPUTS: list[tuple[list[int]]] = [
