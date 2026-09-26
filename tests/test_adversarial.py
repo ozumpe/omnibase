@@ -522,4 +522,8 @@ def test_a_candidate_cannot_slow_the_baseline_through_a_shared_batch(
     ctx = _gate_ctx(tmp_path, SORT, _SLOWS_THE_BASELINE, baseline=_SORT_BASELINE)
     result = gauntlet._gate_differential_benchmark(ctx)
     assert result is not None and not result.passed, "accepted a candidate with no speedup"
-    assert result.reason.startswith("no improvement"), result.reason
+    # Never accepted. Rejected outright, or — on a machine too loaded to tell
+    # it from the margin — inconclusive, which is neutral; the same allowance
+    # test_correct_but_not_faster_is_rejected makes. First written as "no
+    # improvement" only, and flaked under the full suite at 0.80 [0.52, 1.23].
+    assert result.reason.startswith(("no improvement", "benchmark inconclusive")), result.reason
