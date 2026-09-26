@@ -104,11 +104,21 @@ internal target before it models anything external.
     `specs/<name>/`, held-out split) are the anti-gaming layer for targets with
     no reference oracle to differ against — domain laws over generated inputs,
     and "does it reproduce recorded reality", respectively.
+  - **Candidate output is compared only as plain values, and never shares an
+    input object with the other side** (OMNI-46/47). `sis/canonical.py`
+    rebuilds output from exact builtins before every `==` — differential,
+    acceptance (via a gauntlet-written `conftest.py` wrapping the contract's
+    `public_api`), invariant, backtest, and the live canary — because a return
+    type with its own `__eq__` passed every gate (H4). Each side gets its own
+    `copy.deepcopy` of the input, made outside any timed window, because a
+    candidate that emptied a shared list "agreed" with the reference, and one
+    that grew it slowed the baseline (M10). Neither stops a candidate that
+    tampers with the harness in its own process — that is OMNI-45.
   - Every gate ends in a human PR. Generated code MUST be fully typed. What
     counts as correct/better is per-target — see `sis/contract.py`.
 - **Change-authorization policy (`sis/policy.py`) — what the loop may rewrite:**
-  - FORBIDDEN (never, no override): guardrail/safety code — the gauntlet, the
-    contract layer (`sis/contract.py`, `sis/backtest.py`, `sis/invariant.py`,
+  - FORBIDDEN (never, no override): guardrail/safety code — the gauntlet and
+    its output canonicaliser (`sis/canonical.py`), the contract layer (`sis/contract.py`, `sis/backtest.py`, `sis/invariant.py`,
     `sis/slo.py`, `sis/clock.py`), the contract-author approval gate
     (`sis/contract_author.py`),
     `specs/` (the exam itself — oracles, acceptance tests, domain laws, backtest
@@ -558,9 +568,9 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   - Design + the Caddy/TLS decision: `docs/OPERATOR_FRONTEND.md`. Deployment
     artifacts (`Dockerfile.frontend`, `Caddyfile`) are deliberately not in this
     slice.
-- 627 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
+- 691 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
   Ray-Serve-integration tests run separately, see Operational quick reference
-  above; 689 total — corrected 2026-09-26, a multi-dimension review found the
+  above; 753 total — corrected 2026-09-26, a multi-dimension review found the
   previously-documented 616/678 stale); `ruff`/`mypy --strict`/`pytest` clean;
   CI green; `feature → develop → main` enforced by both the client-side
   pre-push hook and active server-side rulesets.
@@ -594,13 +604,11 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
 **Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L
 severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
 the IDs in commits/PRs. **Open after a 2026-09-26 multi-dimension review with
-adversarial verification: H2–H4, M8–M23, L15–L43** (M7 is won't-fix for
-now). The headline, before trusting any gauntlet verdict: **the gate scripts judge a candidate inside its
-own process**. A candidate can rewrite the exam files later gates read (M9),
-defeat every equality-based check by returning a type that overrides `__eq__`
-(H4 — reproduced against the default contract), sabotage the reference through
-shared mutable arguments (M10), or exit 0 with no verdict (M8). One redesign
-closes most of these and H2 (epic
+adversarial verification: H2–H3, M8–M9, M11–M23, L15–L43** (M7 is won't-fix
+for now; H4 and M10 fixed 2026-09-26, OMNI-46/47). The headline, before
+trusting any gauntlet verdict: **the gate scripts judge a candidate inside its
+own process**. A candidate can rewrite the exam files later gates read (M9) or
+exit 0 with no verdict (M8). One redesign closes these and H2 (epic
 [OMNI-43](https://olafzumpe.atlassian.net/browse/OMNI-43)). Separately, the
 Serve canary runs candidate code as a full Ray worker in the control-plane
 cluster, before human review (H3, epic

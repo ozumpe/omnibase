@@ -293,3 +293,40 @@ def test_zero_tolerance_restores_the_strict_p99_check() -> None:
 def test_the_tolerance_cannot_be_set_to_anything_passes(tolerance: float) -> None:
     with pytest.raises(ValueError, match="p99_noise_tolerance"):
         _judge(0.1, 0.1, p99_noise_tolerance=tolerance)
+
+
+# --- H4 online: a response type that defines its own equality (OMNI-46) ------
+
+
+class _LiarList(list[int]):
+    """What an unpickled-by-value live response can be (KNOWN_ISSUES L28)."""
+
+    def __eq__(self, other: object) -> bool:
+        return True
+
+    def __ne__(self, other: object) -> bool:
+        return False
+
+
+def _liar_samples(n: int) -> list[LiveSample]:
+    return [LiveSample(request=[3, 1, 2], candidate_response=_LiarList([9, 9, 9]),
+                       baseline_response=[1, 2, 3]) for _ in range(n)]
+
+
+def test_a_liar_cannot_agree_with_blue_by_answering_the_comparison_itself() -> None:
+    verdict = evaluate_canary(
+        [], _liar_samples(100), _latencies(100, 0.010), _latencies(100, 0.008),
+        version="v1", mode=CanaryMode.SHADOW, min_samples=100,
+    )
+    assert not verdict.passed
+    assert verdict.response_disagreements == 100
+
+
+def test_a_liar_cannot_satisfy_a_law_that_compares() -> None:
+    compares = _Invariant("equals_sorted", lambda req, resp: resp == sorted(req))
+    verdict = evaluate_canary(
+        [compares], _liar_samples(100), _latencies(100, 0.010), _latencies(100, 0.008),
+        version="v1", mode=CanaryMode.SPLIT, min_samples=100,
+    )
+    assert not verdict.passed
+    assert verdict.invariant_violations == 100

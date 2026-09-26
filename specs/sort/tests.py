@@ -15,6 +15,7 @@ contract, not of the engine.
 
 import random
 
+import pytest
 import target
 
 
@@ -37,21 +38,30 @@ def test_already_sorted_is_unchanged() -> None:
     assert target.sort_numbers([1, 2, 3, 4]) == [1, 2, 3, 4]
 
 
-def test_does_not_mutate_its_input() -> None:
+@pytest.mark.parametrize("length", [3, 6, 50, 1200])
+def test_does_not_mutate_its_input(length: int) -> None:
     # Callers rely on getting a new list. An in-place sort would also let a
     # candidate quietly pre-sort the very list the reference is handed next.
-    original = [3, 1, 2]
-    target.sort_numbers(original)
-    assert original == [3, 1, 2]
+    # Several sizes, spanning random_input's range: a 3-element list alone let
+    # through a candidate that emptied any input longer than five (M10).
+    original = random.Random(length).sample(range(-5000, 5000), length)
+    given = list(original)
+    target.sort_numbers(given)
+    assert given == original
 
 
 def test_output_is_a_sorted_permutation_of_the_input() -> None:
     # The defining property, checked on random inputs rather than fixtures: a
     # candidate can special-case the cases above, but not this.
+    #
+    # Judged against a copy taken *before* the call. Checked against `values`
+    # itself, a candidate that emptied its input and returned [] satisfied
+    # every assertion here — the empty list is a sorted permutation of itself.
     rng = random.Random(1234)
     for _ in range(50):
         values = [rng.randint(-100, 100) for _ in range(rng.randint(0, 80))]
+        before = list(values)
         result = target.sort_numbers(values)
-        assert len(result) == len(values)
-        assert sorted(values) == result
+        assert len(result) == len(before)
+        assert sorted(before) == result
         assert all(result[i] <= result[i + 1] for i in range(len(result) - 1))

@@ -54,7 +54,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 
-from sis import config
+from sis import canonical, config
 from sis.backtest import (
     EXIT_BAD_FIXTURE,
     EXIT_MISMATCH,
@@ -365,6 +365,23 @@ def ensure_sandbox_allows_proposer() -> None:
     )
 
 
+def _install_canonical(tmp: pathlib.Path) -> pathlib.Path:
+    """Copy :mod:`sis.canonical` into the mount and return the copy's path.
+
+    What every comparing gate reduces candidate output to before ``==``
+    (OMNI-46, H4). Copied like the oracle, so docker mode needs nothing from the
+    host — and rewritten by each gate that uses it rather than once per
+    validation, so a candidate that overwrote it while an earlier gate ran does
+    not get to keep the change. That is not isolation (KNOWN_ISSUES M9): a gate
+    still shares its process with the candidate it is judging.
+    """
+    module = tmp / f"{canonical.SANDBOX_MODULE}.py"
+    module.write_text(
+        pathlib.Path(canonical.__file__).read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    return module
+
+
 def _gate_invariant(ctx: _GateContext) -> Result | None:
     """Assert the contract's domain laws over generated inputs.
 
@@ -396,6 +413,8 @@ def _gate_invariant(ctx: _GateContext) -> Result | None:
     seed = ctx.seed
     script = invariant_script(
         candidate_path=str(ctx.candidate),
+        canonical_path=str(_install_canonical(ctx.tmp)),
+        exports=list(spec.public_api),
         shared_path=str(shared_mod),
         oracle_path=str(ctx.oracle) if ctx.oracle is not None else None,
         entry=spec.entry,
@@ -522,6 +541,7 @@ def _gate_backtest(ctx: _GateContext) -> Result | None:
 
     script = build_script(
         candidate_path=str(candidate),
+        canonical_path=str(_install_canonical(tmp)),
         comparators_path=str(comparators_mod),
         # A Class-2 contract need not ship an oracle at all; when it does, its
         # comparators take precedence over the shared library.
@@ -825,6 +845,15 @@ def _gate_interface(ctx: _GateContext) -> Result | None:
     return None
 
 
+_ACCEPTANCE_CONFTEST = '''\
+"""Written by the gauntlet: the contract's public API returns canonical output."""
+import {module}
+import target
+
+{module}.wrap_exports(target, {names!r})
+'''
+
+
 def _gate_acceptance(ctx: _GateContext) -> Result | None:
     """The contract's trusted-authored acceptance tests, run against the candidate.
 
@@ -851,6 +880,16 @@ def _gate_acceptance(ctx: _GateContext) -> Result | None:
     (tests_dst / "__init__.py").write_text("", encoding="utf-8")
     (tests_dst / "test_target.py").write_text(
         tests_src.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    # Loaded by pytest before the test module imports `target`, so every
+    # assertion compares plain values rather than whatever `__eq__` the
+    # candidate's return type defines (OMNI-46, H4).
+    _install_canonical(ctx.tmp)
+    (tests_dst / "conftest.py").write_text(
+        _ACCEPTANCE_CONFTEST.format(
+            module=canonical.SANDBOX_MODULE, names=tuple(spec.public_api)
+        ),
+        encoding="utf-8",
     )
 
     result = _run(
@@ -1019,9 +1058,10 @@ def _gate_differential_benchmark(ctx: _GateContext) -> Result | None:
     # convention the invariant gate uses, and for the same reason: without the
     # seed a surprising measurement cannot be re-run.
     bench_seed = ctx.seed
+    canonical_path = str(_install_canonical(ctx.tmp))
     script = textwrap.dedent(
         f"""\
-        import os, sys, time, random, importlib.util
+        import os, sys, time, copy, random, importlib.util
 
         # The harness keeps a duplicate of stdout and points fd 1 (and
         # sys.stdout) at /dev/null before loading anything, so whatever the
@@ -1050,6 +1090,7 @@ def _gate_differential_benchmark(ctx: _GateContext) -> Result | None:
             spec.loader.exec_module(mod)
             return mod
 
+        canon = _load({canonical_path!r}, "_sis_canonical")
         cand = _load({str(ctx.candidate)!r}, "candidate")
         base = _load({str(ctx.baseline)!r}, "baseline")
         oracle = _load({str(ctx.oracle)!r}, "oracle")
@@ -1064,7 +1105,17 @@ def _gate_differential_benchmark(ctx: _GateContext) -> Result | None:
         rng = random.Random()  # system entropy: inputs are unpredictable
         for _ in range({trials}):
             args = oracle.random_input(rng)
-            if cand_fn(*args) != oracle.reference(*args):
+            # The candidate gets its own copy (OMNI-47, M10): called on the
+            # reference's objects, a candidate that emptied its input list and
+            # returned [] "agreed" with a reference that then sorted nothing.
+            # Its output is rebuilt from plain builtins before the comparison
+            # (OMNI-46, H4), so the `!=` below is never the candidate's own.
+            try:
+                got = canon.canonical(cand_fn(*copy.deepcopy(args)))
+            except canon.NotPlainError as exc:
+                emit("NOTPLAIN", exc)
+                sys.exit(5)
+            if got != oracle.reference(*args):
                 emit("MISMATCH", args)
                 sys.exit(3)
 
@@ -1106,14 +1157,21 @@ def _gate_differential_benchmark(ctx: _GateContext) -> Result | None:
                  for _ in range({samples})]
         bench_rng.shuffle(work)
 
+        # Each side times its own deep copy of the batch (OMNI-47, M10), made
+        # outside the timed window so copying costs neither side anything. On
+        # shared lists a candidate that grew its input after the differential
+        # loop made every baseline that ran after it slower — and itself look
+        # faster, with no faster code at all.
         pairs = []
         for sample_i, batch in enumerate(work):
+            cand_batch = copy.deepcopy(batch)
+            base_batch = copy.deepcopy(batch)
             if sample_i % 2 == 0:
-                t_cand = timed(cand_fn, batch)
-                t_base = timed(base_fn, batch)
+                t_cand = timed(cand_fn, cand_batch)
+                t_base = timed(base_fn, base_batch)
             else:
-                t_base = timed(base_fn, batch)
-                t_cand = timed(cand_fn, batch)
+                t_base = timed(base_fn, base_batch)
+                t_cand = timed(cand_fn, cand_batch)
             pairs.append((t_cand, t_base))
 
         # The *baseline's* per-call latency over BENCH_INPUTS, best of 5 —
@@ -1124,9 +1182,9 @@ def _gate_differential_benchmark(ctx: _GateContext) -> Result | None:
         # inputs, so for `sort` it overstates the speedup on BENCH-sized inputs
         # (~2.8x, per review). The verdict never uses it.
         best = float("inf")
-        for _ in range(5):
+        for inputs in [copy.deepcopy(oracle.BENCH_INPUTS) for _ in range(5)]:
             start = time.perf_counter()
-            for args in oracle.BENCH_INPUTS:
+            for args in inputs:
                 base_fn(*args)
             best = min(best, time.perf_counter() - start)
         emit("PAIRS", " ".join(f"{{c!r}},{{b!r}}" for c, b in pairs))
@@ -1149,6 +1207,13 @@ def _gate_differential_benchmark(ctx: _GateContext) -> Result | None:
             passed=False,
             reason="correctness mismatch (candidate disagrees with reference — "
                    "possible benchmark gaming)",
+            errors=result.stdout.splitlines(),
+        )
+    if result.returncode == 5:
+        return Result(
+            passed=False,
+            reason="correctness mismatch (candidate output is not a plain builtin value, "
+                   "so it cannot be compared honestly — H4)",
             errors=result.stdout.splitlines(),
         )
     if result.returncode != 0:
@@ -1477,7 +1542,7 @@ def measure_baseline(
         env = _sandbox_env(home=tmpdir, pythonpath=tmpdir)
         script = textwrap.dedent(
             f"""\
-            import time, importlib.util
+            import copy, time, importlib.util
 
             def _load(path, name):
                 s = importlib.util.spec_from_file_location(name, path)
@@ -1490,9 +1555,11 @@ def measure_baseline(
 
             fn = getattr(m, {spec.entry!r})
             best = float("inf")
-            for _ in range(5):
+            # A fresh copy per repetition (OMNI-47): a function that sorts its
+            # input in place would otherwise time repetitions 2-5 on sorted data.
+            for inputs in [copy.deepcopy(oracle.BENCH_INPUTS) for _ in range(5)]:
                 start = time.perf_counter()
-                for args in oracle.BENCH_INPUTS:
+                for args in inputs:
                     fn(*args)
                 best = min(best, time.perf_counter() - start)
             print(best / len(oracle.BENCH_INPUTS))

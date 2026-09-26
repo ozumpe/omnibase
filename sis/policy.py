@@ -48,6 +48,9 @@ class Justification(str, Enum):
 GUARDRAIL_PATHS: tuple[str, ...] = (
     "sis/policy.py",          # this policy itself
     "sis/gauntlet.py",        # the validation moat + sandbox + timeout
+    # What every comparing gate reduces candidate output to before `==` (H4):
+    # a loop able to loosen it could return a value with its own __eq__ again.
+    "sis/canonical.py",
     # The contract layer. This module's docstring has always named *contracts*
     # as FORBIDDEN, but the list only ever protected `specs/` — the exam's
     # content — and not the declarations that decide how it is marked. That gap

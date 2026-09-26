@@ -190,6 +190,8 @@ def bind(invariant: Invariant, module: Any) -> BoundInvariant:
 def build_script(
     *,
     candidate_path: str,
+    canonical_path: str,
+    exports: list[str],
     shared_path: str,
     oracle_path: str | None,
     entry: str,
@@ -201,10 +203,16 @@ def build_script(
 
     Pure string building, so what the script checks — and in what order — is
     testable without standing up a sandbox.
+
+    *canonical_path* is the sandbox copy of :mod:`sis.canonical`, and *exports*
+    the contract's public API. Every export is wrapped before any law runs, so a
+    predicate compares plain values even when it calls a sibling export itself —
+    the roman round-trip law was one of the checks a hostile ``__eq__`` defeated
+    (OMNI-46, H4).
     """
     return textwrap.dedent(
         f"""\
-        import sys, json, inspect, importlib.util
+        import sys, copy, json, inspect, importlib.util
         from dataclasses import dataclass
 
         from hypothesis import given, seed as _seed, settings, HealthCheck
@@ -220,6 +228,7 @@ def build_script(
             spec.loader.exec_module(mod)
             return mod
 
+        canon = _load({canonical_path!r}, "_sis_canonical")
         cand = _load({candidate_path!r}, "candidate")
         shared = _load({shared_path!r}, "invariants")
         oracle_path = {oracle_path!r}
@@ -229,6 +238,16 @@ def build_script(
         if not callable(entry_fn):
             print("NOENTRY", {entry!r})
             sys.exit({EXIT_NO_ENTRY})
+
+        def _not_plain(law, exc):
+            print("VIOLATED", json.dumps({{"invariant": law, "counterexample": str(exc)}}))
+            sys.exit({EXIT_VIOLATED})
+
+        try:
+            canon.wrap_exports(cand, {exports!r})
+        except canon.NotPlainError as exc:
+            _not_plain("plain output", exc)
+        entry_fn = getattr(cand, {entry!r})
 
         def _resolve(name):
             # Contract-local wins over the shared library.
@@ -265,8 +284,17 @@ def build_script(
             # late-binding hazard does not apply because prop() is defined and
             # called within one iteration.
             def prop(args):
-                output = entry_fn(*args)
-                held = predicate(args, output, impl) if wants_impl else predicate(args, output)
+                # The candidate gets a copy (OMNI-47, M10): the predicate judges
+                # the output against `args`, and a candidate that emptied its
+                # input and returned [] was a sorted permutation of what was left.
+                try:
+                    output = entry_fn(*copy.deepcopy(args))
+                    held = predicate(args, output, impl) if wants_impl else predicate(args, output)
+                except canon.NotPlainError as exc:
+                    raise AssertionError(
+                        f"{{inv['name']}}: output is not a plain value for args={{args!r}} "
+                        f"({{exc}})"
+                    ) from None
                 assert held, f"{{inv['name']}} does not hold for args={{args!r}}"
 
             try:

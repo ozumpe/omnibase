@@ -36,8 +36,8 @@ reference with no link target below.
 > | ID | Jira |
 > |---|---|
 > | H2, M8, M9, M11 | [OMNI-45](https://olafzumpe.atlassian.net/browse/OMNI-45) (epic [OMNI-43](https://olafzumpe.atlassian.net/browse/OMNI-43)) |
-> | H4 | [OMNI-46](https://olafzumpe.atlassian.net/browse/OMNI-46) (epic OMNI-43) |
-> | M10 | [OMNI-47](https://olafzumpe.atlassian.net/browse/OMNI-47) (epic OMNI-43) |
+> | H4 | [OMNI-46](https://olafzumpe.atlassian.net/browse/OMNI-46) (epic OMNI-43) — **fixed** |
+> | M10 | [OMNI-47](https://olafzumpe.atlassian.net/browse/OMNI-47) (epic OMNI-43) — **fixed** |
 > | H3 | [OMNI-48](https://olafzumpe.atlassian.net/browse/OMNI-48) (epic [OMNI-44](https://olafzumpe.atlassian.net/browse/OMNI-44)) |
 > | M19 | [OMNI-49](https://olafzumpe.atlassian.net/browse/OMNI-49) (epic OMNI-44) — **blocks OMNI-29** |
 > | M20, M21 | [OMNI-50](https://olafzumpe.atlassian.net/browse/OMNI-50) (epic OMNI-44) |
@@ -106,24 +106,6 @@ reference with no link target below.
   Until that lands, refuse `canary.backend=serve` for a non-stub proposer, the
   same way `ensure_sandbox_allows_proposer` refuses the soft sandbox for M1.
 
-- [OMNI-46] **H4 — An output type that overrides `__eq__`/`__ne__` defeats every
-  correctness gate, offline and online** *(found 2026-09-26 by a completeness
-  critic; reproduced)* — every gate compares a candidate's output with a plain
-  `==`/`!=`, candidate value on the left, so Python calls the candidate's own
-  `__eq__` first: the Class-1 differential loop (`cand_fn(*args) !=
-  oracle.reference(*args)`), every acceptance-test assertion, the roman
-  round-trip invariant, and the backtest comparators' exact-match branches.
-  Reproduced against the default contract: `class _Liar(int)` with `__eq__` →
-  `True`, `__ne__` → `False`, `__hash__` → `0`, returned from
-  `sum_of_divisors`, type-checks under `mypy --strict` (the declared return
-  type is `int`) and gets `"all gates passed"` — instantly, since the "answer"
-  never has to be computed. The same shape passes the roman acceptance cases
-  and round-trip law with a `str` subclass. Only the mandatory human PR review
-  stands between this and a merge. Fix: canonicalise candidate output to a
-  plain, hashable value built from only builtin `int`/`float`/`str`/`bool`/
-  `None`/`list`/`tuple`/`dict` before any comparison, in every gate script
-  (differential, acceptance conftest shim, invariant, backtest).
-
 ## Medium
 
 - [OMNI-45] **M8 — Every non-benchmark gate accepts exit code 0 as a pass, with no
@@ -157,21 +139,6 @@ reference with no link target below.
   `:ro`; `chmod 0444` in subprocess mode) in a directory separate from the
   candidate's own writable scratch space, which should sit off `sys.path`
   ahead of stdlib; verify a hash of every trusted file before each gate.
-
-- [OMNI-47] **M10 — Candidate and reference/baseline share mutable argument objects, so
-  a candidate can sabotage its own comparison** *(found 2026-09-26;
-  reproduced)* — the differential loop calls `cand_fn(*args)` before
-  `oracle.reference(*args)` on the same list objects; the paired benchmark
-  passes the same `batch` lists to `timed(cand_fn, batch)` and
-  `timed(base_fn, batch)`. Reproduced against `sort`: a candidate that returns
-  `[]` for any list longer than 5 (clearing its input first) passes every
-  gate; so does a plain, no-faster bubble sort that appends to the shared list
-  so the baseline side looks slower. `specs/sort/tests.py::
-  test_does_not_mutate_its_input` only exercises a 3-element list, so the size
-  threshold slips past it, and the sort contract declares no invariants or
-  backtest to catch it another way. Fix: `copy.deepcopy` each side's
-  arguments, computed outside the timed window, in both the differential and
-  benchmark scripts.
 
 - [OMNI-45] **M11 — A candidate's own exception inside the invariant or backtest gate is
   filed as a harness/sandbox fault, not a candidate failure** *(found
@@ -696,6 +663,63 @@ any long-lived cluster exists.
   front.
 
 ## Resolved
+
+- [OMNI-46] **H4 — An output type that overrides `__eq__`/`__ne__` defeats every
+  correctness gate, offline and online** *(found 2026-09-26 by a completeness
+  critic; reproduced; **fixed 2026-09-26**)* — every gate compares a candidate's output with a plain
+  `==`/`!=`, candidate value on the left, so Python calls the candidate's own
+  `__eq__` first: the Class-1 differential loop (`cand_fn(*args) !=
+  oracle.reference(*args)`), every acceptance-test assertion, the roman
+  round-trip invariant, and the backtest comparators' exact-match branches.
+  Reproduced against the default contract: `class _Liar(int)` with `__eq__` →
+  `True`, `__ne__` → `False`, `__hash__` → `0`, returned from
+  `sum_of_divisors`, type-checks under `mypy --strict` (the declared return
+  type is `int`) and gets `"all gates passed"` — instantly, since the "answer"
+  never has to be computed. The same shape passes the roman acceptance cases
+  and round-trip law with a `str` subclass. Only the mandatory human PR review
+  stands between this and a merge. Fix: canonicalise candidate output to a
+  plain, hashable value built from only builtin `int`/`float`/`str`/`bool`/
+  `None`/`list`/`tuple`/`dict` before any comparison, in every gate script
+  (differential, acceptance conftest shim, invariant, backtest).
+  **Fixed:** `sis/canonical.py` rebuilds candidate output from exact builtins
+  (type *is* `int`/`float`/`str`/`bool`/`None`/`list`/`tuple`/`dict`, compared
+  with `is` since a metaclass can make a class *object* claim to equal `int`)
+  and raises `NotPlainError` for anything else. Applied at every comparison:
+  the differential loop, a gauntlet-written acceptance `conftest.py` that wraps
+  the contract's `public_api`, the invariant script (every export wrapped, so
+  round-trip's call to `from_roman` is covered), the backtest script, and the
+  live canary's agreement and invariant checks. FORBIDDEN, like the gauntlet.
+  Regression tests in `tests/test_adversarial.py` (default contract and roman,
+  full pipeline plus each gate on its own), `tests/test_canary.py`,
+  `tests/test_backtest.py` and `tests/test_canonical.py`; the full-pipeline
+  ones return "all gates passed" on the pre-fix code. Not covered: a candidate
+  that tampers with the harness itself from inside the process it shares with
+  it — that is H2/M9, [OMNI-45].
+
+- [OMNI-47] **M10 — Candidate and reference/baseline share mutable argument objects, so
+  a candidate can sabotage its own comparison** *(found 2026-09-26;
+  reproduced; **fixed 2026-09-26**)* — the differential loop calls `cand_fn(*args)` before
+  `oracle.reference(*args)` on the same list objects; the paired benchmark
+  passes the same `batch` lists to `timed(cand_fn, batch)` and
+  `timed(base_fn, batch)`. Reproduced against `sort`: a candidate that returns
+  `[]` for any list longer than 5 (clearing its input first) passes every
+  gate; so does a plain, no-faster bubble sort that appends to the shared list
+  so the baseline side looks slower. `specs/sort/tests.py::
+  test_does_not_mutate_its_input` only exercises a 3-element list, so the size
+  threshold slips past it, and the sort contract declares no invariants or
+  backtest to catch it another way. Fix: `copy.deepcopy` each side's
+  arguments, computed outside the timed window, in both the differential and
+  benchmark scripts.
+  **Fixed:** each side gets its own `copy.deepcopy`, made outside the timed
+  window — the candidate in the differential loop, both sides of every
+  benchmark pair, and each baseline repetition (also in `measure_baseline`).
+  The invariant script does the same, since a law judges the output against
+  `args` too. `specs/sort/tests.py` now checks non-mutation at four sizes up to
+  1200, and its permutation test compares against a copy taken before the
+  call (it had been satisfied by a candidate that emptied its input). Both
+  reproductions are regression tests in `tests/test_adversarial.py`; on the
+  pre-fix code the emptying candidate gets "all gates passed" and the
+  batch-slowing one is accepted with no speedup.
 
 - [OMNI-41] **The benchmark gate measured a cache, not an algorithm — a memoised naive
   candidate passed every gate** *(found and fixed 2026-09-26 under OMNI-41,

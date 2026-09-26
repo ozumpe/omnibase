@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Protocol, runtime_checkable
 
+from sis.canonical import canonical
 from sis.metrics import percentile
 
 # A promote/rollback decision needs more evidence behind it than a "should we
@@ -122,13 +123,18 @@ def _violations(
     predicate is trusted code, but the response it is handed came from an
     untrusted candidate, so "this response made the check blow up" is a
     statement about the candidate and must not take the loop down with it.
+
+    The response is rebuilt from plain builtins first (OMNI-46, H4): a live
+    response is unpickled by value (KNOWN_ISSUES L28), so it can carry a type
+    whose ``__eq__`` agrees with any law that compares. One that is not plain
+    raises :class:`sis.canonical.NotPlainError` — a violation, like any raise.
     """
     count = 0
     first: str | None = None
     for sample in samples:
         for invariant in invariants:
             try:
-                held = invariant.check(sample.request, sample.candidate_response)
+                held = invariant.check(sample.request, canonical(sample.candidate_response))
             except Exception:  # noqa: BLE001 - a broken response is the candidate's fault
                 held = False
             if not held:
@@ -143,7 +149,9 @@ def _disagreements(samples: Sequence[LiveSample]) -> int:
     count = 0
     for sample in samples:
         try:
-            differs = sample.candidate_response != sample.baseline_response
+            # Plain values only on the candidate's side of `!=` (OMNI-46, H4):
+            # otherwise its own __ne__ decides whether it disagrees.
+            differs = canonical(sample.candidate_response) != sample.baseline_response
         except Exception:  # noqa: BLE001 - an uncomparable response is a disagreement
             differs = True
         if differs:
