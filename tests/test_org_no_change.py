@@ -72,6 +72,10 @@ def test_no_change_never_trips_the_breaker(handles) -> None:  # type: ignore[no-
     assert org.run_cycle(handles, "x", "y")["status"] == handles["_expected_status"]
 
 
+# Builds its own CEO and never reads the neutral outcome, so run it once rather
+# than per param — each extra param is another Ray cluster bootstrap.
+@pytest.mark.parametrize(
+    "handles", [(NO_CHANGE_IMPL, "no_change")], indirect=True, ids=["no_change"])
 def test_record_neutral_records_spend_but_not_a_failure(handles) -> None:  # type: ignore[no-untyped-def]
     from sis.roles import CEO
 

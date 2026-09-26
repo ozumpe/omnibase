@@ -110,6 +110,78 @@ def benchmark(n: int = 10_000, repetitions: int = 5) -> float:
         "a memoised naive implementation gamed the benchmark: it is not faster, "
         f"it only replays cached inputs (reason: {result.reason!r})"
     )
+    # Decided BY THE BENCHMARK, not incidentally by an earlier gate — otherwise
+    # this test would keep passing with the hole reopened. Rejected, or under
+    # heavy -n auto load inconclusive (neutral); never accepted (OMNI-41 AC).
+    assert result.reason.startswith(("no improvement", "benchmark inconclusive")), result.reason
+
+
+def test_fast_on_typical_inputs_but_slower_in_total_is_rejected() -> None:
+    # OMNI-41, found by the pre-merge review of the first fix, which decided on
+    # the MEDIAN per-input ratio. O(√n) below n=14000 (70% of random inputs),
+    # the naive definition run four times above it. Correct and typed; fast on
+    # the typical input; ~2x SLOWER in total, because the expensive inputs carry
+    # most of the cost. The median rule passed it; total cost must not.
+    code = '''
+import math
+
+
+def _fast(n: int) -> int:
+    total = 0
+    for i in range(1, math.isqrt(n) + 1):
+        if n % i == 0:
+            total += i
+            if i != n // i:
+                total += n // i
+    return total
+
+
+def sum_of_divisors(n: int) -> int:
+    if n < 14_000:
+        return _fast(n)
+    for _ in range(3):
+        sum(i for i in range(1, n + 1) if n % i == 0)
+    return sum(i for i in range(1, n + 1) if n % i == 0)
+
+
+def benchmark(n: int = 10_000, repetitions: int = 5) -> float:
+    return 1.0
+'''
+    result = _validate(code)
+    assert not result.passed, f"a candidate ~2x slower in total was accepted: {result.reason!r}"
+    assert result.reason.startswith("no improvement"), result.reason
+
+
+def test_a_candidate_cannot_forge_the_benchmark_verdict_from_stdout() -> None:
+    # OMNI-41, found by the pre-merge review: the naive algorithm, unchanged,
+    # plus an atexit hook printing a fabricated "much faster" measurement. The
+    # first fix's parser took the last matching line, and this passed every
+    # gate. The harness now owns a private copy of stdout; the candidate's
+    # prints — and its atexit hooks — go to /dev/null.
+    code = '''
+import atexit
+import sys
+
+
+def sum_of_divisors(n: int) -> int:
+    return sum(i for i in range(1, n + 1) if n % i == 0)
+
+
+def _forge() -> None:
+    sys.stdout.write("PAIRS " + " ".join(["1e-09,0.001"] * 99) + "\\n")
+    sys.stdout.write("BASELINE 0.001\\nEND\\n")
+    sys.stdout.flush()
+
+
+atexit.register(_forge)
+
+
+def benchmark(n: int = 10_000, repetitions: int = 5) -> float:
+    return 1.0
+'''
+    result = _validate(code)
+    assert not result.passed, f"a forged stdout verdict was believed: {result.reason!r}"
+    assert result.reason.startswith(("no improvement", "benchmark inconclusive")), result.reason
 
 
 def test_untyped_fast_impl_is_rejected() -> None:

@@ -44,6 +44,15 @@ NEUTRAL_OUTCOMES: dict[str, str] = {
 }
 
 
+def neutral_status(reason: str | None) -> str | None:
+    """The neutral cycle status a rejection reason maps to, or ``None``. Pure.
+
+    One definition for both places a verdict is read — the SWE's gauntlet run
+    and QA's re-run — so the two can never disagree about what is benign.
+    """
+    return NEUTRAL_OUTCOMES.get(gate_from_reason(reason) or "")
+
+
 @dataclass
 class EpisodicEvent:
     """One cycle outcome. The schema *is* the value — keep it queryable."""
@@ -51,6 +60,7 @@ class EpisodicEvent:
     cycle_id: str
     ts: str
     # outcome: verified_awaiting_human_merge | rolled_back | qa_rejected |
+    #          no_change | inconclusive (both neutral: NEUTRAL_OUTCOMES) |
     #          budget_denied | circuit_breaker_open | ...
     outcome: str
     proposer: str = "stub"
@@ -61,7 +71,8 @@ class EpisodicEvent:
     candidate_sha: str | None = None
     gauntlet_passed: bool | None = None
     # reject_gate: ast | noop | mypy | interface | acceptance | invariant
-    #            | backtest | correctness | benchmark | policy | timeout
+    #            | backtest | correctness | benchmark | benchmark_inconclusive
+    #            | policy | timeout
     #            | pytest    (pre-OMNI-17 name for `acceptance`; still emitted
     #                         by nothing, still recognised for old rows)
     #            | harness   ("harness" = the gate could not run, not a verdict

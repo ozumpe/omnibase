@@ -34,9 +34,10 @@ def random_input(rng: random.Random) -> tuple[int]:
     return (rng.randint(2, 20_000),)
 
 
-# The fixed workload both candidate and baseline are timed over, so the
-# comparison is like-for-like. Spread across small/prime/perfect/large so no
-# single algorithmic shape dominates the measurement.
+# Fixed inputs the benchmark gate times ONCE each (OMNI-41), mixed in among
+# fresh random pairs, and the workload measure_baseline() reports over.
+# Spread across small/prime/perfect/large so no single algorithmic shape
+# dominates the measurement.
 BENCH_INPUTS: list[tuple[int]] = [
     (3,), (97,), (997,), (5000,), (8128,),
     (9973,), (10_000,), (12345,), (16384,), (19_999,),

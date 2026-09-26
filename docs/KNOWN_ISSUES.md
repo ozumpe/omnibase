@@ -209,22 +209,38 @@ any long-lived cluster exists.
   The same gate also decided on a single block-vs-block comparison with no
   notion of confidence, which is why `test_correct_but_not_faster_is_rejected`
   flaked under `-n auto`. Fix: candidate and baseline are timed back-to-back on
-  the same **fresh** seeded input (never reused), up to 99 pairs with an early
-  stop once 11 pairs agree, and `gauntlet.benchmark_decision` decides from a
-  distribution-free interval around the median ratio — accept / reject /
-  **inconclusive** (neutral, `episodic.NEUTRAL_OUTCOMES`). The memoised
-  candidate now measures its real ~190µs and is rejected. Regression tests:
-  `test_memoised_naive_impl_cannot_game_a_replayed_workload`,
+  the same **fresh** seeded input (never reused; 99 pairs, plus each
+  `BENCH_INPUTS` entry once for shape coverage), and
+  `gauntlet.benchmark_decision` decides on **total cost** with a
+  paired-bootstrap interval — accept / reject / **inconclusive**, the last
+  neutral at both SWE and QA stage (`episodic.neutral_status`) and reachable
+  only by a candidate whose estimate clears the margin. The harness owns a
+  private stdout. **The first cut of this fix was itself broken by an
+  adversarial pre-merge review** and reworked before merge: deciding on the
+  *median* per-input ratio accepted a candidate fast on the typical 70% of
+  inputs and 4x slower on the rest (~2x slower in total, accepted ~98% of
+  seeds); a candidate could steer the neutral *inconclusive*; one `atexit`
+  print forged the verdict through a last-line-wins parser; and a
+  candidate-caused missing output self-labelled as `harness:`, skipping the
+  OMNI-37 probe. The memoised candidate now measures its real ~190µs.
+  Regression tests: `test_memoised_naive_impl_cannot_game_a_replayed_workload`,
+  `test_fast_on_typical_inputs_but_slower_in_total_is_rejected`,
+  `test_a_candidate_cannot_forge_the_benchmark_verdict_from_stdout`,
   `tests/test_benchmark_decision.py`, and the inconclusive param of
   `tests/test_org_no_change.py`. Lessons: **a fixed benchmark workload is a
   gaming surface just like a fixed test set** — the L5 lesson ("anti-gaming is
   only as strong as the input distribution") applies to timing, not just
   correctness; and **a larger timing window makes pairing worse**, because
   shared drift cancels only as far as the two halves of a pair are adjacent in
-  time. Still open, and pre-existing rather than introduced here: the
+  time. Still open, both pre-existing rather than introduced here: **(1)** the
   candidate runs in the same process as the timing harness, so it can in
-  principle tamper with the harness itself (e.g. monkeypatch `time`) — the
-  sandbox contains it from the *host*, not from the measurement.
+  principle tamper with the measurement (monkeypatch `time`, read the seed
+  from `sys.orig_argv` or clone the harness's RNG to precompute upcoming
+  inputs, burn the GIL from a thread during baseline windows) — the sandbox
+  contains it from the *host*, not from the measurement; the durable fix is
+  feeding inputs from the parent one at a time. **(2)** the SLO gate
+  (`sis/slo.py`) still replays a fixed workload and has the same memoisation
+  hole; no shipped contract declares an SLO yet, so it is latent.
 
 - **The docker sandbox could not read its own temp dir on native Linux — so
   it blamed every candidate** *(found and fixed 2026-09-23, rehearsing the

@@ -181,7 +181,7 @@ in `sis/contract.py`); both task classes flow through one `validate()`:
 | acceptance (the contract's trusted tests, from `specs/`) | ✅ | ✅ |
 | invariant (domain laws over Hypothesis-generated inputs) | ✅ | ✅ |
 | backtest (reproduces recorded episodes, held-out split) | ✅ | ✅ |
-| differential correctness on random inputs + benchmark vs a fresh baseline | ✅ (≥10% faster by default) | — no reference exists, and "faster" isn't correctness |
+| differential correctness on random inputs + benchmark vs a fresh baseline (paired timing on fresh inputs; accept / reject / inconclusive, OMNI-41) | ✅ (≥10% faster in total by default) | — no reference exists, and "faster" isn't correctness |
 
 The exam each gate reads lives in `specs/<target>/`, which is POLICY-FORBIDDEN:
 the implementer cannot edit its own exam. After the gates, every change still
@@ -256,7 +256,7 @@ runtime/                    # runtime-mutable state (kept apart from the engine)
   contract_staging/         # drafted exams awaiting human approval
   episodic.jsonl            # episodic store (gitignored; or episodic.duckdb)
 config.yml                  # every knob, with its default, env var and CLI flag
-tests/                      # 664 tests: 602 in the default run + 62 Ray Serve integration
+tests/                      # 678 tests: 616 in the default run + 62 Ray Serve integration
 infra/aws/                  # OpenTofu for the one-node AWS run (docs/AWS_RUN.md)
 scripts/                    # check_connections.py (read-only preflight); the AWS run's
                             #   aws_bootstrap.sh, aws_secret.py, rehearse_aws_run.sh
@@ -356,7 +356,7 @@ been applied yet.
 ## Development
 
 ```bash
-poetry run pytest                  # 613 tests, parallel (default: -m "not serve" -n auto)
+poetry run pytest                  # 616 tests, parallel (default: -m "not serve" -n auto)
 poetry run pytest -m serve -n 0    # the 62 Ray Serve integration tests (serial)
 poetry run mypy --strict sis/ main.py scripts/
 poetry run ruff check .

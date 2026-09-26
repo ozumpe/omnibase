@@ -68,12 +68,17 @@ internal target before it models anything external.
     default). **The benchmark never decides on one comparison** (OMNI-41):
     candidate and baseline are timed back-to-back on the *same fresh* input
     (alternating order, seeded, never reused — a replayed workload rewarded
-    `functools.cache`, not speed), and `gauntlet.benchmark_decision` (pure)
-    reads a distribution-free interval around the median ratio: **accept /
-    reject / inconclusive**. Inconclusive is neutral like a no-op
-    (`episodic.NEUTRAL_OUTCOMES`: no bug, no breaker increment, spend still
-    recorded). Reported latency is still taken over `BENCH_INPUTS` so it stays
-    comparable to `measure_baseline`; it never feeds the verdict.
+    `functools.cache`, not speed), plus each `BENCH_INPUTS` entry timed once
+    for shape coverage. `gauntlet.benchmark_decision` (pure) decides on
+    **total cost** — `sum(candidate)/sum(baseline)` with a paired-bootstrap
+    interval — never a per-input median (a candidate fast on typical inputs
+    and 4x slower on large ones passed a median rule while ~2x slower
+    overall): **accept** if the interval clears the margin, **reject** if the
+    point estimate misses it, else **inconclusive** — reachable only by a
+    candidate that *looks* faster, and neutral like a no-op at both the SWE
+    and QA stage (`episodic.neutral_status`: no bug, no breaker increment,
+    spend recorded). The harness owns a private stdout; the candidate's
+    prints go to /dev/null, so it cannot forge the verdict.
   - **Class 2** (`FeatureContract` — build what a spec describes, no
     pre-existing version to diff against): `ast.parse` → `mypy --strict` →
     interface → acceptance → invariant gate → backtest gate → SLO gate. No
@@ -540,7 +545,7 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   - Design + the Caddy/TLS decision: `docs/OPERATOR_FRONTEND.md`. Deployment
     artifacts (`Dockerfile.frontend`, `Caddyfile`) are deliberately not in this
     slice.
-- 613 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
+- 616 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
   Ray-Serve-integration tests run separately, see Operational quick reference
   above); `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop
   → main` enforced by both the client-side pre-push hook and active
@@ -559,7 +564,10 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   so a **naive** implementation under `@functools.cache` measured 25ns and
   passed every gate (reproduced 3/3; now
   `test_memoised_naive_impl_cannot_game_a_replayed_workload`). See Hard rules
-  for the redesign. The measurement that shaped it, worth knowing before
+  for the redesign — whose own first cut was broken by an adversarial
+  pre-merge review within the hour (median rule accepted a 2x-slower
+  candidate; an `atexit` print forged the verdict), both now regression
+  tests. The measurement that shaped it, worth knowing before
   touching the gate again: **a larger timing window makes pairing worse, not
   better** — drift cancels in a ratio only as far as the two halves are
   adjacent in time (under 17× CPU oversubscription, 9 pairs × 10 inputs gave

@@ -208,9 +208,8 @@ def run_cycle(
     # An inconclusive benchmark (OMNI-41) is benign the same way: the gate could
     # not tell the candidate from the margin, which says nothing against the
     # candidate. It keeps its own status so the log never calls it "no change".
-    neutral_status = episodic.NEUTRAL_OUTCOMES.get(
-        episodic.gate_from_reason(impl.get("reason")) or "")
-    if not impl["passed"] and neutral_status:
+    neutral_status = None if impl["passed"] else episodic.neutral_status(impl.get("reason"))
+    if neutral_status:
         trip = ray.get(ceo.record_neutral.remote(cost_usd=cost_usd))
         breaker_bug_id = (
             ray.get(devops.file_bug.remote(
@@ -251,7 +250,27 @@ def run_cycle(
                         "provenance": ray.get(sm.provenance.remote())}, cost_usd)
 
     # 6. Verify (QA + deterministic gauntlet).
-    approved = ray.get(qa.review.remote(story_id, impl["pr_id"], contract_name))
+    approved, qa_reason = ray.get(qa.review.remote(story_id, impl["pr_id"], contract_name))
+
+    # QA re-measures, so it can land on a neutral verdict the SWE's run did not
+    # (OMNI-41: an inconclusive benchmark). Same fact, same handling — spend
+    # recorded, no bug, no breaker increment — or a noisy re-measurement would
+    # file a bug against a candidate the SWE's run had just accepted.
+    qa_neutral = None if approved else episodic.neutral_status(qa_reason)
+    if qa_neutral:
+        trip = ray.get(ceo.record_neutral.remote(cost_usd=cost_usd))
+        breaker_bug_id = (
+            ray.get(devops.file_bug.remote(
+                f"CIRCUIT BREAKER OPEN — human attention required: {trip}"))
+            if trip else None
+        )
+        return _record({"status": qa_neutral, "reason": qa_reason,
+                        "spec_id": spec_id, "story_id": story_id,
+                        "pr_id": impl["pr_id"],
+                        "candidate_sha": impl.get("candidate_sha"),
+                        "breaker_bug_id": breaker_bug_id,
+                        "economics": ray.get(ceo.economics.remote()),
+                        "provenance": ray.get(sm.provenance.remote())}, cost_usd)
 
     # 7. Canary deploy to the green slot (DevOps). Promotion to live is the
     #    human PR merge — intentionally NOT performed by the agent. On the

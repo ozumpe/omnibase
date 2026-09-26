@@ -278,12 +278,12 @@ flowchart TD
         F -- "fail" --> RJ4["reject: pytest"]
         F -- ok --> G{"agrees with oracle.reference<br/>on random inputs?"}
         G -- "no" --> RJ5["reject: correctness<br/>possible benchmark gaming"]
-        G -- ok --> H["time candidate and baseline in pairs<br/>on fresh oracle.random_input"]
+        G -- ok --> H["time candidate and baseline in pairs<br/>on fresh random inputs + BENCH_INPUTS once"]
     end
 
-    H --> I{"median-ratio interval vs<br/>contract.max_latency_ratio"}
-    I -- "misses" --> RJ6["reject: benchmark"]
-    I -- "straddles" --> NI["inconclusive (neutral)"]
+    H --> I{"total-time ratio + interval vs<br/>contract.max_latency_ratio"}
+    I -- "estimate misses" --> RJ6["reject: benchmark"]
+    I -- "looks faster, unproven" --> NI["inconclusive (neutral — no bug, no breaker)"]
     I -- "clears" --> P["pass → PR opened → human review"]
 
     style NC fill:#e8f0e8
