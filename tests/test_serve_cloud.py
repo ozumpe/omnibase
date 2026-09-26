@@ -6,6 +6,7 @@ Serve at all; the live half pays one Serve startup for the module.
 """
 
 import os
+import time
 
 import pytest
 
@@ -193,6 +194,23 @@ def _post(args, url="http://127.0.0.1:8000/sort"):  # type: ignore[no-untyped-de
     return requests.post(url, json={"args": args}, timeout=10).json()
 
 
+def _post_until_version(version, args, timeout=15.0):  # type: ignore[no-untyped-def]
+    """POST until the answer comes from *version*, or give up after *timeout*.
+
+    ``serve.run`` returns once the redeployed replica is up, but the router's
+    handle to it learns the new replica set asynchronously, so for a moment a
+    request can still reach the outgoing one. Seen in CI on PR #107: the first
+    request after ``promote()`` was answered by the old blue. What is asserted
+    is that the code *does* move, not that it moves before the next packet.
+    """
+    deadline = time.monotonic() + timeout
+    answer = _post(args)
+    while answer.get("version") != version and time.monotonic() < deadline:
+        time.sleep(0.1)
+        answer = _post(args)
+    return answer
+
+
 def test_blue_serves_the_committed_target(cloud) -> None:  # type: ignore[no-untyped-def]
     assert _post([[3, 1, 2]])["result"] == [1, 2, 3]
     assert cloud.live_version() == "v1"
@@ -267,7 +285,7 @@ def test_promotion_makes_the_candidate_the_new_baseline(cloud) -> None:  # type:
 
     assert record.slot == "blue" and record.live is True
     assert cloud.live_version() == "v2"
-    answer = _post([[3, 1, 2]])
+    answer = _post_until_version("v2", [[3, 1, 2]])
     assert answer["result"] == "green-answer", "blue is not running the candidate"
     assert answer["slot"] == "blue"
     assert cloud.status()["green_version"] is None, "green must be retired"
