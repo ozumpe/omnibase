@@ -93,9 +93,17 @@ def test_full_cycle_against_the_second_contract(handles) -> None:  # type: ignor
     assert result["status"] == "verified_awaiting_human_merge", result.get("reason")
     assert result["candidate_latency"] < result["baseline_latency"]
     # Prove it really was the sort, not the default target passing by luck.
-    pr = ray.get(handles["Workspace"].get_pr.remote(result["pr_id"]))
+    ws = handles["Workspace"]
+    pr = ray.get(ws.get_pr.remote(result["pr_id"], "runtime/sort_target.py"))
     assert "sort_numbers" in pr.artifact
     assert "sum_of_divisors" not in pr.artifact
+    # OMNI-51: the PR was written to the sort's own file, and the policy check
+    # authorised that file — not runtime/target.py, which every contract used
+    # to read, write and authorise.
+    assert ray.get(ws.get_pr.remote(result["pr_id"], "runtime/target.py")).artifact == ""
+    decisions = [e for e in ray.get(ws.events.remote()) if e["event"] == "policy.decision"]
+    assert decisions and decisions[-1]["path"] == "runtime/sort_target.py"
+    assert decisions[-1]["allowed"] is True
 
 
 def test_a_prs_contract_can_be_recovered_by_id(handles) -> None:  # type: ignore[no-untyped-def]

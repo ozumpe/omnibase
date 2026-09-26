@@ -174,7 +174,7 @@ def _github() -> tuple[GitHubVersionControl, _FakeGitHub]:
 
 def test_get_pr_populates_artifact_from_head_ref() -> None:
     gh, http = _github()
-    pr = gh.get_pr("7")
+    pr = gh.get_pr("7", path="runtime/sort_target.py")
 
     # H2 regression: GitHub's PR API doesn't carry file contents, so get_pr must
     # fetch the candidate from the head ref — otherwise QA re-validates an empty
@@ -185,8 +185,20 @@ def test_get_pr_populates_artifact_from_head_ref() -> None:
     content_calls = [c for c in http.calls if "/contents/" in c[1]]
     assert len(content_calls) == 1
     _, url, params = content_calls[0]
-    assert url.endswith("/contents/runtime/target.py")  # TARGET_REPO_PATH
+    # The caller's file (OMNI-51) — this used to be runtime/target.py whatever
+    # the contract, so a sort PR was re-validated from the divisor-sum file.
+    assert url.endswith("/contents/runtime/sort_target.py")
     assert params == {"ref": "feature/story-3"}  # at the PR head, not main
+    assert pr.path == "runtime/sort_target.py"
+
+
+def test_get_pr_without_a_path_fetches_no_file() -> None:
+    # The merge watcher polls for status only; a content fetch per poll would
+    # be a wasted API call while a human takes hours to review.
+    gh, http = _github()
+    pr = gh.get_pr("7", path=None)
+    assert pr.artifact == "" and pr.path == ""
+    assert not [c for c in http.calls if "/contents/" in c[1]]
 
 
 def test_get_pr_artifact_empty_when_file_absent() -> None:
@@ -201,7 +213,7 @@ def test_get_pr_artifact_empty_when_file_absent() -> None:
 
     http.get = _no_file  # type: ignore[method-assign]
     # A 404 on the file must not raise — artifact is simply empty.
-    assert gh.get_pr("7").artifact == ""
+    assert gh.get_pr("7", path="runtime/target.py").artifact == ""
 
 
 def test_live_target_source_reads_the_base_branch() -> None:
@@ -211,12 +223,12 @@ def test_live_target_source_reads_the_base_branch() -> None:
     gh, http = _github()
     gh._s = GitHubSettings(token="tok", owner="o", repo="r", default_base="main")
 
-    assert gh.live_target_source() == "OPTIMISED SOURCE"
+    assert gh.live_target_source("runtime/sort_target.py") == "OPTIMISED SOURCE"
 
     content_calls = [c for c in http.calls if "/contents/" in c[1]]
     assert len(content_calls) == 1
     _, url, params = content_calls[0]
-    assert url.endswith("/contents/runtime/target.py")  # TARGET_REPO_PATH
+    assert url.endswith("/contents/runtime/sort_target.py")  # the contract's file
     assert params == {"ref": "main"}  # the live base, not a feature branch
 
 
@@ -228,7 +240,7 @@ def test_live_target_source_empty_when_base_has_no_target() -> None:
 
     gh._http.get = _no_file  # type: ignore[method-assign]
     # No target on the base yet (first cycle) — empty, so the SWE uses the local file.
-    assert gh.live_target_source() == ""
+    assert gh.live_target_source("runtime/target.py") == ""
 
 
 class _FakeConfluence:
@@ -476,7 +488,7 @@ def test_open_pr_reuses_existing_pr_on_422() -> None:
 
     gh._http.post = _post  # type: ignore[attr-defined]
     gh._http.get = _get    # type: ignore[method-assign]
-    pr = gh.open_pr("feature/tes-9", "Optimise target (TES-9)")
+    pr = gh.open_pr("feature/tes-9", "Optimise target (TES-9)", path="runtime/target.py")
 
     assert pr.id == "9"
     assert any(e["event"] == "pr.exists" for e in gh._tel.events())
@@ -522,3 +534,36 @@ def test_real_cloud_refuses_to_fake_a_canary() -> None:
         cloud.shift_traffic("v1", 0.05)
     with pytest.raises(NotImplementedError, match="ServeCloud"):
         cloud.live_metrics("v1", 60.0)
+
+
+# --- OMNI-51: the contract's target path, not a constant --------------------
+
+
+def test_a_sort_pr_writes_the_sort_target_and_nothing_else() -> None:
+    # M15: every real-adapter PR used to write runtime/target.py, so a `sort`
+    # cycle would have overwritten the divisor-sum target with a sort.
+    gh, _ = _github()
+    calls: list[tuple[str, str]] = []
+
+    def _get(url: str, params: Any = None) -> _Resp:
+        calls.append(("GET", url))
+        return _Resp({}, status_code=404)  # a new file on this branch
+
+    def _put(url: str, json: Any = None) -> _Resp:
+        calls.append(("PUT", url))
+        return _Resp({})
+
+    def _post(url: str, json: Any = None) -> _Resp:
+        calls.append(("POST", url))
+        return _Resp({"number": 11})
+
+    gh._http.get = _get    # type: ignore[method-assign]
+    gh._http.put = _put    # type: ignore[attr-defined]
+    gh._http.post = _post  # type: ignore[attr-defined]
+    pr = gh.open_pr("feature/tes-11", "Optimise target (TES-11)",
+                    artifact="def sort_numbers(v): ...", path="runtime/sort_target.py")
+
+    puts = [url for verb, url in calls if verb == "PUT"]
+    assert len(puts) == 1 and puts[0].endswith("/contents/runtime/sort_target.py")
+    assert not any("runtime/target.py" in url for _, url in calls)
+    assert pr.path == "runtime/sort_target.py"

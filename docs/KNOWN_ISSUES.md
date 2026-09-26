@@ -41,7 +41,7 @@ reference with no link target below.
 > | H3 | [OMNI-48](https://olafzumpe.atlassian.net/browse/OMNI-48) (epic [OMNI-44](https://olafzumpe.atlassian.net/browse/OMNI-44)) |
 > | M19 | [OMNI-49](https://olafzumpe.atlassian.net/browse/OMNI-49) (epic OMNI-44) — **fixed** (by refusal; isolation is H3) |
 > | M20, M21 | [OMNI-50](https://olafzumpe.atlassian.net/browse/OMNI-50) (epic OMNI-44) |
-> | M15 | [OMNI-51](https://olafzumpe.atlassian.net/browse/OMNI-51) — **blocks OMNI-29** |
+> | M15 | [OMNI-51](https://olafzumpe.atlassian.net/browse/OMNI-51) — **fixed** |
 > | M12 | [OMNI-52](https://olafzumpe.atlassian.net/browse/OMNI-52) |
 > | M13 | [OMNI-53](https://olafzumpe.atlassian.net/browse/OMNI-53) |
 > | M14 | [OMNI-54](https://olafzumpe.atlassian.net/browse/OMNI-54) |
@@ -213,26 +213,6 @@ reference with no link target below.
   caller already has `public_api` in hand); report anything else through
   `untranscribed_examples` as "names a function outside the contract's public
   API".
-
-- [OMNI-51] **M15 — The real GitHub adapter and the SWE's policy check both hardcode
-  `runtime/target.py`, so every non-default contract is judged against the
-  wrong baseline on real adapters** *(found 2026-09-26 from three independent
-  angles by the same review; confirmed by reading the code, not run against
-  live GitHub)* — `TARGET_REPO_PATH = "runtime/target.py"`
-  (`sis/adapters_real.py`) is used by `live_target_source`, `open_pr` and
-  `get_pr` regardless of which contract is active; `SWE.implement`'s policy
-  check (`sis/roles.py`) authorizes that same constant instead of
-  `spec.target_path`. `SIS_ADAPTERS=real --contract sort` would give
-  `measure_baseline` the `sum_of_divisors` module as "the current source", so
-  the benchmark's baseline call raises `AttributeError` (misattributed to the
-  candidate as a benchmark crash); for a Class-2 contract needing no
-  baseline, the resulting PR would overwrite `runtime/target.py` with
-  unrelated code, and the policy check approves that write because it
-  matches the path it was told to authorize. **Matters directly for OMNI-29**
-  if the run uses any contract other than the default. Fix: thread
-  `spec.target_path` through the `VersionControl` port (`live_target_source`,
-  `open_pr`, `get_pr`) and through `policy.authorize_change`, dropping the
-  hardcoded constant.
 
 - [OMNI-55] **M16 — Any exception after the LLM call loses that call's spend from the
   CEO ledger and the episodic log, strands the branch/PR, and can kill
@@ -646,6 +626,40 @@ any long-lived cluster exists.
   front.
 
 ## Resolved
+
+- [OMNI-51] **M15 — The real GitHub adapter and the SWE's policy check both hardcode
+  `runtime/target.py`, so every non-default contract is judged against the
+  wrong baseline on real adapters** *(found 2026-09-26 from three independent
+  angles by the same review; confirmed by reading the code, not run against
+  live GitHub; **fixed 2026-09-26**)* — `TARGET_REPO_PATH = "runtime/target.py"`
+  (`sis/adapters_real.py`) is used by `live_target_source`, `open_pr` and
+  `get_pr` regardless of which contract is active; `SWE.implement`'s policy
+  check (`sis/roles.py`) authorizes that same constant instead of
+  `spec.target_path`. `SIS_ADAPTERS=real --contract sort` would give
+  `measure_baseline` the `sum_of_divisors` module as "the current source", so
+  the benchmark's baseline call raises `AttributeError` (misattributed to the
+  candidate as a benchmark crash); for a Class-2 contract needing no
+  baseline, the resulting PR would overwrite `runtime/target.py` with
+  unrelated code, and the policy check approves that write because it
+  matches the path it was told to authorize. **Matters directly for OMNI-29**
+  if the run uses any contract other than the default. Fix: thread
+  `spec.target_path` through the `VersionControl` port (`live_target_source`,
+  `open_pr`, `get_pr`) and through `policy.authorize_change`, dropping the
+  hardcoded constant.
+  **Fixed:** the port takes the path — `live_target_source(path)`,
+  `open_pr(..., path=)`, and `get_pr(pr_id, *, path=)`, where `path` is
+  required and `None` means "status only, no file" (the merge watcher's
+  polls no longer fetch content). The SWE and QA pass `spec.target_path`;
+  DevOps passes the path of the contract recorded for the PR. The policy
+  check authorises the same path the PR writes, and emits a
+  `policy.decision` event naming it. `TARGET_REPO_PATH` is gone.
+  `PullRequest` carries its `path`, and the in-memory adapter returns an
+  artifact only for the path it was written under — as GitHub does — so a
+  caller asking for the wrong file now fails in-memory tests too, instead of
+  only against a live tenant. Regression tests: `tests/test_adapters_real.py`
+  (a `sort` PR writes `runtime/sort_target.py` and never touches
+  `runtime/target.py`) and `tests/test_org.py` (a `sort` cycle's PR and
+  policy decision both name the sort's file).
 
 - [OMNI-49] **M19 — On the AWS run box, a `--canary serve` green replica can reach IMDS
   instance-role credentials and read other processes' environment via

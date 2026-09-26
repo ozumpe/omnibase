@@ -62,7 +62,7 @@ def test_never_commit_to_main() -> None:
 def test_live_target_source_empty_in_memory() -> None:
     # The in-memory path keeps no merged base, so the SWE falls back to the
     # local target file (a non-empty return would shadow it).
-    assert InMemoryVersionControl(_tel()).live_target_source() == ""
+    assert InMemoryVersionControl(_tel()).live_target_source("runtime/target.py") == ""
 
 
 def test_destructive_actions_are_gated() -> None:
@@ -72,7 +72,7 @@ def test_destructive_actions_are_gated() -> None:
     vcs = InMemoryVersionControl(tel)
     page = docs.create_page("S", "t", "b")
     issue = work.create_issue(IssueType.BUG, "b")
-    pr = vcs.open_pr(vcs.create_branch("feature/x").name, "t")
+    pr = vcs.open_pr(vcs.create_branch("feature/x").name, "t", path="runtime/target.py")
     for call in (
         lambda: docs.archive_page(page.id),
         lambda: work.delete_issue(issue.id),
@@ -93,11 +93,11 @@ def test_promotion_is_gated_by_the_merge_the_agent_cannot_perform() -> None:
     # ever stops raising, self-promotion becomes reachable.
     tel = _tel()
     vcs = InMemoryVersionControl(tel)
-    pr = vcs.open_pr(vcs.create_branch("feature/x").name, "t")
+    pr = vcs.open_pr(vcs.create_branch("feature/x").name, "t", path="runtime/target.py")
 
     with pytest.raises(RequiresHumanApproval):
         vcs.merge_pr(pr.id)
-    assert vcs.get_pr(pr.id).merged is False, (
+    assert vcs.get_pr(pr.id, path=None).merged is False, (
         "a failed merge attempt must leave the PR unmerged — otherwise the agent "
         "could flip the flag that authorises its own promotion"
     )

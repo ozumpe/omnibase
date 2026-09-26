@@ -70,6 +70,9 @@ class PullRequest:
     # The agent never writes this to the live target itself (human PR gate).
     artifact: str = ""
     merged: bool = False
+    # Repo-relative file the artifact is for — the contract's target, never a
+    # constant (OMNI-51). Empty when the PR was read without asking for a file.
+    path: str = ""
 
 
 @dataclass
@@ -139,16 +142,33 @@ class VersionControl(Protocol):
 
     def commit(self, branch: str, message: str) -> str: ...
 
-    def open_pr(self, branch: str, title: str, *, artifact: str = "") -> PullRequest: ...
+    def open_pr(
+        self, branch: str, title: str, *, artifact: str = "", path: str
+    ) -> PullRequest:
+        """Open a PR proposing *artifact* as the new content of *path*.
 
-    def get_pr(self, pr_id: str) -> PullRequest: ...
+        *path* is the contract's repo-relative target. It is a parameter, not an
+        adapter constant, because every contract has its own target: a
+        hardcoded ``runtime/target.py`` made a ``sort`` cycle read and overwrite
+        the ``sum_of_divisors`` file on real adapters (OMNI-51, M15).
+        """
+        ...
 
-    def live_target_source(self) -> str:
-        """The current target source on the live base branch ("" if none).
+    def get_pr(self, pr_id: str, *, path: str | None) -> PullRequest:
+        """Read a PR back; with *path*, its artifact is that file at the PR's head.
+
+        Required, with ``None`` meaning "the status only, no file": a default
+        would let a caller that needs the artifact forget to say which one and
+        silently get an empty string.
+        """
+        ...
+
+    def live_target_source(self, path: str) -> str:
+        """*path* as merged on the live base branch ("" if absent).
 
         Lets a cycle start from a previously-merged optimisation instead of
         the stale local file, so it builds on prior work rather than
-        re-proposing it. Empty when the base has no target yet (or for the
+        re-proposing it. Empty when the base has no such file yet (or for the
         in-memory adapter, which keeps no merged state).
         """
         ...
