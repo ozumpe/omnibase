@@ -211,6 +211,14 @@ internal target before it models anything external.
   cluster and a port) before trusting a change touches Serve, or let CI run
   both halves, which it always does explicitly (`tests/test_test_layout.py`
   pins that it must, so the excluded half can never silently run nowhere).
+- **Writing a Serve test: `deploy_canary` attaches green at
+  `DEFAULT_CANARY_WEIGHT` (5%), not 0.** A test that asserts blue answered
+  must `shift_traffic(v, 0.0)` first, or it fails one run in twenty.
+  `test_promotion_makes_the_candidate_the_new_baseline` did exactly that
+  (`'green-answer' == [1, 2, 3]`, three CI failures, fixed 2026-09-26). It
+  looked like a replica race after a redeploy, but Ray's replica logs show
+  the failing request going to green through the router that had just
+  attached it — check those logs before adding a wait.
 - Optional deps: `poetry install --with llm` (anthropic) · `--with real`
   (requests/boto3/pyyaml) · `--with analytics` (duckdb) · `--with ui` (panel).
 - Operator UI (OMNI-28): `poetry run python -m sis.frontend`. Locally,
