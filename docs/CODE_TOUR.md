@@ -275,7 +275,7 @@ flowchart TD
     A --> B --> C --> D --> E --> F --> G --> H --> I --> J
 
     F -. "on pass: branch + commit + PR<br/>(records the proposer's cost)" .-> F
-    K["source = live_target_source()<br/>the target as merged on the base branch,<br/>falling back to runtime/target.py —<br/>so cycles build on merged improvements"]
+    K["source = live_target_source(contract.target_path)<br/>the contract's target as merged on the base branch,<br/>falling back to the local file —<br/>so cycles build on merged improvements"]
     K -.-> F
 
     style J fill:#e8f0e8

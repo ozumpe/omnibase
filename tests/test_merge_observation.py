@@ -29,7 +29,7 @@ def canary(handles):  # type: ignore[no-untyped-def]
     """A PR with a canary deployed against it, green held."""
     ws, sm = handles["Workspace"], handles["SelfModel"]
     branch = ray.get(ws.create_branch.remote("feature/merge-obs", "develop")).name
-    pr = ray.get(ws.open_pr.remote(branch, "OMNI-15 test", "code"))
+    pr = ray.get(ws.open_pr.remote(branch, "OMNI-15 test", "code", "runtime/target.py"))
     ray.get(handles["DevOps"].canary.remote(pr.id, 0.001))
     yield pr
     ray.get(sm.set_slot.remote("green", None))
@@ -93,10 +93,10 @@ def test_no_role_can_reach_a_merge_at_all() -> None:  # type: ignore[no-untyped-
     )
 
     vcs = InMemoryVersionControl(InMemoryTelemetry())
-    pr = vcs.open_pr(vcs.create_branch("feature/y").name, "t")
+    pr = vcs.open_pr(vcs.create_branch("feature/y").name, "t", path="runtime/target.py")
     with pytest.raises(RequiresHumanApproval):
         vcs.merge_pr(pr.id)
-    assert vcs.get_pr(pr.id).merged is False
+    assert vcs.get_pr(pr.id, path=None).merged is False
 
 
 def test_observing_a_human_merge_promotes_and_releases_green(handles, canary) -> None:  # type: ignore[no-untyped-def]

@@ -46,8 +46,9 @@ classDiagram
         <<Protocol>>
         +create_branch(name, base) Branch
         +commit(branch, message) str
-        +open_pr(branch, title, artifact) PullRequest
-        +live_target_source() str
+        +open_pr(branch, title, artifact, path) PullRequest
+        +get_pr(pr_id, path) PullRequest
+        +live_target_source(path) str
         +merge_pr(pr_id) PullRequest
     }
     class Cloud {
@@ -224,7 +225,7 @@ sequenceDiagram
 
     SWE->>SM: contract_for(target_path)
     SM-->>SWE: OptimizationContract
-    SWE->>WS: live_target_source()
+    SWE->>WS: live_target_source(contract.target_path)
     Note right of SWE: baseline from the MERGED target,<br/>never the stale local file (H1)
     SWE->>G: measure_baseline(source, contract)
     SWE->>SWE: propose(source, baseline)

@@ -15,6 +15,7 @@ import pytest
 ray = pytest.importorskip("ray")
 
 from sis import org  # noqa: E402
+from sis.contract import DEFAULT_CONTRACTS  # noqa: E402
 from sis.roles import LIVE_CANARY_REQUESTS  # noqa: E402
 
 
@@ -35,7 +36,8 @@ def _open_pr(handles, branch: str, artifact: str, contract_name: str = "sort"): 
     one -- lets the rejection/routing tests deploy a source of their choosing."""
     ws, sm = handles["Workspace"], handles["SelfModel"]
     name = ray.get(ws.create_branch.remote(branch, "develop")).name
-    pr = ray.get(ws.open_pr.remote(name, "test PR", artifact))
+    path = {c.name: c for c in DEFAULT_CONTRACTS}[contract_name].target_path
+    pr = ray.get(ws.open_pr.remote(name, "test PR", artifact, path))
     ray.get(sm.set_pr_contract.remote(pr.id, contract_name))
     return pr
 

@@ -15,6 +15,7 @@ rather than performing them, per the project's hard rules.
 
 from __future__ import annotations
 
+import dataclasses
 import itertools
 import time
 from collections.abc import Callable
@@ -144,17 +145,26 @@ class InMemoryVersionControl:
         self._tel.emit("commit", branch=branch, sha=sha, message=message)
         return sha
 
-    def open_pr(self, branch: str, title: str, *, artifact: str = "") -> PullRequest:
+    def open_pr(
+        self, branch: str, title: str, *, artifact: str = "", path: str
+    ) -> PullRequest:
         pr_id = f"PR-{next(self._ids)}"
-        pr = PullRequest(id=pr_id, branch=branch, title=title, artifact=artifact)
+        pr = PullRequest(id=pr_id, branch=branch, title=title, artifact=artifact, path=path)
         self._prs[pr_id] = pr
-        self._tel.emit("pr.opened", pr_id=pr_id, branch=branch, title=title)
+        self._tel.emit("pr.opened", pr_id=pr_id, branch=branch, title=title, path=path)
         return pr
 
-    def get_pr(self, pr_id: str) -> PullRequest:
-        return self._prs[pr_id]
+    def get_pr(self, pr_id: str, *, path: str | None) -> PullRequest:
+        # Mirrors the real adapter, which fetches *path* at the PR's head: the
+        # artifact comes back only for the file it was written to. Returning it
+        # for any path would let a caller asking for the wrong file pass every
+        # in-memory test and fail only against GitHub (OMNI-51).
+        pr = self._prs[pr_id]
+        if path == pr.path:
+            return pr
+        return dataclasses.replace(pr, artifact="", path=path or "")
 
-    def live_target_source(self) -> str:
+    def live_target_source(self, path: str) -> str:
         # No merged base branch in memory; the local file is the source of
         # truth, so the SWE falls back to it.
         return ""

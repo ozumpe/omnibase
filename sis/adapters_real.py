@@ -46,8 +46,6 @@ from sis.settings import AtlassianSettings, GitHubSettings, Settings
 if TYPE_CHECKING:
     import requests
 
-TARGET_REPO_PATH = "runtime/target.py"  # the file the loop optimises
-
 # Default per-request timeout (seconds), applied to every real-adapter call so a
 # wedged tenant API can't hang a whole cycle forever — there is no gauntlet-style
 # timeout around adapter I/O (KNOWN_ISSUES.md M6). Override via SIS_HTTP_TIMEOUT.
@@ -382,9 +380,13 @@ class GitHubVersionControl:
         self._tel.emit("commit.deferred", branch=branch, message=message)
         return ""
 
-    def open_pr(self, branch: str, title: str, *, artifact: str = "") -> PullRequest:
+    def open_pr(
+        self, branch: str, title: str, *, artifact: str = "", path: str
+    ) -> PullRequest:
         if artifact:
-            self._put_file(branch, TARGET_REPO_PATH, artifact, f"{title} (candidate)")
+            # The contract's own target (OMNI-51). _put_file still refuses
+            # anything that is not SOFT, whoever named it.
+            self._put_file(branch, path, artifact, f"{title} (candidate)")
         resp = self._http.post(
             self._api("/pulls"),
             json={"title": title, "head": branch, "base": self._s.default_base,
@@ -394,13 +396,13 @@ class GitHubVersionControl:
             # L11 (L8's sibling): a retry of the same story — a PR for this head is
             # already open. create_branch already reuses the branch; reuse the PR
             # too instead of dying, so a re-run is idempotent end to end.
-            return self._existing_pr(branch, title, artifact)
+            return self._existing_pr(branch, title, artifact, path)
         data = _json(resp)
         pr_id = str(data["number"])
-        self._tel.emit("pr.opened", pr_id=pr_id, branch=branch, title=title)
-        return PullRequest(id=pr_id, branch=branch, title=title, artifact=artifact)
+        self._tel.emit("pr.opened", pr_id=pr_id, branch=branch, title=title, path=path)
+        return PullRequest(id=pr_id, branch=branch, title=title, artifact=artifact, path=path)
 
-    def _existing_pr(self, branch: str, title: str, artifact: str) -> PullRequest:
+    def _existing_pr(self, branch: str, title: str, artifact: str, path: str) -> PullRequest:
         """Find the open PR already opened for *branch* (used on a 422 re-run)."""
         listing = self._http.get(
             self._api("/pulls"),
@@ -412,7 +414,8 @@ class GitHubVersionControl:
         pr_id = str(prs[0]["number"])
         self._tel.emit("pr.exists", pr_id=pr_id, branch=branch)
         return PullRequest(id=pr_id, branch=branch,
-                           title=str(prs[0].get("title", title)), artifact=artifact)
+                           title=str(prs[0].get("title", title)), artifact=artifact,
+                           path=path)
 
     def _put_file(self, branch: str, path: str, content: str, message: str) -> None:
         # Hard stop at the write boundary: the loop's GitHub writes are limited to
@@ -439,21 +442,23 @@ class GitHubVersionControl:
         self._http.put(self._api(f"/contents/{path}"), json=payload).raise_for_status()
         self._tel.emit("commit", branch=branch, path=path, message=message)
 
-    def get_pr(self, pr_id: str) -> PullRequest:
+    def get_pr(self, pr_id: str, *, path: str | None) -> PullRequest:
         data = _json(self._http.get(self._api(f"/pulls/{pr_id}")))
         head_ref = str(data["head"]["ref"])
         # GitHub's PR API doesn't carry file contents, but QA re-validates the
-        # candidate from pr.artifact — so fetch the proposed target at the head
-        # ref and populate it (mirrors what open_pr() wrote via _put_file).
+        # candidate from pr.artifact — so fetch the caller's file at the head
+        # ref (mirrors what open_pr() wrote via _put_file). No path, no fetch:
+        # the merge watcher polls for status and needs no content.
         return PullRequest(
             id=str(data["number"]), branch=head_ref, title=str(data["title"]),
-            artifact=self._get_file(head_ref, TARGET_REPO_PATH),
+            artifact=self._get_file(head_ref, path) if path else "",
             merged=bool(data.get("merged", False)),
+            path=path or "",
         )
 
-    def live_target_source(self) -> str:
-        """The target file as merged on the live base branch ("" if absent)."""
-        return self._get_file(self._s.default_base, TARGET_REPO_PATH)
+    def live_target_source(self, path: str) -> str:
+        """*path* as merged on the live base branch ("" if absent)."""
+        return self._get_file(self._s.default_base, path)
 
     def _get_file(self, ref: str, path: str) -> str:
         """Fetch and decode a file's content at *ref* ("" if absent)."""

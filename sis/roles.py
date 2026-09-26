@@ -490,7 +490,7 @@ class SWE(Role):
         # version control has no merged source (the in-memory path, or a target
         # not yet committed to the base).
 
-        merged_source = ray.get(self._ws.live_target_source.remote())
+        merged_source = ray.get(self._ws.live_target_source.remote(spec.target_path))
         origin = "merged_base" if merged_source else "local_file"
         # Fall back to the *contract's* target, not a hardcoded path — otherwise
         # a cycle for any contract but the bootstrap one silently optimises
@@ -517,8 +517,14 @@ class SWE(Role):
 
         # Change-authorization policy: the loop may only write paths its tier
         # permits. The target is SOFT (allowed once checks pass); a mis-pointed
-        # guardrail/engine path is refused here, before any branch or PR.
-        decision = policy.authorize_change(TARGET_PATH, checks_passed=report.passed)
+        # guardrail/engine path is refused here, before any branch or PR. The
+        # path authorised is the one open_pr() writes — the contract's — so
+        # the check cannot approve one file while the PR changes another
+        # (OMNI-51: both used to name runtime/target.py for every contract).
+        decision = policy.authorize_change(spec.target_path, checks_passed=report.passed)
+        ray.get(self._ws.emit.remote(
+            "policy.decision", story_id=story_id, path=spec.target_path,
+            tier=decision.tier.value, allowed=decision.allowed))
         if not decision.allowed:
             ray.get(self._ws.transition.remote(
                 story_id, IssueStatus.TBD, f"Policy blocked: {decision.reason}"))
@@ -532,7 +538,8 @@ class SWE(Role):
         branch = f"feature/{story_id.lower()}"
         ray.get(self._ws.create_branch.remote(branch, version_control_base()))
         ray.get(self._ws.commit.remote(branch, f"Optimise target for {story_id}"))
-        pr = ray.get(self._ws.open_pr.remote(branch, f"Optimise target ({story_id})", candidate))
+        pr = ray.get(self._ws.open_pr.remote(
+            branch, f"Optimise target ({story_id})", candidate, spec.target_path))
         ray.get(self._ws.transition.remote(
             story_id, IssueStatus.READY_FOR_REVIEW, f"PR {pr.id} ready"))
         # The canary needs this PR's contract later (oracle, entry point,
@@ -565,7 +572,10 @@ class QA(Role):
         not become a bug and a breaker count just because QA re-measured.
         """
         issue = ray.get(self._ws.get_issue.remote(story_id))
-        pr = ray.get(self._ws.get_pr.remote(pr_id))
+        # Resolved before the PR is read: which file holds the candidate is a
+        # property of the contract (OMNI-51).
+        spec = self._contract(contract_name)
+        pr = ray.get(self._ws.get_pr.remote(pr_id, spec.target_path))
         # Deterministic gate already ran in the SWE step; QA confirms the
         # artifact exists, matches the story, and re-runs the gauntlet.
         ok = bool(pr.artifact) and issue.status == IssueStatus.READY_FOR_REVIEW
@@ -577,8 +587,7 @@ class QA(Role):
             # Must resolve the SAME contract the SWE used, or QA re-judges the
             # candidate against a different target's oracle and rejects a
             # perfectly good diff.
-            spec = self._contract(contract_name)
-            merged = ray.get(self._ws.live_target_source.remote())
+            merged = ray.get(self._ws.live_target_source.remote(spec.target_path))
             baseline_source = merged or pathlib.Path(
                 spec.target_file).read_text(encoding="utf-8")
             report = gauntlet.validate(
@@ -746,7 +755,7 @@ class DevOps(Role):
         # (main process, holds creds). On "serve" it runs in a Serve replica
         # with a scrubbed runtime_env (OMNI-13) — a different, procedural
         # guarantee, and the intended shape of a canary.
-        pr = ray.get(self._ws.get_pr.remote(pr_id))
+        pr = ray.get(self._ws.get_pr.remote(pr_id, self._pr_target_path(pr_id)))
         version = _version_for(pr)
 
         # Explicit argument first, then configuration. Reading an env var
@@ -852,7 +861,9 @@ class DevOps(Role):
         promotion actually redeploys blue rather than silently updating a
         bookkeeping record nobody is looking at (see ``canary()``).
         """
-        pr = ray.get(self._ws.get_pr.remote(pr_id))
+        # Status only: a poll that fires every few seconds while a human
+        # reviews has no use for the file, so it does not fetch one.
+        pr = ray.get(self._ws.get_pr.remote(pr_id, None))
         version = _version_for(pr)
         if not pr.merged:
             # The overwhelmingly common case on any given tick. Deliberately
@@ -907,6 +918,17 @@ class DevOps(Role):
         ray.get(self._sm.set_pending_pr.remote(None))
         ray.get(self._sm.record.remote("canary_retired", version))
         return {"version": version, "slot": "green", "released": True}
+
+    def _pr_target_path(self, pr_id: str) -> str:
+        """The file a PR's candidate lives in: its recorded contract's target.
+
+        The SWE records the contract before the PR can reach a canary; the
+        default contract covers a PR opened some other way (tests, a manual
+        call), which is what the old hardcoded path meant anyway.
+        """
+        spec: contract.OptimizationContract | None = ray.get(
+            self._sm.contract_for_pr.remote(pr_id))
+        return (spec or contract.default_contract()).target_path
 
     def _contract_for_live_pr(self, pr_id: str) -> contract.OptimizationContract:
         spec: contract.OptimizationContract | None = ray.get(

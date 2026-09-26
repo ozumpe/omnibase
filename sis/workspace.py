@@ -107,14 +107,14 @@ class Workspace:
     def commit(self, branch: str, message: str) -> str:
         return self.vcs.commit(branch, message)
 
-    def open_pr(self, branch: str, title: str, artifact: str = "") -> PullRequest:
-        return self.vcs.open_pr(branch, title, artifact=artifact)
+    def open_pr(self, branch: str, title: str, artifact: str, path: str) -> PullRequest:
+        return self.vcs.open_pr(branch, title, artifact=artifact, path=path)
 
-    def get_pr(self, pr_id: str) -> PullRequest:
-        return self.vcs.get_pr(pr_id)
+    def get_pr(self, pr_id: str, path: str | None) -> PullRequest:
+        return self.vcs.get_pr(pr_id, path=path)
 
-    def live_target_source(self) -> str:
-        return self.vcs.live_target_source()
+    def live_target_source(self, path: str) -> str:
+        return self.vcs.live_target_source(path)
 
     # --- Cloud (AWS + Ray Serve canary) ---
     def deploy_canary(self, version: str, metrics: dict[str, float] | None = None) -> DeployRecord:
