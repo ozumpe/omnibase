@@ -39,7 +39,7 @@ reference with no link target below.
 > | H4 | [OMNI-46](https://olafzumpe.atlassian.net/browse/OMNI-46) (epic OMNI-43) — **fixed** |
 > | M10 | [OMNI-47](https://olafzumpe.atlassian.net/browse/OMNI-47) (epic OMNI-43) — **fixed** |
 > | H3 | [OMNI-48](https://olafzumpe.atlassian.net/browse/OMNI-48) (epic [OMNI-44](https://olafzumpe.atlassian.net/browse/OMNI-44)) |
-> | M19 | [OMNI-49](https://olafzumpe.atlassian.net/browse/OMNI-49) (epic OMNI-44) — **blocks OMNI-29** |
+> | M19 | [OMNI-49](https://olafzumpe.atlassian.net/browse/OMNI-49) (epic OMNI-44) — **fixed** (by refusal; isolation is H3) |
 > | M20, M21 | [OMNI-50](https://olafzumpe.atlassian.net/browse/OMNI-50) (epic OMNI-44) |
 > | M15 | [OMNI-51](https://olafzumpe.atlassian.net/browse/OMNI-51) — **blocks OMNI-29** |
 > | M12 | [OMNI-52](https://olafzumpe.atlassian.net/browse/OMNI-52) |
@@ -266,23 +266,6 @@ reference with no link target below.
   human declining a change leaves green attached and the next cycle blocked
   forever rather than resuming. Fix: poll the PR's actual state, not just
   mergedness, and retire the canary + resume the loop on `closed`.
-
-- [OMNI-49] **M19 — On the AWS run box, a `--canary serve` green replica can reach IMDS
-  instance-role credentials and read other processes' environment via
-  `/proc`** *(found 2026-09-26 from two angles; confirmed by reading the
-  infra config, not run on a live EC2 instance)* — `build_candidate`
-  (`sis/serving.py`) only blanks `runtime_env.env_vars`; the replica is an
-  ordinary host process, so IMDSv2 (whose hop-limit-1 default only stops
-  containers behind a bridge, not host processes) and
-  `/proc/<raylet-or-driver-pid>/environ` (readable by any same-uid process)
-  are both open to it, and the instance role can call
-  `secretsmanager:GetSecretValue` on the one secret holding the Atlassian,
-  GitHub and Anthropic tokens (`infra/aws/main.tf`). `docs/AWS_RUN.md`
-  currently states the opposite — that the gauntlet's `--network none` is
-  what stands between candidate code and IMDS — which is true for the
-  gauntlet but not for the Serve canary. Fix: land alongside H3's isolation
-  redesign; until then, refuse `canary.backend=serve` when `SIS_ENV=aws` or
-  the proposer isn't the stub, and correct the doc.
 
 - [OMNI-50] **M20 — The live canary's p95/p99 gate is close to a coin flip for targets
   where dispatch overhead dominates compute** *(found 2026-09-26; simulated
@@ -663,6 +646,36 @@ any long-lived cluster exists.
   front.
 
 ## Resolved
+
+- [OMNI-49] **M19 — On the AWS run box, a `--canary serve` green replica can reach IMDS
+  instance-role credentials and read other processes' environment via
+  `/proc`** *(found 2026-09-26 from two angles; confirmed by reading the
+  infra config, not run on a live EC2 instance; **closed 2026-09-26 by
+  refusal**)* — `build_candidate`
+  (`sis/serving.py`) only blanks `runtime_env.env_vars`; the replica is an
+  ordinary host process, so IMDSv2 (whose hop-limit-1 default only stops
+  containers behind a bridge, not host processes) and
+  `/proc/<raylet-or-driver-pid>/environ` (readable by any same-uid process)
+  are both open to it, and the instance role can call
+  `secretsmanager:GetSecretValue` on the one secret holding the Atlassian,
+  GitHub and Anthropic tokens (`infra/aws/main.tf`). `docs/AWS_RUN.md`
+  currently states the opposite — that the gauntlet's `--network none` is
+  what stands between candidate code and IMDS — which is true for the
+  gauntlet but not for the Serve canary. Fix: land alongside H3's isolation
+  redesign; until then, refuse `canary.backend=serve` when `SIS_ENV=aws` or
+  the proposer isn't the stub, and correct the doc.
+  **Closed by refusal, not by isolation:** `gauntlet.serve_canary_problem`
+  (pure) refuses `canary.backend=serve` with any non-stub proposer, checked
+  at `main.py` startup (before a cluster exists), again in `run_cycle` next
+  to the M1 check, and as a backstop in `ServeCloud.deploy_canary`, the line
+  that turns candidate source into a Ray worker. Deliberately keyed on the
+  proposer rather than `SIS_ENV=aws` as first proposed: the stub's
+  hand-written candidate is as safe on the box as on a laptop, and an LLM's
+  is unsafe on both (it can read `secrets.local.yml` locally). No override
+  flag, unlike M1 — the legacy canary costs nothing to fall back to. The
+  replica is still not isolated; that is H3, [OMNI-48]. `docs/AWS_RUN.md`
+  no longer credits `--network none` with covering the Serve canary.
+  Regression tests: `tests/test_serve_canary_refusal.py`.
 
 - [OMNI-46] **H4 — An output type that overrides `__eq__`/`__ne__` defeats every
   correctness gate, offline and online** *(found 2026-09-26 by a completeness

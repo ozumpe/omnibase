@@ -50,6 +50,11 @@ internal target before it models anything external.
   per-gate timeout kills infinite loops. A real (non-stub) proposer writes untrusted code
   and REQUIRES `SIS_SANDBOX=docker` — the loop refuses otherwise (override:
   `SIS_ALLOW_UNSANDBOXED_LLM=1`); the subprocess sandbox leaves host files readable (M1).
+  **The Serve canary is not a sandbox at all** — a green replica is an ordinary
+  Ray worker — so `canary.backend=serve` is refused with any non-stub proposer,
+  with **no** override, until OMNI-48 isolates it (OMNI-49, M19;
+  `gauntlet.serve_canary_problem`, checked at startup, per cycle, and in
+  `ServeCloud.deploy_canary`).
   **A broken sandbox is never blamed on the candidate** (OMNI-37): when a
   sandboxed gate fails, the gauntlet first runs a trusted self-check in the
   same sandbox (`gauntlet.probe_sandbox`); if that fails too, the verdict is
@@ -568,9 +573,9 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   - Design + the Caddy/TLS decision: `docs/OPERATOR_FRONTEND.md`. Deployment
     artifacts (`Dockerfile.frontend`, `Caddyfile`) are deliberately not in this
     slice.
-- 691 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
+- 701 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
   Ray-Serve-integration tests run separately, see Operational quick reference
-  above; 753 total — corrected 2026-09-26, a multi-dimension review found the
+  above; 763 total — corrected 2026-09-26, a multi-dimension review found the
   previously-documented 616/678 stale); `ruff`/`mypy --strict`/`pytest` clean;
   CI green; `feature → develop → main` enforced by both the client-side
   pre-push hook and active server-side rulesets.
@@ -604,16 +609,17 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
 **Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L
 severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
 the IDs in commits/PRs. **Open after a 2026-09-26 multi-dimension review with
-adversarial verification: H2–H3, M8–M9, M11–M23, L15–L43** (M7 is won't-fix
-for now; H4 and M10 fixed 2026-09-26, OMNI-46/47). The headline, before
+adversarial verification: H2–H3, M8–M9, M11–M18, M20–M23, L15–L43** (M7 is
+won't-fix for now; H4, M10 and M19 fixed 2026-09-26, OMNI-46/47/49). The headline, before
 trusting any gauntlet verdict: **the gate scripts judge a candidate inside its
 own process**. A candidate can rewrite the exam files later gates read (M9) or
 exit 0 with no verdict (M8). One redesign closes these and H2 (epic
 [OMNI-43](https://olafzumpe.atlassian.net/browse/OMNI-43)). Separately, the
 Serve canary runs candidate code as a full Ray worker in the control-plane
 cluster, before human review (H3, epic
-[OMNI-44](https://olafzumpe.atlassian.net/browse/OMNI-44)) — don't combine
-`--canary serve` with a real proposer until that lands. M12–M23 are
+[OMNI-44](https://olafzumpe.atlassian.net/browse/OMNI-44)) — so the loop
+refuses `--canary serve` with any non-stub proposer until that lands (OMNI-49,
+no override). M12–M23 are
 guardrail/loop gaps with one story each (OMNI-51–59). **Every KNOWN_ISSUES
 entry starts with its Jira ticket** — open, won't-fix and resolved alike (the
 open Lows are OMNI-64–87; the rest backfilled 2026-09-26 as OMNI-88–120,

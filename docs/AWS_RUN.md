@@ -194,11 +194,20 @@ enforces that: it refuses to upload a document routed at `OMNI` or at
 **Why the docker sandbox is non-negotiable here, beyond M1.** On EC2, the
 instance role's credentials are served by the metadata endpoint (IMDS) to any
 process on the host with network access. The gauntlet's `--network none` is
-what stands between LLM-written candidate code and that endpoint. IMDSv2 is
-enforced too, but the real guarantee is the sandbox: locally,
+what stands between LLM-written candidate code *in the gauntlet* and that
+endpoint. IMDSv2's hop limit of 1 does not help a host process — it only stops
+containers behind a bridge — so the real guarantee is the sandbox: locally,
 `SIS_ALLOW_UNSANDBOXED_LLM=1` means "candidate code can read my home
 directory"; on this box it would mean "candidate code can mint my cloud
 credentials". Don't set it here, ever.
+
+**The Serve canary is not covered by any of that** (KNOWN_ISSUES H3/M19). A
+`--canary serve` green replica is an ordinary Ray worker on the host: no
+`--network none`, so IMDS is reachable, and other processes' environments are
+readable through `/proc`. The loop therefore refuses `canary.backend=serve`
+with any proposer but the stub (OMNI-49) — at startup, per cycle, and at the
+deployment itself — until OMNI-48 isolates the replica. Run day uses the
+legacy canary (`canary.backend` unset), which never executes candidate code.
 
 ## Two spend brakes, deliberately independent
 

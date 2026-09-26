@@ -365,6 +365,51 @@ def ensure_sandbox_allows_proposer() -> None:
     )
 
 
+def serve_canary_problem(canary_backend: str, proposer_backend: str) -> str | None:
+    """Why the Serve canary may not run this proposer's code, or ``None``. Pure.
+
+    OMNI-49 (KNOWN_ISSUES M19), interim until OMNI-48 (H3) isolates the Serve
+    canary. A green replica is an ordinary Ray worker, not the gauntlet's
+    sandbox: no ``--network none``, the host filesystem readable, the named
+    actors (the CEO's ``reset_breaker`` included) callable, and on the AWS box
+    the instance role's credentials a request to IMDS away — the hop limit of 1
+    only stops *containers* behind a bridge, not host processes. The env scrub
+    blanks credentials in the replica's own environment; a same-uid process
+    can still read them from ``/proc/<pid>/environ`` of the raylet or driver.
+
+    That is fine for the stub's hand-written candidate and not for code an LLM
+    wrote, wherever it runs — so the rule keys on the proposer, not on
+    ``SIS_ENV``: an AWS run with the stub is as safe as a local one (M1 makes
+    the same call for the gauntlet).
+
+    No override flag, unlike M1. The legacy in-memory canary is the safe
+    alternative and costs nothing, and an override here would be a switch for
+    running LLM-written code as a control-plane worker — exactly H3.
+    """
+    if canary_backend != "serve" or proposer_backend == "stub":
+        return None
+    return (
+        f"canary.backend='serve' with proposer.backend={proposer_backend!r} would run "
+        "LLM-written code as an ordinary Ray worker in the control-plane cluster — not "
+        "the gauntlet's sandbox: it can read host files and other processes' "
+        "environments, call the named actors, and on AWS reach the instance's "
+        "credentials through IMDS (KNOWN_ISSUES H3/M19). Leave canary.backend unset "
+        "(the legacy in-memory canary) until OMNI-48 isolates the Serve canary."
+    )
+
+
+def ensure_canary_allows_proposer(canary_backend: str | None = None) -> None:
+    """Raise if the effective canary backend may not run the configured proposer.
+
+    *canary_backend* ``None`` means the configured one — the same resolution
+    ``DevOps.canary()`` applies. See :func:`serve_canary_problem`.
+    """
+    backend = canary_backend or config.get("canary.backend") or "legacy"
+    proposer = str(config.get("proposer.backend"))
+    if problem := serve_canary_problem(str(backend), proposer):
+        raise RuntimeError(problem)
+
+
 def _install_canonical(tmp: pathlib.Path) -> pathlib.Path:
     """Copy :mod:`sis.canonical` into the mount and return the copy's path.
 
