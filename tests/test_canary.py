@@ -1,5 +1,6 @@
 """Tests for the online canary verdict — pure, no Ray/Serve/network/clock."""
 
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -222,3 +223,73 @@ def test_verdict_reports_both_percentile_pairs() -> None:
 def test_max_latency_ratio_must_be_positive() -> None:
     with pytest.raises(ValueError, match="max_latency_ratio"):
         evaluate_canary([], [], [], [], version="v1", max_latency_ratio=0.0)
+
+
+# --- p99 noise tolerance ---------------------------------------------------
+
+
+def _judge(baseline: float, candidate: float, n: int = 150, **kw: Any) -> Any:
+    return evaluate_canary(
+        [SORTED_PERMUTATION], _samples(n),
+        _latencies(n, baseline), _latencies(n, candidate),
+        version="v1", min_samples=100, **kw,
+    )
+
+
+def _judge_tail(base_p99: float, cand_p99: float, n: int = 150, *,
+                cand_body: float = 0.010, **kw: Any) -> Any:
+    """Only the tail differs, and by exactly enough requests to *be* the p99.
+
+    Nearest-rank p99 over n samples is the ceil(0.99n)-th value, so the tail
+    must hold n - ceil(0.99n) + 1 requests (2 at n=150) — one slow request is
+    a p100 event and would leave p99 untouched, testing nothing.
+    """
+    tail = n - math.ceil(0.99 * n) + 1
+    baseline = _latencies(n - tail, 0.010) + _latencies(tail, base_p99)
+    candidate = _latencies(n - tail, cand_body) + _latencies(tail, cand_p99)
+    return evaluate_canary(
+        [SORTED_PERMUTATION], _samples(n), baseline, candidate,
+        version="v1", min_samples=100, **kw,
+    )
+
+
+def test_the_ci_flake_a_one_percent_p99_wobble_passes() -> None:
+    # The exact numbers that failed CI on PR #106: a known-good candidate
+    # rejected on p99 118.507 ms vs 117.423 ms. That is noise at ~150 requests.
+    verdict = _judge_tail(0.117423, 0.118507)
+    assert verdict.passed, verdict.reason
+
+
+def test_a_thirty_percent_p99_regression_still_fails() -> None:
+    verdict = _judge_tail(0.100, 0.130)
+    assert not verdict.passed
+    assert "live p99 regression" in verdict.reason
+
+
+def test_p95_gets_no_allowance() -> None:
+    # The tolerance is p99-only: p95 over the same window is several requests
+    # deep, so a 1% p95 regression still fails at the default ratio.
+    verdict = _judge(0.100, 0.101)
+    assert not verdict.passed
+    assert "live p95 regression" in verdict.reason
+
+
+def test_the_allowance_composes_with_a_demanded_margin() -> None:
+    # ratio 0.9 → p95 must be <= 0.90x, p99 <= 0.99x (0.9 * 1.10). The
+    # candidate body is 20% faster, so p95 clears the margin and only p99 decides.
+    assert _judge_tail(0.100, 0.098, max_latency_ratio=0.9, cand_body=0.008).passed
+    rejected = _judge_tail(0.100, 0.100, max_latency_ratio=0.9, cand_body=0.008)
+    assert not rejected.passed
+    assert "live p99 regression" in rejected.reason
+
+
+def test_zero_tolerance_restores_the_strict_p99_check() -> None:
+    verdict = _judge_tail(0.117423, 0.118507, p99_noise_tolerance=0.0)
+    assert not verdict.passed
+    assert "live p99 regression" in verdict.reason
+
+
+@pytest.mark.parametrize("tolerance", [-0.01, 0.51, 1.0])
+def test_the_tolerance_cannot_be_set_to_anything_passes(tolerance: float) -> None:
+    with pytest.raises(ValueError, match="p99_noise_tolerance"):
+        _judge(0.1, 0.1, p99_noise_tolerance=tolerance)

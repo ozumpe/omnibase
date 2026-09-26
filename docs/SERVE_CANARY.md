@@ -148,7 +148,11 @@ or a live cluster. `serve()` (the Ray/network-touching shell) calls it, mirrorin
 3. **Performance (graded):** candidate's live `p95`/`p99` not worse than baseline's
    (or ≥ the target's margin, matching the offline `min_speedup` philosophy) —
    computed over hundreds/thousands of real calls, so it doesn't inherit the
-   synthetic 10-input jitter problem.
+   synthetic 10-input jitter problem. **p99 gets a small noise allowance, p95
+   none** (`p99_noise_tolerance`, default 10%): at the live path's ~150
+   requests, nearest-rank p99 is the second-slowest request, and CI rejected a
+   known-good candidate on a 1% p99 difference (118.5 vs 117.4 ms). A real tail
+   regression — tens of percent, or a stuck request — still fails.
 
 ## The `ServeCloud` adapter
 
@@ -315,8 +319,10 @@ step 1 (already done):
    (2026-08-05). Pure, no Ray/Serve/network/clock. Takes
    `Sequence[BoundInvariant]`, so it did **not** wait on step 2. Four gates:
    evidence floor → invariants (hard) → response agreement (hard, `SHADOW` only)
-   → p95 *and* p99 within `max_latency_ratio` (default `1.0` = "not worse"; pass
-   `0.9` for the offline gate's 10% margin). Everything fails closed — a
+   → p95 within `max_latency_ratio` (default `1.0` = "not worse"; pass
+   `0.9` for the offline gate's 10% margin) and p99 within that times
+   `1 + p99_noise_tolerance` (default 0.10, bounded to [0, 0.5] so it can't
+   become "anything passes"). Everything fails closed — a
    predicate that raises counts as a violation rather than propagating, and a
    `SHADOW` window that lost its baselines returns a `harness:` reason instead of
    being recorded as the candidate disagreeing.
