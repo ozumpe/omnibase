@@ -1,40 +1,57 @@
 name: CI
 
 # The same gates the gauntlet enforces on generated code, run on every push/PR
-# against the engine. Wire this as a required status check in branch protection
-# so nothing merges to main without passing.
+# against the engine. The one required status check is `test` — the last job
+# below, which passes only when the jobs this change needed have succeeded.
+#
+# OMNI-60: lint, the fast suite and the Serve suite run as parallel jobs, and a
+# docs-only PR skips all three for the `docs` job. Deliberately NOT
+# `paths-ignore`: a workflow skipped that way never reports `test`, and the PR
+# waits for the required check forever. The decisions (what counts as docs, and
+# whether `test` passes) live in scripts/ci_gate.py, unit-tested in
+# tests/test_ci_gate.py; tests/test_test_layout.py pins this file's shape.
 on:
   push:
     branches: [main, develop]
   pull_request:
-    branches: [main, develop]
 
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  test:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # the PR's base commit, to diff against
+
+      - name: Classify the change
+        id: classify
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "$EVENT" = "pull_request" ]; then
+            python3 scripts/ci_gate.py changes "$BASE" "$HEAD"
+          else
+            # A push to main/develop is the post-merge check of what actually
+            # landed: always the full run, never the fast path.
+            echo "push: full run"
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  lint:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python 3.14
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.14"
-
-      - name: Install Poetry
-        run: pipx install poetry
-
-      - name: Cache Poetry virtualenv
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pypoetry
-          key: poetry-${{ runner.os }}-py314-${{ hashFiles('poetry.lock') }}
-
-      - name: Install dependencies
-        run: poetry install --no-interaction   # core + dev (ray, mypy, pytest, ruff)
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
 
       - name: Ruff (lint)
         run: poetry run ruff check .
@@ -42,5 +59,59 @@ jobs:
       - name: mypy --strict (type gate)
         run: poetry run mypy --strict sis/ main.py scripts/
 
+  # Two pytest halves, both required on a code change. The default addopts
+  # exclude the `serve` marker and parallelise, which is right for the inner
+  # loop and wrong for a verification gate — so CI runs the excluded half
+  # explicitly rather than inheriting a narrowed definition of "passing"
+  # (OMNI-16). tests/test_test_layout.py pins that this file keeps doing so.
+  fast:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+
       - name: pytest (test gate)
         run: poetry run pytest -q
+
+  serve:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+
+      - name: pytest (Ray Serve integration gate)
+        # Serial by design: these bind a fixed port and share one Ray cluster,
+        # so -n auto would have them fight over both. `-n 0` rather than
+        # `-p no:xdist`, which would disable the plugin while addopts still
+        # passes it `-n auto` — an unrecognised-argument error, not a serial run.
+        run: poetry run pytest -q -m serve -n 0
+
+  # A docs-only change is not an untested one: the tests that read the repo's
+  # Markdown (marked `docs`) still run — a doc naming a SIS_* variable the
+  # config schema lacks, a KNOWN_ISSUES entry without its ticket.
+  docs:
+    needs: changes
+    if: needs.changes.outputs.docs_only == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+
+      - name: pytest (docs gate)
+        run: poetry run pytest -q -m docs -n 0
+
+  test:
+    needs: [changes, lint, fast, serve, docs]
+    if: always()   # must report even when jobs were skipped or failed
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Required jobs for this change succeeded
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: python3 scripts/ci_gate.py verdict

@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# commit-msg hook — require a Jira key (OMNI-N) on commits for planned work.
+#
+# CLAUDE.md: "every commit and PR title touching planned work references its
+# Jira key" — that's what lets the GitHub-for-Jira app populate each issue's
+# Development panel. This is the enforcement side.
+#
+# Ad-hoc fixes with no OMNI story are allowed through with an explicit
+# "No-Ticket: <reason>" trailer line (same style as Co-Authored-By:) instead
+# of a key. A trailer, not free text like "[no-ticket]" anywhere in the
+# message: this hook's own commit needed to *document* that marker in prose,
+# and a free-text match would have let that documentation sentence itself
+# satisfy the bypass — defeating the check on the one commit adding it.
+# A trailer anchored to the start of a line doesn't collide with prose.
+#
+# Enable once per clone:   git config core.hooksPath hooks
+# Emergency override:      git commit --no-verify
+#
+# Skipped for merge commits (git merge's own generated message, not
+# hand-authored) and for fixup!/squash! commits (rebased away before review).
+
+set -euo pipefail
+
+msg_file="$1"
+
+# commit-msg receives only $1 (unlike prepare-commit-msg, which gets a
+# "merge"/"squash" source arg) — MERGE_HEAD is the standard way to detect
+# "this commit is completing a merge" from here.
+if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+  exit 0
+fi
+
+first_line="$(head -n1 "$msg_file")"
+if [[ "$first_line" =~ ^(fixup|squash)! ]]; then
+  exit 0
+fi
+
+if grep -qiE '(^|[^A-Za-z0-9])OMNI-[0-9]+([^A-Za-z0-9]|$)' "$msg_file"; then
+  exit 0
+fi
+if grep -qiE '^No-Ticket:' "$msg_file"; then
+  exit 0
+fi
+
+echo "✗ Commit message has no Jira key (e.g. OMNI-6) and no 'No-Ticket:' trailer." >&2
+echo "  Add the key for planned work, or a trailer line for an ad-hoc fix:" >&2
+echo "    No-Ticket: <why this doesn't need one>" >&2
+echo "  Emergency override:  git commit --no-verify" >&2
+exit 1

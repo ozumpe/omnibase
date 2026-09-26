@@ -14,27 +14,131 @@ agent (the human PR is mandatory — gauntlet step 6).
 from __future__ import annotations
 
 import hashlib
+import pathlib
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass
 from typing import Any
 
 import ray
 
-from sis import gauntlet, policy, proposer
-from sis.paths import TARGET_PATH
-from sis.ports import IssueStatus, IssueType
+from sis import config, contract, contract_author, gauntlet, policy, proposer
+from sis.canary import DEFAULT_MIN_CANARY_SAMPLES, CanaryMode, evaluate_canary
+from sis.paths import PROJECT_ROOT, TARGET_PATH
+from sis.ports import IssueStatus, IssueType, PullRequest
 from sis.self_model import get_self_model
-from sis.settings import space_keys
+from sis.settings import space_keys, version_control_base
 from sis.workspace import get_workspace
+
+# How many synthetic requests DevOps drives through a live canary to fill its
+# window (OMNI-14). Nothing external calls the served target yet
+# (docs/SERVE_CANARY.md's bootstrap problem), so the window has to be filled
+# the same way manual testing already does (sis.loadgen) rather than waiting
+# on organic traffic that will never arrive. Comfortably above
+# evaluate_canary's own evidence floor, with headroom for a candidate that
+# fails some fraction of requests (a failed dispatch is not a paired sample).
+LIVE_CANARY_REQUESTS = 150
+LIVE_CANARY_CONCURRENCY = 8
+
+# Repo-relative key the contract registry is keyed by (see SelfModel).
+_TARGET_REL = TARGET_PATH.relative_to(PROJECT_ROOT).as_posix()
+
+# CEO spend-brake defaults, read off the config schema rather than restated here.
+# They were previously literals in this module *and* the documented defaults in
+# the README — the drift that OMNI-27 exists to end. One declaration in
+# sis/config.py now feeds CEO.__init__, ceo_config_from_env, config.yml, and the
+# --brakes-* flags, so a configured run and a default run cannot disagree.
+DEFAULT_BUDGET_USD: float = config.key_for("brakes.budget_usd").default
+DEFAULT_BREAKER_THRESHOLD: int = config.key_for("brakes.breaker_threshold").default
+DEFAULT_MAX_COST_PER_ACCEPTED_USD: float = config.key_for(
+    "brakes.max_cost_per_accepted_usd").default
+DEFAULT_SLO_MIN_SPEND_USD: float = config.key_for("brakes.slo_min_spend_usd").default
+DEFAULT_SLO_FAILURE_WEIGHT: float = config.key_for("brakes.slo_failure_weight").default
 
 # --------------------------------------------------------------------------
 # Shared helpers
 # --------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class CEOConfig:
+    """The CEO's spend brakes — the hard cap and the two SLO thresholds."""
+
+    budget_usd: float = DEFAULT_BUDGET_USD
+    breaker_threshold: int = DEFAULT_BREAKER_THRESHOLD
+    max_cost_per_accepted_usd: float = DEFAULT_MAX_COST_PER_ACCEPTED_USD
+    slo_min_spend_usd: float = DEFAULT_SLO_MIN_SPEND_USD
+    slo_failure_weight: float = DEFAULT_SLO_FAILURE_WEIGHT
+
+    def __post_init__(self) -> None:
+        check_slo_failure_weight(self.slo_failure_weight)
+
+
+def check_slo_failure_weight(weight: float) -> float:
+    """Reject a weight outside (0, 1]. Pure.
+
+    The config schema already refuses zero and negatives; the upper bound lives
+    here because it is a property of the breaker, not of number parsing. Above
+    1.0 a correct-but-slow cycle would count for *more* than a wrong one, which
+    inverts the whole point of weighing them differently. Zero is refused for
+    the opposite reason: it would silently switch SLO failures off.
+    """
+    if not 0.0 < weight <= 1.0:
+        raise ValueError(
+            f"brakes.slo_failure_weight must be in (0, 1], got {weight} — 1.0 counts an "
+            "over-budget cycle like a wrong one; smaller values count it for less"
+        )
+    return weight
+
+
+def failure_weight(reject_gate: str | None, *, slo_failure_weight: float) -> float:
+    """How much one failed cycle adds to the consecutive-failure streak. Pure.
+
+    Only a correct-but-over-budget rejection (``slo``) is discounted. Everything
+    else — including ``slo_error``, a candidate that *raised* on the SLO
+    workload, which is a wrong answer rather than a slow one — counts in full.
+
+    ``harness`` (a broken sandbox, OMNI-37) also counts in full, deliberately.
+    A broken sandbox fails *every* cycle, and each one spends on a proposal
+    first, so the breaker stopping the loop after N of them is the right
+    outcome. What OMNI-37 fixed is the attribution — the bug says the
+    infrastructure failed, not the candidate — not whether it counts.
+    """
+    return slo_failure_weight if reject_gate == "slo" else 1.0
+
+
+def ceo_config_from_env(env: Mapping[str, str] | None = None) -> CEOConfig:
+    """Build the CEO's spend brakes from configuration (pure — unit-testable).
+
+    Lets a run set a deliberately tiny budget without editing source
+    (KNOWN_ISSUES.md M5), now through the whole precedence chain rather than the
+    environment alone: ``--brakes-budget-usd`` > ``SIS_BUDGET_USD`` >
+    ``config.yml``'s ``brakes.forbidden_budget_usd`` > the built-in default. An
+    unparseable or negative value raises rather than falling back — a typo'd
+    ``0.1O`` that quietly became $5 would defeat the whole point of the gate.
+
+    Keeps its *env mapping* parameter because that is what makes it unit-testable
+    without touching the process environment; the mapping is threaded into
+    :func:`sis.config.resolve` as that layer.
+    """
+    cfg = config.config(env=env).brakes
+    return CEOConfig(
+        budget_usd=cfg.budget_usd,
+        breaker_threshold=cfg.breaker_threshold,
+        max_cost_per_accepted_usd=cfg.max_cost_per_accepted_usd,
+        slo_min_spend_usd=cfg.slo_min_spend_usd,
+        slo_failure_weight=cfg.slo_failure_weight,
+    )
+
+
+# Tolerance for comparing the weighted failure streak with its threshold.
+_STREAK_EPSILON = 1e-9
+
+
 def evaluate_brakes(
     *,
     spent: float,
     budget: float,
-    consecutive_failures: int,
+    consecutive_failures: float,
     threshold: int,
     accepted: int,
     max_cost_per_accepted: float,
@@ -44,15 +148,90 @@ def evaluate_brakes(
 
     Order is intentional: the hard spend cap dominates, then the regression
     breaker, then the economics SLO (only judged once real money is spent).
+
+    *consecutive_failures* is a weighted streak (OMNI-24): a correct-but-over-
+    budget cycle adds ``brakes.slo_failure_weight`` rather than 1, so it may be
+    fractional. It is compared with a small tolerance: a weight like 0.1 summed
+    ten times is 0.9999999999999999 in binary floating point, and a breaker
+    that never reaches its threshold because of rounding is a breaker that
+    never trips.
     """
     if spent > budget:
         return "hard spend cap exceeded"
-    if consecutive_failures >= threshold:
+    if consecutive_failures + _STREAK_EPSILON >= threshold:
         return "consecutive failure threshold"
     cost_per_accepted = spent / accepted if accepted else float("inf")
     if spent >= slo_min_spend and cost_per_accepted > max_cost_per_accepted:
         return "cost-per-accepted-improvement SLO breached"
     return None
+
+
+def brake_persistence_problem(
+    store: str, proposer_backend: str, adapters_mode: str
+) -> str | None:
+    """Why this configuration may not run with ephemeral brakes, or None. Pure.
+
+    OMNI-61, decided 2026-09-26: ``episodic.store = none`` is refused only when
+    the brakes protect something. With ``none``, every ``python main.py``
+    rehydrates nothing and starts at ``spent=0`` — repeated runs have no spend
+    cap at all — and the episodic log reconciled against the provider's bill is
+    discarded too. That matters when a real proposer spends money or real
+    adapters touch real systems; with the stub and in-memory adapters (the
+    default run and the whole test suite) nothing is spent and nothing leaves
+    the process, so per-process brakes cost nothing.
+
+    No override flag, deliberately unlike M1: ``jsonl`` writes to the gitignored
+    ``runtime/``, so the safe alternative costs nothing, and an override on a
+    spend guardrail would be a permanent off-switch.
+    """
+    if store != "none" or (proposer_backend == "stub" and adapters_mode != "real"):
+        return None
+    return (
+        f"episodic.store=none with proposer.backend={proposer_backend!r} and "
+        f"adapters.mode={adapters_mode!r}: brake state would be per-process, so "
+        "every restart starts at spent=0 (no durable spend cap), and the episodic "
+        "log that reconciles spend against the bill is discarded (no audit trail). "
+        "Use episodic.store=jsonl (the default; it writes to the gitignored runtime/)."
+    )
+
+
+def ensure_brake_persistence() -> None:
+    """Raise if the configured store cannot back the brakes (see above)."""
+    problem = brake_persistence_problem(
+        str(config.get("episodic.store")), str(config.get("proposer.backend")),
+        str(config.get("adapters.mode")))
+    if problem:
+        raise RuntimeError(problem)
+
+
+def unreadable_brake_state(detail: str) -> dict[str, Any]:
+    """The state a CEO boots with when its persisted state cannot be read. Pure.
+
+    Fails closed (OMNI-61): the breaker is open and says why. Spend is unknown,
+    not zero — so no cycle runs until a human has looked, repaired or moved the
+    file aside, and reset the breaker on purpose (``python -m sis.admin
+    reset-breaker``). The store refuses to overwrite the unreadable file, so the
+    evidence survives until then.
+    """
+    return {
+        "tripped": True,
+        "trip_reason": (
+            f"brake state unreadable ({detail}); spend and failure streak are unknown. "
+            "Inspect it, repair it or move it aside, then run "
+            "`python -m sis.admin reset-breaker`."
+        ),
+    }
+
+
+def _version_for(pr: PullRequest) -> str:
+    """The deployed-version string for a PR's candidate. Pure.
+
+    One definition, because ``canary()`` and ``observe_merge()`` must agree
+    exactly: the promote path looks the version up by the string the deploy
+    path wrote, and a mismatch would silently promote nothing while reporting
+    success.
+    """
+    return f"{pr.branch}@{pr.id}"
 
 
 class Role:
@@ -64,6 +243,46 @@ class Role:
         self._sm = get_self_model()
         self._ws = get_workspace()
         ray.get(self._sm.register.remote(name, role, parent))
+
+    def _contract(self, name: str | None = None) -> contract.OptimizationContract:
+        """Which target this cycle optimises, and what judges it.
+
+        Shared by the SWE (which proposes) and QA (which re-runs the gauntlet):
+        both must resolve the *same* contract, or QA re-judges the candidate
+        against a different target's oracle and rejects a perfectly good diff.
+        ``run_cycle`` passes the same *name* to both for exactly that reason.
+
+        Resolution order: the explicit *name* the caller passed, then
+        ``contracts.default``, then the bootstrap target (historical behaviour).
+
+        The explicit argument is the primary mechanism, not a nicety: these are
+        **detached Ray actors in their own processes**, which inherit the
+        driver's environment when they are *created*. An env var exported after
+        ``bootstrap()`` — including anything a test sets with
+        ``monkeypatch.setenv`` — is invisible to them. ``SIS_CONTRACT`` therefore
+        only works when set before launch (``SIS_CONTRACT=sort python main.py``),
+        which is fine for the CLI and useless for anything programmatic. The
+        ``config.yml`` layer does not have that limitation — each actor reads the
+        file from disk itself — but the explicit argument still wins, because a
+        per-cycle choice should not depend on a file that outlives the cycle.
+
+        An unknown name raises rather than silently falling back — a typo'd
+        contract name that quietly optimised a different target would be a
+        confusing way to waste a cycle's spend.
+        """
+        wanted = name or config.get("contracts.default")
+        if wanted:
+            named: contract.OptimizationContract | None = ray.get(
+                self._sm.contract_by_name.remote(wanted))
+            if named is None:
+                known = [c.name for c in ray.get(self._sm.contracts.remote())]
+                source = "contract_name" if name else "contracts.default"
+                raise ValueError(
+                    f"{source}={wanted!r} is not a registered contract; known: {known}")
+            return named
+        registered: contract.OptimizationContract | None = ray.get(
+            self._sm.contract_for.remote(_TARGET_REL))
+        return registered or contract.default_contract()
 
 
 # --------------------------------------------------------------------------
@@ -86,10 +305,12 @@ class CEO(Role):
 
     def __init__(
         self,
-        budget_usd: float = 5.0,
-        breaker_threshold: int = 3,
-        max_cost_per_accepted_usd: float = 2.0,
-        slo_min_spend_usd: float = 0.50,
+        budget_usd: float = DEFAULT_BUDGET_USD,
+        breaker_threshold: int = DEFAULT_BREAKER_THRESHOLD,
+        max_cost_per_accepted_usd: float = DEFAULT_MAX_COST_PER_ACCEPTED_USD,
+        slo_min_spend_usd: float = DEFAULT_SLO_MIN_SPEND_USD,
+        slo_failure_weight: float = DEFAULT_SLO_FAILURE_WEIGHT,
+        state: dict[str, Any] | None = None,
     ) -> None:
         super().__init__("CEO", "CEO")
         self._budget = budget_usd
@@ -97,10 +318,29 @@ class CEO(Role):
         self._threshold = breaker_threshold
         self._max_cost_per_accepted = max_cost_per_accepted_usd
         self._slo_min_spend = slo_min_spend_usd  # don't judge the SLO on pennies
-        self._consecutive_failures = 0
+        self._slo_failure_weight = check_slo_failure_weight(slo_failure_weight)
+        # Weighted (OMNI-24): an over-budget cycle adds less than a wrong one.
+        self._consecutive_failures = 0.0
         self._accepted = 0
         self._tripped = False
+        # Why the breaker is open, for the operator (OMNI-61) — a brake name, or
+        # "brake state unreadable" when the CEO failed closed at boot.
+        self._trip_reason: str | None = None
+        # An operator's pause (sis.admin): refuses new cycles without tripping
+        # the breaker or touching any counter. The reason, or None.
+        self._paused: str | None = None
         self._charter_id: str | None = None
+        # Rehydrate persisted brake/spend state (L9) — only on a *fresh* actor.
+        # A detached CEO that already exists (get_if_exists) keeps its live state;
+        # this path runs on first bootstrap or after a cluster/actor restart.
+        if state:
+            self._spent = float(state.get("spent_usd", 0.0))
+            # float(): pre-OMNI-24 snapshots stored an int, which still loads.
+            self._consecutive_failures = float(state.get("consecutive_failures", 0))
+            self._accepted = int(state.get("accepted", 0))
+            self._tripped = bool(state.get("tripped", False))
+            self._trip_reason = state.get("trip_reason")
+            self._paused = state.get("paused")
 
     def approve_budget(self, estimate_usd: float) -> bool:
         """Goal/cost gate: refuse if this attempt would breach the hard cap."""
@@ -114,8 +354,15 @@ class CEO(Role):
                                      spent=self._spent, budget=self._budget))
         return True
 
-    def report_outcome(self, *, success: bool, cost_usd: float = 0.0) -> str | None:
+    def report_outcome(
+        self, *, success: bool, cost_usd: float = 0.0, reject_gate: str | None = None,
+    ) -> str | None:
         """Record real spend + outcome, then evaluate all three brakes.
+
+        *reject_gate* is the gauntlet gate that rejected a failed cycle
+        (``episodic.gate_from_reason``). It only changes how much the failure
+        counts: a correct-but-over-budget ``slo`` rejection adds
+        ``brakes.slo_failure_weight`` to the streak, anything else adds 1.
 
         Returns the brake reason **on a fresh trip** (None otherwise) so the
         caller can raise the alarm — per ACTORS.md, DevOps files the bug that
@@ -123,11 +370,29 @@ class CEO(Role):
         """
         self._spent += cost_usd
         if success:
-            self._consecutive_failures = 0
+            self._consecutive_failures = 0.0
             self._accepted += 1
         else:
-            self._consecutive_failures += 1
+            self._consecutive_failures += failure_weight(
+                reject_gate, slo_failure_weight=self._slo_failure_weight)
+        return self._evaluate_brakes()
 
+    def record_neutral(self, *, cost_usd: float = 0.0) -> str | None:
+        """Record a neutral cycle — nothing to improve (a no-op), or a benchmark
+        that saw the candidate as faster but could not prove it (OMNI-41).
+
+        Not a failure (no regression) and not an acceptance (nothing shipped),
+        so the failure and accept counters are left untouched — a no-op must
+        never trip the consecutive-failure breaker. Spend is still recorded, so
+        the hard spend cap and the cost-per-accepted SLO still apply: many
+        paid-for no-op cycles that accept nothing are exactly what the SLO
+        catches. Returns the brake reason on a fresh trip, else None.
+        """
+        self._spent += cost_usd
+        return self._evaluate_brakes()
+
+    def _evaluate_brakes(self) -> str | None:
+        """Evaluate all three brakes against current state; trip once."""
         reason = evaluate_brakes(
             spent=self._spent,
             budget=self._budget,
@@ -137,9 +402,9 @@ class CEO(Role):
             max_cost_per_accepted=self._max_cost_per_accepted,
             slo_min_spend=self._slo_min_spend,
         )
-
         if reason and not self._tripped:
             self._tripped = True
+            self._trip_reason = reason
             ray.get(self._ws.emit.remote("breaker.tripped", reason=reason,
                                          **self.economics()))
             return reason
@@ -160,6 +425,53 @@ class CEO(Role):
             "accepted": float(self._accepted),
             "cost_per_accepted_usd": cpa if cpa != float("inf") else -1.0,
         }
+
+    def state_snapshot(self) -> dict[str, Any]:
+        """The persistable brake/spend state (L9) — what the driver writes to the
+        episodic store after each cycle and rehydrates on a fresh bootstrap."""
+        return {
+            "spent_usd": self._spent,
+            "consecutive_failures": self._consecutive_failures,
+            "accepted": self._accepted,
+            "tripped": self._tripped,
+            "trip_reason": self._trip_reason,
+            "paused": self._paused,
+        }
+
+    def pause_reason(self) -> str | None:
+        """Why an operator paused the loop, or None when it is not paused."""
+        return self._paused
+
+    def pause(self, reason: str) -> dict[str, Any]:
+        """Refuse new cycles until :meth:`resume` (``sis.admin pause``).
+
+        Not a trip: the failure streak, spend and breaker are untouched, so
+        resuming puts the loop back exactly where it was. Human-only by
+        convention, **not** by construction — any code that can reach this
+        named actor can call it, which is why OMNI-48/49 keep candidate code
+        away from the cluster rather than trusting this method to.
+        """
+        self._paused = reason
+        ray.get(self._ws.emit.remote("loop.paused", reason=reason))
+        return self.state_snapshot()
+
+    def resume(self) -> dict[str, Any]:
+        """Undo :meth:`pause`. The breaker, if open, stays open."""
+        self._paused = None
+        ray.get(self._ws.emit.remote("loop.resumed"))
+        return self.state_snapshot()
+
+    def reset_breaker(self) -> bool:
+        """Admin reset of the circuit breaker (clears the tripped flag + failure
+        streak). Spend is deliberately **not** reset — it is a financial guardrail,
+        so clearing the breaker can't bypass the hard cap (see
+        docs/BRAKE_STATE_AND_ORACLE.md §4.1). A spend-cap trip therefore re-trips on
+        the next evaluation until the budget is raised."""
+        self._tripped = False
+        self._trip_reason = None
+        self._consecutive_failures = 0.0
+        ray.get(self._ws.emit.remote("breaker.reset", **self.economics()))
+        return True
 
     def set_charter(self, text: str) -> str:
         """Write the top-level charter page (once — idempotent per CEO lifetime).
@@ -255,15 +567,38 @@ class SWE(Role):
     def __init__(self) -> None:
         super().__init__("SWE", "SWE", parent="CTO")
 
-    def implement(self, story_id: str) -> dict[str, Any]:
+    def implement(self, story_id: str, contract_name: str | None = None) -> dict[str, Any]:
+        # What this target is judged by — reference, inputs, margin. Resolved
+        # FIRST, before any artifact is touched: a bad contract name is a
+        # configuration error, and failing after moving the story to
+        # In Progress would leave it stranded there with nothing working on it.
+        spec = self._contract(contract_name)
+
         ray.get(self._ws.transition.remote(story_id, IssueStatus.IN_PROGRESS, "SWE picked up"))
 
-        current_source = TARGET_PATH.read_text(encoding="utf-8")
-        baseline = gauntlet.measure_baseline(current_source)  # sandboxed, not in-process
-        candidate = proposer.propose(current_source, baseline)
+        # Start from the target as merged on the base branch, so a cycle that
+        # follows a merged optimisation builds on it instead of re-proposing
+        # against the stale local file. Falls back to the local file when
+        # version control has no merged source (the in-memory path, or a target
+        # not yet committed to the base).
+
+        merged_source = ray.get(self._ws.live_target_source.remote(spec.target_path))
+        origin = "merged_base" if merged_source else "local_file"
+        # Fall back to the *contract's* target, not a hardcoded path — otherwise
+        # a cycle for any contract but the bootstrap one silently optimises
+        # runtime/target.py while being judged against a different oracle.
+        current_source = merged_source or pathlib.Path(
+            spec.target_file).read_text(encoding="utf-8")
+        ray.get(self._ws.emit.remote("target.source", story_id=story_id, origin=origin))
+        # sandboxed, not in-process
+        baseline = gauntlet.measure_baseline(current_source, contract=spec)
+        candidate = proposer.propose(current_source, baseline, contract=spec)
         candidate_sha = hashlib.sha256(candidate.encode("utf-8")).hexdigest()[:12]
         cost_usd = proposer.last_cost_usd()  # 0.0 for the stub; real $ for Claude
-        report = gauntlet.validate(candidate, baseline)
+        # Benchmark the candidate against the source the cycle is based on (the
+        # merged target), not the stale local file — see KNOWN_ISSUES.md H1.
+        report = gauntlet.validate(
+            candidate, baseline, baseline_source=current_source, contract=spec)
 
         if not report.passed:
             ray.get(self._ws.transition.remote(
@@ -274,22 +609,34 @@ class SWE(Role):
 
         # Change-authorization policy: the loop may only write paths its tier
         # permits. The target is SOFT (allowed once checks pass); a mis-pointed
-        # guardrail/engine path is refused here, before any branch or PR.
-        decision = policy.authorize_change(TARGET_PATH, checks_passed=report.passed)
+        # guardrail/engine path is refused here, before any branch or PR. The
+        # path authorised is the one open_pr() writes — the contract's — so
+        # the check cannot approve one file while the PR changes another
+        # (OMNI-51: both used to name runtime/target.py for every contract).
+        decision = policy.authorize_change(spec.target_path, checks_passed=report.passed)
+        ray.get(self._ws.emit.remote(
+            "policy.decision", story_id=story_id, path=spec.target_path,
+            tier=decision.tier.value, allowed=decision.allowed))
         if not decision.allowed:
             ray.get(self._ws.transition.remote(
                 story_id, IssueStatus.TBD, f"Policy blocked: {decision.reason}"))
             ray.get(self._sm.record.remote(
                 "outcome", story_id, passed=False, reason=f"policy: {decision.reason}"))
             return {"passed": False, "reason": f"policy: {decision.reason}",
-                    "pr_id": None, "cost_usd": cost_usd}
+                    "pr_id": None, "cost_usd": cost_usd, "candidate_sha": candidate_sha}
 
+        # Fork from the same base the merged target was read from, not a
+        # hardcoded "main" — see KNOWN_ISSUES.md M4.
         branch = f"feature/{story_id.lower()}"
-        ray.get(self._ws.create_branch.remote(branch, "main"))
+        ray.get(self._ws.create_branch.remote(branch, version_control_base()))
         ray.get(self._ws.commit.remote(branch, f"Optimise target for {story_id}"))
-        pr = ray.get(self._ws.open_pr.remote(branch, f"Optimise target ({story_id})", candidate))
+        pr = ray.get(self._ws.open_pr.remote(
+            branch, f"Optimise target ({story_id})", candidate, spec.target_path))
         ray.get(self._ws.transition.remote(
             story_id, IssueStatus.READY_FOR_REVIEW, f"PR {pr.id} ready"))
+        # The canary needs this PR's contract later (oracle, entry point,
+        # margin, route) and has only the PR id to go on by then.
+        ray.get(self._sm.set_pr_contract.remote(pr.id, spec.name))
         ray.get(self._sm.record.remote("branch", branch, story=story_id))
         ray.get(self._sm.record.remote(
             "pr", pr.id, story=story_id,
@@ -306,44 +653,384 @@ class QA(Role):
     def __init__(self) -> None:
         super().__init__("QA", "QA", parent="CTO")
 
-    def review(self, story_id: str, pr_id: str) -> bool:
+    def review(
+        self, story_id: str, pr_id: str, contract_name: str | None = None
+    ) -> tuple[bool, str | None]:
+        """Verify the PR against its story; returns ``(approved, gauntlet_reason)``.
+
+        The reason is the re-run gauntlet's (``None`` if it never ran), so the
+        org can tell a real rejection from a neutral one — an *inconclusive*
+        benchmark (OMNI-41) is the same fact at QA as at the SWE stage and must
+        not become a bug and a breaker count just because QA re-measured.
+        """
         issue = ray.get(self._ws.get_issue.remote(story_id))
-        pr = ray.get(self._ws.get_pr.remote(pr_id))
+        # Resolved before the PR is read: which file holds the candidate is a
+        # property of the contract (OMNI-51).
+        spec = self._contract(contract_name)
+        pr = ray.get(self._ws.get_pr.remote(pr_id, spec.target_path))
         # Deterministic gate already ran in the SWE step; QA confirms the
         # artifact exists, matches the story, and re-runs the gauntlet.
         ok = bool(pr.artifact) and issue.status == IssueStatus.READY_FOR_REVIEW
+        reason: str | None = None
         if ok:
-            # Re-run the gauntlet: the candidate executes ONLY inside its sandbox
-            # (baseline is advisory — validate() measures its own in-sandbox).
-            report = gauntlet.validate(pr.artifact, 0.0)
+            # Re-run the gauntlet: the candidate executes ONLY inside its sandbox.
+            # Benchmark against the same merged baseline the SWE used (the target
+            # as merged on the base branch), not the stale local file — H1.
+            # Must resolve the SAME contract the SWE used, or QA re-judges the
+            # candidate against a different target's oracle and rejects a
+            # perfectly good diff.
+            merged = ray.get(self._ws.live_target_source.remote(spec.target_path))
+            baseline_source = merged or pathlib.Path(
+                spec.target_file).read_text(encoding="utf-8")
+            report = gauntlet.validate(
+                pr.artifact, 0.0, baseline_source=baseline_source, contract=spec)
             ok = report.passed
+            reason = report.reason
         if ok:
             ray.get(self._ws.transition.remote(story_id, IssueStatus.DONE, "QA verified"))
         else:
             ray.get(self._ws.transition.remote(story_id, IssueStatus.TBD, "QA found discrepancy"))
         ray.get(self._sm.record.remote("outcome", story_id, passed=ok, by="QA"))
-        return ok
+        return ok, reason
+
+
+@ray.remote
+class ContractAuthor(Role):
+    """Turns a spec into a drafted contract. Trusted; its output is human-reviewed.
+
+    **The one role that is allowed to write the exam**, which is exactly why it
+    is a different actor from the SWE that has to pass it. Separation of author
+    and implementer is not a workflow nicety — it *is* the anti-gaming property,
+    and making it structural is the point of this step existing at all.
+
+    Deliberately thin: the drafting logic is pure and lives in
+    :mod:`sis.contract_author`, so it is unit-testable without standing up Ray,
+    and the approval gate lives there too — in guardrail code, not in a method on
+    an actor the loop could otherwise reason its way around.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("ContractAuthor", "ContractAuthor", parent="CTO")
+
+    def draft(
+        self,
+        spec_id: str,
+        *,
+        name: str,
+        entry: str,
+        public_api: tuple[str, ...],
+    ) -> dict[str, Any]:
+        """Draft a contract skeleton from a spec page and stage it for review.
+
+        Returns a summary rather than the draft itself: the artifacts are on
+        disk under ``runtime/contract_staging/``, and what a caller needs back is
+        *what to go and look at*.
+
+        Never promotes. ``contract_author.promote`` requires human approval and
+        this actor does not call it — the agent surfaces the decision, a human
+        makes it, which is the same shape as ``DevOps.observe_merge`` applying a
+        human's merge rather than performing one.
+        """
+        page = ray.get(self._ws.get_page.remote(spec_id))
+        draft = contract_author.skeleton_from_spec(
+            name=name,
+            spec_ref=spec_id,
+            body=page.body,
+            entry=entry,
+            public_api=public_api,
+        )
+        staged = contract_author.stage(draft, public_api=public_api)
+        # Structured, not just prose. `summary()` is a sentence, and a caller
+        # writing the natural `if result["discriminates"]:` would take the
+        # success branch for "DOES NOT REJECT A NULL IMPLEMENTATION" — a
+        # non-empty string is truthy, so the one fact the field exists to convey
+        # is the one a truthiness test cannot see. None means "not checked",
+        # which is a third state and not the same as False.
+        discrimination = staged.discrimination
+        discriminates: bool | None = (
+            None if discrimination is None or not discrimination.checked
+            else discrimination.discriminates
+        )
+        verdict = discrimination.summary() if discrimination is not None else "not checked"
+        ray.get(self._sm.record.remote(
+            "contract_drafted", spec_id, contract=name, files=list(staged.files),
+            staged_at=str(staged.directory), awaiting="human approval",
+            discriminates=discriminates, discrimination_detail=verdict,
+        ))
+        return {
+            "contract": staged.name,
+            "spec_ref": staged.spec_ref,
+            "staged_at": str(staged.directory),
+            "files": list(staged.files),
+            "promoted": False,
+            # Surfaced in the return value, not only in the file: a caller that
+            # never opens the directory should still see that the drafted exam
+            # asserts nothing, because that is the failure a reviewer skimming
+            # plausible-looking test code is least likely to notice.
+            "discriminates": discriminates,          # True | False | None (not checked)
+            "discrimination_detail": verdict,
+            "next": "a human reviews the draft, then approves promotion into specs/",
+        }
+
+
+@dataclass(frozen=True)
+class _RemoteTelemetry:
+    """Forwards ``emit`` through ``Workspace.emit.remote(...)``.
+
+    Satisfies :class:`sis.serve_cloud.SupportsEmit` for a role actor, which
+    holds a Ray *handle* to Workspace rather than the raw ``InMemoryTelemetry``
+    instance living inside it. Without this, a live ``ServeCloud``'s events
+    would land in a second, invisible audit trail instead of the one
+    everything else writes to.
+    """
+
+    workspace: Any
+
+    def emit(self, event: str, **fields: object) -> None:
+        ray.get(self.workspace.emit.remote(event, **fields))
 
 
 @ray.remote
 class DevOps(Role):
-    """Infra & ops: canary deploy to the green slot; files bugs; feeds SelfModel."""
+    """Infra & ops: canary deploy to the green slot; files bugs; feeds SelfModel.
+
+    Two canary backends, chosen per call (OMNI-14):
+
+    - **legacy** (default) — records a deploy against ``Workspace.cloud``
+      (``InMemoryCloud``/``RealCloud``); no traffic, matches the engine's
+      behaviour before this story.
+    - **serve** (``SIS_CANARY=serve`` or ``canary_backend="serve"``) — a real
+      Ray Serve deployment via :class:`~sis.serve_cloud.ServeCloud`, judged by
+      :func:`~sis.canary.evaluate_canary` against live traffic this class
+      synthesises itself (see :meth:`_canary_live`).
+    """
 
     def __init__(self) -> None:
         super().__init__("DevOps", "DevOps", parent="CTO")
+        # One ServeCloud per contract, built on first use (each construction
+        # starts a real Serve application). Keyed by contract name because the
+        # engine is multi-target and Workspace.cloud is a single, contract-
+        # agnostic adapter slot that a per-contract deployment cannot share.
+        self._serve_clouds: dict[str, Any] = {}
+        # pr_id -> "serve" | "legacy", set by canary() and read by
+        # observe_merge()/retire_canary() so a later call on the same PR routes
+        # to the same backend it was deployed through. In-memory only, same
+        # durability bar as SelfModel's own slot state — not persisted across a
+        # cluster restart.
+        self._pr_backend: dict[str, str] = {}
 
-    def canary(self, pr_id: str, candidate_latency: float) -> dict[str, Any]:
+    def _cloud_for(self, spec: contract.OptimizationContract) -> Any:
+        """The ``ServeCloud`` for *spec*, built and served on first use.
+
+        Cached per contract name: a second construction would call
+        ``serve_blue()`` again and, per OMNI-13's finding, needlessly cycle a
+        replica the first construction already stood up correctly. Ray is
+        already initialised — this runs inside a live Ray actor — so only
+        Serve needs an explicit, idempotent start.
+        """
+        if spec.name not in self._serve_clouds:
+            from ray import serve
+
+            from sis.serve_cloud import ServeCloud
+
+            serve.start(logging_config={"log_level": "ERROR"})
+            cloud = ServeCloud(_RemoteTelemetry(self._ws), spec)
+            cloud.serve_blue(version="live")
+            self._serve_clouds[spec.name] = cloud
+        return self._serve_clouds[spec.name]
+
+    def canary(
+        self, pr_id: str, candidate_latency: float, canary_backend: str | None = None
+    ) -> dict[str, Any]:
         # candidate_latency was measured inside the gauntlet sandbox by the SWE
-        # step. The candidate is NEVER executed here (main process, holds creds).
-        pr = ray.get(self._ws.get_pr.remote(pr_id))
-        version = f"{pr.branch}@{pr.id}"
+        # step. On the legacy backend the candidate is NEVER executed here
+        # (main process, holds creds). On "serve" it runs in a Serve replica
+        # with a scrubbed runtime_env (OMNI-13) — a different, procedural
+        # guarantee, and the intended shape of a canary.
+        pr = ray.get(self._ws.get_pr.remote(pr_id, self._pr_target_path(pr_id)))
+        version = _version_for(pr)
+
+        # Explicit argument first, then configuration. Reading an env var
+        # "fresh" inside an already-running actor is not fresh at all: the
+        # actor's os.environ is a snapshot from when its OS process was
+        # spawned, so a test's monkeypatch.setenv() (a different process) can
+        # never reach it. Same trap as contracts.default (docs/KNOWN_ISSUES.md,
+        # and Role._contract above); same fix. The config.yml layer is read from
+        # disk per process and so does reach here, but the argument still wins.
+        backend = canary_backend or config.get("canary.backend")
+        self._pr_backend[pr_id] = "serve" if backend == "serve" else "legacy"
+
+        if backend == "serve":
+            return self._canary_live(pr, version, candidate_latency)
+
         record = ray.get(self._ws.deploy_canary.remote(
             version, {"latency_seconds": candidate_latency}))
         ray.get(self._sm.set_slot.remote("green", version))
+        # Remember which PR would release this canary, so the merge watcher has
+        # an exact id rather than one parsed back out of the version string.
+        ray.get(self._sm.set_pending_pr.remote(pr_id))
         ray.get(self._sm.record.remote(
             "canary", version, pr=pr_id, latency=candidate_latency))
         return {"version": version, "slot": record.slot,
-                "latency_seconds": candidate_latency, "live": record.live}
+                "latency_seconds": candidate_latency, "live": record.live,
+                "canary_passed": True}
+
+    def _canary_live(
+        self, pr: PullRequest, version: str, candidate_latency: float
+    ) -> dict[str, Any]:
+        """The real flow: deploy behind Ray Serve, fill the window, decide.
+
+        A live signal the sandboxed benchmark structurally cannot see — real
+        concurrency, real queueing (OMNI-12's field measurement: a ~5x offline
+        speedup was only ~30% faster under 8-way load). That gap is the reason
+        this exists, not a formality to satisfy before ``verified_awaiting_
+        human_merge`` unchanged.
+        """
+        spec: contract.OptimizationContract | None = ray.get(
+            self._sm.contract_for_pr.remote(pr.id))
+        if spec is None:
+            raise RuntimeError(
+                f"no contract recorded for PR {pr.id!r} — SWE.implement() must "
+                "resolve and record one before a live canary can judge the candidate"
+            )
+        cloud = self._cloud_for(spec)
+
+        # Forced, not configured: an OptimizationContract carries no
+        # invariants (only FeatureContracts declare them, and none is served
+        # yet — OMNI-18 built the offline gate), so SPLIT mode would have
+        # ZERO live correctness signal — only a speed comparison — and could
+        # silently promote a fast, wrong candidate. Response agreement under
+        # SHADOW is the only live correctness check available today.
+        cloud.set_mode(CanaryMode.SHADOW)
+
+        record = cloud.deploy_canary(
+            version, metrics={"latency_seconds": candidate_latency}, source=pr.artifact)
+        ray.get(self._sm.set_slot.remote("green", version))
+        ray.get(self._sm.set_pending_pr.remote(pr.id))
+        ray.get(self._sm.record.remote(
+            "canary", version, pr=pr.id, latency=candidate_latency, backend="serve"))
+
+        # Bootstrap traffic (see LIVE_CANARY_REQUESTS): nothing external calls
+        # the target yet, so the window is filled synthetically rather than
+        # waiting on organic traffic that will never arrive.
+        cloud.warm_up(LIVE_CANARY_REQUESTS, concurrency=LIVE_CANARY_CONCURRENCY)
+
+        blue_latencies, _ = cloud.live_window(str(cloud.live_version()))
+        green_latencies, _ = cloud.live_window(version)
+        verdict = evaluate_canary(
+            [], cloud.live_samples(), blue_latencies, green_latencies,
+            version=version, mode=CanaryMode.SHADOW,
+            min_samples=min(DEFAULT_MIN_CANARY_SAMPLES, LIVE_CANARY_REQUESTS))
+
+        if not verdict.passed:
+            self.retire_canary(version, pr.id)
+            bug_id = self.file_bug(
+                f"Live canary rejected PR {pr.id} ({spec.name}): {verdict.reason}")
+            ray.get(self._sm.record.remote(
+                "canary_rejected", version, pr=pr.id, reason=verdict.reason))
+            return {"version": version, "slot": "green", "live": False,
+                    "latency_seconds": candidate_latency, "canary_passed": False,
+                    "reason": verdict.reason, "bug_id": bug_id, "verdict": asdict(verdict)}
+
+        return {"version": version, "slot": record.slot, "live": record.live,
+                "latency_seconds": candidate_latency, "canary_passed": True,
+                "verdict": asdict(verdict)}
+
+    def observe_merge(self, pr_id: str) -> dict[str, Any]:
+        """Notice that a human merged ``pr_id``; promote and release green.
+
+        **This never merges and never decides to promote.** It reads the PR
+        back from the version-control port and does nothing at all unless
+        ``merged`` is already true. Since ``merge_pr()`` raises
+        ``RequiresHumanApproval`` in every adapter, the agent cannot make that
+        true — so the only thing this does is *apply* a decision a human
+        already made, which is what closes the loop the design always described
+        (docs/SERVE_CANARY.md, "nothing calls promote() today").
+
+        Idempotent: promoting an already-live version is a no-op, so a poll that
+        fires twice on the same merge does not double-promote or double-record.
+        Routes to the same backend the PR was canaried through, so a live
+        promotion actually redeploys blue rather than silently updating a
+        bookkeeping record nobody is looking at (see ``canary()``).
+        """
+        # Status only: a poll that fires every few seconds while a human
+        # reviews has no use for the file, so it does not fetch one.
+        pr = ray.get(self._ws.get_pr.remote(pr_id, None))
+        version = _version_for(pr)
+        if not pr.merged:
+            # The overwhelmingly common case on any given tick. Deliberately
+            # silent — emitting here would bury the audit trail under one event
+            # per poll while a human takes hours to review.
+            return {"pr": pr_id, "version": version, "merged": False, "promoted": False}
+
+        if self._pr_backend.get(pr_id) == "serve":
+            spec = self._contract_for_live_pr(pr_id)
+            cloud = self._cloud_for(spec)
+            if cloud.live_version() == version:
+                return {"pr": pr_id, "version": version, "merged": True,
+                        "promoted": False, "reason": "already live"}
+            record = cloud.promote(version)
+        else:
+            if ray.get(self._ws.live_version.remote()) == version:
+                return {"pr": pr_id, "version": version, "merged": True,
+                        "promoted": False, "reason": "already live"}
+            record = ray.get(self._ws.promote.remote(version))
+
+        ray.get(self._sm.set_live_version.remote(version))
+        # Release the gate: green is free, so loop.serve may start a new cycle —
+        # and it will now baseline from the merged target rather than
+        # re-proposing the change that was sitting in this PR.
+        ray.get(self._sm.set_slot.remote("green", None))
+        ray.get(self._sm.set_pending_pr.remote(None))
+        ray.get(self._sm.record.remote("promote", version, pr=pr_id))
+        ray.get(self._ws.emit.remote("merge.observed", pr_id=pr_id, version=version))
+        return {"pr": pr_id, "version": version, "merged": True, "promoted": True,
+                "slot": record.slot, "live": record.live}
+
+    def retire_canary(self, version: str, pr_id: str | None = None) -> dict[str, Any]:
+        """Take the canary out of the green slot and stop its traffic.
+
+        The release half of ``canary()``. Without it the one-canary-in-flight
+        gate (``loop.serve``) has no exit: green is set when a canary deploys
+        and nothing else ever clears it, so the loop would idle forever after
+        its first successful cycle. Called on rollback (including from
+        ``_canary_live`` on a failed live verdict), and by ``observe_merge`` on
+        promotion.
+
+        ``pr_id`` is optional: given, it routes the rollback to the same
+        backend the canary was deployed through. Omitted — the manual
+        "an operator releases the gate by hand" path — it always goes through
+        the legacy adapter, the historical behaviour.
+        """
+        if pr_id is not None and self._pr_backend.get(pr_id) == "serve":
+            self._cloud_for(self._contract_for_live_pr(pr_id)).rollback(version)
+        else:
+            ray.get(self._ws.rollback.remote(version))
+        ray.get(self._sm.set_slot.remote("green", None))
+        ray.get(self._sm.set_pending_pr.remote(None))
+        ray.get(self._sm.record.remote("canary_retired", version))
+        return {"version": version, "slot": "green", "released": True}
+
+    def _pr_target_path(self, pr_id: str) -> str:
+        """The file a PR's candidate lives in: its recorded contract's target.
+
+        The SWE records the contract before the PR can reach a canary; the
+        default contract covers a PR opened some other way (tests, a manual
+        call), which is what the old hardcoded path meant anyway.
+        """
+        spec: contract.OptimizationContract | None = ray.get(
+            self._sm.contract_for_pr.remote(pr_id))
+        return (spec or contract.default_contract()).target_path
+
+    def _contract_for_live_pr(self, pr_id: str) -> contract.OptimizationContract:
+        spec: contract.OptimizationContract | None = ray.get(
+            self._sm.contract_for_pr.remote(pr_id))
+        if spec is None:  # pragma: no cover - canary() would not set backend="serve" otherwise
+            raise RuntimeError(
+                f"PR {pr_id!r} was canaried on the live backend but has no "
+                "recorded contract — this should be unreachable"
+            )
+        return spec
 
     def file_bug(self, summary: str) -> str:
         issue = ray.get(self._ws.create_issue.remote(IssueType.BUG, summary, None))

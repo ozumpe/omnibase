@@ -70,6 +70,9 @@ class PullRequest:
     # The agent never writes this to the live target itself (human PR gate).
     artifact: str = ""
     merged: bool = False
+    # Repo-relative file the artifact is for — the contract's target, never a
+    # constant (OMNI-51). Empty when the PR was read without asking for a file.
+    path: str = ""
 
 
 @dataclass
@@ -139,9 +142,36 @@ class VersionControl(Protocol):
 
     def commit(self, branch: str, message: str) -> str: ...
 
-    def open_pr(self, branch: str, title: str, *, artifact: str = "") -> PullRequest: ...
+    def open_pr(
+        self, branch: str, title: str, *, artifact: str = "", path: str
+    ) -> PullRequest:
+        """Open a PR proposing *artifact* as the new content of *path*.
 
-    def get_pr(self, pr_id: str) -> PullRequest: ...
+        *path* is the contract's repo-relative target. It is a parameter, not an
+        adapter constant, because every contract has its own target: a
+        hardcoded ``runtime/target.py`` made a ``sort`` cycle read and overwrite
+        the ``sum_of_divisors`` file on real adapters (OMNI-51, M15).
+        """
+        ...
+
+    def get_pr(self, pr_id: str, *, path: str | None) -> PullRequest:
+        """Read a PR back; with *path*, its artifact is that file at the PR's head.
+
+        Required, with ``None`` meaning "the status only, no file": a default
+        would let a caller that needs the artifact forget to say which one and
+        silently get an empty string.
+        """
+        ...
+
+    def live_target_source(self, path: str) -> str:
+        """*path* as merged on the live base branch ("" if absent).
+
+        Lets a cycle start from a previously-merged optimisation instead of
+        the stale local file, so it builds on prior work rather than
+        re-proposing it. Empty when the base has no such file yet (or for the
+        in-memory adapter, which keeps no merged state).
+        """
+        ...
 
     def merge_pr(self, pr_id: str) -> PullRequest:  # to main → human-gated
         ...
@@ -155,12 +185,63 @@ class Cloud(Protocol):
         self, version: str, *, metrics: dict[str, float] | None = None
     ) -> DeployRecord: ...
 
-    def promote(self, version: str) -> DeployRecord:  # green → live → human-gated
+    def shift_traffic(self, version: str, fraction: float) -> None:
+        """Route ``fraction`` (0.0–1.0) of traffic to ``version``.
+
+        The weighted split is the whole mechanism of a real canary and the one
+        thing the recording placeholders never needed. See docs/SERVE_CANARY.md.
+        """
+        ...
+
+    def live_metrics(self, version: str, window_s: float) -> dict[str, float]:
+        """Observed metrics for ``version`` over the last ``window_s`` seconds.
+
+        Keys are :data:`sis.metrics.METRIC_KEYS`. Feeds both the canary verdict
+        and the loop's real (non-simulated) SLO-breach trigger.
+        """
+        ...
+
+    def promote(self, version: str) -> DeployRecord:
+        """Make ``version`` live (green → blue).
+
+        **The human gate is upstream of this call, not inside it.** Until
+        OMNI-15 every adapter raised ``RequiresHumanApproval`` here
+        unconditionally, which made promotion unreachable — the rule was
+        enforced by the feature not existing rather than by a check. It is now
+        enforced where the evidence actually is: the only caller is
+        ``DevOps.observe_merge()``, which promotes solely after reading
+        ``PullRequest.merged`` back from the version-control port.
+
+        That state cannot be manufactured by the agent, because ``merge_pr()``
+        still raises ``RequiresHumanApproval`` in every adapter — so the only
+        way a PR becomes merged is a human merging it. Promotion applies a
+        decision a human already made; it never makes one.
+        """
         ...
 
     def rollback(self, version: str) -> None: ...
 
     def live_version(self) -> str | None: ...
+
+
+class Severity(str, Enum):
+    """How urgently a human must look (OMNI-62)."""
+
+    CRITICAL = "critical"   # the loop has stopped, or must not be trusted to run
+    WARNING = "warning"     # it runs, but something a human should know broke
+
+
+@runtime_checkable
+class Notifier(Protocol):
+    """Pages a human. Default adapter: in-memory; real adapter: AWS SNS.
+
+    The TES bug a breaker trip files stays the audit trail. This is the part
+    that reaches a person: nobody watches a scratch Jira project in real time,
+    so on an unattended box a trip used to be silent until someone happened to
+    look (OMNI-62). Returns a delivery id.
+    """
+
+    def notify(self, severity: Severity, title: str, body: str) -> str: ...
 
 
 @runtime_checkable

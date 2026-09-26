@@ -50,3 +50,88 @@ def test_story_done_after_qa(handles) -> None:  # type: ignore[no-untyped-def]
     from sis.ports import IssueStatus
     issue = ray.get(handles["Workspace"].get_issue.remote(result["story_id"]))
     assert issue.status == IssueStatus.DONE
+
+
+def test_bootstrap_registers_the_target_contract(handles) -> None:  # type: ignore[no-untyped-def]
+    # The SelfModel is the contract registry: it already knows what is deployed
+    # where, so what each target is *judged by* belongs with it rather than in
+    # an env var — and it is the same lookup the canary needs later to fetch a
+    # PR's contract (docs/SERVE_CANARY.md step 10).
+    from sis.contract import SUM_OF_DIVISORS
+
+    spec = ray.get(handles["SelfModel"].contract_for.remote("runtime/target.py"))
+    assert spec == SUM_OF_DIVISORS
+    assert spec.entry == "sum_of_divisors"
+
+
+def test_bootstrap_records_the_code_that_is_running(handles) -> None:  # type: ignore[no-untyped-def]
+    # OMNI-63: a run's provenance names the commit that made its decisions.
+    code = [e for e in ray.get(handles["SelfModel"].provenance.remote()) if e["kind"] == "code"]
+    assert code, "bootstrap recorded no code version"
+    assert len(code[-1]["ref"]) == 40 and code[-1]["detail"]["describe"]
+
+
+def test_contract_registration_is_idempotent(handles) -> None:  # type: ignore[no-untyped-def]
+    # bootstrap() is called repeatedly against a detached SelfModel that
+    # survives restarts; re-registering must not accumulate duplicates.
+    from sis.contract import SUM_OF_DIVISORS
+
+    before = len(ray.get(handles["SelfModel"].contracts.remote()))
+    ray.get(handles["SelfModel"].register_contract.remote(SUM_OF_DIVISORS))
+    assert len(ray.get(handles["SelfModel"].contracts.remote())) == before
+
+
+def test_an_unregistered_target_has_no_contract(handles) -> None:  # type: ignore[no-untyped-def]
+    assert ray.get(handles["SelfModel"].contract_for.remote("runtime/nope.py")) is None
+
+
+def test_full_cycle_against_the_second_contract(handles) -> None:  # type: ignore[no-untyped-def]
+    # OMNI-7 acceptance: the whole actor cycle -- propose, gauntlet, QA re-run,
+    # canary -- runs against a target the engine knows nothing about by name.
+    # contract_name selects it; everything downstream is contract-driven.
+    #
+    # Passed as an ARGUMENT, not monkeypatch.setenv("SIS_CONTRACT"). The first
+    # version of this test did the latter and passed while silently running
+    # sum_of_divisors: the role actors are separate processes that inherit the
+    # driver's env when created, so a var set afterwards never reaches them.
+    result = org.run_cycle(
+        handles, "Speed up the sort", "Bubble sort is too slow; same results, faster.",
+        contract_name="sort")
+    assert result["status"] == "verified_awaiting_human_merge", result.get("reason")
+    assert result["candidate_latency"] < result["baseline_latency"]
+    # Prove it really was the sort, not the default target passing by luck.
+    ws = handles["Workspace"]
+    pr = ray.get(ws.get_pr.remote(result["pr_id"], "runtime/sort_target.py"))
+    assert "sort_numbers" in pr.artifact
+    assert "sum_of_divisors" not in pr.artifact
+    # OMNI-51: the PR was written to the sort's own file, and the policy check
+    # authorised that file — not runtime/target.py, which every contract used
+    # to read, write and authorise.
+    assert ray.get(ws.get_pr.remote(result["pr_id"], "runtime/target.py")).artifact == ""
+    decisions = [e for e in ray.get(ws.events.remote()) if e["event"] == "policy.decision"]
+    assert decisions and decisions[-1]["path"] == "runtime/sort_target.py"
+    assert decisions[-1]["allowed"] is True
+
+
+def test_a_prs_contract_can_be_recovered_by_id(handles) -> None:  # type: ignore[no-untyped-def]
+    # OMNI-14: the canary needs a PR's contract (oracle, entry point, margin,
+    # route) and has only the PR id to go on by the time it runs -- SWE resolves
+    # the contract and opens the PR in the same call, so it is the one place
+    # that can record the association.
+    result = org.run_cycle(
+        handles, "Speed up the sort again", "same as before", contract_name="sort")
+    assert result["status"] == "verified_awaiting_human_merge", result.get("reason")
+
+    spec = ray.get(handles["SelfModel"].contract_for_pr.remote(result["pr_id"]))
+    assert spec is not None and spec.name == "sort"
+
+
+def test_an_unknown_pr_has_no_recoverable_contract(handles) -> None:  # type: ignore[no-untyped-def]
+    assert ray.get(handles["SelfModel"].contract_for_pr.remote("PR-never-existed")) is None
+
+
+def test_unknown_contract_name_fails_loudly(handles) -> None:  # type: ignore[no-untyped-def]
+    # A typo'd contract name must not silently optimise a different target --
+    # that would burn a cycle's spend and produce a baffling PR.
+    with pytest.raises(Exception, match="not a registered contract"):
+        ray.get(handles["SWE"].implement.remote("STORY-1", "not-a-real-contract"))

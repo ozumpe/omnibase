@@ -1,0 +1,26 @@
+name: Python + Poetry
+description: >-
+  Python 3.14, Poetry, the cached Poetry virtualenv, and core + dev
+  dependencies. Shared by every CI job that runs the engine's own checks, so
+  the parallel jobs cannot drift into testing different environments.
+runs:
+  using: composite
+  steps:
+    - name: Set up Python 3.14
+      uses: actions/setup-python@v7
+      with:
+        python-version: "3.14"
+
+    - name: Install Poetry
+      shell: bash
+      run: pipx install poetry
+
+    - name: Cache Poetry virtualenv
+      uses: actions/cache@v6
+      with:
+        path: ~/.cache/pypoetry
+        key: poetry-${{ runner.os }}-py314-${{ hashFiles('poetry.lock') }}
+
+    - name: Install dependencies
+      shell: bash
+      run: poetry install --no-interaction   # core + dev (ray, mypy, pytest, ruff)

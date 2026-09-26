@@ -37,6 +37,32 @@ def test_jsonl_skips_malformed_and_legacy_lines(tmp_path) -> None:  # type: igno
     assert all(isinstance(e, EpisodicEvent) for e in store.events())
 
 
+def test_jsonl_state_round_trip(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    # L9: latest-wins key/value state persists next to the event log and reads back.
+    store = JsonlEpisodicStore(tmp_path / "ep.jsonl")
+    assert store.load_state("ceo") is None
+    store.save_state("ceo", {"spent_usd": 0.5, "tripped": False})
+    store.save_state("ceo", {"spent_usd": 1.5, "tripped": True})  # latest wins
+    assert store.load_state("ceo") == {"spent_usd": 1.5, "tripped": True}
+    # A second store on the same path sees it (survives a "restart").
+    assert JsonlEpisodicStore(tmp_path / "ep.jsonl").load_state("ceo")["tripped"] is True
+
+
+def test_duckdb_state_round_trip(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    pytest.importorskip("duckdb")
+    store = DuckDBEpisodicStore(tmp_path / "ep.duckdb")
+    assert store.load_state("ceo") is None
+    store.save_state("ceo", {"spent_usd": 0.5})
+    store.save_state("ceo", {"spent_usd": 2.0})  # upsert, latest wins
+    assert store.load_state("ceo") == {"spent_usd": 2.0}
+
+
+def test_null_store_state_is_noop() -> None:
+    store = NullEpisodicStore()
+    store.save_state("ceo", {"spent_usd": 9.9})
+    assert store.load_state("ceo") is None
+
+
 def test_summary_rollups() -> None:
     events = [
         _ev("verified_awaiting_human_merge", cost_usd=2.0),
@@ -73,9 +99,50 @@ def test_gate_from_reason() -> None:
     assert gate_from_reason("pytest failed") == "pytest"
     assert gate_from_reason("correctness mismatch (...)") == "correctness"
     assert gate_from_reason("no improvement: ...") == "benchmark"
+    assert gate_from_reason("no change: candidate is identical to the baseline") == "noop"
     assert gate_from_reason("Policy blocked: ...") == "policy"
     assert gate_from_reason("gauntlet sandbox timed out after 2s") == "timeout"
+    # L12: a gate-timeout reason names the gate ("mypy gate timed out") — the
+    # timeout check must win over the "mypy"/"pytest" substring checks.
+    assert gate_from_reason("mypy gate timed out") == "timeout"
+    assert gate_from_reason("pytest gate timed out") == "timeout"
+    assert gate_from_reason("benchmark gate timed out") == "timeout"
+    # A harness fault names the gate it could not run, so — like a timeout — it
+    # must win over the gate-name substring checks, or "the suite is missing"
+    # is counted in the analytics as "candidates keep failing pytest".
+    assert gate_from_reason(
+        "harness: contract acceptance tests missing at specs/x/tests.py "
+        "— the pytest gate cannot run"
+    ) == "harness"
     assert gate_from_reason(None) is None
+
+
+def test_gate_from_reason_for_the_canarys_own_gates() -> None:
+    # evaluate_canary's four reasons (sis/canary.py), each named distinctly
+    # from its offline analogue -- OMNI-14 -- so rejected_by_gate can tell
+    # whether the sandbox or live traffic caught a rejection.
+    assert gate_from_reason(
+        "insufficient evidence: 42 observations, need 100 "
+        "(a percentile over a handful of requests is not a measurement)"
+    ) == "canary_evidence"
+    assert gate_from_reason(
+        "invariant violated: sorted_permutation (3 of 100 checks failed)"
+    ) == "canary_invariant"
+    assert gate_from_reason(
+        "response disagreement: 12 of 12 sampled requests got a different "
+        "answer from the candidate"
+    ) == "canary_disagreement"
+    assert gate_from_reason(
+        "live p95 regression: candidate 0.001234s vs baseline 0.000987s "
+        "(need <= 0.001086s)"
+    ) == "canary_regression"
+    # A SHADOW window missing its baseline is a harness fault, not a candidate
+    # verdict -- it already matches the existing "harness:" prefix and must
+    # keep doing so rather than needing a fifth canary-specific branch.
+    assert gate_from_reason(
+        "harness: SHADOW mode sample is missing its baseline_response — "
+        "the shadow dispatcher recorded only one side"
+    ) == "harness"
 
 
 def test_event_from_cycle_result_maps_fields() -> None:

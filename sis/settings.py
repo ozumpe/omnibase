@@ -25,6 +25,8 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, Protocol
 
+from sis import config
+
 DEFAULT_SECRETS_FILE = "secrets.local.yml"
 _MASK = "***redacted***"
 
@@ -76,12 +78,35 @@ class AwsSettings:
 
 
 @dataclass(frozen=True)
+class FrontendSettings:
+    """OAuth credentials for the operator UI (OMNI-28).
+
+    Credentials, so they live here rather than in ``config.yml`` — that file is
+    committed. Which *provider* to use and who may sign in are configuration
+    and stay in the schema; the client secret and the cookie key are not.
+    """
+
+    oauth_key: str = field(repr=False, default="")
+    oauth_secret: str = field(repr=False, default="")
+    # Signs the session cookie. Generated per-process when unset, which logs
+    # everyone out on restart — correct for a single-operator tool, and far
+    # better than shipping a constant that would let anyone forge a session.
+    cookie_secret: str = field(repr=False, default="")
+
+    def __repr__(self) -> str:
+        return (f"FrontendSettings(oauth_key={_mask(self.oauth_key)!r}, "
+                f"oauth_secret={_mask(self.oauth_secret)!r}, "
+                f"cookie_secret={_mask(self.cookie_secret)!r})")
+
+
+@dataclass(frozen=True)
 class Settings:
     env: str = "local"
     adapters: str = "memory"  # "memory" | "real"
     atlassian: AtlassianSettings | None = None
     github: GitHubSettings | None = None
     aws: AwsSettings | None = None
+    frontend: FrontendSettings | None = None
 
     def require_atlassian(self) -> AtlassianSettings:
         if self.atlassian is None:
@@ -125,17 +150,22 @@ class EnvSecretSource:
     """Reads secrets from ``SIS_*`` environment variables.
 
     Maps e.g. ``SIS_ATLASSIAN_API_TOKEN`` → ``atlassian_api_token``.
+
+    Everything :mod:`sis.config` declares is skipped: those variables are
+    *configuration*, they share the ``SIS_`` prefix by history, and scooping
+    them up here would file ``SIS_BUDGET_USD`` as a credential named
+    ``budget_usd``. The exclusion used to be a hand-written list of five names,
+    which was correct when there were five and quietly wrong once the engine had
+    twenty-seven — deriving it from the schema is what keeps it correct.
     """
 
     PREFIX = "SIS_"
 
     def load(self) -> dict[str, Any]:
+        not_secrets = {key.env for key in config.SCHEMA}
         out: dict[str, Any] = {}
         for key, value in os.environ.items():
-            if key.startswith(self.PREFIX) and key not in {"SIS_ENV", "SIS_ADAPTERS",
-                                                            "SIS_SECRETS_FILE",
-                                                            "SIS_AWS_SECRET_ID",
-                                                            "SIS_AWS_REGION"}:
+            if key.startswith(self.PREFIX) and key not in not_secrets:
                 out[key[len(self.PREFIX):].lower()] = value
         return out
 
@@ -204,11 +234,20 @@ def _build_settings(env: str, adapters: str, raw: dict[str, Any]) -> Settings:
         )
 
     aws = AwsSettings(
-        region=str(flat.get("aws_region", os.getenv("SIS_AWS_REGION", "us-east-1"))),
+        region=str(flat.get("aws_region") or config.get("adapters.aws_region")),
         secret_id=_opt_str(flat.get("aws_secret_id")),
     )
 
-    return Settings(env=env, adapters=adapters, atlassian=atlassian, github=github, aws=aws)
+    frontend = FrontendSettings(
+        oauth_key=str(flat.get("frontend_oauth_key", "")),
+        oauth_secret=str(flat.get("frontend_oauth_secret", "")),
+        cookie_secret=str(flat.get("frontend_cookie_secret", "")),
+    )
+
+    return Settings(
+        env=env, adapters=adapters, atlassian=atlassian, github=github, aws=aws,
+        frontend=frontend,
+    )
 
 
 def _opt_str(value: Any) -> str | None:
@@ -216,28 +255,61 @@ def _opt_str(value: Any) -> str | None:
 
 
 def _select_source() -> SecretSource:
-    env = os.getenv("SIS_ENV", "local")
-    if env == "aws":
-        secret_id = os.environ.get("SIS_AWS_SECRET_ID")
-        if not secret_id:
-            raise RuntimeError("SIS_ENV=aws requires SIS_AWS_SECRET_ID")
-        return AwsSecretsManagerSource(secret_id, os.getenv("SIS_AWS_REGION"))
-    secrets_file = Path(os.getenv("SIS_SECRETS_FILE", DEFAULT_SECRETS_FILE))
+    adapters = config.config().adapters
+    if adapters.env == "aws":
+        if not adapters.aws_secret_id:
+            raise RuntimeError("adapters.env=aws requires adapters.aws_secret_id")
+        return AwsSecretsManagerSource(adapters.aws_secret_id, adapters.aws_region)
+    secrets_file = Path(adapters.secrets_file)
     if secrets_file.exists():
         return FileSecretSource(secrets_file)
     return EnvSecretSource()
 
 
 def load_settings(source: SecretSource | None = None) -> Settings:
-    """Load typed settings from the chosen secret source (auto-selected if None)."""
-    env = os.getenv("SIS_ENV", "local")
-    adapters = os.getenv("SIS_ADAPTERS", "memory")
+    """Load typed settings from the chosen secret source (auto-selected if None).
+
+    Always reads the source. The convenience accessors below go through
+    :func:`cached_settings` instead — see the note there.
+    """
+    settings = config.config().adapters
+    env, adapters = settings.env, settings.mode
     src = source if source is not None else _select_source()
     try:
         raw = src.load()
     except FileNotFoundError:
         raw = {}
     return _build_settings(env, adapters, raw)
+
+
+_CACHED: Settings | None = None
+
+
+def cached_settings() -> Settings:
+    """Process-wide cached settings, for accessors called on the hot path.
+
+    ``space_keys()`` and ``version_control_base()`` are invoked several times
+    per cycle from inside the Ray actors, and each call used to re-read and
+    re-parse the whole secrets source — a redundant file read locally, and a
+    redundant **Secrets Manager round-trip** under ``SIS_ENV=aws``. ``Settings``
+    is frozen and a process's credentials do not change under it, so one load
+    per process is enough.
+
+    Only the no-argument path is cached: ``load_settings(source)`` still reads
+    every time, so explicit-source callers (tests, ``check_connections.py``) are
+    unaffected. Call :func:`reset_settings_cache` if you mutate the environment
+    and need the next read to pick it up.
+    """
+    global _CACHED
+    if _CACHED is None:
+        _CACHED = load_settings()
+    return _CACHED
+
+
+def reset_settings_cache() -> None:
+    """Drop the cached settings — for tests/tools that change the environment."""
+    global _CACHED
+    _CACHED = None
 
 
 # Confluence space keys the org writes to when no Atlassian integration is
@@ -258,7 +330,7 @@ def space_keys(settings: Settings | None = None) -> dict[str, str]:
     Atlassian integration is configured (e.g. the default in-memory run), which
     keeps the local path credential-free and unchanged.
     """
-    resolved = settings if settings is not None else load_settings()
+    resolved = settings if settings is not None else cached_settings()
     atl = resolved.atlassian
     if atl is None:
         return dict(DEFAULT_SPACES)
@@ -267,6 +339,18 @@ def space_keys(settings: Settings | None = None) -> dict[str, str]:
         "spec": atl.spec_space,
         "charter": atl.charter_space,
     }
+
+
+def version_control_base(settings: Settings | None = None) -> str:
+    """The branch the loop forks feature branches from — GitHub's default base.
+
+    Sourced from :class:`GitHubSettings` so it stays consistent with what
+    ``VersionControl.live_target_source`` reads the merged target from. Falls
+    back to ``"main"`` when no GitHub integration is configured (the in-memory
+    path), which keeps the local run unchanged. See KNOWN_ISSUES.md M4.
+    """
+    resolved = settings if settings is not None else cached_settings()
+    return resolved.github.default_base if resolved.github else "main"
 
 
 def settings_summary(settings: Settings) -> dict[str, Any]:

@@ -3,6 +3,12 @@
 This is the authoritative spec for the actor org and how it touches the outside
 world. `CLAUDE.md` and `DESIGN.md` reference this file.
 
+> **Diagrams:** [`docs/DIAGRAMS.md`](docs/DIAGRAMS.md) has the UML views —
+> a [sequence diagram of one cycle](docs/DIAGRAMS.md#2-sequence--one-self-improvement-cycle)
+> showing the artifact handoffs described below, and
+> [state machines](docs/DIAGRAMS.md#4-state--issue-workflow-and-deploy-slots)
+> for the issue workflow and the blue/green slots.
+
 ## Coordinating principle: artifacts are the bus
 
 Actors do **not** primarily coordinate through free-form chat. They coordinate by
@@ -37,6 +43,7 @@ are the actors' shared coordination + memory substrate.
 | Version Control & Review  | GitHub (GitHub MCP / `gh`) | Branches, commits, PRs, CI |
 | Cloud / Infra             | AWS                        | Compute, networking, deploy targets |
 | Telemetry                 | cluster + cloud metrics    | Logs, metrics, traces |
+| Notifier                  | AWS SNS                    | Pages a human: breaker trip, spend-cap hit, broken sandbox, a loop that stopped (OMNI-62) |
 
 Same adapter mechanism later connects **domain** actors to the modeled world's APIs
 (traffic sensors, building systems, etc.) — the "real world" connection is uniform.

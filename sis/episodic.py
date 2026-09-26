@@ -20,19 +20,38 @@ retrieval) is a new backend implementing the same port — the loop doesn't chan
 
 from __future__ import annotations
 
-import datetime
 import json
-import os
 import uuid
 from collections import Counter
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import Any, Protocol
 
+from sis import config
+from sis.atomic import write_text_atomic
+from sis.clock import Clock, now_iso
 from sis.paths import EPISODIC_DUCKDB, EPISODIC_JSONL
 
 # Outcomes that count as an accepted improvement (passed gauntlet + QA, in a PR).
 ACCEPTED_OUTCOMES = frozenset({"verified_awaiting_human_merge", "promoted"})
+
+# Reject gates that are benign rather than failures, and the cycle status each
+# is recorded under: no bug filed, no breaker increment, spend still recorded.
+# "noop" — nothing to improve (KNOWN_ISSUES M3). "benchmark_inconclusive" — the
+# measurement could not separate the candidate from the margin (OMNI-41).
+NEUTRAL_OUTCOMES: dict[str, str] = {
+    "noop": "no_change",
+    "benchmark_inconclusive": "inconclusive",
+}
+
+
+def neutral_status(reason: str | None) -> str | None:
+    """The neutral cycle status a rejection reason maps to, or ``None``. Pure.
+
+    One definition for both places a verdict is read — the SWE's gauntlet run
+    and QA's re-run — so the two can never disagree about what is benign.
+    """
+    return NEUTRAL_OUTCOMES.get(gate_from_reason(reason) or "")
 
 
 @dataclass
@@ -42,7 +61,8 @@ class EpisodicEvent:
     cycle_id: str
     ts: str
     # outcome: verified_awaiting_human_merge | rolled_back | qa_rejected |
-    #          budget_denied | circuit_breaker_open | ...
+    #          no_change | inconclusive (both neutral: NEUTRAL_OUTCOMES) |
+    #          budget_denied | circuit_breaker_open | paused (sis.admin) | ...
     outcome: str
     proposer: str = "stub"
     model: str | None = None
@@ -51,7 +71,18 @@ class EpisodicEvent:
     pr_id: str | None = None
     candidate_sha: str | None = None
     gauntlet_passed: bool | None = None
-    # reject_gate: ast | mypy | pytest | correctness | benchmark | policy | timeout
+    # reject_gate: ast | noop | mypy | interface | acceptance | invariant
+    #            | backtest | correctness | benchmark | benchmark_inconclusive
+    #            | benchmark_unmeasurable | benchmark_malformed | policy | timeout
+    #            | pytest    (pre-OMNI-17 name for `acceptance`; still emitted
+    #                         by nothing, still recognised for old rows)
+    #            | harness   ("harness" = the gate could not run, not a verdict
+    #                         on the candidate)
+    #            | canary_evidence | canary_invariant | canary_disagreement
+    #            | canary_regression  (evaluate_canary, OMNI-14: the ONLINE
+    #                         analogue of correctness/benchmark, named
+    #                         distinctly so rejected_by_gate can tell whether
+    #                         the sandbox or live traffic caught it)
     reject_gate: str | None = None
     reject_reason: str | None = None
     baseline_latency: float | None = None
@@ -67,8 +98,16 @@ class EpisodicEvent:
 _FIELD_NAMES: tuple[str, ...] = tuple(f.name for f in fields(EpisodicEvent))
 
 
-def _now() -> str:
-    return datetime.datetime.now(datetime.UTC).isoformat()
+def _now(clock: Clock | None = None) -> str:
+    """Event time for an episode. Wall clock unless a replay drives it.
+
+    Almost always the wall clock: ``ts`` records when the *engine* ran a cycle,
+    which is audit-trail time and should not be movable. The parameter exists
+    for the one case where it should — a replay driver reconstructing episodes
+    stamps them in the timeline they belong to, not the timeline they are being
+    recomputed in. See sis.clock for the engine-time/world-time distinction.
+    """
+    return now_iso(clock)
 
 
 def _from_dict(data: dict[str, Any]) -> EpisodicEvent:
@@ -95,10 +134,30 @@ def summarize(events: list[EpisodicEvent]) -> dict[str, Any]:
 # --------------------------------------------------------------------------
 
 
+class StateUnreadable(RuntimeError):
+    """Persisted state exists but cannot be read (OMNI-61).
+
+    Deliberately distinct from "no state": a first boot has nothing to
+    rehydrate, a corrupt file has *something* the brakes depended on. Treating
+    the second like the first reset the spend cap and failure streak to zero
+    without a word, so the caller must decide — and the CEO decides to boot
+    with the breaker open.
+    """
+
+
 class EpisodicStore(Protocol):
     def append(self, event: EpisodicEvent) -> None: ...
     def events(self) -> list[EpisodicEvent]: ...
     def summary(self) -> dict[str, Any]: ...
+    # Small latest-wins key/value state alongside the append-only event log —
+    # e.g. the CEO's persisted brake/spend state (L9). Distinct from events so
+    # it survives cluster/actor restart and rehydrates on bootstrap.
+    #
+    # load_state returns None only when there is no state; unreadable state
+    # raises StateUnreadable. save_state never overwrites state it could not
+    # read — that would destroy the evidence of what the brakes were (OMNI-61).
+    def save_state(self, key: str, value: dict[str, Any]) -> None: ...
+    def load_state(self, key: str) -> dict[str, Any] | None: ...
 
 
 class NullEpisodicStore:
@@ -113,17 +172,56 @@ class NullEpisodicStore:
     def summary(self) -> dict[str, Any]:
         return summarize([])
 
+    def save_state(self, key: str, value: dict[str, Any]) -> None:
+        return None
+
+    def load_state(self, key: str) -> dict[str, Any] | None:
+        return None
+
 
 class JsonlEpisodicStore:
     """Append-only JSON lines — the durable, zero-dependency default."""
 
     def __init__(self, path: Path = EPISODIC_JSONL) -> None:
         self.path = path
+        # Latest-wins state sits next to the event log (…/episodic_state.json),
+        # so constructing the store on a tmp path isolates both in tests.
+        self._state_path = path.with_name(f"{path.stem}_state.json")
 
     def append(self, event: EpisodicEvent) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(asdict(event)) + "\n")
+
+    def save_state(self, key: str, value: dict[str, Any]) -> None:
+        # Read-modify-write of the whole blob, replaced atomically: a crash
+        # leaves the previous file or the new one, never a truncated one. An
+        # unreadable existing file is NOT overwritten — it used to be replaced
+        # with {} here, which erased the spend the brakes had counted (OMNI-61).
+        blob = self._read_blob() if self._state_path.exists() else {}
+        blob[key] = value
+        write_text_atomic(self._state_path, json.dumps(blob, indent=2))
+
+    def load_state(self, key: str) -> dict[str, Any] | None:
+        if not self._state_path.exists():
+            return None
+        value = self._read_blob().get(key)
+        if value is None:
+            return None
+        if not isinstance(value, dict):
+            raise StateUnreadable(
+                f"{self._state_path}: state for {key!r} is a {type(value).__name__}, "
+                "not an object")
+        return value
+
+    def _read_blob(self) -> dict[str, Any]:
+        try:
+            blob = json.loads(self._state_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+            raise StateUnreadable(f"{self._state_path}: {exc}") from exc
+        if not isinstance(blob, dict):
+            raise StateUnreadable(f"{self._state_path}: not a JSON object")
+        return blob
 
     def events(self) -> list[EpisodicEvent]:
         if not self.path.exists():
@@ -170,6 +268,9 @@ class DuckDBEpisodicStore:
         self._con = duckdb.connect(str(path))
         cols = ", ".join(f"{name} {dtype}" for name, dtype in _DUCK_TYPES.items())
         self._con.execute(f"CREATE TABLE IF NOT EXISTS episodes ({cols})")
+        # Latest-wins key/value state (e.g. persisted CEO brake state, L9).
+        self._con.execute(
+            "CREATE TABLE IF NOT EXISTS kv_state (key VARCHAR PRIMARY KEY, value VARCHAR)")
 
     def append(self, event: EpisodicEvent) -> None:
         cols = ", ".join(_FIELD_NAMES)
@@ -187,6 +288,29 @@ class DuckDBEpisodicStore:
     def summary(self) -> dict[str, Any]:
         return summarize(self.events())
 
+    def save_state(self, key: str, value: dict[str, Any]) -> None:
+        # One upsert statement: DuckDB applies it transactionally, so this
+        # backend already has the all-or-nothing write the jsonl one needed
+        # sis.atomic for (OMNI-61).
+        self._con.execute(
+            "INSERT INTO kv_state (key, value) VALUES (?, ?) "
+            "ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            [key, json.dumps(value)],
+        )
+
+    def load_state(self, key: str) -> dict[str, Any] | None:
+        row = self._con.execute(
+            "SELECT value FROM kv_state WHERE key = ?", [key]).fetchone()
+        if row is None:
+            return None
+        try:
+            parsed: Any = json.loads(row[0])
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise StateUnreadable(f"duckdb kv_state[{key!r}]: {exc}") from exc
+        if not isinstance(parsed, dict):
+            raise StateUnreadable(f"duckdb kv_state[{key!r}]: not an object")
+        return parsed
+
     def sql(self, query: str) -> list[tuple[Any, ...]]:
         """Run an ad-hoc analytical query against the `episodes` table."""
         # Annotated local (not cast): duckdb is an optional dep, so its return
@@ -197,8 +321,8 @@ class DuckDBEpisodicStore:
 
 
 def get_episodic_store(kind: str | None = None) -> EpisodicStore:
-    """Return the configured store (``SIS_EPISODIC_STORE``: jsonl|duckdb|none)."""
-    kind = (kind or os.getenv("SIS_EPISODIC_STORE") or "jsonl").lower()
+    """Return the configured store (``episodic.store``: jsonl|duckdb|none)."""
+    kind = (kind or str(config.get("episodic.store"))).lower()
     if kind == "none":
         return NullEpisodicStore()
     if kind == "duckdb":
@@ -216,16 +340,91 @@ def gate_from_reason(reason: str | None) -> str | None:
     if not reason:
         return None
     r = reason.lower()
-    if "syntaxerror" in r:
-        return "ast"
-    if "mypy" in r:
-        return "mypy"
+    # Timeout first: a timed-out gate's reason names the gate ("mypy gate timed
+    # out"), so this must win over the gate-name checks below (L12).
     if "timed out" in r or "timeout" in r:
         return "timeout"
+    # Harness faults next: their reason names the gate that could not run
+    # ("... the pytest gate cannot run"), so this must win over the gate-name
+    # checks below — otherwise a broken harness is counted as a candidate that
+    # failed pytest, and the analytics blame the wrong side.
+    if r.startswith("harness:"):
+        return "harness"
+    # The contract's interface gate: the candidate has the wrong shape, which is
+    # a distinct failure from "its behaviour is wrong" (CLASS2_CONTRACT.md).
+    if r.startswith("interface:"):
+        return "interface"
+    # The backtest gate (sis/backtest.py): the candidate is well-formed and
+    # passes its acceptance tests, but does not reproduce a recorded episode.
+    # Distinct from "correctness" — that gate compares against a reference
+    # oracle evaluated on demand, this one against history that actually
+    # happened, and for a world-model the second is the evidence that counts.
+    if r.startswith("backtest failed"):
+        return "backtest"
+    # The SLO gate (sis/slo.py, OMNI-24): correct, but over the spec's latency
+    # budget. Its own name because the CEO weighs it below a correctness
+    # failure. A candidate that *raises* on the workload is a different fact —
+    # a wrong answer — and gets its own name so it is weighed in full.
+    if r.startswith("slo exceeded"):
+        return "slo"
+    if r.startswith("slo workload raised"):
+        return "slo_error"
+    # The offline invariant gate (sis/invariant.py). The reason says "in
+    # sandbox" specifically because the canary's own violation reason starts
+    # "invariant violated" too — the same predicates, applied to live traffic.
+    # A shared prefix here would shadow the canary rule below and silently
+    # report every live violation as an offline one, losing exactly the
+    # sandbox-vs-production distinction the canary exists to add.
+    if r.startswith("invariant violated in sandbox"):
+        return "invariant"
+    # The canary's own gates (sis/canary.py: evaluate_canary), each a live
+    # analogue of an offline concept but named distinctly — conflating a live
+    # regression with an offline "no improvement" (or a live invariant
+    # violation with the offline differential-correctness "correctness" gate)
+    # would make rejected_by_gate ambiguous about whether the sandbox or live
+    # traffic caught it, which is exactly the distinction the canary adds.
+    if r.startswith("insufficient evidence"):
+        return "canary_evidence"
+    if r.startswith("invariant violated"):
+        return "canary_invariant"
+    if r.startswith("response disagreement"):
+        return "canary_disagreement"
+    if r.startswith("live "):  # "live p95/p99 regression: ..."
+        return "canary_regression"
+    if "syntaxerror" in r:
+        return "ast"
+    if "no change" in r:  # candidate identical to the baseline (no-op)
+        return "noop"
+    if "mypy" in r:
+        return "mypy"
+    # The contract's trusted acceptance tests. Renamed from `pytest` in OMNI-17:
+    # the gate is named for what it checks (the spec's cases) rather than for
+    # the tool that happens to run them, which matters once a ToolchainAdapter
+    # can run junit or cargo test instead. Rows written before that rename still
+    # read `pytest`, and the rule below still recognises the old reason string,
+    # so `rejected_by_gate` shows both names across the transition rather than
+    # silently losing the older half.
+    if r.startswith("acceptance"):
+        return "acceptance"
     if "pytest" in r:
         return "pytest"
     if "correctness mismatch" in r:
         return "correctness"
+    # The benchmark gate's third verdict (OMNI-41). Must be tested before the
+    # "no improvement" rule below and kept a distinct name: "could not measure a
+    # difference" is not "measured, and it is no faster". Conflating them is what
+    # made a noisy machine look like a stream of bad candidates — the analytics
+    # would show a benchmark reject-rate that says nothing about the proposer.
+    # It is also what NEUTRAL_OUTCOMES keys on to keep it off the breaker.
+    if r.startswith("benchmark inconclusive"):
+        return "benchmark_inconclusive"
+    # Too few usable timings, or output the harness did not write in the shape
+    # it writes (KNOWN_ISSUES H2). Named so analytics can tell measurement
+    # failures from "measured, not faster"; neither is neutral.
+    if r.startswith("benchmark unmeasurable"):
+        return "benchmark_unmeasurable"
+    if r.startswith("benchmark output malformed"):
+        return "benchmark_malformed"
     if "no improvement" in r:
         return "benchmark"
     if "policy" in r:
@@ -236,8 +435,13 @@ def gate_from_reason(reason: str | None) -> str | None:
 def event_from_cycle_result(
     result: dict[str, Any], *, cost_usd: float = 0.0,
     proposer: str = "stub", model: str | None = None,
+    clock: Clock | None = None,
 ) -> EpisodicEvent:
-    """Build an EpisodicEvent from an ``org.run_cycle`` result dict."""
+    """Build an EpisodicEvent from an ``org.run_cycle`` result dict.
+
+    *clock* defaults to the wall clock, so every existing caller is unchanged;
+    pass one only when replaying (see :func:`_now`).
+    """
     status = str(result.get("status", "unknown"))
     base = result.get("baseline_latency")
     cand = result.get("candidate_latency")
@@ -249,12 +453,12 @@ def event_from_cycle_result(
     reason = result.get("reason")
     gauntlet_passed = (
         True if status in ACCEPTED_OUTCOMES
-        else False if status == "rolled_back"
+        else False if status == "rolled_back" or status in NEUTRAL_OUTCOMES.values()
         else None
     )
     return EpisodicEvent(
         cycle_id=EpisodicEvent.new_cycle_id(),
-        ts=_now(),
+        ts=_now(clock),
         outcome=status,
         proposer=proposer,
         model=model,

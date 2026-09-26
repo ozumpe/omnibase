@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# One-time bootstrap for the OMNI-29 run box (docs/AWS_RUN.md).
+#
+# Invoked as root by the instance's user_data after it clones the repo to
+# /home/ubuntu/omnibase; everything user-level runs as ubuntu. Logged by
+# user_data to /var/log/sis-bootstrap.log. Idempotent enough to re-run by hand
+# if a step fails partway.
+set -euo pipefail
+
+REPO_DIR=/home/ubuntu/omnibase
+
+# The exact code this box runs, first line of the log (OMNI-63). `describe`
+# says v0.2.0 for a release tag; `|| echo` because the rehearsal copies a
+# working tree that may carry no .git.
+echo "sis code: $(git -C "$REPO_DIR" describe --tags --always --dirty 2>/dev/null || echo unknown)" \
+     "@ $(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null || echo unknown)"
+
+# --- system layer (root) --------------------------------------------------
+# The lock timeout matters at boot: unattended-upgrades runs on the apt-daily
+# timer at exactly the moment user_data does, and without waiting for the lock
+# `set -e` aborts the bootstrap partway (see the same option in main.tf).
+APT_WAIT="-o DPkg::Lock::Timeout=600"
+apt-get $APT_WAIT update
+DEBIAN_FRONTEND=noninteractive apt-get $APT_WAIT install -y docker.io git curl jq unzip
+systemctl enable --now docker
+usermod -aG docker ubuntu
+
+# AWS CLI v2: not preinstalled on Ubuntu AMIs, needed for the secret fetch and
+# the artifacts sync (docs/AWS_RUN.md "The run itself").
+if ! command -v aws >/dev/null; then
+    # `uname -m` is x86_64 or aarch64 — exactly AWS's two filenames, so this
+    # also works on Graviton (and in an arm64 rehearsal of this script).
+    curl -sSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip
+    unzip -q /tmp/awscliv2.zip -d /tmp
+    /tmp/aws/install
+    rm -rf /tmp/aws /tmp/awscliv2.zip
+fi
+
+# --- user layer (ubuntu) --------------------------------------------------
+# Python 3.14 via uv: 24.04's apt does not carry 3.14, and the standard CPython
+# build is required — NOT free-threaded; Ray ships no cp314t wheels (CLAUDE.md).
+sudo -u ubuntu -H bash -s <<'AS_UBUNTU'
+set -euo pipefail
+curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+uv python install 3.14
+uv tool install poetry
+cd "$HOME/omnibase"
+poetry env use "$(uv python find 3.14)"
+# ui: the runbook starts the operator console on this box (sis.frontend needs
+# panel); without it that step dies with ModuleNotFoundError.
+poetry install --with real --with llm --with ui
+AS_UBUNTU
+
+# The kernel-enforced sandbox image. A real (non-stub) proposer REQUIRES
+# SIS_SANDBOX=docker (M1) — and on EC2 the sandbox's --network none is also
+# what keeps candidate code away from the IMDS credential endpoint.
+sudo -u ubuntu docker build -t sis-gauntlet:latest \
+    -f "$REPO_DIR/Dockerfile.gauntlet" "$REPO_DIR"
+
+echo "sis bootstrap complete"

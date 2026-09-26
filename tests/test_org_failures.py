@@ -31,7 +31,7 @@ def handles():  # type: ignore[no-untyped-def]
     # always fails the gauntlet. ray.put gives run_cycle the ObjectRef shape it
     # expects from a real actor call.
     h["SWE"] = SimpleNamespace(
-        implement=SimpleNamespace(remote=lambda story_id: ray.put(FAILED_IMPL)))
+        implement=SimpleNamespace(remote=lambda story_id, contract_name=None: ray.put(FAILED_IMPL)))
     yield h
     ray.shutdown()
 
@@ -61,6 +61,10 @@ def test_circuit_breaker_files_a_page_then_opens(handles) -> None:  # type: igno
     page = ray.get(handles["Workspace"].get_issue.remote(breaker_bug))
     assert page.type is IssueType.BUG
     assert "CIRCUIT BREAKER" in page.summary
+    # OMNI-62: the bug is the audit trail; a person is paged as well — once.
+    pages = [e for e in ray.get(handles["Workspace"].events.remote())
+             if e["event"] == "notify.sent" and str(e["title"]).startswith("circuit breaker")]
+    assert len(pages) == 1 and pages[0]["severity"] == "critical"
 
     # Once open, further cycles are refused before any work/spend.
     assert org.run_cycle(handles, "x", "y")["status"] == "circuit_breaker_open"

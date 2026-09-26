@@ -8,7 +8,7 @@ This wires the roles onto the control loop exactly as ACTORS.md maps them:
     propose / implement→ SWE, on a feature branch (reuses proposer+gauntlet)
     verify             → QA + the deterministic gauntlet
     canary deploy      → DevOps via the Cloud port (green slot)
-    promote / rollback → human PR merge (left pending) / DevOps
+    promote / rollback → human PR merge, observed & applied by DevOps / DevOps
     circuit breaker    → CEO authority
 
 Everything is coordinated through durable artifacts in the shared Workspace,
@@ -18,16 +18,29 @@ and every handoff is recorded in the SelfModel provenance graph.
 from __future__ import annotations
 
 import logging
-import os
+import sys
 from typing import Any
 
 import ray
 
-from sis import episodic
-from sis.proposer import MODEL
-from sis.roles import CEO, CTO, PM, QA, SWE, Designer, DevOps
+from sis import config, episodic, gauntlet, llm
+from sis.contract import DEFAULT_CONTRACTS
+from sis.ports import Severity
+from sis.roles import (
+    CEO,
+    CTO,
+    PM,
+    QA,
+    SWE,
+    Designer,
+    DevOps,
+    ceo_config_from_env,
+    ensure_brake_persistence,
+    unreadable_brake_state,
+)
 from sis.self_model import get_self_model
 from sis.settings import space_keys
+from sis.version import code_version
 from sis.workspace import get_workspace
 
 CHARTER_TEXT = (
@@ -39,25 +52,90 @@ CHARTER_TEXT = (
 )
 
 
+# All detached actors share one namespace so a persistent/AWS cluster finds them
+# across runs instead of duplicating them into fresh anonymous namespaces (M2).
+NAMESPACE = "sis"
+
+# The CEO is looked up by name from outside a cycle — the operator console reads
+# its brakes (OMNI-28) — so the registered name is a constant rather than a
+# literal repeated at each lookup site, which is how the two come to disagree.
+CEO_NAME = "CEO"
+
+
 def _get_or_create(name: str, cls: Any, *args: Any) -> Any:
+    # get_if_exists is atomic: it returns the existing detached actor or creates
+    # it, closing the race where two concurrent bootstraps both create (M2). On an
+    # existing actor the constructor *args are ignored — it keeps its live state.
+    return cls.options(
+        name=name, namespace=NAMESPACE, lifetime="detached", get_if_exists=True
+    ).remote(*args)
+
+
+def page(
+    workspace: Any, store: episodic.EpisodicStore, severity: Severity, title: str, body: str
+) -> dict[str, str]:
+    """Page a human through the Workspace's notifier (OMNI-62). Never raises.
+
+    The notifier already reports its own failures; this adds the durable half —
+    a page that could not be sent is recorded in the episodic store, so the
+    run's own record says when nobody was told.
+    """
+    outcome: dict[str, str] = ray.get(workspace.notify.remote(severity, title, body))
+    record_page_outcome(store, severity, title, outcome)
+    return outcome
+
+
+def record_page_outcome(
+    store: episodic.EpisodicStore, severity: Severity, title: str, outcome: dict[str, str]
+) -> None:
+    """Keep a failed page in the episodic store's state. Never raises."""
+    if "error" not in outcome:
+        return
     try:
-        return ray.get_actor(name)
-    except ValueError:
-        return cls.options(name=name, lifetime="detached").remote(*args)
+        store.save_state("notifier", {"last_failure": {
+            "title": title, "severity": severity.value, "error": outcome["error"]}})
+    except Exception:  # noqa: BLE001 - notify() has already printed and emitted it
+        pass
 
 
 def bootstrap() -> dict[str, Any]:
     """Start Ray, the shared substrate, and the named role actors."""
-    ray.init(ignore_reinit_error=True, logging_level=logging.ERROR)
+    # Before anything starts: brakes that reset on every restart are refused
+    # whenever they protect real money or real systems (OMNI-61).
+    ensure_brake_persistence()
+    if str(config.get("episodic.store")) == "none":
+        print("[sis] note: episodic.store=none — brake state is per-process and "
+              "resets on restart (fine for the stub + in-memory adapters)", file=sys.stderr)
+
+    ray.init(namespace=NAMESPACE, ignore_reinit_error=True, logging_level=logging.ERROR)
 
     # Shared substrate first, so role __init__ can register against it.
     workspace = get_workspace()
     self_model = get_self_model()
 
+    # CEO spend brakes are env-configurable (M5). On a *fresh* CEO we also rehydrate
+    # persisted brake/spend state from the episodic store (L9), so the spend cap and
+    # breaker survive a cluster/actor restart; an already-running detached CEO keeps
+    # its live state (get_if_exists ignores these args).
+    ceo_cfg = ceo_config_from_env()
+    store = episodic.get_episodic_store()
+    held_open: str | None = None
+    try:
+        ceo_state = store.load_state("ceo")
+    except episodic.StateUnreadable as exc:
+        # Fail closed (OMNI-61): unreadable is not "no state". The CEO boots
+        # with the breaker open and says why, instead of at spent=0.
+        ceo_state = unreadable_brake_state(str(exc))
+        held_open = str(ceo_state["trip_reason"])
+        print(f"[sis] BRAKES HELD OPEN: {held_open}", file=sys.stderr)
+
     handles = {
         "Workspace": workspace,
         "SelfModel": self_model,
-        "CEO": _get_or_create("CEO", CEO),
+        "CEO": _get_or_create(
+            CEO_NAME, CEO, ceo_cfg.budget_usd, ceo_cfg.breaker_threshold,
+            ceo_cfg.max_cost_per_accepted_usd, ceo_cfg.slo_min_spend_usd,
+            ceo_cfg.slo_failure_weight, ceo_state),
         "PM": _get_or_create("PM", PM),
         "CTO": _get_or_create("CTO", CTO),
         "Designer": _get_or_create("Designer", Designer),
@@ -69,7 +147,52 @@ def bootstrap() -> dict[str, Any]:
     # The CEO sets the top-level charter once (idempotent) — the goal the
     # provenance graph roots at: charter → spec → epic → story → outcome.
     ray.get(handles["CEO"].set_charter.remote(CHARTER_TEXT))
+
+    # Register what each target is judged by. Idempotent, keyed by target path,
+    # so a detached SelfModel surviving a restart just re-learns the same map.
+    for contract in DEFAULT_CONTRACTS:
+        ray.get(self_model.register_contract.remote(contract))
+
+    # Name the code this run executes (OMNI-63): the provenance graph and the
+    # episodic store both carry it, so a log synced off the box says which
+    # commit made its decisions — and whether the tree was dirty.
+    version = code_version()
+    ray.get(self_model.record.remote("code", version["sha"], describe=version["describe"]))
+    try:
+        store.save_state("code_version", version)
+    except Exception as exc:  # noqa: BLE001 - provenance must not stop a run
+        print(f"[sis] WARNING: code version not persisted: {exc}", file=sys.stderr)
+    print(f"[sis] running {version['describe']} ({version['sha']})", file=sys.stderr)
+
+    if held_open:
+        page(workspace, store, Severity.CRITICAL, "brakes held open at startup",
+             f"The CEO booted with its circuit breaker open: {held_open}")
     return handles
+
+
+def cycle_outcome(approved: bool, canary: dict[str, Any] | None) -> tuple[str, bool, str | None]:
+    """Fold QA's verdict and (if one ran) the canary's into one cycle outcome.
+
+    Pure — no Ray, no I/O — per the project convention that decision logic is
+    unit-testable without standing up a cluster (``evaluate_brakes``,
+    ``gate_from_reason``, ``loop.decide``). Returns ``(status, success,
+    canary_reason)``.
+
+    Before OMNI-14, QA approval alone decided success; a live canary
+    (OMNI-14, ``canary_backend="serve"``) can now reject a candidate QA
+    already approved — exactly the failure mode it exists to catch, since it
+    sees real concurrency and queueing the offline gauntlet cannot. That
+    rejection has to be able to change the outcome, not just ride along in
+    the returned dict unread. ``canary`` is None when QA rejected (no canary
+    runs) or the legacy backend ran (no ``canary_passed`` key at all, so it
+    defaults True and this reduces to the pre-OMNI-14 behaviour exactly).
+    """
+    canary_passed = True if canary is None else bool(canary.get("canary_passed", True))
+    canary_reason = None if canary is None else canary.get("reason")
+    success = approved and canary_passed
+    status = ("verified_awaiting_human_merge" if success
+              else "canary_rejected" if approved else "qa_rejected")
+    return status, success, canary_reason
 
 
 def run_cycle(
@@ -78,8 +201,34 @@ def run_cycle(
     proposal_body: str,
     *,
     estimate_usd: float = 0.5,
+    contract_name: str | None = None,
+    canary_backend: str | None = None,
 ) -> dict[str, Any]:
-    """Run one full intake→spec→epic→story→implement→review→canary cycle."""
+    """Run one full intake→spec→epic→story→implement→review→canary cycle.
+
+    *contract_name* selects which registered target to optimise (see
+    ``sis.contract.DEFAULT_CONTRACTS``); None keeps the bootstrap target.
+    Passed to BOTH the SWE and QA so they judge the candidate against the
+    same oracle — and passed explicitly rather than via ``SIS_CONTRACT``
+    because the role actors are separate processes that cannot see an env
+    var exported after bootstrap().
+
+    *canary_backend* selects ``DevOps.canary()``'s backend ("serve" for a real
+    Ray Serve deployment judged against live traffic; anything else keeps the
+    legacy in-memory/real ``Cloud`` recording). Same reasoning as
+    *contract_name*: an explicit argument, not ``SIS_CANARY`` alone, because
+    DevOps is an already-running actor by the time this runs."""
+    # Fail fast, before any spend or artifacts: an untrusted (non-stub) proposer
+    # requires the kernel-enforced docker sandbox so its code can't read host
+    # credentials (KNOWN_ISSUES.md M1). validate() re-checks as a backstop.
+    gauntlet.ensure_sandbox_allows_proposer()
+    # Backstop for bootstrap()'s check: configuration can change between the
+    # two (a CLI overlay, an edited config.yml), and this is before any spend.
+    ensure_brake_persistence()
+    # Same moment, same reason: the Serve canary runs candidate code as an
+    # ordinary Ray worker, so it refuses anything but the stub's (OMNI-49).
+    gauntlet.ensure_canary_allows_proposer(canary_backend)
+
     ws = handles["Workspace"]
     sm = handles["SelfModel"]
     ceo, pm, cto, designer, swe, qa, devops = (
@@ -87,23 +236,65 @@ def run_cycle(
         handles["Designer"], handles["SWE"], handles["QA"], handles["DevOps"],
     )
 
-    proposer = os.getenv("SIS_PROPOSER", "stub")
-    model = MODEL if proposer == "claude" else None
+    proposer = str(config.get("proposer.backend"))
+    # The model recorded in the episodic log = whichever provider/model is
+    # configured (sis.llm), not a hardcoded vendor. None for the stub.
+    model = llm.configured_model() if proposer != "stub" else None
     store = episodic.get_episodic_store()
 
     def _record(res: dict[str, Any], cost: float = 0.0) -> dict[str, Any]:
-        # Episodic logging is auxiliary — it must never break a cycle.
+        # Episodic logging + CEO-state persistence are auxiliary — they must never
+        # break a cycle. The driver is the single writer (keeps DuckDB happy).
         try:
             store.append(episodic.event_from_cycle_result(
                 res, cost_usd=cost, proposer=proposer, model=model))
         except Exception:  # noqa: BLE001
             pass
+        try:
+            # Persist the CEO's brake/spend state so it survives a restart (L9).
+            store.save_state("ceo", ray.get(ceo.state_snapshot.remote()))
+        except Exception as exc:  # noqa: BLE001
+            # Still never breaks the cycle — but never silent either. A refused
+            # save is usually the store declining to overwrite state it could
+            # not read, which the next bootstrap turns into an open breaker.
+            print(f"[sis] WARNING: brake state not persisted: {exc}", file=sys.stderr)
+            ws.emit.remote("brake_state.save_failed", error=str(exc))
         return res
 
-    # 1. Budget & goal gate (CEO).
+    def _breaker_alarm(trip: str | None) -> str | None:
+        """File the breaker bug and page a human — on a fresh trip only.
+
+        The bug is the audit trail; the page is what reaches a person (OMNI-62).
+        One helper for every place the CEO can report a trip, so no path files
+        the bug and forgets the page.
+        """
+        if not trip:
+            return None
+        bug_id = str(ray.get(devops.file_bug.remote(
+            f"CIRCUIT BREAKER OPEN — human attention required: {trip}")))
+        econ = ray.get(ceo.economics.remote())
+        page(ws, store, Severity.CRITICAL, f"circuit breaker open: {trip}",
+             f"The loop has stopped starting cycles: {trip}.\n"
+             f"Spent ${econ['spent_usd']:.4f} of ${econ['budget_usd']:.2f}; "
+             f"accepted {int(econ['accepted'])}. Filed as {bug_id}.\n"
+             "Inspect with `python -m sis.admin status`; clear it deliberately with "
+             "`python -m sis.admin reset-breaker --reason \"...\"` (spend is not reset).")
+        return bug_id
+
+    # 1. Budget & goal gate (CEO). A pause is checked first and recorded as
+    # its own status: an operator's decision, not a brake that tripped.
+    if (paused := ray.get(ceo.pause_reason.remote())) is not None:
+        # "pause_reason", not "reason": the episodic log reads "reason" as a
+        # gauntlet rejection, and an operator's note is not one.
+        return _record({"status": "paused", "pause_reason": paused})
     if ray.get(ceo.breaker_open.remote()):
         return _record({"status": "circuit_breaker_open"})
     if not ray.get(ceo.approve_budget.remote(estimate_usd)):
+        econ = ray.get(ceo.economics.remote())
+        page(ws, store, Severity.CRITICAL, "spend cap reached: cycle refused",
+             f"A cycle estimated at ${estimate_usd:.2f} would exceed the budget: "
+             f"spent ${econ['spent_usd']:.4f} of ${econ['budget_usd']:.2f}. No cycle "
+             "runs until the budget (brakes.budget_usd) is raised.")
         return _record({"status": "budget_denied"})
 
     # 2. Intake: a non-technical user drops a proposal into the proposal space.
@@ -119,18 +310,48 @@ def run_cycle(
     story_id = plan["feature_story_id"]
 
     # 5. Implement (SWE → validated change on a feature branch + PR).
-    impl = ray.get(swe.implement.remote(story_id))
+    impl = ray.get(swe.implement.remote(story_id, contract_name))
     cost_usd = float(impl.get("cost_usd", 0.0))
+
+    # A "no change" outcome — the candidate is identical to the current baseline
+    # — is not a failure: the loop correctly found nothing to improve. Record
+    # the spend, but don't file a bug or count it against the circuit breaker
+    # (three "nothing to do" cycles must not page a human). See KNOWN_ISSUES M3.
+    # An inconclusive benchmark (OMNI-41) is benign the same way: the gate could
+    # not tell the candidate from the margin, which says nothing against the
+    # candidate. It keeps its own status so the log never calls it "no change".
+    neutral_status = None if impl["passed"] else episodic.neutral_status(impl.get("reason"))
+    if neutral_status:
+        trip = ray.get(ceo.record_neutral.remote(cost_usd=cost_usd))
+        breaker_bug_id = _breaker_alarm(trip)
+        return _record({"status": neutral_status, "reason": impl["reason"],
+                        "spec_id": spec_id, "story_id": story_id,
+                        "candidate_sha": impl.get("candidate_sha"),
+                        "breaker_bug_id": breaker_bug_id,
+                        "economics": ray.get(ceo.economics.remote()),
+                        "provenance": ray.get(sm.provenance.remote())}, cost_usd)
+
     if not impl["passed"]:
-        trip = ray.get(ceo.report_outcome.remote(success=False, cost_usd=cost_usd))
+        gate = episodic.gate_from_reason(impl.get("reason"))
+        # The gate is passed so the CEO can weigh a correct-but-over-budget
+        # rejection (``slo``, OMNI-24) below a wrong one.
+        trip = ray.get(ceo.report_outcome.remote(
+            success=False, cost_usd=cost_usd, reject_gate=gate))
         # Failures become artifacts (ACTORS.md: DevOps files bug/defect Jiras).
-        bug_id = ray.get(devops.file_bug.remote(
-            f"Cycle failed for {story_id}: {impl['reason']}"))
-        breaker_bug_id = (
-            ray.get(devops.file_bug.remote(
-                f"CIRCUIT BREAKER OPEN — human attention required: {trip}"))
-            if trip else None
+        # A harness fault is filed as what it is (OMNI-37): the sandbox broke,
+        # the candidate was never judged, and the fix is in the infrastructure.
+        headline = (
+            f"Infrastructure fault (sandbox) during {story_id} — the candidate was not judged"
+            if gate == "harness" else f"Cycle failed for {story_id}"
         )
+        bug_id = ray.get(devops.file_bug.remote(f"{headline}: {impl['reason']}"))
+        if gate == "harness":
+            # A broken sandbox fails every cycle after this one too, and nothing
+            # a proposer does will fix it — worth a person now, not after the
+            # breaker has counted three of them (OMNI-62).
+            page(ws, store, Severity.WARNING, f"sandbox broken during {story_id}",
+                 f"The candidate was not judged: {impl['reason']}\nFiled as {bug_id}.")
+        breaker_bug_id = _breaker_alarm(trip)
         return _record({"status": "rolled_back", "reason": impl["reason"],
                         "spec_id": spec_id, "story_id": story_id,
                         "candidate_sha": impl.get("candidate_sha"),
@@ -139,27 +360,57 @@ def run_cycle(
                         "provenance": ray.get(sm.provenance.remote())}, cost_usd)
 
     # 6. Verify (QA + deterministic gauntlet).
-    approved = ray.get(qa.review.remote(story_id, impl["pr_id"]))
+    approved, qa_reason = ray.get(qa.review.remote(story_id, impl["pr_id"], contract_name))
+
+    # QA re-measures, so it can land on a neutral verdict the SWE's run did not
+    # (OMNI-41: an inconclusive benchmark). Same fact, same handling — spend
+    # recorded, no bug, no breaker increment — or a noisy re-measurement would
+    # file a bug against a candidate the SWE's run had just accepted.
+    qa_neutral = None if approved else episodic.neutral_status(qa_reason)
+    if qa_neutral:
+        trip = ray.get(ceo.record_neutral.remote(cost_usd=cost_usd))
+        breaker_bug_id = _breaker_alarm(trip)
+        return _record({"status": qa_neutral, "reason": qa_reason,
+                        "spec_id": spec_id, "story_id": story_id,
+                        "pr_id": impl["pr_id"],
+                        "candidate_sha": impl.get("candidate_sha"),
+                        "breaker_bug_id": breaker_bug_id,
+                        "economics": ray.get(ceo.economics.remote()),
+                        "provenance": ray.get(sm.provenance.remote())}, cost_usd)
 
     # 7. Canary deploy to the green slot (DevOps). Promotion to live is the
-    #    human PR merge — intentionally NOT performed by the agent. The latency
-    #    was measured inside the gauntlet sandbox; the candidate is not re-run.
-    canary = (ray.get(devops.canary.remote(impl["pr_id"], impl["candidate_latency"]))
+    #    human PR merge — intentionally NOT performed by the agent. On the
+    #    legacy backend the offline latency is recorded as-is (the candidate
+    #    is not re-run); on the "serve" backend this is a real deployment
+    #    judged against live traffic (OMNI-14) and can itself reject a
+    #    candidate QA already approved — the failure mode a canary exists to
+    #    catch (real concurrency/queueing the offline gauntlet cannot see).
+    canary = (ray.get(devops.canary.remote(
+                  impl["pr_id"], impl["candidate_latency"], canary_backend))
               if approved else None)
 
+    status, success, canary_reason = cycle_outcome(approved, canary)
+
     # 8. PM acceptance + CEO records the outcome + spend (drives the brakes).
-    ray.get(pm.accept.remote(spec_id, satisfied=approved))
-    trip = ray.get(ceo.report_outcome.remote(success=approved, cost_usd=cost_usd))
-    bug_id = (ray.get(devops.file_bug.remote(f"QA rejected {story_id} (PR {impl['pr_id']})"))
-              if not approved else None)
-    breaker_bug_id = (
-        ray.get(devops.file_bug.remote(
-            f"CIRCUIT BREAKER OPEN — human attention required: {trip}"))
-        if trip else None
-    )
+    ray.get(pm.accept.remote(spec_id, satisfied=success))
+    trip = ray.get(ceo.report_outcome.remote(success=success, cost_usd=cost_usd))
+    if status == "canary_rejected":
+        bug_id = ray.get(devops.file_bug.remote(
+            f"Live canary rejected {story_id} (PR {impl['pr_id']}): {canary_reason}"))
+    elif status == "qa_rejected":
+        bug_id = ray.get(devops.file_bug.remote(
+            f"QA rejected {story_id} (PR {impl['pr_id']})"))
+    else:
+        bug_id = None
+    breaker_bug_id = _breaker_alarm(trip)
 
     return _record({
-        "status": "verified_awaiting_human_merge" if approved else "qa_rejected",
+        "status": status,
+        # Feeds episodic.event_from_cycle_result's existing reason/reject_gate
+        # extraction (result.get("reason")) with zero new plumbing there —
+        # CanaryVerdict.reason (evaluate_canary) is a distinct failure family
+        # from the offline gauntlet's, so gate_from_reason grows matching names.
+        "reason": canary_reason if status == "canary_rejected" else None,
         "bug_id": bug_id,
         "breaker_bug_id": breaker_bug_id,
         "spec_id": spec_id,

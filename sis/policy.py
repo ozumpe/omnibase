@@ -5,8 +5,10 @@ a change is authorised (pre-write) only if its tier permits it:
 
 - **FORBIDDEN — guardrail / safety code.** NEVER modifiable by the loop, with
   **no override path** (not even human approval). If the rewriter could edit its
-  own gauntlet, sandbox, spend brakes, secret handling, or *this policy*, the
-  safety guarantees evaporate. This is the load-bearing invariant.
+  own gauntlet, sandbox, spend brakes, secret handling, *contracts*, or *this
+  policy*, the safety guarantees evaporate. This is the load-bearing invariant.
+  Listed both as individual files (``GUARDRAIL_PATHS``) and as whole
+  directories (``GUARDRAIL_DIRS``, for trees like ``specs/``).
 - **STRICT — all other engine code.** Off-limits to the loop by default. Enabling
   it (``SIS_ALLOW_STRICT_CHANGES=1``) still requires, before the loop may even
   propose a change: a **justification** (a collected exception or an explicit
@@ -21,11 +23,11 @@ rules.
 
 from __future__ import annotations
 
-import os
 import pathlib
 from dataclasses import dataclass
 from enum import Enum
 
+from sis import config
 from sis.paths import PROJECT_ROOT
 
 
@@ -46,33 +48,73 @@ class Justification(str, Enum):
 GUARDRAIL_PATHS: tuple[str, ...] = (
     "sis/policy.py",          # this policy itself
     "sis/gauntlet.py",        # the validation moat + sandbox + timeout
+    # What every comparing gate reduces candidate output to before `==` (H4):
+    # a loop able to loosen it could return a value with its own __eq__ again.
+    "sis/canonical.py",
+    # The contract layer. This module's docstring has always named *contracts*
+    # as FORBIDDEN, but the list only ever protected `specs/` — the exam's
+    # content — and not the declarations that decide how it is marked. That gap
+    # became load-bearing in OMNI-17: a contract now returns its own
+    # `gate_profile()`, so a loop able to edit this file could return an empty
+    # tuple and pass every candidate, on top of the pre-existing ability to set
+    # `max_latency_ratio=1.0` or `diff_trials=1` and gut two gates.
+    "sis/contract.py",
+    "sis/backtest.py",        # fixture parsing + the in-sandbox backtest script
+    "sis/invariant.py",       # the domain-law gate + its in-sandbox script
+    "sis/slo.py",             # the latency-budget gate + its in-sandbox script
+    # The only write path into specs/. It holds the approval gate that stands
+    # between a drafted exam and the exam the implementer is judged against,
+    # so a loop able to edit it could approve its own contract.
+    "sis/contract_author.py",
+    "sis/clock.py",           # event time: what a replayed gate believes "now" is
     "sis/cost.py",            # spend accounting that feeds the brakes
     "sis/settings.py",        # secret loading + masking
     "sis/adapters.py",        # RequiresHumanApproval guardrails (in-memory)
     "sis/adapters_real.py",   # RequiresHumanApproval guardrails (real)
+    "sis/serve_cloud.py",     # same guardrail, plus the green-replica env scrub
+    # The configuration schema and the file it renders. Every knob above is
+    # reachable from here — the sandbox mode, the spend brakes, this module's
+    # own target list — so a loop able to write either one could widen the SOFT
+    # tier to include the gauntlet, or set the budget to infinity, without
+    # touching a single guardrail *module*. The per-key `forbidden_`/`strict_`/
+    # `soft_` prefixes in config.yml are about what a **human** may edit in the
+    # operator UI; they grant the loop nothing, because the loop is stopped here.
+    "sis/config.py",
+    "config.yml",
     "Dockerfile.gauntlet",    # the sandbox image
 )
 
-# The designated optimisation target(s) — the SOFT tier. Configurable via
-# SIS_TARGET_PATHS (comma-separated, repo-root-relative posix paths) so widening
-# what the loop may optimise is a deliberate, reviewed change. Guardrail paths
-# always win over this list (see classify), so a target can never silently
-# overlap safety code even if mis-configured here.
-DEFAULT_TARGET_PATHS: tuple[str, ...] = (
-    "runtime/target.py",
+# Whole *directories* the loop must never write, matched by path prefix.
+# Separate from GUARDRAIL_PATHS because a contract is a tree — oracle module,
+# acceptance tests, fixtures — whose filenames aren't known when this list is
+# written, so enumerating them one by one is a guarantee that silently decays
+# every time a contract gains a file.
+GUARDRAIL_DIRS: tuple[str, ...] = (
+    # The contract space: the reference oracle, the benchmark inputs, and the
+    # acceptance tests a candidate must satisfy. The implementer must not be
+    # able to edit its own exam — the direct generalization of "the reference
+    # oracle must not live in the loop-mutable target". See
+    # docs/CLASS2_CONTRACT.md.
+    "specs",
 )
+
+# The designated optimisation target(s) — the SOFT tier. Re-exported from
+# sis.config, which declares it alongside the `policy.target_paths` key that
+# overrides it, so the default and its override cannot drift apart. Both modules
+# are FORBIDDEN, so moving the constant changes nothing about who may edit it.
+DEFAULT_TARGET_PATHS: tuple[str, ...] = config.DEFAULT_TARGET_PATHS
 
 
 def target_paths() -> tuple[str, ...]:
-    """The SOFT-tier optimisation targets (env-overridable)."""
-    raw = os.getenv("SIS_TARGET_PATHS")
-    if not raw:
-        return DEFAULT_TARGET_PATHS
-    return tuple(
-        part.strip().replace("\\", "/").lstrip("./")
-        for part in raw.split(",")
-        if part.strip()
-    )
+    """The SOFT-tier optimisation targets.
+
+    Configurable (``policy.forbidden_target_paths`` / ``SIS_TARGET_PATHS``) so
+    widening what the loop may optimise is a deliberate, reviewed change.
+    Guardrail paths always win over this list (see :func:`classify`), so a
+    target can never silently overlap safety code even if mis-configured.
+    """
+    paths: tuple[str, ...] = config.get("policy.target_paths")
+    return paths or DEFAULT_TARGET_PATHS
 
 
 @dataclass(frozen=True)
@@ -112,16 +154,43 @@ class Decision:
 
 
 def _strict_enabled() -> bool:
-    return os.getenv("SIS_ALLOW_STRICT_CHANGES", "0") == "1"
+    enabled: bool = config.get("policy.allow_strict_changes")
+    return enabled
 
 
 def _rel(path: str | pathlib.Path) -> str:
-    """Repo-root-relative posix path; falls back to a cleaned string."""
+    """Repo-root-relative posix path; falls back to a cleaned string.
+
+    A *relative* path is resolved against ``PROJECT_ROOT``, not the process's
+    cwd. Every tier list here is repo-root-relative, and the loop spawns
+    subprocesses with their own cwd (see ``sis.paths``), so resolving against
+    cwd would make a path's tier depend on where the interpreter happened to be
+    started — and would let ``runtime/../specs/x.py`` slip past the contract
+    guardrail whenever cwd wasn't the repo root.
+    """
     candidate = pathlib.Path(path)
+    if not candidate.is_absolute():
+        candidate = PROJECT_ROOT / candidate
     try:
         return candidate.resolve().relative_to(PROJECT_ROOT).as_posix()
     except (ValueError, OSError):
-        return str(path).replace("\\", "/").lstrip("./")
+        # Strip a leading "./" *prefix* — not `.`/`/` *characters*, which
+        # lstrip("./") does (mangling e.g. "../x" → "x", ".github/x" → "github/x").
+        return str(path).replace("\\", "/").removeprefix("./")
+
+
+def _under_guardrail_dir(rel: str) -> bool:
+    """Is *rel* inside (or equal to) a GUARDRAIL_DIRS directory?
+
+    Compares whole path segments, never a bare string prefix: ``"specs"`` must
+    protect ``specs/x.py`` without also swallowing an unrelated ``specs_draft/``
+    or ``specstest.py``, which ``str.startswith("specs")`` would.
+    """
+    for guarded in GUARDRAIL_DIRS:
+        head = guarded.rstrip("/")
+        if rel == head or rel.startswith(f"{head}/"):
+            return True
+    return False
 
 
 def classify(path: str | pathlib.Path) -> ChangeTier:
@@ -129,7 +198,7 @@ def classify(path: str | pathlib.Path) -> ChangeTier:
     rel = _rel(path)
     # Guardrail precedence is absolute: a path that is both listed as a target
     # AND is guardrail code is still FORBIDDEN.
-    if rel in GUARDRAIL_PATHS:
+    if rel in GUARDRAIL_PATHS or _under_guardrail_dir(rel):
         return ChangeTier.FORBIDDEN
     if rel in target_paths():
         return ChangeTier.SOFT

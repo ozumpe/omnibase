@@ -10,9 +10,12 @@ from __future__ import annotations
 
 from typing import Any
 
-# model id -> (input $/1M, output $/1M)
+# model id -> (input $/1M, output $/1M). Verified against published rates
+# 2026-07-25. Sonnet 5 lists a lower intro price through 2026-08-31; the
+# standard rate is used here so the spend cap never *under*-counts.
 PRICING: dict[str, tuple[float, float]] = {
     "claude-opus-4-8": (5.0, 25.0),
+    "claude-sonnet-5": (3.0, 15.0),
     "claude-sonnet-4-6": (3.0, 15.0),
     "claude-haiku-4-5": (1.0, 5.0),
 }

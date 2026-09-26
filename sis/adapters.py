@@ -15,8 +15,12 @@ rather than performing them, per the project's hard rules.
 
 from __future__ import annotations
 
+import dataclasses
 import itertools
+import time
+from collections.abc import Callable
 
+from sis.metrics import summarise
 from sis.ports import (
     Branch,
     DeployRecord,
@@ -26,6 +30,7 @@ from sis.ports import (
     Page,
     PullRequest,
     RequiresHumanApproval,
+    Severity,
 )
 
 
@@ -41,6 +46,25 @@ class InMemoryTelemetry:
 
     def events(self) -> list[dict[str, object]]:
         return list(self._events)
+
+
+class InMemoryNotifier:
+    """Records pages instead of sending them — the default, and what tests read."""
+
+    def __init__(self, telemetry: InMemoryTelemetry) -> None:
+        self._tel = telemetry
+        self._ids = itertools.count(1)
+        self._sent: list[dict[str, str]] = []
+
+    def notify(self, severity: Severity, title: str, body: str) -> str:
+        delivery = f"N-{next(self._ids)}"
+        self._sent.append({"id": delivery, "severity": severity.value,
+                           "title": title, "body": body})
+        self._tel.emit("notify.sent", id=delivery, severity=severity.value, title=title)
+        return delivery
+
+    def sent(self) -> list[dict[str, str]]:
+        return list(self._sent)
 
 
 class InMemoryDocumentStore:
@@ -141,29 +165,80 @@ class InMemoryVersionControl:
         self._tel.emit("commit", branch=branch, sha=sha, message=message)
         return sha
 
-    def open_pr(self, branch: str, title: str, *, artifact: str = "") -> PullRequest:
+    def open_pr(
+        self, branch: str, title: str, *, artifact: str = "", path: str
+    ) -> PullRequest:
         pr_id = f"PR-{next(self._ids)}"
-        pr = PullRequest(id=pr_id, branch=branch, title=title, artifact=artifact)
+        pr = PullRequest(id=pr_id, branch=branch, title=title, artifact=artifact, path=path)
         self._prs[pr_id] = pr
-        self._tel.emit("pr.opened", pr_id=pr_id, branch=branch, title=title)
+        self._tel.emit("pr.opened", pr_id=pr_id, branch=branch, title=title, path=path)
         return pr
 
-    def get_pr(self, pr_id: str) -> PullRequest:
-        return self._prs[pr_id]
+    def get_pr(self, pr_id: str, *, path: str | None) -> PullRequest:
+        # Mirrors the real adapter, which fetches *path* at the PR's head: the
+        # artifact comes back only for the file it was written to. Returning it
+        # for any path would let a caller asking for the wrong file pass every
+        # in-memory test and fail only against GitHub (OMNI-51).
+        pr = self._prs[pr_id]
+        if path == pr.path:
+            return pr
+        return dataclasses.replace(pr, artifact="", path=path or "")
+
+    def live_target_source(self, path: str) -> str:
+        # No merged base branch in memory; the local file is the source of
+        # truth, so the SWE falls back to it.
+        return ""
 
     def merge_pr(self, pr_id: str) -> PullRequest:
         raise RequiresHumanApproval(
             f"merging {pr_id} to main is the mandatory human-review gate (gauntlet step 6)"
         )
 
+    def simulate_human_merge(self, pr_id: str) -> PullRequest:
+        """Model a human merging out of band. **Not** on the ``VersionControl``
+        port, and not reachable from any role.
+
+        The in-memory adapter has no GitHub to observe, so something has to
+        stand in for the human action that ``merged`` reports — the same shape
+        as :meth:`InMemoryCloud.observe`, which lets a load generator feed
+        metrics a real cloud would report by itself. The real adapter has no
+        counterpart: there, ``merged`` comes from GitHub's API and the only way
+        it becomes true is a person clicking merge.
+
+        Deliberately absent from :class:`~sis.workspace.Workspace`'s delegating
+        surface too, so a role cannot reach it even by accident — the whole
+        promotion gate rests on the agent being unable to set this flag.
+        """
+        pr = self._prs[pr_id]
+        pr.merged = True
+        self._tel.emit("pr.merged", pr_id=pr_id, by="human")
+        return pr
+
 
 class InMemoryCloud:
-    """AWS + Ray Serve canary stand-in. Blue is live; green is the canary."""
+    """AWS + Ray Serve canary stand-in. Blue is live; green is the canary.
 
-    def __init__(self, telemetry: InMemoryTelemetry) -> None:
+    Unlike the other in-memory adapters this one is a working *model* of a
+    weighted canary, not just a recorder: it tracks a traffic weight per version
+    and summarises observed requests into percentile windows. That is deliberate
+    — it is what lets the canary flow (``DevOps.canary`` and the load generator)
+    be built and tested with no Ray Serve running at all, the same "fake first,
+    real adapter after" pattern as every other port here. ``ServeCloud`` later
+    implements the same two methods against real Serve metrics.
+
+    ``clock`` is injectable so window filtering is testable without sleeping.
+    """
+
+    def __init__(
+        self, telemetry: InMemoryTelemetry, *, clock: Callable[[], float] | None = None
+    ) -> None:
         self._tel = telemetry
         self._live: str | None = None
         self._records: list[DeployRecord] = []
+        self._clock = clock if clock is not None else time.monotonic
+        self._weights: dict[str, float] = {}
+        # version -> [(observed_at, latency_seconds, is_error)]
+        self._observations: dict[str, list[tuple[float, float, bool]]] = {}
 
     def deploy_canary(
         self, version: str, *, metrics: dict[str, float] | None = None
@@ -172,15 +247,50 @@ class InMemoryCloud:
             version=version, slot="green", live=False, metrics=dict(metrics or {})
         )
         self._records.append(record)
+        self._weights.setdefault(version, 0.0)
         self._tel.emit("canary.deployed", version=version, slot="green", metrics=record.metrics)
         return record
 
-    def promote(self, version: str) -> DeployRecord:
-        raise RequiresHumanApproval(
-            f"promoting {version} from green canary to live follows the human PR merge"
+    def shift_traffic(self, version: str, fraction: float) -> None:
+        if not 0.0 <= fraction <= 1.0:
+            raise ValueError(f"traffic fraction must be in 0.0..1.0, got {fraction}")
+        self._weights[version] = fraction
+        self._tel.emit("canary.traffic_shifted", version=version, fraction=fraction)
+
+    def traffic_weights(self) -> dict[str, float]:
+        """Current split (test/inspection helper — not part of the Cloud port)."""
+        return dict(self._weights)
+
+    def observe(self, version: str, latency_seconds: float, *, error: bool = False) -> None:
+        """Record one served request (test/load-gen helper, not on the port).
+
+        This is the seam the load generator writes through, so ``live_metrics``
+        summarises real observations rather than numbers a test made up.
+        """
+        self._observations.setdefault(version, []).append(
+            (self._clock(), latency_seconds, error)
         )
 
+    def live_metrics(self, version: str, window_s: float) -> dict[str, float]:
+        cutoff = self._clock() - window_s
+        recent = [(lat, err) for at, lat, err in self._observations.get(version, [])
+                  if at >= cutoff]
+        return summarise([lat for lat, _ in recent],
+                         errors=sum(1 for _, err in recent if err)).as_metrics()
+
+    def promote(self, version: str) -> DeployRecord:
+        # Deliberately does NOT raise (see Cloud.promote): the human gate is the
+        # observed PR merge, checked by the only caller. Raising here again
+        # would just restore the state where promotion can never happen at all.
+        self._live = version
+        self._weights[version] = 1.0
+        record = DeployRecord(version=version, slot="blue", live=True)
+        self._records.append(record)
+        self._tel.emit("canary.promoted", version=version, slot="blue")
+        return record
+
     def rollback(self, version: str) -> None:
+        self._weights[version] = 0.0
         self._tel.emit("canary.rolledback", version=version)
 
     def live_version(self) -> str | None:

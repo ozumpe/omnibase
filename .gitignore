@@ -5,18 +5,51 @@ __pycache__/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+*.DS_Store
+
+# Local agent-tool config that isn't shared (graft's cache is at the bottom,
+# with the note on why ripgrep still sees it).
+.mcp.json
+GEMINI.md
+# graft's per-machine install. Its helpers bake an absolute path into the
+# installer's node_modules, and its .claude/settings.json registers hooks on
+# every session, prompt, tool call and stop — committed, both would break or
+# fail for anyone without graft. The rest only point at the (also ignored)
+# graft/ cache. Named precisely, so a genuinely shared file in these
+# directories can still be committed on purpose.
+.claude/settings.json
+.claude/helpers/
+.claude/skills/graft/
+.agents/skills/graft/
+.github/copilot-instructions.md
+.ignore
 
 # Runtime-mutable state produced by the loop.
 # runtime/target.py is the committed naive baseline; the loop overwrites it
 # at runtime, but we keep the pristine version under version control.
 runtime/target.py.bak
 runtime/episodic.jsonl
+runtime/episodic_state.json
 runtime/episodic.duckdb
+# Who changed which config key, when, and why (OMNI-28) — a local operational
+# record of this machine's console, not source.
+runtime/operator_audit.jsonl
+# Drafted contracts awaiting human approval — local review state, not source.
+runtime/contract_staging/
 
 # Editor / tooling
 .idea/
 .vscode/
 .claude/settings.local.json
+.claude-code-gui/
+
+# Terraform (infra/aws). State records resource attributes and terraform.tfvars
+# holds the alert email; neither belongs in a public repo. The .terraform.lock.hcl
+# provider lock IS committed, by Terraform convention.
+*.tfstate
+*.tfstate.*
+.terraform/
+terraform.tfvars
 
 # Secrets (see DESIGN.md §6). Local dev only — never commit real credentials.
 # secrets.example.yml IS committed (template); secrets.local.yml is NOT.
@@ -25,3 +58,6 @@ secrets.local.yml
 *.local.yml
 secrets/
 !secrets.example.yml
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/

@@ -1,0 +1,641 @@
+# From Class 2 to omnitrack — building a digital twin with omnibase
+
+**Status:** vision & sequencing. **None of E1–E5 is built** — with one exception, the
+`Clock` port, which D6 pulled forward into
+[OMNI-23](https://olafzumpe.atlassian.net/browse/OMNI-23) and which shipped as
+`sis/clock.py`.
+
+The Class-2 base this document builds on **has landed** (2026-08-11):
+`FeatureContract` with a contract-selected gate profile, `InterfaceGate`,
+`AcceptanceGate`, `InvariantGate`, `BacktestGate`, and the contract-author actor. Two
+pieces of [OMNI-3](https://olafzumpe.atlassian.net/browse/OMNI-3) did **not** ship with
+it and neither is on this document's path: `SloGate`
+([OMNI-24](https://olafzumpe.atlassian.net/browse/OMNI-24), low — shipped separately on
+2026-09-25) and `ToolchainAdapter`
+([OMNI-20](https://olafzumpe.atlassian.net/browse/OMNI-20), parked) — both were
+detached as standalone backlog items when the epic closed. The ✅ column in §2 therefore describes shipped code except
+where a cell says otherwise. Read [`CLASS2_CONTRACT.md`](CLASS2_CONTRACT.md) first; this
+is its continuation. [`SERVE_CANARY.md`](SERVE_CANARY.md) is the online half of the same
+verification story and is reused wholesale here.
+
+> Not yet mirrored in Confluence. When it is, it belongs in the SD space as a sibling of
+> the Class-2 contract page.
+
+---
+
+## 1. The thesis
+
+**omnitrack is not one system omnibase builds. It is N modelled actors, each of which is
+a contract plus a deploy slot on the same engine.**
+
+The engine is already target-agnostic — nothing in `sis/` knows a target by name, and a
+new target is "a `specs/` directory plus a registry entry, not an engine change." That
+property is the whole plan. A new modelled actor — a supplier, a junction, a regulator, a
+tenant — is a new contract, a new slot, an episodic partition, and a share of the budget.
+It is *not* a new omnibase.
+
+Separate omnibase *instances* may eventually make sense for ops reasons (independent
+failure domains, independent cadence, separate ownership). That is a deployment decision
+to defer (**D1**). The decision to make now is that **the contract boundary is the actor
+boundary**, because that is what gives credit assignment: a system-level score is one
+scalar for hundreds of components and nothing converges against it.
+
+---
+
+## 2. What OMNI-3 provides — and what it doesn't
+
+| Capability | After OMNI-3 | Gap for omnitrack |
+|---|---|---|
+| Verify a built feature offline | ✅ `FeatureContract` + invariants + backtests | assumes a **deterministic** entry point |
+| Verify on live traffic | ✅ `ServeCloud` canary, same predicates | assumes a **stateless** target |
+| Any target, any language | ⚠️ contract yes; `ToolchainAdapter` **parked** (OMNI-20) — Python only today | — |
+| Spec → contract | ✅ contract-author actor (human-reviewed) | — |
+| **Read the world** | ⚠️ `Clock` port shipped (OMNI-23); no `Sensor` | no way to *read* the world — event time exists, readings don't |
+| **Know the model is wrong** | ❌ | trigger is "code is slow", not "model disagrees with reality" |
+| **Model non-deterministic reaction** | ❌ | every gate compares values, not distributions |
+| **Hold live state across a swap** | ❌ | canary works *because* the target is stateless |
+| **Many targets in parallel** | ❌ | one contract per cycle; `Workspace.cloud` is a single slot (`DevOps` already holds one `ServeCloud` per contract) |
+| **Catch emergent misbehaviour** | ❌ | every actor can pass locally while the system oscillates |
+
+Six gaps, five new components — the sixth ("know the model is wrong") is wiring, not a
+component: Phase B connects prediction error to the trigger shape that already exists.
+None of this is an engine rewrite.
+
+---
+
+## 3. The five new components
+
+### E1 — `Sensor` port (+ a clock)
+A port like the existing five, with **two adapters from day one**: `RealSensor` (reads the
+world) and `SimSensor` (generates scenarios). Paired with a `Clock` port so the twin can
+run in event time, not wall-clock.
+
+**The clock half is already built** — `sis/clock.py` (OMNI-23) ships `WallClock`,
+`ReplayClock`, and timezone-required `event_time` parsing, so what remains of E1 is the
+`Sensor` port and its two adapters. Note what that module already settled, so E1 doesn't
+relitigate it: event time is *not* used for durations (the benchmark gate keeps
+`perf_counter`) and *not* for the audit trail (`SelfModel.record` stays on the wall
+clock). Only "when did something happen out there" goes behind the port.
+
+This single component pays for itself three times:
+1. it is the input to the twin;
+2. it is the **scenario generator** — drive the model into situations that have never
+   happened;
+3. it is the **input generator for the gauntlet**, which closes the open problem
+   `CLASS2_CONTRACT.md` flags ("property generators are real work"). Same trick as the
+   oracle being both reference and prompt source: one artifact, two uses.
+
+**The trap:** if the simulator generates the test inputs *and* the model is judged against
+the simulator, the loop closes with no contact with reality — and the simulator is itself a
+model you are also improving. The rule that prevents it: **simulation is for refutation,
+real data is for acceptance.** Sim finds failure modes and drives coverage; promotion
+requires real-trace evidence (**D4**). The simulator gets its own contract, backtested
+against recorded sensor traces, or it drifts and takes everything downstream with it.
+
+**The second trap: sensor data is untrusted input.** The existing hard rules treat
+generated *code* as untrusted; a `RealSensor` adds untrusted *data* — readings an outside
+party can influence. Traces flow into scenario libraries, backtest fixtures, and (because
+the proposer prompt is contract-derived) potentially into LLM prompts: prompt injection
+via a sensor trace is a real risk class, not a hypothetical. Anything that travels from
+`RealSensor` into a prompt or a contract artifact gets the same skepticism as generated
+code — sanitised, size-bounded, never interpolated raw.
+
+One operational note, already learned elsewhere in this repo: detached Ray actors inherit
+the driver's environment at *creation*, so `Sensor`/`Clock` configuration must be passed
+per cycle as arguments, never read from env vars after bootstrap (same rule as
+`SIS_CONTRACT`).
+
+### E2 — the determinism axis and the distributional gate family
+The load-bearing change: **correctness stops being a value and becomes a distribution.**
+A reaction model ("how would this institution respond to X") has no reference oracle, no
+single right answer, and only sparse ground truth.
+
+**This is an axis, not a Class 3.** The tempting move is to call it a third contract class
+after optimisation (Class 1) and feature construction (Class 2), and that would be a
+category error with real downstream cost. Classes 1 and 2 differ by *what the task is* —
+optimise a working function, versus build one from a spec — and correspondingly by where
+truth comes from. Determinism differs by *what the output is*, and it crosses both:
+
+|                          | Deterministic                                   | Stochastic                                                        |
+|--------------------------|-------------------------------------------------|-------------------------------------------------------------------|
+| **Optimise** (Class 1)   | differential vs reference + benchmark *(today)*  | distributional equivalence vs reference + benchmark                |
+| **Construct** (Class 2)  | acceptance + invariants + backtest               | acceptance bounds + distributional invariants + calibration/skill  |
+
+A slow Monte Carlo simulation someone wants sped up is the top-right cell: unambiguously
+a Class-1 optimisation, unambiguously stochastic. A "Class 3" has no room for it.
+
+So determinism is **a field on the contract, defaulting to deterministic** — not a new
+contract type. Three consequences worth stating plainly:
+
+1. **Deterministic contracts stay deterministic, permanently.** There is no ladder to
+   climb and no upgrade path to opt out of. A contract that declares nothing behaves
+   exactly as it does today, forever.
+2. **The gate *stack* never branches on determinism.** Only the **comparator** inside a
+   gate does: exact-or-tolerance versus a proper scoring rule. One pipeline, swappable
+   comparison — which is why `Backtest.compare` in OMNI-19 is the whole mechanism rather
+   than a convenience.
+3. **The only structural addition is the seed requirement**, and it applies solely to
+   contracts that declare themselves stochastic.
+
+With that framing, the Class-1 stack maps over almost line-for-line:
+
+| Existing gate | Stochastic analogue |
+|---|---|
+| `ast` / `mypy --strict` | unchanged |
+| **no-op check** | **must beat the base-rate / climatology baseline** (skill > 0) |
+| interface | unchanged, **plus the entry must take an explicit seed** |
+| acceptance tests | named scenarios with expected *bounds*, not expected values |
+| **differential vs reference** | no reference → **calibration + distributional invariants** over N sampled runs |
+| **benchmark ≥ margin** | **proper scoring rule vs the incumbent, by margin** (Brier / log score / CRPS) |
+| canary on live traffic | paired live prediction-error vs incumbent |
+
+Three details carry the weight:
+
+- **The no-op analogue is not optional.** A model that always predicts the base rate is
+  perfectly calibrated and useless. The gate is calibration *and* discrimination against a
+  climatology baseline — structurally the same check that already rejects an unchanged
+  candidate as `no_change`.
+- **Determinism under seed is a hard interface requirement.** Without it the gauntlet
+  cannot reproduce a failure and every distributional gate is noise.
+- **`diff_trials` generalises directly** (`sis/contract.py`): 300 randomised trials becomes
+  "N sampled runs", so statistical power is a contract field, not a new concept.
+
+**Anti-gaming gets genuinely weaker here, and this is the one real regression.** A
+candidate can overfit sparse historical episodes, and the accept/reject signal leaks the
+holdout one bit per cycle — the loop overfits data it never saw, purely through selection
+(the adaptive-data-analysis problem; cf. Dwork et al.'s reusable holdout). Mitigation fits
+what already exists: a held-out episode split inside the POLICY-FORBIDDEN `specs/` space
+that never enters the proposer prompt, plus a **holdout-evaluation budget** as a brake next
+to the CEO's spend cap. The episodic store already records every rejected diff and the gate
+that caught it, so holdout burn is measurable from data being written today (**D5**).
+
+### E3 — Stateful swap
+The Serve canary works *because* `/sort` is stateless by construction. A modelled actor
+holds live state by definition. There are two ways out and they differ enormously in cost —
+see **D2**. Externalising state behind a `StateStore` port collapses this component into
+the canary pattern that already works; keeping state in the actor requires drain/handoff
+semantics, a versioned state schema, a contract-verified `migrate()`, and trajectory
+comparison rather than single-output comparison.
+
+This is also where the **atomic actor swap** scoped out of
+[`SERVE_CANARY.md`](SERVE_CANARY.md) (and sketched in `DESIGN.md` §4: spin up the new
+version, shadow-run, swap the named-actor handle) comes home: E3 either *is* that design
+or must subsume it. Neither has a design doc yet — whoever schedules either piece first
+writes the one document, so drain/handoff machinery isn't built twice.
+
+### E4 — Per-actor slots
+Registry entries, a deploy slot per modelled actor, an episodic partition per actor, and a
+budget share. Mechanically the smallest of the five; `Workspace.cloud` becoming a map
+rather than a single slot is most of it. **The CEO brake stays global** — N loops each
+honouring their own cap is N times the budget.
+
+### E5 — Emergence gate
+Per-actor contracts cannot see oscillation, deadlock, or cascade. A second, slower
+verification level: a system-level backtest over a multi-actor scenario, run every N cycles
+rather than every cycle. Structurally the same split as gauntlet (fast, offline) vs canary
+(slow, live), one level up. Advisory before blocking (**D10**).
+
+Also needed here: **interaction contracts.** A's model of how B reacts, versus B's own
+model of itself. Without an explicit protocol between modelled actors, each drifts into
+private assumptions. An actor's *observable behaviour* wants to be a port, with a contract
+on the interface, not only on the implementation.
+
+---
+
+## 4. Sequencing
+
+Each phase ends in something runnable, in the style of the RUNBOOK levels.
+
+| Phase | Delivers | Milestone you can run |
+|---|---|---|
+| **A** | E1: `Sensor` + `Clock` ports, real + sim adapters, one domain (the California gasoline market, D0) | drive the twin from a recorded trace *and* from a generated scenario; prediction error computed, nothing acts on it |
+| **B** | prediction error as trigger | a **sustained model-error breach** starts a cycle, exactly as a sustained SLO breach does today — reuses the existing monitor/brake shape; the error series lands in the Telemetry port + SelfModel, the same home as the SLO metrics it mirrors |
+| **C** | E2: the determinism axis + distributional comparators | one actor's reaction model passes/fails on calibration + skill + invariants, against a held-out split it never sees |
+| **D** | E4: per-actor slots | two modelled actors improving independently on one engine; roll one back without touching the other |
+| **E** | E3: stateful swap | swap a live actor's model version under load, state preserved, nothing else restarts |
+| **F** | E5: emergence gate + interaction contracts | system-level backtest over a multi-actor scenario; advisory verdict |
+
+Rationale for the order: **sense → notice you're wrong → verify a fix → parallelise →
+swap live → integrate.** A and B are cheap and unlock the honest version of every later
+demo (you cannot backtest without event time, and you cannot justify a cycle without a
+model-error signal). C is the intellectual core. D is mechanical. E's cost is set entirely
+by D2. F needs history that only exists after D and E have been running.
+
+Phases A–C are the minimum that proves the thesis on one modelled actor. That is the
+milestone worth aiming at before scoping the rest.
+
+---
+
+## 5. The verification model, in one picture
+
+```
+                 sim sensor ──┐                  ┌── refutation only
+                              ├─> contract gates ┤
+                real sensor ──┘                  └── acceptance evidence
+                                    │
+        per actor, per cycle ───────┤ fast: interface, acceptance, invariants,
+                                    │       calibration, skill vs climatology
+                                    │
+        system, every N cycles ─────┤ slow: multi-actor backtest, interaction
+                                    │       contracts, emergence
+                                    │
+                     live ──────────┘ canary: paired prediction error vs incumbent
+```
+
+Two rules hold the whole thing together, and both are carried over rather than invented:
+
+1. **The implementer cannot edit its own exam.** `specs/` stays POLICY-FORBIDDEN, and that
+   now covers oracles, invariants, scenario libraries, and held-out splits.
+2. **Author and implementer are different actors.** The domain laws — "cargo is conserved",
+   "a regulator never acts before notice" — come from a human or the contract-author actor
+   under review, never from the loop.
+
+---
+
+## 6. Decisions to be made
+
+Numbers are stable identifiers, not an ordering — the → line on each gives its deadline.
+Each entry states a recommendation; where a decision has been taken it follows below it and
+supersedes it. **All of D0–D12 are decided** (register settled 2026-08-28; D0 revised
+2026-09-24 — the California gasoline market replaces regional air traffic). D10 decides
+the *mechanism* — advisory first, with an empirical criterion for the blocking flip —
+while the flip itself deliberately stays a Phase-F call; see its entry.
+
+**D0 — What slice of the world does omnitrack model first? DECIDED (revised 2026-09-24):
+the California gasoline market first, read from EIA's weekly data; Iowa's spirits supply
+chain second.** This supersedes the first decision (2026-08-14, regional air traffic),
+which is kept below with the reason it was dropped.
+Everything in §8 — ground-truth density, episode frequency, sensor availability — is a
+property of this choice, and it determines the first `RealSensor` adapter and the domain
+of Phase A. **D8** then decides who decomposes the chosen domain into modelled actors.
+→ *Decided before Phase A, as required; revised before any Phase-A code existed, so
+nothing built is thrown away.*
+
+*Why it was revisited.* Air traffic was always an example of the idea, never the idea.
+The idea is a server that adapts itself to new tasks: a new domain arrives as a spec, and
+the running system extends itself to model it. omnibase is the engine that does the
+extending; the product is that self-adapting domain server, not the engine and not any
+one domain. Judged as a proof of concept of *that*, air traffic was interesting but of
+limited use — there is little anyone would do with a passive airspace twin, and it
+carried the heaviest optics tax of any candidate. The first domain should instead be one
+where a twin is useful; whose real data is still being published, because a live canary
+and D4's real-trace evidence both need a world that keeps producing readings; which is a
+supply chain, so there are actors reacting to each other and E5 has something to catch
+later; and which has recorded shocks to backtest against.
+
+*Why fuel.* Every level of the chain has public data — refinery production and stocks,
+regional stocks, retail prices, and demand through miles driven (traffic is a demand
+sensor: fuel demand is roughly miles driven divided by fleet fuel economy). Shocks happen,
+and they are on record. And nobody will ridicule the domain: society depends on fuel far
+more than on anything that would draw that reaction, and no output of a passive market
+twin is safety-critical.
+
+*Why California first.* The US publishes fuel prices by area, not by station, so the
+first twin is an area twin — and California is the area where area-level effects show up
+most clearly. Its market is largely separate from the rest of the country's, and EIA
+publishes its prices at three levels (state, Los Angeles, San Francisco). The first
+episode is already in the data, verified 2026-09-24 against EIA's weekly series:
+California's regular reformulated retail price rose from $5.05 to $6.21 a gallon in the
+four weeks to 3 October 2022, while the US regular reformulated price rose $0.16 — the
+California premium doubled, from $1.03 to $2.03. West Coast (PADD 5) gasoline stocks
+bottomed the same week (24,675 thousand barrels on 30 September, down from 29,192 on
+5 August) and had rebuilt to 29,943 by 25 November, when the premium was back under $1.
+What caused it is not verified here; the fixture (OMNI-35) records what the series show,
+not a story about them.
+
+*Why Iowa second.* The Iowa liquor sales table is the one public dataset found that
+reaches every entity in a supply chain: each invoice line from the state — the sole
+wholesaler of spirits in Iowa — to each licensed store, naming the vendor, item, pack,
+bottle cost and retail price, and bottles sold. That is where the entity-level twin
+becomes possible, one modelled actor per store and per vendor, which is the long-term
+shape §1 describes. It is second rather than first for two reasons. An entity-level twin
+needs E4 (per-actor slots, Phase D) before it is more than one aggregate actor. And doing
+it second *is* the proof of concept: the second domain arrives as a spec on an engine the
+first one shaped, and the test is how much of it the running system builds itself. Two
+domains on one engine is what "adapts itself to new tasks" has to mean in practice. Its
+limits, known now: spirits only, and the rows are store orders from the state, not
+consumer sales. Filed as
+[OMNI-39](https://olafzumpe.atlassian.net/browse/OMNI-39), not yet broken into stories.
+
+*Data sources, verified 2026-09-24.* Licence and terms of use are checked separately, by
+a human, before any adapter is written against a source.
+
+| Source | What | Level | Cadence, latest | Access |
+|---|---|---|---|---|
+| EIA weekly petroleum data | retail gasoline prices; gasoline stocks; product supplied | prices for 29 areas, incl. California, Los Angeles, San Francisco; stocks by PADD and sub-PADD (West Coast = PADD 5, not California alone); product supplied US only | weekly; prices to 21 Sep 2026, stocks to the week ending 18 Sep 2026 | bulk file `PET.zip` (56 MB, last refreshed 24 Sep 2026) needs no key; API v2 needs a free key |
+| California Energy Commission, Weekly Fuels Watch | California refinery inputs, production and stocks | California refineries | weekly | dashboards; a machine-readable export is **not yet verified** |
+| Caltrans PeMS | freeway detector volumes | California freeways, 5-minute | live | site answers; access not yet verified |
+| FHWA Traffic Volume Trends | vehicle-miles travelled | by state | monthly, to July 2026 | public files |
+| FHWA monthly motor fuel | taxed fuel volumes | by state | **stale** — newest files Sep 2023 | public files; not usable as a live sensor |
+| Iowa liquor sales (BigQuery public copy) | invoice lines, state → store | per store, vendor, item | 34,016,839 rows, table modified 20 Sep 2026 | `bigquery-public-data.iowa_liquor_sales.sales`; the Iowa portal's old Socrata endpoint now returns 404 |
+| Station-level fuel prices | per-station retail prices | Germany (Tankerkönig / MTS-K), France (roulez-eco), Western Australia (FuelWatch) | live | Germany needs a free key, France and WA none; **no US equivalent found** |
+
+EIA series used above: `EMM_EPMRR_PTE_SCA_DPG`, `EMM_EPMRR_PTE_Y05LA_DPG` and
+`EMM_EPMRR_PTE_Y05SF_DPG` (California, Los Angeles, San Francisco regular reformulated
+retail), `EMM_EPMRR_PTE_NUS_DPG` (US), `WGTSTP51` (PADD 5 gasoline stocks). A second
+verified episode, outside California: the Colonial Pipeline shutdown (7–12 May 2021)
+shows in Lower Atlantic (PADD 1C, `WGTST1C1`) gasoline stocks as a drop from 24,621 to
+22,711 thousand barrels in one week, then an overshoot to 30,079 by 25 June — part of
+which may be seasonal. It is the candidate for a second area.
+
+*What the choice costs.*
+- **Few data points.** A weekly series gives 52 readings a year; the 2022 episode is
+  about a dozen. §8's sparse ground truth applies from the first day, and D5's holdout
+  budget is tight.
+- **Area level only, in the US.** No public per-station US price feed exists, so the
+  California twin is a market twin. Per-entity modelling waits for Iowa, or for a
+  non-US station feed.
+- **Series don't share a geography.** EIA's weekly stocks are for the West Coast region,
+  not California; California's own refinery stocks are the CEC's, and that source is not
+  yet verified as machine-readable.
+- **Series don't share a clock.** Weekly stocks are dated by a Friday week-ending, weekly
+  retail prices by a Monday, PeMS every five minutes and FHWA monthly. Merging them is
+  the first thing the clock-cadence check (OMNI-35) has to handle.
+- **A reading has two times.** The week it describes and the moment it became known are
+  different, and a backtest that sees a value before it was published is seeing the
+  future. The capture format (OMNI-33) records both.
+
+*What carried over.* Everything domain-agnostic about Phase A survived the switch: the
+`Sensor` port and `SimSensor`, the sanitisation boundary before any real adapter, the D7
+simulator split, a first recorded fixture with a clock-cadence check, and prediction
+error computed but not acted on. OMNI-30's stories were re-scoped on 2026-09-24, not
+replaced.
+
+Candidates considered and not selected:
+
+- **Regional air traffic** (OpenSky / ADS-B Exchange) — the 2026-08-14 decision,
+  superseded above. The richest, highest-frequency public data of every candidate and
+  the most visual demo; also the heaviest scope and optics tax — the one domain where
+  "wrong is dangerous" needs active management even for a passive twin — and, the reason
+  it was dropped, of limited use as a proof of concept.
+- **A beer supply chain** (brewery → distributor → bar: the bullwhip effect of MIT's Beer
+  Distribution Game). The right shape and the best E5 story, but no real data at any
+  level. Iowa is the same shape with real data.
+- **Retailer APIs** (e.g. Amazon's). They show one seller's view of a storefront, not the
+  chain behind it.
+- **Bike-share network** (station GBFS feeds + historical trip data). Best fit on all four
+  selection criteria (public/cheap data, frequent events, real structure to model, low
+  stakes if wrong) and on §1's actor-network shape: each station is an actor, the
+  rebalancing dispatcher is a literal regulator reacting to network imbalance. Cheapest
+  Phase-A path — one station, fill-level from rides + weather — before any network model
+  exists.
+- **Regional power grid** (EIA + ISO real-time load). Strongest real structure to model
+  (actual supply/demand balancing physics/economics); the regulator/supplier actor shape
+  comes free from how the grid is already organised. More moving parts than bike-share to
+  stand up a first fixture.
+- **Multi-agency transit** (GTFS-realtime across a metro's subway/bus/rail). Best E5 story —
+  cascading delay is the textbook "every local actor passes, the system misbehaves" demo —
+  but that payoff needs several actors already standing, so it's a weaker Phase-A start.
+
+**D1 — One engine with N contracts, or N omnibase instances?**
+*Recommend one engine, N slots.* The engine is already target-agnostic; per-actor
+separation buys credit assignment and rollback granularity without a second engine.
+Separate instances become attractive only for independent failure domains and ownership.
+→ *Decided before Phase D; cheap to revisit.*
+
+Decision:
+*One Engine with N Contracts*
+
+**D2 — Where does twin state live: in the Ray actor, or behind a `StateStore` port?**
+The highest-leverage decision in this document. *Recommend externalising it.* If modelled
+actors are stateless compute over an external store, E3 collapses into the Serve canary
+pattern that already works, and state migration becomes an ordinary schema migration with
+its own contract. Keeping state in the actor means building drain/handoff, versioned state,
+and trajectory comparison from scratch — and Ray cannot hot-swap an actor class anyway, so
+you would be building that machinery regardless.
+→ *Decided before any twin code is written. Retrofitting is a rewrite.*
+
+Decision:
+The actor state needs to be externalized. Ideally in DuckDB and in a human readable way.
+Ideally, it should be possible to optionally store each transition with the clock time and the 
+cause for transitioning to be able to debug/follow reasoning (it may not even take too much 
+space if implemented right but it should probably not be the default).
+
+**D3 — What is a reaction model, as an artifact?**
+Generated Python with explicit parameters, a fitted statistical model, or an LLM called at
+runtime? This determines what the gauntlet is even checking. *Recommend generated,
+parameterised code — LLM at build time, not at runtime.* Runtime LLM calls put
+non-determinism, per-request cost, and an unauditable dependency inside the twin, and no
+gate in this document can verify them. If a runtime LLM is ever wanted, it is a distinct risk
+class that needs its own design.
+→ *Decided before Phase C.*
+
+Decision:
+Here we should compromise between using LLMs and still being able to test and simulate:
+The power of LLMs is indispensable for certain applications to get real world real-time digital twins and it is good to have the option to use LLM responses - within testable and simulatable boundaries.
+There will definitely be actors that need to use LLMs at some point and in some formalized ways - like expecting responses in certain formats (e.g. JSON with specified fields)
+so it can be efficiently evaluated by code.
+If an actor depends on LLMs, we need to be able to simulate the LLM responses for testing and game playing/simulating scenarios (e.g. answering with pre-canned responses, pre-defined scenarios).
+In order to parameterize tests, we could have for each LLM dependent actor specialized LLM actors or interfaces (reverse of MCP servers), that can be mocked for testing purposes.
+
+However, this should not be relevant until we need actors that interact with LLMs.
+
+Points to remember:
+- mocks need to verify how actors are handling the responses, never the LLM's behavior — so promotion evidence can't come purely from mocked responses, and the first LLM-dependent actor still needs its own design note
+    (the original "distinct risk class" point survives this D3 compromise).
+- Runtime LLM calls are per-request spend and must sit under the CEO brakes, which today only meter the proposer.
+- All LLM responses are untrusted input (like sensor data in §3's second trap) — schema-validated, size-bounded, never interpolated raw. One genuine gap to name: an LLM-backed actor is STOCHASTIC on the E2 axis, but E2's hard requirement is "determinism under seed," which no LLM API can honor (temperature 0 is not determinism).
+
+**D4 — What evidence is required to promote: simulated, real, or both?**
+*Recommend real-trace evidence required for promotion; simulation for refutation and
+coverage only.* Needs to be a contract field, not a convention, or it erodes the first time
+real data is inconvenient.
+→ *Decided with Phase A, as required; enforce from Phase C.*
+
+Decision:
+As base for a promotion decision, recorded and human approved real world data is preferred, simulated data is to be used, if no recorded data is available (all tests must pass and it needs to be able to tolerate live traffic).
+
+Before a promotion we should expose the candidate to real world traffic and look at the error rate (if it can handle the format and the volume, and if there are no exceptions and probably if the responses are in an expected range)
+
+**D5 — How is holdout burn managed?**
+Options: rotating splits, a fixed evaluation budget, noised score reporting, or all three.
+*Recommend budget + rotation, with burn measured from the episodic log* (the data is
+already being written). The alternative is silent overfitting that no gate reports.
+Rotation implies ongoing writes into `specs/` — the ingestion path is **D12**.
+→ *Decided ahead of Phase C.*
+
+Decision:
+Go with the recommendation: budget + rotation, with burn measured from the episodic log.
+
+**D6 — Event time or wall-clock?**
+*Recommend event time behind a `Clock` port, with wall-clock as one adapter.* Backtest and
+replay are impossible without it, and it is nearly free at the start and painful later.
+→ *Decided with Phase A.*
+
+Decided as recommended: event time behind a Clock port with wall-clock as one adapter
+
+**D7 — Is the simulator part of the exam or a target the loop may improve?**
+Tension: you want the simulator to get better, but it generates the test inputs.
+*Recommend splitting it* — the generator mechanism is FORBIDDEN, the scenario library is
+reviewed data, and simulator improvements go through their own contract judged against
+held-out **real** traces. Never against itself.
+→ *Decided before Phase C.*
+
+Decided as recommended:
+the simulator needs to be an improvable target. All improvements must only be judged against held-out real traces and 
+never be judged against its own output, with a copy that generates the gauntlet inputs staying FORBIDDEN at a pinned 
+version, improvements reaching it only via the human-approved promote path. This split is what prevents a closed loop.
+
+**D8 — Who decides what the modelled actors are?**
+Human/PM-authored ontology, or loop-proposed decomposition? *Recommend human-authored for
+v1.* This is the same input class as the domain invariants — a small, stable, high-value
+human contribution. A loop that chooses its own decomposition is also choosing its own
+scoring boundaries.
+→ *Decided before Phase D.*
+
+Decided as recommended:
+A human should decide what the modelled actors are. However, this human decision can be driven by a
+proposal from any of the actors, but it must be approved by a human.
+
+**D9 — What counts as "the model is wrong enough to act"?**
+A per-actor prediction-error budget with a sustained-breach rule, mirroring the existing
+SLO trigger. The open question is whether the threshold is absolute, relative to the
+incumbent, or relative to climatology. *Recommend relative to climatology* — it is the only
+form that stays meaningful as the model improves.
+→ *Decided ahead of Phase B (the two-trigger structure; per-actor thresholds stay case-by-case, see below).*
+
+That's a decision to be made case by case, actor by actor and project by project. My opinion is to optimize the implementation
+of a model over time based on historic values/timelines. The situation for each actor can change suddenly and drastically - 
+even the climatology option can become unreliable quickly. It is paramount to keep a detailed history 
+of input values, and actions. Then come up with the most applicable model for each of the actors over time - maybe 
+through regression or appropriate functions, backward propagation, whatever fits.
+
+What counts as a model is wrong enough to act? I think it depends on the context and the specific requirements of each actor but mainly two criteria:
+- Absolute error budget → "is the active twin fit for its purpose right now?" This is a safety or utility statement. Consequence: alert a human, downgrade confidence, stop trusting the output — and also initiate an improvement cycle, because an unfit twin must adapt to the world as it now is, whether or not the model itself got worse. 
+- Skill vs climatology → "is there recoverable headroom a code change could capture?" Consequence: spend LLM budget on a cycle.
+
+Occasionally,
+(1) the world got harder rather than the model getting worse: the absolute error rate is too high while the skill didn't change. We still spend the money and initiate a self-improvement cycle — a harder world absolutely triggers an improvement, because the twin must adapt to the world as it now is.
+(2) or if the model has drifted and the headroom is real, we need to spend money by firing when a skill decays while the absolute error still looks fine.
+(1) and (2) should not be the same trigger.
+
+**D10 — Does the emergence gate block promotion?**
+*Recommend advisory first, blocking once it has enough history to be trusted.* A blocking
+gate with a high false-positive rate will be switched off, and then it is worse than
+advisory.
+→ *Decided before Phase F.*
+
+Background:
+The gate (E5 in docs/OMNITRACK_VISION.md) - once the twin consists of several modeled actors instead of one, previously checked per-actor contracts stop being sufficient: each actor can pass its own exam while the combination can be oscillating, deadlocking, or cascading. E5 is a second verification level — a system-level backtest over a multi-actor scenario, run every N cycles rather than every cycle. Structurally it's the same fast (gauntlet)/slow (canary) split that already exists, but one level higher - a system-level gate.
+
+The open question is what its verdict does:
+Blocking — it behaves like every gate in sis/gauntlet.py today: a bad verdict rejects the candidate, and no PR is opened.
+Advisory — it runs, records its verdict in the episodic store, and surfaces it to the human reviewing the PR, but a bad verdict doesn't stop the cycle by itself.
+
+My current decision is to implement E5 as an advisory gate.
+
+Why this isn't the obvious "of course it blocks"
+Every other gate in the system has an oracle it can point at. Differential correctness has the reference implementation; the invariant gate has domain laws a human wrote; the backtest gate has recorded reality. E5 has none of that — and the vision document states plainly: it can detect that a system-level backtest degraded, but it cannot attribute the degradation to an actor. Credit assignment across interacting stochastic models is an open research problem, not a task someone deferred.
+
+So E5's verdict is inherently noisy in a way mypy --strict is not. Combine that with the sparse-ground-truth problem — few historical episodes, weak statistical evidence — and you get a gate that will sometimes fail a genuinely good candidate for reasons no one can localize.
+
+That's the actual argument in the D10 text: a blocking gate with a high false-positive rate doesn't stay on. It fails good work, no one can explain why, and someone sets SIS_...=0 — at which point you have no signal at all. An advisory gate that everyone reads is strictly more information than a blocking gate that's been switched off. The failure mode of over-strictness here isn't "too safe," it's "silently disabled."
+
+What "enough history to be trusted" means concretely
+It's measurable from data the system already writes. The episodic store records every rejected diff and the gate that caught it. Run E5 advisory for a while, and you can ask: of the candidates E5 flagged, how many did a human then merge anyway and observe no system-level problem? That's the false-positive rate. Flip it to blocking when that number is low enough to live with — an empirical threshold, not a judgment call made in advance.
+
+Note the safety asymmetry that makes advisory-first affordable: the human merge is still mandatory (§7, "The human merge"). An advisory E5 isn't "no gate" — it's a gate whose enforcement is a human reading its verdict on the PR. Nothing promotes itself either way.
+
+Two operational notes: the false-positive measurement only accrues if humans sometimes *do* merge flagged candidates — an advisory verdict treated as de-facto blocking starves its own calibration (the mirror number, candidates E5 passed that later degraded the system backtest, lands in the same store, and the flip should weigh both); and the advisory→blocking flip is a human configuration change, never the loop's — E5's code and its mode are guardrail-tier like every other gate.
+
+**D11 — How is the budget split across N actors?**
+Global cap with per-actor shares, or per-actor caps? *Recommend a global cap with soft
+per-actor shares* so one actor's productive streak isn't starved by an idle sibling, while
+the hard ceiling stays global.
+→ *Decided ahead of Phase D.*
+
+Recommendation sounds correct:
+- The total amount of money to be spent on the system must be capped globally.
+- The money spent on each actor should be allocated based on their contribution, impact and error rate.
+
+**D12 — Who writes real traces into the exam?**
+The held-out splits and scenario library live in POLICY-FORBIDDEN `specs/` (§5, rule 1),
+but the traces are produced at runtime by the system itself, and D5's rotation implies
+ongoing writes. The loop must not write its own exam; a human reviewing every trace does
+not scale past the toy domain. *Recommend a one-way ingestion pipeline outside the loop's
+authority:* traces land in an append-only staging partition of the episodic store, and
+promotion into `specs/` is a batched, human-approved operation — the same
+`RequiresHumanApproval` shape the adapters already use for destructive actions. The loop
+never holds write access to `specs/` at any point.
+→ *Decided with Phase A (capture format); enforce from Phase C (first holdout).*
+
+The loop could propose its exam and a human can review/change/approve/reject it.
+
+---
+
+## 7. What does not change
+
+Worth stating explicitly, because the temptation to relax these grows with domain
+complexity:
+
+- **Policy tiers.** Guardrails FORBIDDEN with no override; `specs/` FORBIDDEN; only the
+  designated target is SOFT. Modelled-actor implementations are new SOFT targets; sensors,
+  invariants, and held-out data are not. The simulator has **two copies** (D7): the
+  working copy is a SOFT target the loop may improve; the pinned exam copy that
+  generates gauntlet inputs stays FORBIDDEN and changes only through the
+  human-approved promote path.
+- **The sandbox.** Generated reaction models are untrusted code. Sampled runs, invariants,
+  and backtests execute inside the sandbox, never the main process.
+- **The human merge.** Promotion still follows an *observed* merge. Nothing in this document
+  gives the loop a path to promote its own work.
+- **The brakes.** Global spend cap, cost-per-accepted-improvement SLO, circuit breaker —
+  plus the new holdout budget from D5.
+
+---
+
+## 8. Where this is hard
+
+- **Sparse ground truth.** Institutional reactions are rare events. Calibration over a
+  handful of historical episodes is weak evidence, and no gate can manufacture more data.
+  Expect long acceptance windows and resist tightening margins to compensate.
+- **The simulator is a model too.** D7 contains it; it does not solve it. A confidently
+  wrong simulator produces a confidently wrong twin that passes every gate.
+- **Emergence has no oracle.** E5 can detect that a system-level backtest degraded. It
+  cannot attribute the degradation to an actor. Credit assignment across interacting
+  stochastic models is an open problem, not a deferred task.
+- **Verification cost scales with N actors × N samples.** Distributional gates need many
+  runs; per-actor parallelism multiplies that. The gauntlet's cost stops being negligible
+  and becomes something the budget gate must reason about.
+
+---
+
+## 9. Relationship to existing work
+
+- [`CLASS2_CONTRACT.md`](CLASS2_CONTRACT.md) — the feature contract this extends. E2 is
+  *not* a Class 3: it adds a determinism axis that crosses both existing classes, leaving
+  every deterministic contract untouched.
+- [`SERVE_CANARY.md`](SERVE_CANARY.md) — the online gate. Reused unchanged for stateless
+  targets; E3/D2 decides whether it is reused unchanged for stateful ones too.
+- [`ACTORS.md`](../ACTORS.md) — the org that builds omnitrack. Unchanged. The modelled
+  actors of the twin are a *different* population from the engineering roles, and the two
+  should never be conflated in code or naming.
+- `docs/KNOWN_ISSUES.md` — defects. This document is not a defect list; planned work lands
+  in Jira.
+
+**Already delivered via the Class-2 epic** (folded in 2026-08-09, shipped by 2026-08-11).
+Rather than wait for a Phase-A epic, the parts of this plan that the Class-2 epic
+([OMNI-3](https://olafzumpe.atlassian.net/browse/OMNI-3)) could absorb were folded into
+it. That paid off: the groundwork for Phases A and B exists as a side effect of finishing
+Class 2, so Phase A starts from the `Sensor` port rather than from scratch.
+
+| Ticket | Status | Relationship to this document |
+|---|---|---|
+| [OMNI-19](https://olafzumpe.atlassian.net/browse/OMNI-19) — `BacktestGate` | ✅ Done | Re-scoped and raised to Highest. Carries `split` (D5) and the pluggable `compare` comparator (E2). Was scheduled last on the theory that backtests need history; that is backwards here, where comparing against recorded reality *is* Phases A/B. |
+| [OMNI-23](https://olafzumpe.atlassian.net/browse/OMNI-23) — `Clock` + event time | ✅ Done | D6, pulled forward: a fixture recorded without event time cannot be replayed, and the window to re-record may be gone. Landed as `sis/clock.py` before any fixture — the one piece of E1 that already exists. |
+| [OMNI-17](https://olafzumpe.atlassian.net/browse/OMNI-17) — `FeatureContract` | ✅ Done | Declares `determinism`, defaulting to deterministic, and requires a seeded entry point when stochastic. |
+| [OMNI-18](https://olafzumpe.atlassian.net/browse/OMNI-18) — `InvariantGate` | ✅ Done | Seeds generation explicitly and records the seed in the reject reason, so E2's gates inherit reproducibility. |
+| [OMNI-21](https://olafzumpe.atlassian.net/browse/OMNI-21) — contract-author actor | ✅ Done | Owns the *only* write path into `specs/`, built as a general human-approved ingestion mechanism so D12's trace pipeline reuses it. [OMNI-26](https://olafzumpe.atlassian.net/browse/OMNI-26) added worked-example transcription and the discrimination check. |
+| [OMNI-25](https://olafzumpe.atlassian.net/browse/OMNI-25) — D0 | ✅ Done | Decided 2026-08-14: regional air traffic. Revised 2026-09-24: the California gasoline market first, Iowa's spirits supply chain second (§6, D0). |
+| [OMNI-24](https://olafzumpe.atlassian.net/browse/OMNI-24) — `SloGate` · [OMNI-20](https://olafzumpe.atlassian.net/browse/OMNI-20) — `ToolchainAdapter` | ✅ Done (OMNI-24, 2026-09-25) / ⬜ parked (OMNI-20) | Split out and parked respectively; OMNI-24 later shipped as a latency-only budget gate. Neither is on this document's path. Detached from OMNI-3 on 2026-08-27 so the completed epic could close; they stand alone in the backlog. |
+| [OMNI-3](https://olafzumpe.atlassian.net/browse/OMNI-3) — the Class-2 epic | ✅ Done | Closed 2026-08-27. |
+
+**Phase A is filed:
+[OMNI-30](https://olafzumpe.atlassian.net/browse/OMNI-30)** (2026-08-27, re-scoped to
+the California gasoline market 2026-09-24) — the `Sensor` port, the sanitisation
+boundary, an EIA `RealSensor`, the `SimSensor`, the first recorded fixture (California,
+autumn 2022), and prediction error computed but not acted on. It also carries the one
+OMNI-25 acceptance criterion that was never completed: checking the `Clock` shape against
+the domain's actual data cadence before a fixture is recorded — now a merge of weekly
+series with different anchor days, plus monthly and five-minute ones. The second
+application, Iowa's spirits supply chain, is filed as
+[OMNI-39](https://olafzumpe.atlassian.net/browse/OMNI-39).
