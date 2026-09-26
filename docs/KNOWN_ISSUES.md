@@ -32,19 +32,21 @@ bottom with the PR.
 > | H4 | [OMNI-46](https://olafzumpe.atlassian.net/browse/OMNI-46) (epic OMNI-43) |
 > | M10 | [OMNI-47](https://olafzumpe.atlassian.net/browse/OMNI-47) (epic OMNI-43) |
 > | H3 | [OMNI-48](https://olafzumpe.atlassian.net/browse/OMNI-48) (epic [OMNI-44](https://olafzumpe.atlassian.net/browse/OMNI-44)) |
-> | M19 | [OMNI-49](https://olafzumpe.atlassian.net/browse/OMNI-49) (epic OMNI-44) |
+> | M19 | [OMNI-49](https://olafzumpe.atlassian.net/browse/OMNI-49) (epic OMNI-44) — **blocks OMNI-29** |
 > | M20, M21 | [OMNI-50](https://olafzumpe.atlassian.net/browse/OMNI-50) (epic OMNI-44) |
-> | M15 | [OMNI-51](https://olafzumpe.atlassian.net/browse/OMNI-51) — relates to OMNI-29 |
+> | M15 | [OMNI-51](https://olafzumpe.atlassian.net/browse/OMNI-51) — **blocks OMNI-29** |
 > | M12 | [OMNI-52](https://olafzumpe.atlassian.net/browse/OMNI-52) |
 > | M13 | [OMNI-53](https://olafzumpe.atlassian.net/browse/OMNI-53) |
 > | M14 | [OMNI-54](https://olafzumpe.atlassian.net/browse/OMNI-54) |
 > | M16 (and L30) | [OMNI-55](https://olafzumpe.atlassian.net/browse/OMNI-55) |
-> | M17 | [OMNI-56](https://olafzumpe.atlassian.net/browse/OMNI-56) |
+> | M17 | [OMNI-56](https://olafzumpe.atlassian.net/browse/OMNI-56) — partly done by #108 (QA returns its reason; neutral verdicts routed) |
 > | M18 | [OMNI-57](https://olafzumpe.atlassian.net/browse/OMNI-57) |
 > | M22 | [OMNI-58](https://olafzumpe.atlassian.net/browse/OMNI-58) — blocked by OMNI-51 |
 > | M23 | [OMNI-59](https://olafzumpe.atlassian.net/browse/OMNI-59) |
+> | L21, L23 | [OMNI-61](https://olafzumpe.atlassian.net/browse/OMNI-61) (brake state fails closed; `sis.admin`) — **blocks OMNI-29** |
+> | L24 | [OMNI-62](https://olafzumpe.atlassian.net/browse/OMNI-62) (Notifier port) — **blocks OMNI-29** |
 > | M7 | none yet — natural to do with OMNI-45 |
-> | L15–L43 | no individual tickets; fix opportunistically or in batches, as L10–L14 were. L39 belongs with [OMNI-42](https://olafzumpe.atlassian.net/browse/OMNI-42). |
+> | other L15–L43 | no individual tickets; fix opportunistically or in batches, as L10–L14 were. L39 belongs with [OMNI-42](https://olafzumpe.atlassian.net/browse/OMNI-42). |
 
 ## High
 
