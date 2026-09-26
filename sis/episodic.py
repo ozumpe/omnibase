@@ -34,6 +34,15 @@ from sis.paths import EPISODIC_DUCKDB, EPISODIC_JSONL
 # Outcomes that count as an accepted improvement (passed gauntlet + QA, in a PR).
 ACCEPTED_OUTCOMES = frozenset({"verified_awaiting_human_merge", "promoted"})
 
+# Reject gates that are benign rather than failures, and the cycle status each
+# is recorded under: no bug filed, no breaker increment, spend still recorded.
+# "noop" — nothing to improve (KNOWN_ISSUES M3). "benchmark_inconclusive" — the
+# measurement could not separate the candidate from the margin (OMNI-41).
+NEUTRAL_OUTCOMES: dict[str, str] = {
+    "noop": "no_change",
+    "benchmark_inconclusive": "inconclusive",
+}
+
 
 @dataclass
 class EpisodicEvent:
@@ -357,6 +366,14 @@ def gate_from_reason(reason: str | None) -> str | None:
         return "pytest"
     if "correctness mismatch" in r:
         return "correctness"
+    # The benchmark gate's third verdict (OMNI-41). Must be tested before the
+    # "no improvement" rule below and kept a distinct name: "could not measure a
+    # difference" is not "measured, and it is no faster". Conflating them is what
+    # made a noisy machine look like a stream of bad candidates — the analytics
+    # would show a benchmark reject-rate that says nothing about the proposer.
+    # It is also what NEUTRAL_OUTCOMES keys on to keep it off the breaker.
+    if r.startswith("benchmark inconclusive"):
+        return "benchmark_inconclusive"
     if "no improvement" in r:
         return "benchmark"
     if "policy" in r:
@@ -385,7 +402,7 @@ def event_from_cycle_result(
     reason = result.get("reason")
     gauntlet_passed = (
         True if status in ACCEPTED_OUTCOMES
-        else False if status in ("rolled_back", "no_change")
+        else False if status == "rolled_back" or status in NEUTRAL_OUTCOMES.values()
         else None
     )
     return EpisodicEvent(

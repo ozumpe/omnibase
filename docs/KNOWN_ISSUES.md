@@ -198,6 +198,34 @@ any long-lived cluster exists.
 
 ## Resolved
 
+- **The benchmark gate measured a cache, not an algorithm — a memoised naive
+  candidate passed every gate** *(found and fixed 2026-09-26 under OMNI-41,
+  while chasing what looked like a flaky test)* — the Class-1 benchmark timed
+  five repetitions over the same fixed `oracle.BENCH_INPUTS` and kept the best.
+  A candidate that is the naive O(n) `sum_of_divisors` under
+  `@functools.cache` is correct, fully typed, agrees with the reference on
+  every random differential trial, and after the first repetition is all cache
+  hits: it measured **25ns** and passed, 3 of 3 runs, with no speedup at all.
+  The same gate also decided on a single block-vs-block comparison with no
+  notion of confidence, which is why `test_correct_but_not_faster_is_rejected`
+  flaked under `-n auto`. Fix: candidate and baseline are timed back-to-back on
+  the same **fresh** seeded input (never reused), up to 99 pairs with an early
+  stop once 11 pairs agree, and `gauntlet.benchmark_decision` decides from a
+  distribution-free interval around the median ratio — accept / reject /
+  **inconclusive** (neutral, `episodic.NEUTRAL_OUTCOMES`). The memoised
+  candidate now measures its real ~190µs and is rejected. Regression tests:
+  `test_memoised_naive_impl_cannot_game_a_replayed_workload`,
+  `tests/test_benchmark_decision.py`, and the inconclusive param of
+  `tests/test_org_no_change.py`. Lessons: **a fixed benchmark workload is a
+  gaming surface just like a fixed test set** — the L5 lesson ("anti-gaming is
+  only as strong as the input distribution") applies to timing, not just
+  correctness; and **a larger timing window makes pairing worse**, because
+  shared drift cancels only as far as the two halves of a pair are adjacent in
+  time. Still open, and pre-existing rather than introduced here: the
+  candidate runs in the same process as the timing harness, so it can in
+  principle tamper with the harness itself (e.g. monkeypatch `time`) — the
+  sandbox contains it from the *host*, not from the measurement.
+
 - **The docker sandbox could not read its own temp dir on native Linux — so
   it blamed every candidate** *(found and fixed 2026-09-23, rehearsing the
   OMNI-29 box on a local Ubuntu 24.04 container)* — each validation's temp dir

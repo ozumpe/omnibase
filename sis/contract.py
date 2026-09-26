@@ -183,6 +183,45 @@ DEFAULT_MAX_LATENCY_RATIO = 0.90
 # gate well under a second for a microsecond-scale target.
 DEFAULT_DIFF_TRIALS = 300
 
+# --- Benchmark measurement (OMNI-41) -----------------------------------------
+# The benchmark gate times candidate and baseline in *interleaved pairs* over
+# freshly generated inputs, and decides from the distribution of per-pair ratios
+# rather than from one comparison. These knobs are the measurement, not the pass
+# mark: ``max_latency_ratio`` above is still what "better" means.
+#
+# Many tightly-paired samples, not a few big ones. Measured on a 12-core box
+# under full CPU saturation, comparing an implementation against a semantically
+# identical one (true ratio ~1.0, must be rejected at a 0.90 margin):
+#
+#   scheme                  95% interval on the median ratio      verdict
+#   9 pairs x 10 inputs     [0.191, 1.181] .. [0.930, 0.948]      2 of 3 decided
+#   21 pairs x 10 inputs    [0.506, 1.003] .. [0.914, 3.416]      1 of 3 decided
+#   99 pairs x 1 input      [0.922, 0.934]                        3 of 3 decided
+#
+# The reason is adjacency, not sample size: the two halves of a pair cancel
+# shared drift only to the extent they are close together in time, so a *larger*
+# timed window makes the pairing worse, not better. One input per window is the
+# tightest pairing available, and it is also how the sample count gets high
+# enough for the interval to close.
+DEFAULT_BENCH_SAMPLES = 99
+# The gate stops after this many samples if they all fall on one side of the
+# margin: a clear win or a clear non-win is settled here, and only a borderline
+# candidate runs to DEFAULT_BENCH_SAMPLES. "All on one side" is monotone — one
+# sample on each side can never be undone — so this is really a single check at
+# exactly this count, and a candidate sitting on the margin passes it by chance
+# with probability 2 * 0.5**11 ≈ 0.1%. No optional-stopping inflation.
+DEFAULT_BENCH_MIN_SAMPLES = 11
+# Fresh inputs timed together per measurement. 1 is the tightest pairing and the
+# right default; raise it only for a target whose single call is below the
+# clock's resolution, where one call cannot be timed at all. Inputs are never
+# reused within or across windows — that is what stops a memoised candidate
+# measuring as fast (see the regression test in tests/test_adversarial.py).
+DEFAULT_BENCH_BATCH = 1
+# Coverage demanded of the median ratio's interval before the gate will call a
+# candidate better or worse. Below it the verdict is *inconclusive* — the
+# measurement could not tell, which is a different fact from "not faster".
+DEFAULT_BENCH_CONFIDENCE = 0.95
+
 
 @dataclass(frozen=True)
 class OptimizationContract:
@@ -201,6 +240,13 @@ class OptimizationContract:
     tests_path: str     # repo-relative; FORBIDDEN — acceptance tests, run in-sandbox
     max_latency_ratio: float = DEFAULT_MAX_LATENCY_RATIO
     diff_trials: int = DEFAULT_DIFF_TRIALS
+    # How the benchmark is *measured* (OMNI-41); the pass mark stays
+    # max_latency_ratio. Per-target because only the contract knows whether a
+    # single call is long enough to time on its own.
+    bench_samples: int = DEFAULT_BENCH_SAMPLES
+    bench_min_samples: int = DEFAULT_BENCH_MIN_SAMPLES
+    bench_batch: int = DEFAULT_BENCH_BATCH
+    bench_confidence: float = DEFAULT_BENCH_CONFIDENCE
     # repo-relative; the stub proposer's canned answer for this contract
     # (SIS_PROPOSER=stub, the offline/zero-cost/CI default). None means the stub
     # has nothing to offer here — SIS_PROPOSER=claude is required for this

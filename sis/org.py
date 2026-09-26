@@ -205,14 +205,19 @@ def run_cycle(
     # — is not a failure: the loop correctly found nothing to improve. Record
     # the spend, but don't file a bug or count it against the circuit breaker
     # (three "nothing to do" cycles must not page a human). See KNOWN_ISSUES M3.
-    if not impl["passed"] and episodic.gate_from_reason(impl.get("reason")) == "noop":
+    # An inconclusive benchmark (OMNI-41) is benign the same way: the gate could
+    # not tell the candidate from the margin, which says nothing against the
+    # candidate. It keeps its own status so the log never calls it "no change".
+    neutral_status = episodic.NEUTRAL_OUTCOMES.get(
+        episodic.gate_from_reason(impl.get("reason")) or "")
+    if not impl["passed"] and neutral_status:
         trip = ray.get(ceo.record_neutral.remote(cost_usd=cost_usd))
         breaker_bug_id = (
             ray.get(devops.file_bug.remote(
                 f"CIRCUIT BREAKER OPEN — human attention required: {trip}"))
             if trip else None
         )
-        return _record({"status": "no_change", "reason": impl["reason"],
+        return _record({"status": neutral_status, "reason": impl["reason"],
                         "spec_id": spec_id, "story_id": story_id,
                         "candidate_sha": impl.get("candidate_sha"),
                         "breaker_bug_id": breaker_bug_id,

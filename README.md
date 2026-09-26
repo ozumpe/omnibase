@@ -356,7 +356,7 @@ been applied yet.
 ## Development
 
 ```bash
-poetry run pytest                  # 602 tests, parallel (default: -m "not serve" -n auto)
+poetry run pytest                  # 613 tests, parallel (default: -m "not serve" -n auto)
 poetry run pytest -m serve -n 0    # the 62 Ray Serve integration tests (serial)
 poetry run mypy --strict sis/ main.py scripts/
 poetry run ruff check .

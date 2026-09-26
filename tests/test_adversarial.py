@@ -69,7 +69,47 @@ def benchmark(n: int = 10_000, repetitions: int = 5) -> float:
 '''
     result = _validate(code)
     assert not result.passed
-    assert "no improvement" in result.reason
+    # OMNI-41: never accepted. Rejected outright, or — if the machine is too
+    # noisy to separate it from the margin — inconclusive, which the org treats
+    # as neutral. Both are correct; acceptance is the only wrong answer.
+    assert result.reason.startswith(("no improvement", "benchmark inconclusive")), result.reason
+
+
+def test_memoised_naive_impl_cannot_game_a_replayed_workload() -> None:
+    # OMNI-41. The algorithm is the naive O(n) definition — no faster at all —
+    # but it is wrapped in functools.cache. Correct (memoising a pure function
+    # changes nothing), fully typed, and it agrees with the reference on every
+    # random differential trial, so every earlier gate passes it.
+    #
+    # It beats the benchmark purely as an artifact of *how the benchmark was
+    # measured*: the old gate timed five repetitions over the same fixed
+    # oracle.BENCH_INPUTS list and kept the best, so repetitions 2-5 were cache
+    # hits costing nothing. "Fastest of 5 over a replayed workload" measured the
+    # cache, not the algorithm.
+    #
+    # Fresh inputs per round are what close this: the candidate never sees an
+    # argument twice, so the cache can never hit and the naive cost is exposed.
+    code = '''
+import functools
+import time
+
+
+@functools.cache
+def sum_of_divisors(n: int) -> int:
+    return sum(i for i in range(1, n + 1) if n % i == 0)
+
+
+def benchmark(n: int = 10_000, repetitions: int = 5) -> float:
+    start = time.perf_counter()
+    for _ in range(repetitions):
+        sum_of_divisors(n)
+    return (time.perf_counter() - start) / repetitions
+'''
+    result = _validate(code)
+    assert not result.passed, (
+        "a memoised naive implementation gamed the benchmark: it is not faster, "
+        f"it only replays cached inputs (reason: {result.reason!r})"
+    )
 
 
 def test_untyped_fast_impl_is_rejected() -> None:
