@@ -191,8 +191,11 @@ DEFAULT_DIFF_TRIALS = 300
 # above is still what "better" means.
 #
 # Many tightly-paired samples, not a few big ones. Measured on a 12-core box
-# under full CPU saturation, comparing an implementation against a semantically
-# identical one (true ratio ~1.0, must be rejected at a 0.90 margin):
+# under full CPU saturation with the per-pair *median* estimator this gate used
+# at the time (since replaced by total cost), comparing two implementations of
+# sum_of_divisors that genuinely differ by ~7% (a generator under sum() vs an
+# explicit loop — not identical, despite what an earlier version of this comment
+# said). What the table shows is how the interval's WIDTH depends on pairing:
 #
 #   scheme                  95% interval on the per-pair median ratio
 #   9 pairs x 10 inputs     up to [0.191, 1.181]

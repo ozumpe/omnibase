@@ -72,7 +72,7 @@ class EpisodicEvent:
     gauntlet_passed: bool | None = None
     # reject_gate: ast | noop | mypy | interface | acceptance | invariant
     #            | backtest | correctness | benchmark | benchmark_inconclusive
-    #            | policy | timeout
+    #            | benchmark_unmeasurable | benchmark_malformed | policy | timeout
     #            | pytest    (pre-OMNI-17 name for `acceptance`; still emitted
     #                         by nothing, still recognised for old rows)
     #            | harness   ("harness" = the gate could not run, not a verdict
@@ -385,6 +385,13 @@ def gate_from_reason(reason: str | None) -> str | None:
     # It is also what NEUTRAL_OUTCOMES keys on to keep it off the breaker.
     if r.startswith("benchmark inconclusive"):
         return "benchmark_inconclusive"
+    # Too few usable timings, or output the harness did not write in the shape
+    # it writes (KNOWN_ISSUES H2). Named so analytics can tell measurement
+    # failures from "measured, not faster"; neither is neutral.
+    if r.startswith("benchmark unmeasurable"):
+        return "benchmark_unmeasurable"
+    if r.startswith("benchmark output malformed"):
+        return "benchmark_malformed"
     if "no improvement" in r:
         return "benchmark"
     if "policy" in r:

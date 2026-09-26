@@ -77,8 +77,11 @@ internal target before it models anything external.
     point estimate misses it, else **inconclusive** — reachable only by a
     candidate that *looks* faster, and neutral like a no-op at both the SWE
     and QA stage (`episodic.neutral_status`: no bug, no breaker increment,
-    spend recorded). The harness owns a private stdout; the candidate's
-    prints go to /dev/null, so it cannot forge the verdict.
+    spend recorded). The candidate's prints go to /dev/null, but it still
+    runs in the process that measures it and **can forge the verdict on
+    purpose** (KNOWN_ISSUES **H2**, open; M7 — false-accept above nominal
+    under stalls — too). Too few usable timings is `benchmark unmeasurable`,
+    a counted failure, never neutral.
   - **Class 2** (`FeatureContract` — build what a spec describes, no
     pre-existing version to diff against): `ast.parse` → `mypy --strict` →
     interface → acceptance → invariant gate → backtest gate → SLO gate. No
@@ -577,7 +580,8 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
 
 **Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L
 severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
-the IDs in commits/PRs. **High, Medium and Low are all clear**; L5 (the target
+the IDs in commits/PRs. **Open: H2 and M7** (2026-09-26, both in the OMNI-41
+benchmark gate — see Hard rules); Low is clear; L5 (the target
 contract / benchmark oracle) resolved 2026-08-06. Planned work lives in Jira
 ([`OMNI`](https://olafzumpe.atlassian.net/browse/OMNI)), defects here.
 
