@@ -452,6 +452,7 @@ def test_ceo_brakes_resolve_through_the_whole_precedence_chain(
     assert cfg.budget_usd == 2.0
 
 
+@pytest.mark.docs  # a docs-only PR still runs this (OMNI-60)
 def test_every_env_var_named_in_the_docs_exists_in_the_schema() -> None:
     """A variable documented but absent from ``SCHEMA`` is fiction.
 

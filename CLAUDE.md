@@ -192,6 +192,18 @@ internal target before it models anything external.
   develop]`, which matches the PR's *base*, so a PR stacked on a feature branch
   skipped CI entirely and could merge looking green with zero verification
   (what happened to #67/#68). The required status-check context is `test`.
+  **Layout (OMNI-60):** `changes` classifies the diff; `lint` (ruff + mypy),
+  `fast` (default pytest) and `serve` (`-m serve -n 0`) then run as parallel
+  jobs, all skipped on a **docs-only PR** (only `.md`/`.svg`/`.png` —
+  an allowlist, so anything else runs everything), which runs `docs`
+  (`pytest -m docs`: the tests that read the repo's Markdown) instead. `test`
+  is an aggregator that always reports and passes only if the jobs *this*
+  change needed succeeded — skipped counts as missing, not passed. A push to
+  `main`/`develop` always gets the full run. No `paths-ignore`: a skipped
+  workflow never reports `test`, and the PR waits on it forever. Decisions in
+  `scripts/ci_gate.py` (pure, `tests/test_ci_gate.py`); shape pinned by
+  `tests/test_test_layout.py`. **A test that reads repo Markdown must be
+  marked `docs`** — the layout test flags an unmarked one.
 - Commit-lint (`.github/workflows/commit-lint.yml`): every non-merge commit newly
   introduced by a PR needs an `OMNI-N` key or a `No-Ticket:` trailer — the
   server-side backstop for the Jira-key convention above, for when
@@ -573,9 +585,9 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   - Design + the Caddy/TLS decision: `docs/OPERATOR_FRONTEND.md`. Deployment
     artifacts (`Dockerfile.frontend`, `Caddyfile`) are deliberately not in this
     slice.
-- 703 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
+- 740 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
   Ray-Serve-integration tests run separately, see Operational quick reference
-  above; 765 total — corrected 2026-09-26, a multi-dimension review found the
+  above; 802 total — corrected 2026-09-26, a multi-dimension review found the
   previously-documented 616/678 stale); `ruff`/`mypy --strict`/`pytest` clean;
   CI green; `feature → develop → main` enforced by both the client-side
   pre-push hook and active server-side rulesets.

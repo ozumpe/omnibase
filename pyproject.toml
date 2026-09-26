@@ -118,6 +118,7 @@ testpaths = ["tests"]
 addopts = "-q -m 'not serve' -n auto"
 markers = [
     "serve: stands up a real Ray Serve deployment. Slow, excluded from the default run, always run in CI.",
+    "docs: reads the repository's Markdown. The only tests a docs-only PR runs in CI (OMNI-60).",
 ]
 
 [tool.ruff]
