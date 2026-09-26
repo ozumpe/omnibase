@@ -16,11 +16,45 @@ bottom with the PR.
 
 ## High
 
-*(none open)*
+- **H2 — The benchmark verdict can be forged from inside the measured
+  process** *(found 2026-09-26 by a statistics-lens review of the merged
+  OMNI-41 gate; reproduced)* — the Class-1 benchmark runs the candidate in the
+  same Python process as the harness that times it and reports the verdict.
+  OMNI-41 moved the verdict onto a duplicate of stdout, which stops a
+  candidate's *prints* (incl. `atexit`), but a candidate can reach the
+  duplicate itself: at import, write a fabricated `PAIRS`/`BASELINE`/`END` to
+  `__main__._out` and `os._exit(0)`. The naive `sum_of_divisors` plus that
+  forger passes **every** gate, reporting 1µs, and exits before the
+  differential-correctness loop — so a *wrong* candidate passes too. Closing
+  `_out` would not help (the dup'd fd is reachable with `os.write`), and any
+  in-process secret is readable by code that runs at import. The same reach
+  allows patching `time.perf_counter`, rebinding `base_fn`, or burning the GIL
+  from a thread during baseline windows. **Not new in kind** — the pre-OMNI-41
+  gate was forgeable with `print("1e-9 1.0"); os._exit(0)` — but OMNI-41's code
+  and docs claimed a private channel, which was false. Mitigations today: the
+  mandatory human PR merge, and (since this entry) a candidate that zeroes or
+  NaNs the timings gets a counted failure (`benchmark unmeasurable`, or
+  `benchmark output malformed` when the baseline is zeroed too) rather than the
+  neutral inconclusive it could previously steer to. Fix: run the candidate (and baseline) in separate
+  worker processes and time them from the harness, so candidate code never
+  shares a process with the clock or the verdict channel. Pinned by the
+  strict-xfail `test_a_candidate_cannot_forge_the_verdict_through_the_harness_itself`,
+  which flips to a failure the day this is fixed.
 
 ## Medium
 
-*(none open)*
+- **M7 — The benchmark's false-accept rate at the margin is a few times the
+  nominal** *(found 2026-09-26 by the same review; verified by simulation)* —
+  `benchmark_decision` bootstraps a ratio of raw wall-clock sums. Scheduler
+  stalls are not symmetric noise: a stall landing in a few pairs moves the sum,
+  and a percentile bootstrap over ~109 heavy-tailed pairs undercovers, so a
+  candidate sitting exactly at the margin is accepted ~3–4x more often than the
+  nominal 2.5%. The human PR merge still follows every accept. Fix direction:
+  read process CPU time alongside `perf_counter` per timing and re-draw a pair
+  whose wall-minus-CPU gap marks a stall (keep the verdict on wall time, since
+  `thread_time` alone is gameable by offloading work), or use a trimmed /
+  Winsorized ratio. Natural to do together with H2, which rebuilds the
+  measurement anyway.
 
 ## Low
 
@@ -214,8 +248,9 @@ any long-lived cluster exists.
   `gauntlet.benchmark_decision` decides on **total cost** with a
   paired-bootstrap interval — accept / reject / **inconclusive**, the last
   neutral at both SWE and QA stage (`episodic.neutral_status`) and reachable
-  only by a candidate whose estimate clears the margin. The harness owns a
-  private stdout. **The first cut of this fix was itself broken by an
+  only by a candidate whose estimate clears the margin. The harness moves the
+  verdict off the candidate's stdout — which stops its prints, not a candidate
+  that reaches into the harness on purpose (**H2**, still open). **The first cut of this fix was itself broken by an
   adversarial pre-merge review** and reworked before merge: deciding on the
   *median* per-input ratio accepted a candidate fast on the typical 70% of
   inputs and 4x slower on the rest (~2x slower in total, accepted ~98% of

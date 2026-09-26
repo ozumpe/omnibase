@@ -11,6 +11,7 @@ Every bug found in the wild should become a new case here.
 import pytest
 
 from sis import gauntlet
+from sis.episodic import neutral_status
 
 _BASELINE = 0.05
 
@@ -268,3 +269,68 @@ def test_trivially_wrong_impls_are_rejected(evil: str) -> None:
     benchmark = "\ndef benchmark(n: int = 1, repetitions: int = 1) -> float:\n    return 1e-9\n"
     result = _validate(evil + benchmark)
     assert not result.passed
+
+
+def test_a_candidate_that_breaks_the_clock_is_a_counted_failure_not_neutral() -> None:
+    # KNOWN_ISSUES H2 follow-up: the candidate shares the harness's process, so
+    # it can make every timing zero. That must land as a counted failure, never
+    # as the neutral "inconclusive" (no bug, no breaker) it could previously
+    # steer to. Guarded so it only fires inside the benchmark harness.
+    code = '''
+import sys
+import time
+
+
+def sum_of_divisors(n: int) -> int:
+    return sum(i for i in range(1, n + 1) if n % i == 0)
+
+
+def benchmark(n: int = 10_000, repetitions: int = 5) -> float:
+    return 1.0
+
+
+if sys.argv[:1] == ["-c"] and hasattr(sys.modules.get("__main__"), "_out"):
+    setattr(time, "perf_counter", lambda: 0.0)
+'''
+    result = _validate(code)
+    assert not result.passed
+    assert result.reason.startswith(("benchmark unmeasurable", "benchmark output malformed")), (
+        result.reason)
+    assert neutral_status(result.reason) is None
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="KNOWN_ISSUES H2: the candidate runs in the process that measures it, so it "
+           "can write a forged verdict to the harness's own output channel. Remove this "
+           "marker when the candidate is moved into a separate worker process.",
+)
+def test_a_candidate_cannot_forge_the_verdict_through_the_harness_itself() -> None:
+    # Reproduced 2026-09-26 by a statistics-lens review of the merged OMNI-41
+    # gate: the naive algorithm plus this forger passes EVERY gate (reported
+    # latency 1µs) and exits before the differential-correctness loop, so a
+    # wrong candidate would pass too. Strict xfail: this test turning green is
+    # the signal that H2 is fixed — and strict makes that a failure until the
+    # marker is removed, so the pin cannot silently outlive the hole.
+    code = '''
+import os
+import sys
+
+
+def sum_of_divisors(n: int) -> int:
+    return sum(i for i in range(1, n + 1) if n % i == 0)
+
+
+def benchmark(n: int = 10_000, repetitions: int = 5) -> float:
+    return 1.0
+
+
+_channel = getattr(sys.modules.get("__main__"), "_out", None)
+if _channel is not None:
+    _channel.write("PAIRS " + " ".join(["1e-06,0.001"] * 109) + "\\n")
+    _channel.write("BASELINE 0.001\\nEND\\n")
+    _channel.flush()
+    os._exit(0)
+'''
+    result = _validate(code)
+    assert not result.passed, f"forged verdict believed: {result.reason!r}"

@@ -71,9 +71,12 @@ def test_a_slower_candidate_cannot_hide_in_inconclusive_by_being_noisy() -> None
     assert decision.verdict is BenchmarkVerdict.REJECT  # ...and it is still rejected
 
 
-def test_too_few_usable_pairs_cannot_decide() -> None:
+def test_too_few_usable_pairs_is_unmeasurable_not_inconclusive() -> None:
+    # Not neutral: a candidate sharing the harness's process can zero or NaN
+    # its own timings on purpose, so "could not measure" must not be a place to
+    # hide the way INCONCLUSIVE (neutral) would be.
     decision = benchmark_decision([(0.1, 1.0)] * 9, max_ratio=MARGIN)
-    assert decision.verdict is BenchmarkVerdict.INCONCLUSIVE
+    assert decision.verdict is BenchmarkVerdict.UNMEASURABLE
 
 
 def test_unmeasurable_pairs_are_ignored_rather_than_trusted() -> None:
@@ -103,3 +106,12 @@ def test_inconclusive_is_logged_as_its_own_gate_and_is_neutral() -> None:
     assert gate_from_reason("no improvement: candidate 1.0s vs baseline 1.0s") == "benchmark"
     assert neutral_status("no improvement: candidate 1.0s vs baseline 1.0s") is None
     assert neutral_status(None) is None
+
+
+def test_measurement_failures_are_named_and_never_neutral() -> None:
+    for reason, gate in (
+        ("benchmark unmeasurable: only 3 usable timing pairs of 109", "benchmark_unmeasurable"),
+        ("benchmark output malformed or missing — expected PAIRS", "benchmark_malformed"),
+    ):
+        assert gate_from_reason(reason) == gate
+        assert neutral_status(reason) is None
