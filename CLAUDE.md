@@ -532,19 +532,31 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   - Design + the Caddy/TLS decision: `docs/OPERATOR_FRONTEND.md`. Deployment
     artifacts (`Dockerfile.frontend`, `Caddyfile`) are deliberately not in this
     slice.
-- 550 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
+- 602 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
   Ray-Serve-integration tests run separately, see Operational quick reference
   above); `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop
   → main` enforced by both the client-side pre-push hook and active
   server-side rulesets.
-- **Two known test flakes, both pre-existing and both parallel-execution
-  artifacts** (noted 2026-08-14; **not ticketed** — no Jira issue exists for
-  either, confirmed against the board 2026-08-27):
-  `test_correct_but_not_faster_is_rejected`
-  measures a fresh baseline, which gets noisy under xdist CPU contention
-  (passes 5/5 in isolation); `test_a_drafted_skeleton_stages_without_touching_specs`
-  compares two `specs/` listings and races another worker creating
-  `specs/__pycache__`. Neither indicates a real defect — re-run before chasing.
+- **Two known test flakes under `-n auto`** (noted 2026-08-14, **ticketed
+  2026-09-26**). Re-run before chasing either, but they are not the same kind
+  of problem:
+  - `test_correct_but_not_faster_is_rejected` is the symptom of a **real gate
+    defect** — [OMNI-41](https://olafzumpe.atlassian.net/browse/OMNI-41)
+    (Medium). The Class-1 benchmark gate (`_gate_differential_benchmark`,
+    `sis/gauntlet.py`) decides on one noisy comparison: candidate and baseline
+    are timed in separate blocks, best of 5 each, against a fixed margin with
+    no notion of confidence, so an identical candidate sometimes measures ≥10%
+    faster under CPU contention. It gets worse on real targets, where genuine
+    gains (5–30%) are the size of the noise, and it is gameable: the same
+    `BENCH_INPUTS` are replayed every repetition, so a candidate wrapped in
+    `functools.cache` is correct and near-free after the first run. The fix
+    hardens the gate (interleaved paired rounds, fresh seeded inputs per
+    round, accept / reject / *inconclusive*); the test stays as a permanent
+    regression test — don't serialise it away.
+  - `test_a_drafted_skeleton_stages_without_touching_specs` is **test-only** —
+    [OMNI-42](https://olafzumpe.atlassian.net/browse/OMNI-42) (Low). It
+    compares two `specs/` listings and races another worker creating
+    `specs/__pycache__`; `stage()` never writes into `specs/`.
 
 **Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L
 severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
@@ -572,8 +584,8 @@ Two traps L5 surfaced, both worth knowing before writing similar code:
 
 **Next — the milestone plan is in Jira ([`OMNI`](https://olafzumpe.atlassian.net/browse/OMNI)),
 not here.** Check the board for current status rather than trusting this list.
-**Last reconciled against a live query on 2026-09-25** (40 issues, OMNI-1
-through OMNI-40; 26 Done, 1 In Progress, 13 To Do):
+**Last reconciled against a live query on 2026-09-26** (42 issues, OMNI-1
+through OMNI-42; 28 Done, 1 In Progress, 13 To Do):
 
 1. ~~**[OMNI-1](https://olafzumpe.atlassian.net/browse/OMNI-1) — L5 target
    contract** (Class 1)~~ — **done 2026-08-06** (OMNI-4/5/6/7). Two targets ship
@@ -699,11 +711,18 @@ through OMNI-40; 26 Done, 1 In Progress, 13 To Do):
    `To Do`, Low, filed 2026-09-24 as a placeholder epic — deliberately not
    broken into stories until Phases A–C exist to write them against.
 
-Also on the board since the OMNI-29 rehearsal (2026-09-23), both `To Do`:
-[OMNI-37](https://olafzumpe.atlassian.net/browse/OMNI-37) (the gauntlet reports
-sandbox harness faults as candidate failures) and
-[OMNI-38](https://olafzumpe.atlassian.net/browse/OMNI-38) (wire the live
-SLO-breach trigger into `main.py --loop`).
+Also on the board, outside the numbered epics:
+- [OMNI-37](https://olafzumpe.atlassian.net/browse/OMNI-37) — **Done
+  2026-09-25** (PR #106): a broken sandbox is never blamed on the candidate
+  (see Hard rules). Found in the OMNI-29 rehearsal (2026-09-23).
+- [OMNI-38](https://olafzumpe.atlassian.net/browse/OMNI-38) (Low, `To Do`) —
+  wire the live SLO-breach trigger into `main.py --loop`. Also from the
+  rehearsal.
+- [OMNI-41](https://olafzumpe.atlassian.net/browse/OMNI-41) (Medium, `To Do`,
+  filed 2026-09-26) — harden the Class-1 benchmark gate; see the flake note
+  above. Next up.
+- [OMNI-42](https://olafzumpe.atlassian.net/browse/OMNI-42) (Low, `To Do`,
+  filed 2026-09-26) — the `specs/` listing race in a contract-author test.
 
 Not yet scheduled: the **atomic actor swap** for internal, never-served actors,
 which `docs/SERVE_CANARY.md` scopes out and which has no design doc yet. E3/D2 in
