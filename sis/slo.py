@@ -9,7 +9,7 @@ rather than as a full failure. Too slow can be non-functional, so it still
 counts; it is not the same thing as broken.
 
 It is also deliberately not a second benchmark. The Class-1 benchmark asks "is
-it *better* than the baseline?" by timing both over the same workload; this asks
+it *better* than the baseline?" by timing both in pairs on fresh inputs; this asks
 "is it *within budget*?" against an absolute number the spec states. Conflating
 the two is how the fixed-input timing fragility the live canary replaced (L5:
 ~30% jitter flipping accept/reject) would come back.

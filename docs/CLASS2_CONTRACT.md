@@ -381,8 +381,8 @@ Each has a property that makes it a clean contract demo:
 3. **Invariant gate** (property-based, Hypothesis) — the anti-gaming layer for features.
 4. **[`docs/SERVE_CANARY.md`](SERVE_CANARY.md)** — reuses these same invariants as the
    *online* correctness gate for a Ray Serve canary (live traffic instead of
-   generated inputs), and replaces the offline benchmark's noise-floor-prone
-   fixed-input timing with real-traffic latency percentiles. Picks up right after
+   generated inputs), and complements the offline benchmark's synthetic timing
+   (paired, fresh inputs since OMNI-41) with real-traffic latency percentiles. Picks up right after
    step 3 above; see that doc for its own step-by-step sequencing.
 5. **`ToolchainAdapter`** — make the gate commands adapter-declared; add a second
    language (the "even Java" step) reusing the same contract.

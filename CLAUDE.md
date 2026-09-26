@@ -65,7 +65,20 @@ internal target before it models anything external.
     acceptance tests → invariant gate → backtest gate → differential
     correctness on random inputs (anti-gaming) + benchmark vs a freshly
     measured baseline (must clear the contract's margin, ≥10% faster by
-    default).
+    default). **The benchmark never decides on one comparison** (OMNI-41):
+    candidate and baseline are timed back-to-back on the *same fresh* input
+    (alternating order, seeded, never reused — a replayed workload rewarded
+    `functools.cache`, not speed), plus each `BENCH_INPUTS` entry timed once
+    for shape coverage. `gauntlet.benchmark_decision` (pure) decides on
+    **total cost** — `sum(candidate)/sum(baseline)` with a paired-bootstrap
+    interval — never a per-input median (a candidate fast on typical inputs
+    and 4x slower on large ones passed a median rule while ~2x slower
+    overall): **accept** if the interval clears the margin, **reject** if the
+    point estimate misses it, else **inconclusive** — reachable only by a
+    candidate that *looks* faster, and neutral like a no-op at both the SWE
+    and QA stage (`episodic.neutral_status`: no bug, no breaker increment,
+    spend recorded). The harness owns a private stdout; the candidate's
+    prints go to /dev/null, so it cannot forge the verdict.
   - **Class 2** (`FeatureContract` — build what a spec describes, no
     pre-existing version to diff against): `ast.parse` → `mypy --strict` →
     interface → acceptance → invariant gate → backtest gate → SLO gate. No
@@ -532,19 +545,35 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   - Design + the Caddy/TLS decision: `docs/OPERATOR_FRONTEND.md`. Deployment
     artifacts (`Dockerfile.frontend`, `Caddyfile`) are deliberately not in this
     slice.
-- 550 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
+- 616 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
   Ray-Serve-integration tests run separately, see Operational quick reference
   above); `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop
   → main` enforced by both the client-side pre-push hook and active
   server-side rulesets.
-- **Two known test flakes, both pre-existing and both parallel-execution
-  artifacts** (noted 2026-08-14; **not ticketed** — no Jira issue exists for
-  either, confirmed against the board 2026-08-27):
-  `test_correct_but_not_faster_is_rejected`
-  measures a fresh baseline, which gets noisy under xdist CPU contention
-  (passes 5/5 in isolation); `test_a_drafted_skeleton_stages_without_touching_specs`
+- **One known test flake under `-n auto`**:
+  `test_a_drafted_skeleton_stages_without_touching_specs` is **test-only** —
+  [OMNI-42](https://olafzumpe.atlassian.net/browse/OMNI-42) (Low). It
   compares two `specs/` listings and races another worker creating
-  `specs/__pycache__`. Neither indicates a real defect — re-run before chasing.
+  `specs/__pycache__`; `stage()` never writes into `specs/`. Re-run before
+  chasing it.
+- **The other former flake was a real gate defect, now fixed** —
+  [OMNI-41](https://olafzumpe.atlassian.net/browse/OMNI-41), Done 2026-09-26.
+  `test_correct_but_not_faster_is_rejected` flaked because the Class-1
+  benchmark decided on one noisy block-vs-block comparison. Fixing it found a
+  worse hole: the gate replayed `BENCH_INPUTS` five times and kept the best,
+  so a **naive** implementation under `@functools.cache` measured 25ns and
+  passed every gate (reproduced 3/3; now
+  `test_memoised_naive_impl_cannot_game_a_replayed_workload`). See Hard rules
+  for the redesign — whose own first cut was broken by an adversarial
+  pre-merge review within the hour (median rule accepted a 2x-slower
+  candidate; an `atexit` print forged the verdict), both now regression
+  tests. The measurement that shaped it, worth knowing before
+  touching the gate again: **a larger timing window makes pairing worse, not
+  better** — drift cancels in a ratio only as far as the two halves are
+  adjacent in time (under 17× CPU oversubscription, 9 pairs × 10 inputs gave
+  intervals up to [0.19, 1.18]; 99 pairs × 1 input gave [0.922, 0.934]). The
+  former flake now passes 50/50 run concurrently under `-n auto`, and the test
+  stays as a permanent regression test.
 
 **Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L
 severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
@@ -572,8 +601,8 @@ Two traps L5 surfaced, both worth knowing before writing similar code:
 
 **Next — the milestone plan is in Jira ([`OMNI`](https://olafzumpe.atlassian.net/browse/OMNI)),
 not here.** Check the board for current status rather than trusting this list.
-**Last reconciled against a live query on 2026-09-25** (40 issues, OMNI-1
-through OMNI-40; 26 Done, 1 In Progress, 13 To Do):
+**Last reconciled against a live query on 2026-09-26** (42 issues, OMNI-1
+through OMNI-42; 29 Done, 1 In Progress, 12 To Do):
 
 1. ~~**[OMNI-1](https://olafzumpe.atlassian.net/browse/OMNI-1) — L5 target
    contract** (Class 1)~~ — **done 2026-08-06** (OMNI-4/5/6/7). Two targets ship
@@ -699,11 +728,19 @@ through OMNI-40; 26 Done, 1 In Progress, 13 To Do):
    `To Do`, Low, filed 2026-09-24 as a placeholder epic — deliberately not
    broken into stories until Phases A–C exist to write them against.
 
-Also on the board since the OMNI-29 rehearsal (2026-09-23), both `To Do`:
-[OMNI-37](https://olafzumpe.atlassian.net/browse/OMNI-37) (the gauntlet reports
-sandbox harness faults as candidate failures) and
-[OMNI-38](https://olafzumpe.atlassian.net/browse/OMNI-38) (wire the live
-SLO-breach trigger into `main.py --loop`).
+Also on the board, outside the numbered epics:
+- [OMNI-37](https://olafzumpe.atlassian.net/browse/OMNI-37) — **Done
+  2026-09-25** (PR #106): a broken sandbox is never blamed on the candidate
+  (see Hard rules). Found in the OMNI-29 rehearsal (2026-09-23).
+- [OMNI-38](https://olafzumpe.atlassian.net/browse/OMNI-38) (Low, `To Do`) —
+  wire the live SLO-breach trigger into `main.py --loop`. Also from the
+  rehearsal.
+- [OMNI-41](https://olafzumpe.atlassian.net/browse/OMNI-41) — **Done
+  2026-09-26**: the Class-1 benchmark gate decides from paired samples over
+  fresh inputs, with an *inconclusive* verdict; it also closed a memoisation
+  gaming hole (see Hard rules and the flake note above).
+- [OMNI-42](https://olafzumpe.atlassian.net/browse/OMNI-42) (Low, `To Do`,
+  filed 2026-09-26) — the `specs/` listing race in a contract-author test.
 
 Not yet scheduled: the **atomic actor swap** for internal, never-served actors,
 which `docs/SERVE_CANARY.md` scopes out and which has no design doc yet. E3/D2 in

@@ -43,7 +43,7 @@ it doesn't invent a new mechanism.**
 | | Offline gauntlet (`CLASS2_CONTRACT.md`) | Online canary (this doc) |
 |---|---|---|
 | Correctness signal | `InvariantGate`: generated valid inputs → predicate | same predicates, sampled from **live** request/response pairs |
-| Performance signal | synthetic benchmark (or domain SLO), N fixed inputs | **real traffic latency percentiles** over a rolling window |
+| Performance signal | synthetic benchmark (or domain SLO) — since OMNI-41 paired timing on fresh inputs, deciding on total cost | **real traffic latency percentiles** over a rolling window |
 | Weakness alone | can't see production input distribution or concurrency; [L5's noise floor](KNOWN_ISSUES.md) — fixed-input timing goes non-deterministic once a target is fast enough (field evidence: runs 4/5, ~30% jitter flipping accept/reject) | no correctness check at all today; can't run *before* spending real traffic on a broken candidate |
 | Role | cheap, fast **pre-filter** — reject garbage before it ever sees a real request | **arbiter** for anything the pre-filter can't decide cleanly, including everything L5 flags as noise-floor-ambiguous |
 

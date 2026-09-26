@@ -1,4 +1,8 @@
-"""A "no change" cycle is benign — no bug, no breaker (needs Ray).
+"""A "no change" or "inconclusive" cycle is benign — no bug, no breaker (needs Ray).
+
+Parametrised over both neutral outcomes (sis.episodic.NEUTRAL_OUTCOMES): the
+no-op (KNOWN_ISSUES M3) and the inconclusive benchmark (OMNI-41). Each param
+gets its own module-scoped Ray cluster, so CEO state never leaks between them.
 
 Its own module so it gets a fresh Ray cluster with clean CEO state: named
 detached actors are singletons within a cluster, so reusing the breaker-tripped
@@ -24,20 +28,34 @@ NO_CHANGE_IMPL: dict[str, Any] = {
     "candidate_sha": "cafe12345678",
 }
 
+# OMNI-41: the benchmark could not separate the candidate from the margin. Not
+# evidence against the candidate, so it must be exactly as benign as a no-op.
+INCONCLUSIVE_IMPL: dict[str, Any] = {
+    **NO_CHANGE_IMPL,
+    "reason": "benchmark inconclusive: candidate 0.000251s vs baseline 0.000282s per call "
+              "(need ≤ 90%); median ratio 0.9100, 96% interval [0.8600, 0.9400] "
+              "over 99 paired rounds; seed=1",
+}
 
-@pytest.fixture(scope="module")
-def handles():  # type: ignore[no-untyped-def]
+
+@pytest.fixture(scope="module", params=[
+    pytest.param((NO_CHANGE_IMPL, "no_change"), id="no_change"),
+    pytest.param((INCONCLUSIVE_IMPL, "inconclusive"), id="inconclusive"),
+])
+def handles(request):  # type: ignore[no-untyped-def]
+    impl, status = request.param
     h = org.bootstrap()
     h["SWE"] = SimpleNamespace(
         implement=SimpleNamespace(
-            remote=lambda story_id, contract_name=None: ray.put(NO_CHANGE_IMPL)))
+            remote=lambda story_id, contract_name=None: ray.put(impl)))
+    h["_expected_status"] = status
     yield h
     ray.shutdown()
 
 
 def test_no_change_files_no_bug(handles) -> None:  # type: ignore[no-untyped-def]
     result = org.run_cycle(handles, "already optimal", "nothing to do")
-    assert result["status"] == "no_change"
+    assert result["status"] == handles["_expected_status"]
     assert "bug_id" not in result          # not a defect — no bug filed
     assert result.get("breaker_bug_id") is None
 
@@ -47,13 +65,17 @@ def test_no_change_never_trips_the_breaker(handles) -> None:  # type: ignore[no-
     # page a human: a no-op is not a failure.
     for _ in range(6):
         r = org.run_cycle(handles, "again", "still nothing")
-        assert r["status"] == "no_change"
+        assert r["status"] == handles["_expected_status"]
         assert r.get("breaker_bug_id") is None
     assert not ray.get(handles["CEO"].breaker_open.remote())
     # A further cycle still runs (not refused with circuit_breaker_open).
-    assert org.run_cycle(handles, "x", "y")["status"] == "no_change"
+    assert org.run_cycle(handles, "x", "y")["status"] == handles["_expected_status"]
 
 
+# Builds its own CEO and never reads the neutral outcome, so run it once rather
+# than per param — each extra param is another Ray cluster bootstrap.
+@pytest.mark.parametrize(
+    "handles", [(NO_CHANGE_IMPL, "no_change")], indirect=True, ids=["no_change"])
 def test_record_neutral_records_spend_but_not_a_failure(handles) -> None:  # type: ignore[no-untyped-def]
     from sis.roles import CEO
 

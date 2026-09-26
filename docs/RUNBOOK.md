@@ -346,7 +346,9 @@ repo seeded with the naive `runtime/target.py`).
 **On failure:** a gauntlet rollback (wrong/slower/untyped candidate) or a QA
 rejection files a bug in the work tracker automatically (`DevOps.file_bug`) —
 check there first, not just the episodic log. (A `no_change` outcome is *not* a
-failure: it files no bug and doesn't count toward the breaker.) Three
+failure: it files no bug and doesn't count toward the breaker. Neither is
+`inconclusive` — the benchmark saw the candidate as faster but could not prove
+it on a noisy machine, OMNI-41.) Three
 consecutive real failures trip the circuit breaker: it files a
 second, distinctly-titled `CIRCUIT BREAKER OPEN` bug and every further cycle
 returns `circuit_breaker_open` without spending anything. The breaker + spend

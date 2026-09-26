@@ -40,6 +40,7 @@ the candidate passes all gates.
 
 import ast
 import json
+import math
 import os
 import pathlib
 import random
@@ -49,8 +50,9 @@ import sys
 import tempfile
 import textwrap
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from enum import Enum
 
 from sis import config
 from sis.backtest import (
@@ -64,6 +66,9 @@ from sis.backtest import (
     plan_entry,
 )
 from sis.contract import (
+    DEFAULT_BENCH_BATCH,
+    DEFAULT_BENCH_CONFIDENCE,
+    DEFAULT_BENCH_SAMPLES,
     DEFAULT_DIFF_TRIALS,
     DEFAULT_MAX_LATENCY_RATIO,
     Contract,
@@ -286,7 +291,8 @@ class Result:
     reason: str
     latency_seconds: float | None = None
     errors: list[str] = field(default_factory=list)
-    # The invariant gate's generation seed, on a violation. Also carried in the
+    # The invariant gate's generation seed, on a violation — and the benchmark
+    # gate's input seed on a reject or inconclusive (OMNI-41). Also carried in the
     # reason string so it survives into the episodic log's reject_reason without
     # every caller having to plumb a new field.
     seed: int | None = None
@@ -315,8 +321,9 @@ class _GateContext:
     baseline_code: str | None = None
     baseline: pathlib.Path | None = None
     oracle: pathlib.Path | None = None
-    # Chosen once per validation and handed to the invariant gate, so a
-    # violation is reproducible from the log alone.
+    # Chosen once per validation and handed to the invariant gate and the
+    # benchmark gate's input stream, so either verdict is reproducible from the
+    # log alone.
     seed: int = DEFAULT_SEED
     # Filled in by the differential+benchmark gate; reported on success.
     candidate_latency: float | None = None
@@ -448,8 +455,8 @@ def _gate_backtest(ctx: _GateContext) -> Result | None:
 
     **Ordered after acceptance and before the differential gate**, which differs
     from the list in docs/CLASS2_CONTRACT.md. Cheapest-first: replaying a handful
-    of fixtures costs far less than 300 randomised trials plus five benchmark
-    repetitions, and it fails with a far sharper message ("did not reproduce q1,
+    of fixtures costs far less than 300 randomised trials plus ~100 paired
+    benchmark samples, and it fails with a far sharper message ("did not reproduce q1,
     off by 12%") than a differential mismatch on an opaque random input.
 
     It is not a *substitute* for the differential gate and does not reorder the
@@ -860,6 +867,105 @@ def _gate_acceptance(ctx: _GateContext) -> Result | None:
     return None
 
 
+class BenchmarkVerdict(str, Enum):
+    """What a set of paired timing rounds supports concluding (OMNI-41).
+
+    ``INCONCLUSIVE`` is the point of the enum. "Not faster" and "could not tell"
+    are different facts, and the old gate had no way to say the second: it
+    compared one candidate block against one baseline block and read the sign,
+    so a machine under load could make an identical candidate look 10% faster.
+    """
+
+    ACCEPT = "accept"
+    REJECT = "reject"
+    INCONCLUSIVE = "inconclusive"
+
+
+@dataclass(frozen=True)
+class BenchmarkDecision:
+    """The benchmark verdict plus the evidence it was read from."""
+
+    verdict: BenchmarkVerdict
+    ratio: float          # sum(candidate time) / sum(baseline time) over all pairs
+    ci_low: float
+    ci_high: float
+    samples: int
+    confidence: float
+
+    def describe(self) -> str:
+        """One-line summary of the measurement, for a reject reason."""
+        return (
+            f"total-time ratio {self.ratio:.4f}, "
+            f"{self.confidence:.0%} interval [{self.ci_low:.4f}, {self.ci_high:.4f}] "
+            f"over {self.samples} paired samples"
+        )
+
+
+# Fewer usable pairs than this and the gate will not decide either way.
+_MIN_DECIDABLE_PAIRS = 10
+# Bootstrap resamples. Deterministic (fixed seed) so benchmark_decision stays a
+# pure function of its input; 1000 keeps it well under a tenth of a second.
+_BOOTSTRAP_RESAMPLES = 1000
+
+
+def benchmark_decision(
+    pairs: Sequence[tuple[float, float]],
+    *,
+    max_ratio: float,
+    confidence: float = DEFAULT_BENCH_CONFIDENCE,
+) -> BenchmarkDecision:
+    """Decide from paired ``(candidate_seconds, baseline_seconds)`` timings. Pure.
+
+    Each pair times candidate and baseline back-to-back on the same fresh input,
+    so load drifting across the run scales both halves and largely cancels.
+
+    **The estimand is total cost** — ``sum(candidate) / sum(baseline)`` over the
+    pairs — because that is what "faster" means for a workload. An earlier cut
+    of this gate decided on the *median* per-pair ratio, and a pre-merge review
+    broke it within the hour: a candidate fast on the typical 70% of inputs and
+    4x slower on the large 30% was ~2x slower overall and passed. The interval
+    is a paired bootstrap (resampling whole pairs keeps each pair's shared drift
+    together), so a few expensive pairs widen it rather than silently decide.
+
+    - ``ACCEPT``       — the interval's upper bound clears the margin.
+    - ``REJECT``       — the point estimate itself misses the margin.
+    - ``INCONCLUSIVE`` — the candidate *looks* faster by the margin but the
+      interval cannot confirm it, or too few usable pairs to judge. Recorded as
+      neutral (``episodic.NEUTRAL_OUTCOMES``), which is why it is reachable only
+      by a candidate whose best estimate already clears the margin: a slow
+      candidate cannot make itself noisy enough to escape being counted.
+    """
+    usable = [(c, b) for c, b in pairs
+              if math.isfinite(c) and math.isfinite(b) and c > 0.0 and b > 0.0]
+    n = len(usable)
+    if n < _MIN_DECIDABLE_PAIRS:
+        return BenchmarkDecision(
+            verdict=BenchmarkVerdict.INCONCLUSIVE, ratio=float("nan"),
+            ci_low=float("nan"), ci_high=float("nan"), samples=n, confidence=confidence,
+        )
+    cand = [c for c, _ in usable]
+    base = [b for _, b in usable]
+    ratio = sum(cand) / sum(base)
+    rng = random.Random(0)
+    resampled = sorted(
+        sum(cand[i] for i in idx) / sum(base[i] for i in idx)
+        for idx in (rng.choices(range(n), k=n) for _ in range(_BOOTSTRAP_RESAMPLES))
+    )
+    tail = (1.0 - confidence) / 2.0
+    low = resampled[int(tail * (_BOOTSTRAP_RESAMPLES - 1))]
+    high = resampled[int((1.0 - tail) * (_BOOTSTRAP_RESAMPLES - 1))]
+    if high <= max_ratio:
+        verdict = BenchmarkVerdict.ACCEPT
+    elif ratio > max_ratio:
+        verdict = BenchmarkVerdict.REJECT
+    else:
+        verdict = BenchmarkVerdict.INCONCLUSIVE
+    return BenchmarkDecision(
+        verdict=verdict, ratio=ratio, ci_low=low, ci_high=high,
+        samples=n, confidence=confidence,
+    )
+
+
 def _gate_differential_benchmark(ctx: _GateContext) -> Result | None:
     """Differential correctness over random inputs, then a like-for-like benchmark.
 
@@ -869,9 +975,11 @@ def _gate_differential_benchmark(ctx: _GateContext) -> Result | None:
         the candidate cannot predict — catches a diff that special-cases the
         known test and benchmark inputs but is wrong elsewhere.
     (b) The harness drives the entry function itself (never the candidate's own
-        ``benchmark()``) and times candidate and baseline over the **same**
-        fixed workload, so the comparison is fair and the timing cannot be
-        faked.
+        ``benchmark()``) and times candidate and baseline back-to-back on the
+        **same fresh** input, many times, deciding from the paired ratios via
+        :func:`benchmark_decision` (OMNI-41). Fresh inputs matter as much as
+        pairing: a fixed workload timed repeatedly measures a cache, not an
+        algorithm.
 
     Class-1 only: both halves presuppose a reference that can be evaluated on
     demand, which is exactly what a Class-2 feature does not have.
@@ -890,9 +998,30 @@ def _gate_differential_benchmark(ctx: _GateContext) -> Result | None:
         )
     trials = getattr(spec, "diff_trials", DEFAULT_DIFF_TRIALS)
     max_ratio = getattr(spec, "max_latency_ratio", DEFAULT_MAX_LATENCY_RATIO)
+    samples = getattr(spec, "bench_samples", DEFAULT_BENCH_SAMPLES)
+    batch = getattr(spec, "bench_batch", DEFAULT_BENCH_BATCH)
+    confidence = getattr(spec, "bench_confidence", DEFAULT_BENCH_CONFIDENCE)
+    # Seeded so a verdict is reproducible, and reported on rejection — the same
+    # convention the invariant gate uses, and for the same reason: without the
+    # seed a surprising measurement cannot be re-run.
+    bench_seed = ctx.seed
     script = textwrap.dedent(
         f"""\
-        import sys, time, random, importlib.util
+        import os, sys, time, random, importlib.util
+
+        # The candidate shares this process, so it must not share the channel the
+        # verdict travels on. The harness keeps a private duplicate of stdout and
+        # points fd 1 (and sys.stdout) at /dev/null before loading anything:
+        # whatever the candidate prints — at import, per call, or from an atexit
+        # hook — goes nowhere. A pre-merge review forged a passing verdict with
+        # one atexit print against a parser that took the last matching line.
+        _out = os.fdopen(os.dup(1), "w")
+        os.dup2(os.open(os.devnull, os.O_WRONLY), 1)
+        sys.stdout = open(os.devnull, "w")
+
+        def emit(*parts):
+            _out.write(" ".join(str(p) for p in parts) + "\\n")
+            _out.flush()
 
         def _load(path, name):
             spec = importlib.util.spec_from_file_location(name, path)
@@ -906,7 +1035,7 @@ def _gate_differential_benchmark(ctx: _GateContext) -> Result | None:
 
         entry = {spec.entry!r}
         if not hasattr(cand, entry):
-            print("NOENTRY", entry)
+            emit("NOENTRY", entry)
             sys.exit(4)
         cand_fn = getattr(cand, entry)
         base_fn = getattr(base, entry)
@@ -915,21 +1044,71 @@ def _gate_differential_benchmark(ctx: _GateContext) -> Result | None:
         for _ in range({trials}):
             args = oracle.random_input(rng)
             if cand_fn(*args) != oracle.reference(*args):
-                print("MISMATCH", args)
+                emit("MISMATCH", args)
                 sys.exit(3)
 
-        INPUTS = oracle.BENCH_INPUTS
+        # Tightly interleaved pairs over FRESH inputs (OMNI-41).
+        #
+        # Fresh inputs, not oracle.BENCH_INPUTS replayed: a fixed workload timed
+        # repeatedly rewards memoisation rather than speed, so a naive
+        # implementation under functools.cache measured as near-free and passed
+        # every gate. An argument is used once, so a cache cannot hit.
+        #
+        # One pair = candidate and baseline timed back-to-back on the SAME fresh
+        # input. Shared drift cancels in a ratio only in so far as the two halves
+        # are adjacent in time, so the window is kept as small as the clock
+        # allows and the sample count carries the precision. The order alternates
+        # so neither side systematically runs second on warm caches.
+        #
+        # Every sample is taken — there is deliberately no early stop. The first
+        # cut stopped once 11 pairs agreed, and a review showed a candidate that
+        # is slow only on the rarer, expensive inputs survives 11 draws often
+        # enough to matter (a slow 10% tail is missed with p = 0.9**11 ≈ 31%).
+        bench_rng = random.Random({bench_seed!r})
 
-        def bench(fn):
-            best = float("inf")
-            for _ in range(5):
-                start = time.perf_counter()
-                for args in INPUTS:
-                    fn(*args)
-                best = min(best, time.perf_counter() - start)
-            return best / len(INPUTS)
+        def timed(fn, batch):
+            start = time.perf_counter()
+            for args in batch:
+                fn(*args)
+            return time.perf_counter() - start
 
-        print(bench(cand_fn), bench(base_fn))
+        # The contract's own BENCH_INPUTS are timed too — ONCE each, as pairs
+        # mixed in among the fresh ones. The oracle chose them for shape
+        # coverage random_input lacks (sort: already-sorted, reverse-sorted,
+        # heavy-duplicate — where naive pivots go quadratic), and the first
+        # cut of this gate, timing random inputs only, lost that. Timed once,
+        # a cache cannot hit; they are public, so a candidate could special-case
+        # them, but they are a small share of total cost (~8% for
+        # sum_of_divisors) and cannot clear the margin alone.
+        work = [[args] for args in oracle.BENCH_INPUTS]
+        work += [[oracle.random_input(bench_rng) for _ in range({batch})]
+                 for _ in range({samples})]
+        bench_rng.shuffle(work)
+
+        pairs = []
+        for sample_i, batch in enumerate(work):
+            if sample_i % 2 == 0:
+                t_cand = timed(cand_fn, batch)
+                t_base = timed(base_fn, batch)
+            else:
+                t_base = timed(base_fn, batch)
+                t_cand = timed(cand_fn, batch)
+            pairs.append((t_cand, t_base))
+
+        # The *baseline's* per-call latency over BENCH_INPUTS, best of 5 —
+        # exactly measure_baseline()'s method, so the gate's numbers stay
+        # comparable to the loop's. The candidate is never timed on this fixed
+        # workload at all (that is what a cache games); its reported latency is
+        # derived from this number and the measured total-time ratio.
+        best = float("inf")
+        for _ in range(5):
+            start = time.perf_counter()
+            for args in oracle.BENCH_INPUTS:
+                base_fn(*args)
+            best = min(best, time.perf_counter() - start)
+        emit("PAIRS", " ".join(f"{{c!r}},{{b!r}}" for c, b in pairs))
+        emit("BASELINE", repr(best / len(oracle.BENCH_INPUTS)))
+        emit("END")
         """
     )
     result = _run([_PY, "-c", script], ctx.tmpdir, ctx.env)
@@ -956,22 +1135,75 @@ def _gate_differential_benchmark(ctx: _GateContext) -> Result | None:
             errors=result.stderr.splitlines(),
         )
 
-    try:
-        candidate_latency, measured_baseline = (float(x) for x in result.stdout.split())
-    except ValueError:
-        return Result(passed=False, reason="benchmark produced non-numeric output")
-
-    ctx.candidate_latency = candidate_latency
-    if candidate_latency > measured_baseline * max_ratio:
+    parsed = _parse_benchmark_output(result.stdout)
+    if parsed is None:
+        # Not "harness:": a candidate can cause this (exit early, or tamper with
+        # the harness's output), so it must not self-label as infrastructure and
+        # skip the OMNI-37 probe. _attribute probes the sandbox; only a failed
+        # self-check turns it into a harness fault.
         return Result(
             passed=False,
-            reason=(
-                f"no improvement: candidate {candidate_latency:.6f}s vs baseline "
-                f"{measured_baseline:.6f}s (need ≤ {max_ratio:.0%})"
-            ),
-            latency_seconds=candidate_latency,
+            reason="benchmark output malformed or missing — expected PAIRS, BASELINE, "
+                   "END and nothing else (candidate exited early or tampered?)",
+            errors=result.stdout.splitlines()[:20],
         )
-    return None
+    pairs, measured_baseline = parsed
+
+    decision = benchmark_decision(pairs, max_ratio=max_ratio, confidence=confidence)
+    candidate_latency = measured_baseline * decision.ratio
+    ctx.candidate_latency = candidate_latency
+    if decision.verdict is BenchmarkVerdict.ACCEPT:
+        return None
+    detail = (
+        f"candidate ~{candidate_latency:.6f}s vs baseline {measured_baseline:.6f}s "
+        f"per call (need ≤ {max_ratio:.0%}); {decision.describe()}; seed={bench_seed}"
+    )
+    if decision.verdict is BenchmarkVerdict.REJECT:
+        return Result(
+            passed=False,
+            reason=f"no improvement: {detail}",
+            latency_seconds=candidate_latency,
+            seed=bench_seed,
+        )
+    # Inconclusive: the candidate's best estimate clears the margin, but the
+    # interval cannot confirm it. Its own reject gate rather than "no
+    # improvement" — the evidence leans *for* the candidate — and the org records
+    # it like a no-op (episodic.NEUTRAL_OUTCOMES): spend counted, no bug, no
+    # breaker increment. benchmark_decision makes it unreachable for a candidate
+    # whose best estimate is slower, so it is not a hiding place for one.
+    return Result(
+        passed=False,
+        reason=f"benchmark inconclusive: {detail}",
+        latency_seconds=candidate_latency,
+        seed=bench_seed,
+    )
+
+
+def _parse_benchmark_output(stdout: str) -> tuple[list[tuple[float, float]], float] | None:
+    """Parse the benchmark script's output, strictly. ``None`` if malformed.
+
+    Exactly ``PAIRS``, ``BASELINE``, ``END`` — any other line, a duplicate, or a
+    missing sentinel is refused rather than parsed around, so output the harness
+    did not write cannot be mistaken for output it did.
+    """
+    lines = stdout.splitlines()
+    if len(lines) != 3 or lines[2] != "END":
+        return None
+    head, pair_line = lines[0].partition(" ")[::2]
+    tag, baseline_raw = lines[1].partition(" ")[::2]
+    if head != "PAIRS" or tag != "BASELINE":
+        return None
+    try:
+        pairs = []
+        for token in pair_line.split():
+            c, b = token.split(",")
+            pairs.append((float(c), float(b)))
+        baseline = float(baseline_raw)
+    except ValueError:
+        return None
+    if not math.isfinite(baseline) or baseline <= 0.0:
+        return None
+    return pairs, baseline
 
 
 # Which gate name runs which implementation. The *contract* chooses the profile
@@ -1098,8 +1330,8 @@ def validate(
     baseline-dependent gate.
 
     *baseline_latency* is advisory only (kept for logging/compat); the pass/fail
-    comparison uses a baseline measured in-sandbox over the same workload as the
-    candidate, which is far less noisy.
+    decision times candidate and baseline in-sandbox, back-to-back in pairs on
+    the same fresh inputs, which is far less noisy (OMNI-41).
     """
     spec: Contract = contract if contract is not None else default_contract()
     profile = spec.gate_profile()
