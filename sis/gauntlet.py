@@ -879,6 +879,12 @@ class BenchmarkVerdict(str, Enum):
     ACCEPT = "accept"
     REJECT = "reject"
     INCONCLUSIVE = "inconclusive"
+    # Too few usable timings to judge at all. Deliberately NOT neutral: the
+    # timings a candidate shares a process with can be made zero or NaN on
+    # purpose (patch the clock), and "unmeasurable" must not become a place to
+    # hide the way INCONCLUSIVE would be. Also the honest signal for a target
+    # too fast for the clock — raise the contract's bench_batch.
+    UNMEASURABLE = "unmeasurable"
 
 
 @dataclass(frozen=True)
@@ -930,17 +936,25 @@ def benchmark_decision(
     - ``ACCEPT``       — the interval's upper bound clears the margin.
     - ``REJECT``       — the point estimate itself misses the margin.
     - ``INCONCLUSIVE`` — the candidate *looks* faster by the margin but the
-      interval cannot confirm it, or too few usable pairs to judge. Recorded as
-      neutral (``episodic.NEUTRAL_OUTCOMES``), which is why it is reachable only
-      by a candidate whose best estimate already clears the margin: a slow
-      candidate cannot make itself noisy enough to escape being counted.
+      interval cannot confirm it. Recorded as neutral
+      (``episodic.NEUTRAL_OUTCOMES``), which is why it is reachable only by a
+      candidate whose best estimate already clears the margin: a slow candidate
+      cannot get there by being noisy.
+    - ``UNMEASURABLE`` — fewer than ``_MIN_DECIDABLE_PAIRS`` usable pairs. A
+      failure, not neutral (see ``BenchmarkVerdict``).
+
+    What this function cannot defend against is timings that were *forged*
+    before they reached it: the candidate runs in the process that measures it
+    (KNOWN_ISSUES H2). And a percentile bootstrap on raw wall-clock sums
+    undercovers when scheduler stalls land in a few pairs — the false-accept
+    rate at the margin is a few times the nominal (KNOWN_ISSUES M7).
     """
     usable = [(c, b) for c, b in pairs
               if math.isfinite(c) and math.isfinite(b) and c > 0.0 and b > 0.0]
     n = len(usable)
     if n < _MIN_DECIDABLE_PAIRS:
         return BenchmarkDecision(
-            verdict=BenchmarkVerdict.INCONCLUSIVE, ratio=float("nan"),
+            verdict=BenchmarkVerdict.UNMEASURABLE, ratio=float("nan"),
             ci_low=float("nan"), ci_high=float("nan"), samples=n, confidence=confidence,
         )
     cand = [c for c, _ in usable]
@@ -1009,12 +1023,19 @@ def _gate_differential_benchmark(ctx: _GateContext) -> Result | None:
         f"""\
         import os, sys, time, random, importlib.util
 
-        # The candidate shares this process, so it must not share the channel the
-        # verdict travels on. The harness keeps a private duplicate of stdout and
-        # points fd 1 (and sys.stdout) at /dev/null before loading anything:
-        # whatever the candidate prints — at import, per call, or from an atexit
-        # hook — goes nowhere. A pre-merge review forged a passing verdict with
-        # one atexit print against a parser that took the last matching line.
+        # The harness keeps a duplicate of stdout and points fd 1 (and
+        # sys.stdout) at /dev/null before loading anything, so whatever the
+        # candidate *prints* — at import, per call, or from an atexit hook — goes
+        # nowhere. A pre-merge review forged a passing verdict with one atexit
+        # print against a parser that took the last matching line.
+        #
+        # This is NOT isolation. The candidate runs in this process and can
+        # reach anything here on purpose: `__main__._out` (or the dup'd fd via
+        # os.write), `time.perf_counter`, `timed`, `base_fn`. A candidate that
+        # writes a fabricated PAIRS/BASELINE/END to `_out` and calls os._exit(0)
+        # passes every gate and skips the correctness loop below — KNOWN_ISSUES
+        # H2, pinned by a strict-xfail test. Only running the candidate in a
+        # separate worker process, timed from here, closes it.
         _out = os.fdopen(os.dup(1), "w")
         os.dup2(os.open(os.devnull, os.O_WRONLY), 1)
         sys.stdout = open(os.devnull, "w")
@@ -1096,10 +1117,12 @@ def _gate_differential_benchmark(ctx: _GateContext) -> Result | None:
             pairs.append((t_cand, t_base))
 
         # The *baseline's* per-call latency over BENCH_INPUTS, best of 5 —
-        # exactly measure_baseline()'s method, so the gate's numbers stay
-        # comparable to the loop's. The candidate is never timed on this fixed
-        # workload at all (that is what a cache games); its reported latency is
-        # derived from this number and the measured total-time ratio.
+        # measure_baseline()'s method. The candidate is never timed on this fixed
+        # workload (that is what a cache games); its *reported* latency is this
+        # number scaled by the total-cost ratio. That is a display estimate, not
+        # a like-for-like measurement: the ratio is dominated by the large random
+        # inputs, so for `sort` it overstates the speedup on BENCH-sized inputs
+        # (~2.8x, per review). The verdict never uses it.
         best = float("inf")
         for _ in range(5):
             start = time.perf_counter()
@@ -1150,6 +1173,18 @@ def _gate_differential_benchmark(ctx: _GateContext) -> Result | None:
     pairs, measured_baseline = parsed
 
     decision = benchmark_decision(pairs, max_ratio=max_ratio, confidence=confidence)
+    if decision.verdict is BenchmarkVerdict.UNMEASURABLE:
+        # Not neutral and not "harness:" — the candidate can cause it (see
+        # BenchmarkVerdict.UNMEASURABLE); _attribute's probe decides whether the
+        # sandbox is at fault instead.
+        return Result(
+            passed=False,
+            reason=f"benchmark unmeasurable: only {decision.samples} usable timing pairs "
+                   f"of {len(pairs)} (need {_MIN_DECIDABLE_PAIRS}) — the target is too "
+                   "fast for the clock (raise the contract's bench_batch) or the "
+                   f"candidate interfered with timing; seed={bench_seed}",
+            seed=bench_seed,
+        )
     candidate_latency = measured_baseline * decision.ratio
     ctx.candidate_latency = candidate_latency
     if decision.verdict is BenchmarkVerdict.ACCEPT:

@@ -77,8 +77,11 @@ internal target before it models anything external.
     point estimate misses it, else **inconclusive** — reachable only by a
     candidate that *looks* faster, and neutral like a no-op at both the SWE
     and QA stage (`episodic.neutral_status`: no bug, no breaker increment,
-    spend recorded). The harness owns a private stdout; the candidate's
-    prints go to /dev/null, so it cannot forge the verdict.
+    spend recorded). The candidate's prints go to /dev/null, but it still
+    runs in the process that measures it and **can forge the verdict on
+    purpose** (KNOWN_ISSUES **H2**, open; M7 — false-accept above nominal
+    under stalls — too). Too few usable timings is `benchmark unmeasurable`,
+    a counted failure, never neutral.
   - **Class 2** (`FeatureContract` — build what a spec describes, no
     pre-existing version to diff against): `ast.parse` → `mypy --strict` →
     interface → acceptance → invariant gate → backtest gate → SLO gate. No
@@ -558,12 +561,25 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   above); `ruff`/`mypy --strict`/`pytest` clean; CI green; `feature → develop
   → main` enforced by both the client-side pre-push hook and active
   server-side rulesets.
-- **One known test flake under `-n auto`**:
-  `test_a_drafted_skeleton_stages_without_touching_specs` is **test-only** —
-  [OMNI-42](https://olafzumpe.atlassian.net/browse/OMNI-42) (Low). It
-  compares two `specs/` listings and races another worker creating
-  `specs/__pycache__`; `stage()` never writes into `specs/`. Re-run before
-  chasing it.
+- **Two known test flakes** — re-run before chasing either:
+  - `test_a_drafted_skeleton_stages_without_touching_specs` (under `-n auto`)
+    is **test-only** — [OMNI-42](https://olafzumpe.atlassian.net/browse/OMNI-42)
+    (Low). It compares two `specs/` listings and races another worker creating
+    `specs/__pycache__`; `stage()` never writes into `specs/`.
+  - `tests/test_serve_cloud.py::test_promotion_makes_the_candidate_the_new_baseline`
+    (Serve half, CI) — **unticketed** (noted 2026-09-26). One asynchronous
+    race in two places: `serve.run` returns once a redeployed replica is up,
+    but the router's handle learns the new replica set later. After
+    `promote()` a request can still reach the outgoing blue (`009727b`, a
+    bounded wait for the promoted version). Every CI failure on record was the
+    *other* place, the pre-promote check (`assert 'green-answer' == [1, 2, 3]`):
+    right after the fixture's `_reset` redeploys blue as v1, a request was still
+    answered by the previous test's promoted candidate. Seen on `develop`
+    (`0cb407e`), `feature/OMNI-25` and #107 — three unrelated diffs. **Both
+    fixed in #107**: `_reset` now waits until blue *answers* with the source it
+    was just given (matched on the answer, since every reset is "v1"), so the
+    test's own assertions stay strict. Drop this entry once the Serve half has
+    stayed green for a while.
 - **The other former flake was a real gate defect, now fixed** —
   [OMNI-41](https://olafzumpe.atlassian.net/browse/OMNI-41), Done 2026-09-26.
   `test_correct_but_not_faster_is_rejected` flaked because the Class-1
@@ -585,7 +601,8 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
 
 **Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L
 severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
-the IDs in commits/PRs. **High, Medium and Low are all clear**; L5 (the target
+the IDs in commits/PRs. **Open: H2 and M7** (2026-09-26, both in the OMNI-41
+benchmark gate — see Hard rules); Low is clear; L5 (the target
 contract / benchmark oracle) resolved 2026-08-06. Planned work lives in Jira
 ([`OMNI`](https://olafzumpe.atlassian.net/browse/OMNI)), defects here.
 
