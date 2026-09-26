@@ -198,6 +198,7 @@ def holdout(backtests: tuple[Backtest, ...]) -> tuple[Backtest, ...]:
 def build_script(
     *,
     candidate_path: str,
+    canonical_path: str,
     comparators_path: str,
     oracle_path: str | None,
     entry: str,
@@ -213,6 +214,11 @@ def build_script(
     Comparator resolution prefers the contract's own oracle module over the
     shared library, so a domain can supply a comparison the shared set has no
     business knowing about, without the engine learning the domain's name.
+
+    *canonical_path* is the sandbox copy of :mod:`sis.canonical`: the output is
+    rebuilt from plain builtins before a comparator sees it, since a comparator
+    that does ``actual == expected`` would otherwise run the candidate's own
+    ``__eq__`` (OMNI-46, H4).
     """
     return textwrap.dedent(
         f"""\
@@ -224,6 +230,7 @@ def build_script(
             spec.loader.exec_module(mod)
             return mod
 
+        canon = _load({canonical_path!r}, "_sis_canonical")
         cand = _load({candidate_path!r}, "candidate")
         shared = _load({comparators_path!r}, "comparators")
         oracle_path = {oracle_path!r}
@@ -253,8 +260,12 @@ def build_script(
                 print("NOCOMPARATOR", bt["name"], bt["compare"])
                 sys.exit({EXIT_NO_COMPARATOR})
 
-            actual = entry_fn(*args)
-            ok, detail = compare(actual, expected, bt["tolerance"])
+            try:
+                actual = canon.canonical(entry_fn(*args))
+            except canon.NotPlainError as exc:
+                ok, detail = False, f"output is not a plain builtin value ({{exc}})"
+            else:
+                ok, detail = compare(actual, expected, bt["tolerance"])
             if not ok:
                 print("MISMATCH", json.dumps({{
                     "backtest": bt["name"],

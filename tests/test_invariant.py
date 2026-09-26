@@ -215,7 +215,8 @@ def test_the_roman_laws_are_checkable_without_knowing_the_right_answer() -> None
 
 def test_the_script_prefers_a_contract_local_law_over_the_shared_one() -> None:
     script = build_script(
-        candidate_path="/s/c.py", shared_path="/s/inv.py", oracle_path="/s/o.py",
+        candidate_path="/s/c.py", canonical_path="/s/canon.py", exports=["f"],
+        shared_path="/s/inv.py", oracle_path="/s/o.py",
         entry="f", plan=[], examples=10, seed=1,
     )
     assert script.index("getattr(oracle, name") < script.index("getattr(shared, name")
@@ -229,7 +230,8 @@ def test_the_generated_property_takes_no_default_arguments() -> None:
     rather than a closure mistake. Worth pinning so it is not reintroduced.
     """
     script = build_script(
-        candidate_path="/s/c.py", shared_path="/s/inv.py", oracle_path=None,
+        candidate_path="/s/c.py", canonical_path="/s/canon.py", exports=["f"],
+        shared_path="/s/inv.py", oracle_path=None,
         entry="f", plan=[], examples=10, seed=1,
     )
     assert "def prop(args):" in script
@@ -239,7 +241,8 @@ def test_the_example_database_is_disabled_in_the_sandbox() -> None:
     # The seed must be the only reproduction handle; a database would make a
     # replay depend on state the log does not carry.
     script = build_script(
-        candidate_path="/s/c.py", shared_path="/s/inv.py", oracle_path=None,
+        candidate_path="/s/c.py", canonical_path="/s/canon.py", exports=["f"],
+        shared_path="/s/inv.py", oracle_path=None,
         entry="f", plan=[], examples=10, seed=1,
     )
     assert "database=None" in script
@@ -329,3 +332,25 @@ def test_the_offline_gate_is_distinct_from_the_canarys() -> None:
 
 def test_an_invariant_timeout_is_still_a_timeout() -> None:
     assert gate_from_reason("invariant gate timed out") == "timeout"
+
+
+def test_every_export_is_wrapped_before_any_law_runs() -> None:
+    # OMNI-46 (H4): round-trip calls a sibling export itself, so wrapping only
+    # the entry would leave `from_roman`'s own __eq__ in charge of the verdict.
+    script = build_script(
+        candidate_path="/s/c.py", canonical_path="/s/canon.py",
+        exports=["to_roman", "from_roman"], shared_path="/s/inv.py", oracle_path=None,
+        entry="to_roman", plan=[], examples=10, seed=1,
+    )
+    assert "canon.wrap_exports(cand, ['to_roman', 'from_roman'])" in script
+    assert script.index("wrap_exports") < script.index("def prop(args):")
+
+
+def test_the_candidate_gets_a_copy_of_the_args_the_law_judges() -> None:
+    # OMNI-47 (M10): a law compares the output with `args`; a candidate handed
+    # the same objects could empty them and be "a sorted permutation" of [].
+    script = build_script(
+        candidate_path="/s/c.py", canonical_path="/s/canon.py", exports=["f"],
+        shared_path="/s/inv.py", oracle_path=None, entry="f", plan=[], examples=10, seed=1,
+    )
+    assert "entry_fn(*copy.deepcopy(args))" in script

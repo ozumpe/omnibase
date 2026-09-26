@@ -79,9 +79,9 @@ internal target before it models anything external.
     and QA stage (`episodic.neutral_status`: no bug, no breaker increment,
     spend recorded). The candidate's prints go to /dev/null, but it still
     runs in the process that measures it and **can forge the verdict on
-    purpose** (KNOWN_ISSUES **H2**, open; M7 — false-accept above nominal
-    under stalls — too). Too few usable timings is `benchmark unmeasurable`,
-    a counted failure, never neutral.
+    purpose** (KNOWN_ISSUES **H2**, open). M7 — false-accept above nominal
+    under stalls — is won't-fix for now (OMNI-88). Too few usable timings is
+    `benchmark unmeasurable`, a counted failure, never neutral.
   - **Class 2** (`FeatureContract` — build what a spec describes, no
     pre-existing version to diff against): `ast.parse` → `mypy --strict` →
     interface → acceptance → invariant gate → backtest gate → SLO gate. No
@@ -104,11 +104,21 @@ internal target before it models anything external.
     `specs/<name>/`, held-out split) are the anti-gaming layer for targets with
     no reference oracle to differ against — domain laws over generated inputs,
     and "does it reproduce recorded reality", respectively.
+  - **Candidate output is compared only as plain values, and never shares an
+    input object with the other side** (OMNI-46/47). `sis/canonical.py`
+    rebuilds output from exact builtins before every `==` — differential,
+    acceptance (via a gauntlet-written `conftest.py` wrapping the contract's
+    `public_api`), invariant, backtest, and the live canary — because a return
+    type with its own `__eq__` passed every gate (H4). Each side gets its own
+    `copy.deepcopy` of the input, made outside any timed window, because a
+    candidate that emptied a shared list "agreed" with the reference, and one
+    that grew it slowed the baseline (M10). Neither stops a candidate that
+    tampers with the harness in its own process — that is OMNI-45.
   - Every gate ends in a human PR. Generated code MUST be fully typed. What
     counts as correct/better is per-target — see `sis/contract.py`.
 - **Change-authorization policy (`sis/policy.py`) — what the loop may rewrite:**
-  - FORBIDDEN (never, no override): guardrail/safety code — the gauntlet, the
-    contract layer (`sis/contract.py`, `sis/backtest.py`, `sis/invariant.py`,
+  - FORBIDDEN (never, no override): guardrail/safety code — the gauntlet and
+    its output canonicaliser (`sis/canonical.py`), the contract layer (`sis/contract.py`, `sis/backtest.py`, `sis/invariant.py`,
     `sis/slo.py`, `sis/clock.py`), the contract-author approval gate
     (`sis/contract_author.py`),
     `specs/` (the exam itself — oracles, acceptance tests, domain laws, backtest
@@ -558,32 +568,21 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   - Design + the Caddy/TLS decision: `docs/OPERATOR_FRONTEND.md`. Deployment
     artifacts (`Dockerfile.frontend`, `Caddyfile`) are deliberately not in this
     slice.
-- 627 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
+- 691 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
   Ray-Serve-integration tests run separately, see Operational quick reference
-  above; 689 total — corrected 2026-09-26, a multi-dimension review found the
+  above; 753 total — corrected 2026-09-26, a multi-dimension review found the
   previously-documented 616/678 stale); `ruff`/`mypy --strict`/`pytest` clean;
   CI green; `feature → develop → main` enforced by both the client-side
   pre-push hook and active server-side rulesets.
-- **Two known test flakes** — re-run before chasing either:
-  - `test_a_drafted_skeleton_stages_without_touching_specs` (under `-n auto`)
-    is **test-only** — [OMNI-42](https://olafzumpe.atlassian.net/browse/OMNI-42)
-    (Low). It compares two `specs/` listings and races another worker creating
-    `specs/__pycache__`; `stage()` never writes into `specs/`.
-  - `tests/test_serve_cloud.py::test_promotion_makes_the_candidate_the_new_baseline`
-    (Serve half, CI) — **unticketed** (noted 2026-09-26). One asynchronous
-    race in two places: `serve.run` returns once a redeployed replica is up,
-    but the router's handle learns the new replica set later. After
-    `promote()` a request can still reach the outgoing blue (`009727b`, a
-    bounded wait for the promoted version). Every CI failure on record was the
-    *other* place, the pre-promote check (`assert 'green-answer' == [1, 2, 3]`):
-    right after the fixture's `_reset` redeploys blue as v1, a request was still
-    answered by the previous test's promoted candidate. Seen on `develop`
-    (`0cb407e`), `feature/OMNI-25` and #107 — three unrelated diffs. **Both
-    fixed in #107**: `_reset` now waits until blue *answers* with the source it
-    was just given (matched on the answer, since every reset is "v1"), so the
-    test's own assertions stay strict. Drop this entry once the Serve half has
-    stayed green for a while.
-- **The other former flake was a real gate defect, now fixed** —
+- **One known test flake** — re-run before chasing it:
+  `test_a_drafted_skeleton_stages_without_touching_specs` (under `-n auto`)
+  is **test-only** — [OMNI-42](https://olafzumpe.atlassian.net/browse/OMNI-42)
+  (Low). It compares two `specs/` listings and races another worker creating
+  `specs/__pycache__`; `stage()` never writes into `specs/`. (The Serve
+  flake in `test_promotion_makes_the_candidate_the_new_baseline` was not a
+  replica race but the 5% default canary weight — fixed in #110, see
+  "Writing a Serve test" above.)
+- **A former flake was a real gate defect, now fixed** —
   [OMNI-41](https://olafzumpe.atlassian.net/browse/OMNI-41), Done 2026-09-26.
   `test_correct_but_not_faster_is_rejected` flaked because the Class-1
   benchmark decided on one noisy block-vs-block comparison. Fixing it found a
@@ -605,20 +604,21 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
 **Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L
 severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
 the IDs in commits/PRs. **Open after a 2026-09-26 multi-dimension review with
-adversarial verification: H2–H4, M7–M23, L15–L43.** The headline, before
+adversarial verification: H2–H3, M8–M9, M11–M23, L15–L43** (M7 is won't-fix
+for now; H4 and M10 fixed 2026-09-26, OMNI-46/47). The headline, before
 trusting any gauntlet verdict: **the gate scripts judge a candidate inside its
-own process**. A candidate can rewrite the exam files later gates read (M9),
-defeat every equality-based check by returning a type that overrides `__eq__`
-(H4 — reproduced against the default contract), sabotage the reference through
-shared mutable arguments (M10), or exit 0 with no verdict (M8). One redesign
-closes most of these and H2 (epic
+own process**. A candidate can rewrite the exam files later gates read (M9) or
+exit 0 with no verdict (M8). One redesign closes these and H2 (epic
 [OMNI-43](https://olafzumpe.atlassian.net/browse/OMNI-43)). Separately, the
 Serve canary runs candidate code as a full Ray worker in the control-plane
 cluster, before human review (H3, epic
 [OMNI-44](https://olafzumpe.atlassian.net/browse/OMNI-44)) — don't combine
 `--canary serve` with a real proposer until that lands. M12–M23 are
-guardrail/loop gaps with one story each (OMNI-51–59); the Lows are untracked in
-Jira. The ID → ticket table is at the top of KNOWN_ISSUES. L5 (the target
+guardrail/loop gaps with one story each (OMNI-51–59). **Every KNOWN_ISSUES
+entry starts with its Jira ticket** — open, won't-fix and resolved alike (the
+open Lows are OMNI-64–87; the rest backfilled 2026-09-26 as OMNI-88–120,
+label `backfilled`), and `tests/test_known_issues.py` fails on an entry
+without one. File the ticket first, then the entry. L5 (the target
 contract / benchmark oracle) resolved 2026-08-06. Planned work lives in Jira
 ([`OMNI`](https://olafzumpe.atlassian.net/browse/OMNI)), defects here.
 
@@ -638,12 +638,13 @@ Two traps L5 surfaced, both worth knowing before writing similar code:
   (192.4µs → 1.6µs, 99.2% faster), and it filed Confluence spec `6356994`, Jira
   `TES-20`, GitHub `testrun` PR #4, stopping at `verified_awaiting_human_merge`. Cost
   $0.014375, reconciled against the Anthropic console. Details in
-  `docs/KNOWN_ISSUES.md` (Resolved).
+  `docs/KNOWN_ISSUES.md` ("Sequencing for the first real-life test").
 
 **Next — the milestone plan is in Jira ([`OMNI`](https://olafzumpe.atlassian.net/browse/OMNI)),
 not here.** Check the board for current status rather than trusting this list.
-**Last reconciled against a live query on 2026-09-26** (59 issues, OMNI-1
-through OMNI-59; 29 Done, 1 In Progress, 29 To Do):
+**Last reconciled against a live query on 2026-09-26** (120 issues, OMNI-1
+through OMNI-120; 60 Done, 1 In Progress, 59 To Do — most of the growth is the
+KNOWN_ISSUES backfill, see "Known issues" above):
 
 1. ~~**[OMNI-1](https://olafzumpe.atlassian.net/browse/OMNI-1) — L5 target
    contract** (Class 1)~~ — **done 2026-08-06** (OMNI-4/5/6/7). Two targets ship
@@ -802,6 +803,8 @@ has the defect write-ups and the ID → ticket table:
   (M17), OMNI-57 PR closed without merging (M18), OMNI-58 Serve baseline from
   the merged target (M22, blocked by OMNI-51), OMNI-59 tests inherit `SIS_*`
   env (M23).
+- **Before OMNI-29 (run day):** OMNI-60–63, filed with OMNI-51 as its
+  prerequisites (each `Blocks` OMNI-29).
 
 Not yet scheduled: the **atomic actor swap** for internal, never-served actors,
 which `docs/SERVE_CANARY.md` scopes out and which has no design doc yet. E3/D2 in

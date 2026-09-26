@@ -288,7 +288,8 @@ def test_strings_compare_whole_rather_than_character_by_character() -> None:
 
 def test_the_script_prefers_a_contract_local_comparator_over_the_shared_one() -> None:
     script = build_script(
-        candidate_path="/tmp/c.py", comparators_path="/tmp/cmp.py",
+        candidate_path="/tmp/c.py", canonical_path="/tmp/canon.py",
+        comparators_path="/tmp/cmp.py",
         oracle_path="/tmp/o.py", entry="f", plan=[],
     )
     # Resolution order is the mechanism by which a domain supplies a comparison
@@ -300,7 +301,8 @@ def test_the_script_prefers_a_contract_local_comparator_over_the_shared_one() ->
 
 def test_the_script_tolerates_a_contract_with_no_oracle() -> None:
     script = build_script(
-        candidate_path="/tmp/c.py", comparators_path="/tmp/cmp.py",
+        candidate_path="/tmp/c.py", canonical_path="/tmp/canon.py",
+        comparators_path="/tmp/cmp.py",
         oracle_path=None, entry="f", plan=[],
     )
     assert "oracle_path = None" in script
@@ -516,3 +518,25 @@ def test_validate_passes_a_candidate_that_reproduces_history(
 def test_the_default_tolerance_matches_the_documented_worked_example() -> None:
     # docs/CLASS2_CONTRACT.md's planner example lands "within 5% of realized cost".
     assert DEFAULT_TOLERANCE == 0.05
+
+
+def test_a_comparator_never_sees_a_value_with_its_own_equality(tmp_path: pathlib.Path) -> None:
+    # OMNI-46 (H4). `exact` compares with `==`, which a return type overriding
+    # __eq__ answers itself: this candidate "reproduced" every recorded outcome.
+    liar = (
+        "class _Liar(int):\n"
+        "    def __eq__(self, other: object) -> bool:\n"
+        "        return True\n"
+        "    __hash__ = int.__hash__\n\n\n"
+        "def sum_of_divisors(n: int) -> int:\n"
+        "    return _Liar(0)\n"
+    )
+    fixture = _write_fixture(tmp_path / "f.json", [6])
+    expect = _write_expect(tmp_path / "e.json", 12)
+    spec = replace(
+        default_contract(),
+        backtests=(Backtest(name="six", fixture=fixture, expect=expect, compare="exact"),),
+    )
+    result = gauntlet._gate_backtest(_ctx(tmp_path, spec, candidate_source=liar))
+    assert result is not None and not result.passed
+    assert "not a plain builtin value" in result.reason

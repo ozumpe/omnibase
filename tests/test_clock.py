@@ -238,7 +238,8 @@ def test_the_same_trace_produces_byte_identical_gate_input() -> None:
 
     def build() -> str:
         return build_script(
-            candidate_path="/s/target.py", comparators_path="/s/comparators.py",
+            candidate_path="/s/target.py", canonical_path="/s/canon.py",
+            comparators_path="/s/comparators.py",
             oracle_path="/s/oracle.py", entry="f", plan=plan,
         )
 
@@ -249,7 +250,8 @@ def test_the_gate_script_contains_no_timestamp() -> None:
     # The complement of the test above, stated as intent rather than as a
     # comparison: a script that never mentions a date cannot drift.
     script = build_script(
-        candidate_path="/s/c.py", comparators_path="/s/cmp.py",
+        candidate_path="/s/c.py", canonical_path="/s/canon.py",
+        comparators_path="/s/cmp.py",
         oracle_path=None, entry="f", plan=[],
     )
     assert str(datetime.now(UTC).year) not in script

@@ -7,6 +7,13 @@ runbook / Confluence. IDs are stable — reference them in commits and PRs (e.g.
 "Fix H1"). When an issue is fixed, move it to the "Resolved" section at the
 bottom with the PR.
 
+**Every entry starts with its Jira ticket** — open, won't-fix and resolved
+alike. A new issue gets a ticket before it gets an entry here; the resolved
+and won't-fix entries that predate that rule were backfilled on 2026-09-26
+(label `backfilled`; won't-fix tickets stay open with label `wont-fix`).
+`tests/test_known_issues.py` fails on an entry without one, and on a ticket
+reference with no link target below.
+
 > **Supersedes:** the "benchmark noise gate / timing jitter" item documented in
 > v0.1.4 (CLAUDE.md next-steps, README roadmap, runbook Level 2, Confluence
 > Risk 6). The jitter explanation was the wrong mechanism: post-merge no-op PRs
@@ -29,8 +36,8 @@ bottom with the PR.
 > | ID | Jira |
 > |---|---|
 > | H2, M8, M9, M11 | [OMNI-45](https://olafzumpe.atlassian.net/browse/OMNI-45) (epic [OMNI-43](https://olafzumpe.atlassian.net/browse/OMNI-43)) |
-> | H4 | [OMNI-46](https://olafzumpe.atlassian.net/browse/OMNI-46) (epic OMNI-43) |
-> | M10 | [OMNI-47](https://olafzumpe.atlassian.net/browse/OMNI-47) (epic OMNI-43) |
+> | H4 | [OMNI-46](https://olafzumpe.atlassian.net/browse/OMNI-46) (epic OMNI-43) — **fixed** |
+> | M10 | [OMNI-47](https://olafzumpe.atlassian.net/browse/OMNI-47) (epic OMNI-43) — **fixed** |
 > | H3 | [OMNI-48](https://olafzumpe.atlassian.net/browse/OMNI-48) (epic [OMNI-44](https://olafzumpe.atlassian.net/browse/OMNI-44)) |
 > | M19 | [OMNI-49](https://olafzumpe.atlassian.net/browse/OMNI-49) (epic OMNI-44) — **blocks OMNI-29** |
 > | M20, M21 | [OMNI-50](https://olafzumpe.atlassian.net/browse/OMNI-50) (epic OMNI-44) |
@@ -45,12 +52,14 @@ bottom with the PR.
 > | M23 | [OMNI-59](https://olafzumpe.atlassian.net/browse/OMNI-59) |
 > | L21, L23 | [OMNI-61](https://olafzumpe.atlassian.net/browse/OMNI-61) (brake state fails closed; `sis.admin`) — **blocks OMNI-29** |
 > | L24 | [OMNI-62](https://olafzumpe.atlassian.net/browse/OMNI-62) (Notifier port) — **blocks OMNI-29** |
-> | M7 | none yet — natural to do with OMNI-45 |
-> | other L15–L43 | no individual tickets; fix opportunistically or in batches, as L10–L14 were. L39 belongs with [OMNI-42](https://olafzumpe.atlassian.net/browse/OMNI-42). |
+> | M7 | [OMNI-88] — **won't fix** for now (label `wont-fix`); see the Won't fix section |
+> | L15–L20, L22, L25–L29, L31–L38, L40–L43 | one ticket each, [OMNI-64]–[OMNI-87], on each entry below. Each is linked (Relates) in Jira to the ticket it should ship with. |
+> | L30 | [OMNI-55], with M16 |
+> | L39 | [OMNI-42] |
 
 ## High
 
-- **H2 — The benchmark verdict can be forged from inside the measured
+- [OMNI-45] **H2 — The benchmark verdict can be forged from inside the measured
   process** *(found 2026-09-26 by a statistics-lens review of the merged
   OMNI-41 gate; reproduced)* — the Class-1 benchmark runs the candidate in the
   same Python process as the harness that times it and reports the verdict.
@@ -75,7 +84,7 @@ bottom with the PR.
   strict-xfail `test_a_candidate_cannot_forge_the_verdict_through_the_harness_itself`,
   which flips to a failure the day this is fixed.
 
-- **H3 — A Serve-canary candidate runs as a full Ray control-plane worker, not
+- [OMNI-48] **H3 — A Serve-canary candidate runs as a full Ray control-plane worker, not
   in any sandbox** *(found 2026-09-26 by a multi-dimension review; confirmed by
   two independent skeptics reading the code, not run against a live cluster)* —
   `TargetDeployment._load` (`sis/serving.py:125`) `exec`s the candidate's source
@@ -97,40 +106,9 @@ bottom with the PR.
   Until that lands, refuse `canary.backend=serve` for a non-stub proposer, the
   same way `ensure_sandbox_allows_proposer` refuses the soft sandbox for M1.
 
-- **H4 — An output type that overrides `__eq__`/`__ne__` defeats every
-  correctness gate, offline and online** *(found 2026-09-26 by a completeness
-  critic; reproduced)* — every gate compares a candidate's output with a plain
-  `==`/`!=`, candidate value on the left, so Python calls the candidate's own
-  `__eq__` first: the Class-1 differential loop (`cand_fn(*args) !=
-  oracle.reference(*args)`), every acceptance-test assertion, the roman
-  round-trip invariant, and the backtest comparators' exact-match branches.
-  Reproduced against the default contract: `class _Liar(int)` with `__eq__` →
-  `True`, `__ne__` → `False`, `__hash__` → `0`, returned from
-  `sum_of_divisors`, type-checks under `mypy --strict` (the declared return
-  type is `int`) and gets `"all gates passed"` — instantly, since the "answer"
-  never has to be computed. The same shape passes the roman acceptance cases
-  and round-trip law with a `str` subclass. Only the mandatory human PR review
-  stands between this and a merge. Fix: canonicalise candidate output to a
-  plain, hashable value built from only builtin `int`/`float`/`str`/`bool`/
-  `None`/`list`/`tuple`/`dict` before any comparison, in every gate script
-  (differential, acceptance conftest shim, invariant, backtest).
-
 ## Medium
 
-- **M7 — The benchmark's false-accept rate at the margin is a few times the
-  nominal** *(found 2026-09-26 by the same review; verified by simulation)* —
-  `benchmark_decision` bootstraps a ratio of raw wall-clock sums. Scheduler
-  stalls are not symmetric noise: a stall landing in a few pairs moves the sum,
-  and a percentile bootstrap over ~109 heavy-tailed pairs undercovers, so a
-  candidate sitting exactly at the margin is accepted ~3–4x more often than the
-  nominal 2.5%. The human PR merge still follows every accept. Fix direction:
-  read process CPU time alongside `perf_counter` per timing and re-draw a pair
-  whose wall-minus-CPU gap marks a stall (keep the verdict on wall time, since
-  `thread_time` alone is gameable by offloading work), or use a trimmed /
-  Winsorized ratio. Natural to do together with H2, which rebuilds the
-  measurement anyway.
-
-- **M8 — Every non-benchmark gate accepts exit code 0 as a pass, with no
+- [OMNI-45] **M8 — Every non-benchmark gate accepts exit code 0 as a pass, with no
   positive verdict token** *(found 2026-09-26; reproduced)* — `_gate_interface`,
   `_gate_acceptance`, `_gate_invariant` and `_gate_backtest` only check
   `returncode != 0`. A Class-2 candidate that calls `os._exit(0)` at import
@@ -144,7 +122,7 @@ bottom with the PR.
   (e.g. pytest `--junitxml` with the expected test count and zero failures; a
   per-run nonce for interface/invariant/backtest), never a bare exit code.
 
-- **M9 — The per-validation temp directory is shared, writable, and reused
+- [OMNI-45] **M9 — The per-validation temp directory is shared, writable, and reused
   across every gate, so a candidate can rewrite the exam files later gates
   trust** *(found 2026-09-26; reproduced)* — `validate()` writes `oracle.py`,
   `baseline.py` and `sitecustomize.py` once, then hands the same directory
@@ -162,22 +140,7 @@ bottom with the PR.
   candidate's own writable scratch space, which should sit off `sys.path`
   ahead of stdlib; verify a hash of every trusted file before each gate.
 
-- **M10 — Candidate and reference/baseline share mutable argument objects, so
-  a candidate can sabotage its own comparison** *(found 2026-09-26;
-  reproduced)* — the differential loop calls `cand_fn(*args)` before
-  `oracle.reference(*args)` on the same list objects; the paired benchmark
-  passes the same `batch` lists to `timed(cand_fn, batch)` and
-  `timed(base_fn, batch)`. Reproduced against `sort`: a candidate that returns
-  `[]` for any list longer than 5 (clearing its input first) passes every
-  gate; so does a plain, no-faster bubble sort that appends to the shared list
-  so the baseline side looks slower. `specs/sort/tests.py::
-  test_does_not_mutate_its_input` only exercises a 3-element list, so the size
-  threshold slips past it, and the sort contract declares no invariants or
-  backtest to catch it another way. Fix: `copy.deepcopy` each side's
-  arguments, computed outside the timed window, in both the differential and
-  benchmark scripts.
-
-- **M11 — A candidate's own exception inside the invariant or backtest gate is
+- [OMNI-45] **M11 — A candidate's own exception inside the invariant or backtest gate is
   filed as a harness/sandbox fault, not a candidate failure** *(found
   2026-09-26 by a completeness critic; reproduced)* — `sis/invariant.py`'s
   property wrapper catches only `AssertionError` around the candidate's call;
@@ -197,7 +160,7 @@ bottom with the PR.
   `AssertionError` naming the candidate's exception, so Hypothesis can shrink
   it and the seed still rides in the reason).
 
-- **M12 — A `soft_` operator config edit can rewrite `forbidden_` keys through
+- [OMNI-52] **M12 — A `soft_` operator config edit can rewrite `forbidden_` keys through
   unescaped YAML rendering** *(found 2026-09-26; reproduced end to end
   through the real `operator.save_edits`)* — `_render_scalar`
   (`sis/config.py`) wraps string values in `f'"{value}"'` with no escaping;
@@ -215,7 +178,7 @@ bottom with the PR.
   result and refuse the write unless it round-trips to exactly the intended
   values; write via a temp file + `os.replace`.
 
-- **M13 — GitHub OAuth is never actually installed on the operator console;
+- [OMNI-53] **M13 — GitHub OAuth is never actually installed on the operator console;
   the server runs unauthenticated** *(found 2026-09-26; reproduced against
   the installed Panel version, without starting Ray)* — `_install_oauth`
   (`sis/frontend.py`) only sets `pn.config.oauth_provider`/etc. and returns
@@ -234,7 +197,7 @@ bottom with the PR.
   `pn.serve`; enable signed sessions; add a test asserting the built server's
   `auth_provider` is not `NullAuth`.
 
-- **M14 — A worked example in a spec page can name any callable, so spec
+- [OMNI-54] **M14 — A worked example in a spec page can name any callable, so spec
   prose becomes executed code** *(found 2026-09-26; reproduced)* —
   `_worked_example_source` (`sis/contract_author.py`) emits
   `` assert {entry}(*args) == expected `` for any `\w+` identifier, never
@@ -251,7 +214,7 @@ bottom with the PR.
   `untranscribed_examples` as "names a function outside the contract's public
   API".
 
-- **M15 — The real GitHub adapter and the SWE's policy check both hardcode
+- [OMNI-51] **M15 — The real GitHub adapter and the SWE's policy check both hardcode
   `runtime/target.py`, so every non-default contract is judged against the
   wrong baseline on real adapters** *(found 2026-09-26 from three independent
   angles by the same review; confirmed by reading the code, not run against
@@ -271,7 +234,7 @@ bottom with the PR.
   `open_pr`, `get_pr`) and through `policy.authorize_change`, dropping the
   hardcoded constant.
 
-- **M16 — Any exception after the LLM call loses that call's spend from the
+- [OMNI-55] **M16 — Any exception after the LLM call loses that call's spend from the
   CEO ledger and the episodic log, strands the branch/PR, and can kill
   `--loop`** *(found 2026-09-26; confirmed by reading the code — the
   triggering case is the already-documented L6 403)* — `run_cycle`
@@ -287,7 +250,7 @@ bottom with the PR.
   recorded, breaker-counted `error` outcome — and, if a canary was live,
   retires it — instead of an unhandled exception.
 
-- **M17 — A QA-stage rejection drops the gauntlet's reject reason** *(found
+- [OMNI-56] **M17 — A QA-stage rejection drops the gauntlet's reject reason** *(found
   2026-09-26; confirmed by reading the code)* — when QA's own re-run of the
   gauntlet rejects a candidate, the episodic record loses `reject_gate`, the
   `slo` failure-weight discount, and the OMNI-37 harness/candidate
@@ -295,7 +258,7 @@ bottom with the PR.
   the gauntlet `Result` through QA's rejection path the same way `SWE.
   implement`'s does.
 
-- **M18 — A PR a human closes without merging holds the canary — and, under
+- [OMNI-57] **M18 — A PR a human closes without merging holds the canary — and, under
   `loop.serve(watch_merges=True)`, the whole loop — open indefinitely**
   *(found 2026-09-26 from two angles, `sis/loop.py` and `sis/roles.py`;
   confirmed by reading the code)* — `observe_merge` and the poll loop only
@@ -304,7 +267,7 @@ bottom with the PR.
   forever rather than resuming. Fix: poll the PR's actual state, not just
   mergedness, and retire the canary + resume the loop on `closed`.
 
-- **M19 — On the AWS run box, a `--canary serve` green replica can reach IMDS
+- [OMNI-49] **M19 — On the AWS run box, a `--canary serve` green replica can reach IMDS
   instance-role credentials and read other processes' environment via
   `/proc`** *(found 2026-09-26 from two angles; confirmed by reading the
   infra config, not run on a live EC2 instance)* — `build_candidate`
@@ -321,7 +284,7 @@ bottom with the PR.
   redesign; until then, refuse `canary.backend=serve` when `SIS_ENV=aws` or
   the proposer isn't the stub, and correct the doc.
 
-- **M20 — The live canary's p95/p99 gate is close to a coin flip for targets
+- [OMNI-50] **M20 — The live canary's p95/p99 gate is close to a coin flip for targets
   where dispatch overhead dominates compute** *(found 2026-09-26; simulated
   through the real `evaluate_canary`)* — Gate 4 compares nearest-rank p95/p99
   of two **unpaired** marginal latency arrays (~150 samples) at
@@ -337,7 +300,7 @@ bottom with the PR.
   the way `gauntlet.benchmark_decision` does — a paired-bootstrap accept /
   reject / inconclusive, inconclusive neutral.
 
-- **M21 — The live canary never judges error rate, and SHADOW mode drops any
+- [OMNI-50] **M21 — The live canary never judges error rate, and SHADOW mode drops any
   pair where green failed** *(found 2026-09-26 from three independent
   reviews; simulated through the real `evaluate_canary`)* — `_canary_live`
   (`sis/roles.py`) discards both error counts that `live_window` returns;
@@ -354,7 +317,7 @@ bottom with the PR.
   rate exceeds blue's; in SHADOW, record a blue-ok/green-error pair as a
   disagreement rather than dropping it.
 
-- **M22 — The Serve baseline (blue) is the local target file, not the merged
+- [OMNI-58] **M22 — The Serve baseline (blue) is the local target file, not the merged
   base, and reverts to it whenever `ServeCloud` is rebuilt** *(found
   2026-09-26; confirmed by reading the code)* — unlike the offline gauntlet
   (fixed under H1 to benchmark against `live_target_source()`), the Serve
@@ -362,7 +325,7 @@ bottom with the PR.
   rebuilt `ServeCloud` (e.g. after a DevOps restart) can silently regress
   blue to stale code. Fix: seed blue from `live_target_source()` too.
 
-- **M23 — The test suite inherits real `SIS_*` environment variables from the
+- [OMNI-59] **M23 — The test suite inherits real `SIS_*` environment variables from the
   developer's shell** *(found 2026-09-26; confirmed by reading
   `tests/conftest.py`)* — nothing clears `SIS_*`/adapter-credential
   variables before the suite runs, so a shell configured for a real run
@@ -374,124 +337,124 @@ bottom with the PR.
 
 ## Low
 
-- **L15** — `validate()` can be made to raise instead of returning a
+- [OMNI-64] **L15** — `validate()` can be made to raise instead of returning a
   `Result` (a gate script crash that escapes the harness's own exception
   handling), losing the episodic record, the breaker increment, and the
   accounted spend for that cycle. Fix: wrap `validate()`'s gate dispatch in a
   catch-all that returns a `harness:` `Result` instead of propagating.
-- **L16** — The OMNI-37 sandbox self-check (`probe_sandbox`) loads
+- [OMNI-65] **L16** — The OMNI-37 sandbox self-check (`probe_sandbox`) loads
   `sitecustomize.py` from the same writable directory a failing candidate can
   also write to (see M9), so a candidate that wants its own rejection blamed
   on the harness can corrupt the probe too. Fix: give the probe its own
   read-only directory, not the candidate's.
-- **L17** — `NaN` passes `config.py`'s number validation and silently
+- [OMNI-66] **L17** — `NaN` passes `config.py`'s number validation and silently
   disables the spend cap and cost-per-accepted SLO (a threshold compared
   against `NaN` is never true). Fix: reject non-finite floats in
   `parse_value`.
-- **L18** — `policy.classify()` is case-sensitive, so on a case-insensitive
+- [OMNI-67] **L18** — `policy.classify()` is case-sensitive, so on a case-insensitive
   filesystem a different-case path to guardrail code classifies as STRICT
   rather than FORBIDDEN. Fix: normalise case via the resolved path.
-- **L19** — `contract_author.promote()` copies whatever is currently in the
+- [OMNI-68] **L19** — `contract_author.promote()` copies whatever is currently in the
   loop-writable staging directory at promotion time, not necessarily the
   content a human reviewed if the draft was rewritten in between. Fix: hash
   the draft at review time and refuse `promote()` on a mismatch.
-- **L20** — The operator audit log (`runtime/operator_audit.jsonl`) path
+- [OMNI-69] **L20** — The operator audit log (`runtime/operator_audit.jsonl`) path
   depends on the process's working directory, and entries don't record which
   operator made the edit. Fix: resolve the path against a fixed root; add the
   OAuth-authenticated login to each record.
-- **L21** — CEO brake-state persistence fails open: a corrupt, unwritable, or
+- [OMNI-61] **L21** — CEO brake-state persistence fails open: a corrupt, unwritable, or
   newly-switched state store silently resets `spent=0` and clears the
   breaker trip rather than refusing to start. Fix: an unparseable-but-present
   state file should trip the breaker with a `state_unreadable` reason, not
   reset it.
-- **L22** — PRs from QA-rejected, QA-inconclusive and canary-rejected cycles
+- [OMNI-70] **L22** — PRs from QA-rejected, QA-inconclusive and canary-rejected cycles
   stay open with nothing tracking them; merging one later promotes nothing
   but leaves a merged-looking PR with no effect. Fix: close (not merge) the
   PR as part of recording the rejected outcome.
-- **L23** — `CEO.reset_breaker()` has no caller anywhere outside tests; in
+- [OMNI-61] **L23** — `CEO.reset_breaker()` has no caller anywhere outside tests; in
   practice the only reset is deleting the state file, which also zeroes
   spend. Fix: expose it through an admin entry point that resets the trip
   without touching spend.
-- **L24** — Budget exhaustion stops `--loop` silently; `loop.decide()`'s own
+- [OMNI-62] **L24** — Budget exhaustion stops `--loop` silently; `loop.decide()`'s own
   comment says a human is paged, but nothing files anything. Fix: route it
   through the same alerting path as a breaker trip.
-- **L25** — Unknown/unpriced Anthropic model ids are silently billed at
+- [OMNI-71] **L25** — Unknown/unpriced Anthropic model ids are silently billed at
   `claude-opus-4-8` rates in `cost.py`, which can undercount a pricier
   model's actual spend against the hard cap. Fix: fail loudly (or price at
   the most expensive known tier) on an unrecognised model id.
-- **L26** — A live-canary rejection files two bugs for the same event. Fix:
+- [OMNI-72] **L26** — A live-canary rejection files two bugs for the same event. Fix:
   file one.
-- **L27** — `episodic.gate_from_reason` matches `"timed out"`/`"timeout"`
+- [OMNI-73] **L27** — `episodic.gate_from_reason` matches `"timed out"`/`"timeout"`
   anywhere in the reject reason, including text a candidate itself printed,
   so a counted correctness failure can be mislabelled as an infrastructure
   timeout. Fix: match only the harness's own timeout sentinel.
-- **L28** — Candidate return values are unpickled by value inside the
+- [OMNI-74] **L28** — Candidate return values are unpickled by value inside the
   (unscrubbed) router and DevOps processes during a live canary — a second,
   more roundabout way for candidate code to run outside any sandbox, lower
   severity than H3/M19 because it needs a return type whose deserialisation
   itself runs code. Fix: deserialise live-canary responses into a
   restricted, data-only representation.
-- **L29** — A live canary has no per-call timeout, and SHADOW mode awaits
+- [OMNI-75] **L29** — A live canary has no per-call timeout, and SHADOW mode awaits
   green fully before answering the caller, so a slow or hung candidate stalls
   every live client and can wedge DevOps. Fix: bound the green call with its
   own timeout, independent of the client's.
-- **L30** — An exception after the green deploy during a live canary leaves
+- [OMNI-55] **L30** — An exception after the green deploy during a live canary leaves
   green attached and the PR pending with no verdict, bug, or spend recorded
   — the live-path sibling of M16. Fix: the same accounting fix as M16,
   applied to `_canary_live`.
-- **L31** — Promotion serves the source snapshotted at canary time, not
+- [OMNI-76] **L31** — Promotion serves the source snapshotted at canary time, not
   necessarily what a human actually merged if the PR was amended after the
   canary started. Fix: re-fetch the merged source at `observe_merge` time and
   compare shas before promoting.
-- **L32** — Canary backend routing silently falls back to the legacy
+- [OMNI-77] **L32** — Canary backend routing silently falls back to the legacy
   in-memory path when `retire_canary` is called without a `pr_id`, or after a
   DevOps restart — leaving Serve's green attached, or "promoting" only in
   bookkeeping with nothing changing online. Fix: make the fallback loud.
-- **L33** — `AnthropicClient.complete` never checks `stop_reason`; output
+- [OMNI-78] **L33** — `AnthropicClient.complete` never checks `stop_reason`; output
   truncated by `max_tokens` (8000, shared with adaptive thinking at
   `effort=high`) is silently treated as complete, and any resulting gate
   failure is blamed on the candidate. Fix: check `stop_reason`; retry or fail
   loudly on `max_tokens`.
-- **L34** — The real GitHub adapter's `_get_file` treats any error
+- [OMNI-79] **L34** — The real GitHub adapter's `_get_file` treats any error
   (including a transient 5xx) the same as "file absent" and silently falls
   back to the stale local baseline. Fix: distinguish 404 from other errors;
   let a real error retry or fail the cycle loudly.
-- **L35** — `ConfluenceDocumentStore.create_page` overwrites any existing
+- [OMNI-80] **L35** — `ConfluenceDocumentStore.create_page` overwrites any existing
   page with the same title, including a human-authored one, without
   approval. Fix: require the destructive-Confluence-action approval gate
   here too.
-- **L36** — `scripts/aws_secret.py`'s routing guard checks the Jira project
+- [OMNI-81] **L36** — `scripts/aws_secret.py`'s routing guard checks the Jira project
   and GitHub repo but not the Confluence space, which defaults to the real
   `SD` space. Fix: add the same allowlist check for the Confluence space key.
-- **L37** — `scripts/check_connections.py` doesn't preflight the Anthropic
+- [OMNI-82] **L37** — `scripts/check_connections.py` doesn't preflight the Anthropic
   API key/model; a bad `SIS_LLM_MODEL` or key only fails inside
   `SWE.implement`, after Jira/Confluence artifacts already exist for the
   cycle. Fix: add an Anthropic check to `--deep`.
-- **L38** — `Dockerfile.gauntlet` installs `mypy`/`pytest`/`hypothesis`
+- [OMNI-83] **L38** — `Dockerfile.gauntlet` installs `mypy`/`pytest`/`hypothesis`
   unpinned, so the docker sandbox's gate toolchain can drift from
   `poetry.lock` (and thus from what CI and the subprocess sandbox actually
   run) whenever the image is rebuilt. Fix: pin from an exported, hash-locked
   requirements file; check the pin at `ensure_sandbox_ready()` time.
-- **L39** — `tests/test_contract_author.py::
+- [OMNI-42] **L39** — `tests/test_contract_author.py::
   test_a_drafted_skeleton_stages_without_touching_specs` (OMNI-42) has a
   second, independent cause beyond the `specs/__pycache__` race already
   ticketed: another test in the suite writes a real directory into `specs/`
   during the run. Fix: locate and fix that test alongside OMNI-42.
-- **L40** — CI never installs the `analytics` (duckdb) or `ui` (panel)
+- [OMNI-84] **L40** — CI never installs the `analytics` (duckdb) or `ui` (panel)
   dependency groups, so the tests behind those groups are silently skipped
   rather than run and reported. Fix: install both groups in CI.
-- **L41** — `commit-lint` exempts any commit whose subject starts with
+- [OMNI-85] **L41** — `commit-lint` exempts any commit whose subject starts with
   `fixup!`/`squash!` from needing an OMNI key or `No-Ticket:` trailer, on the
   assumption they're rebased away before merge — nothing enforces that
   assumption, so a `--no-verify` commit titled `fixup! ...` can reach
   `develop` with neither. Fix: fail on a `fixup!`/`squash!` subject reaching
   CI instead of exempting it.
-- **L42** — The SLO gate (`sis/slo.py`) replays a fixed workload the same way
+- [OMNI-86] **L42** — The SLO gate (`sis/slo.py`) replays a fixed workload the same way
   the pre-OMNI-41 benchmark did, and has the same memoisation hole (noted in
   the OMNI-41 Resolved entry below, previously without an ID). No shipped
   contract declares an SLO yet, so this is latent. Fix: apply the OMNI-41
   fresh-input design here too before any contract ships an SLO.
-- **L43** — CLAUDE.md's Hard Rules describe "cost/brakes" as one FORBIDDEN
+- [OMNI-87] **L43** — CLAUDE.md's Hard Rules describe "cost/brakes" as one FORBIDDEN
   unit, but only `sis/cost.py` (spend accounting) actually is; the
   breaker/threshold decision logic (`evaluate_brakes`, `failure_weight`,
   `CEO.report_outcome`) lives in `sis/roles.py`, which is STRICT — a test
@@ -503,25 +466,25 @@ bottom with the PR.
 
 ## Resolved (Low)
 
-- **L5 — The gauntlet is hardwired to `sum_of_divisors`.** **RESOLVED
+- [OMNI-1] **L5 — The gauntlet is hardwired to `sum_of_divisors`.** **RESOLVED
   2026-08-06** (OMNI-1: OMNI-4/5/6/7). Nothing in `sis/` knows any target by
   name. Four changes, in order:
-  - **Policy (OMNI-4).** `GUARDRAIL_DIRS` guards whole trees by path segment, so
+  - **Policy ([OMNI-4]).** `GUARDRAIL_DIRS` guards whole trees by path segment, so
     `specs/` is FORBIDDEN — the implementer cannot edit its own exam. `_rel()`
     now resolves against the project root, without which a traversal path
     escaped the guard from any other working directory.
-  - **Contract (OMNI-5).** `sis/contract.py` carries the entry point, paths,
+  - **Contract ([OMNI-5]).** `sis/contract.py` carries the entry point, paths,
     margin and trial count; `specs/<name>/oracle.py` carries the reference,
     benchmark inputs and input generator as a **module the gauntlet copies into
     the sandbox**, rather than literals interpolated into its bench script. New
     interface gate; SelfModel is the contract registry.
-  - **Proposer (OMNI-6).** The system prompt named a target
+  - **Proposer ([OMNI-6]).** The system prompt named a target
     (`"preserve sum_of_divisors(n: int) -> int"`), so any other target would
     have had the LLM instructed to write the *wrong function* — L5 was a
     gauntlet **and** proposer problem. The prompt is now contract-derived
     (signature and reference via `inspect` on the oracle; required API via the
     acceptance tests verbatim) and names no target.
-  - **Second target (OMNI-7).** `runtime/sort_target.py` + `specs/sort/`. Both
+  - **Second target ([OMNI-7]).** `runtime/sort_target.py` + `specs/sort/`. Both
     targets run the full loop end-to-end on the same unmodified engine:
     sort `0.000880s → 0.000173s`, sum-of-divisors `0.000249s → 0.000002s`.
     A third target is a new `specs/` directory and a registry entry, not an
@@ -590,13 +553,13 @@ bottom with the PR.
   `sis/ports.py` / `sis/roles.py` / `sis/policy.py` / `sis/adapters.py`. First four
   fixed same-day by correcting the design text (still nothing to implement — no
   `Contract`/`Cloud.shift_traffic`/etc. exist in code yet); last two still open:*
-  - ~~**`Cloud` Protocol break.**~~ **Fixed in the doc.** `shift_traffic`/
+  - ~~**`Cloud` Protocol break.**~~ **Fixed in the doc.** ([OMNI-9]) `shift_traffic`/
     `live_metrics` would've broken the `@runtime_checkable Cloud` Protocol for
     `InMemoryCloud` (`sis/adapters.py:165`) *and* `RealCloud`
     (`sis/adapters_real.py:459`), not just the one the doc called out. Sequencing
     step 7 and the `ServeCloud` section now say both adapters need a stub in the
     same step.
-  - ~~**`specs/` isn't actually FORBIDDEN yet.**~~ **Fixed in the doc**, and a
+  - ~~**`specs/` isn't actually FORBIDDEN yet.**~~ **Fixed in the doc** ([OMNI-4]), and a
     sharper gap than first written: `classify()` matches `GUARDRAIL_PATHS` by
     *exact* string equality, not directory prefix, so even adding a bare
     `"specs/"` entry would silently protect nothing. `CLASS2_CONTRACT.md` now
@@ -604,21 +567,21 @@ bottom with the PR.
     *and* teach `classify()` directory-prefix matching (or enumerate contract
     modules individually) — instead of claiming present-tense enforcement.
   - ~~**`DevOps.canary()`'s signature doesn't stretch to this design.**~~ **Fixed
-    in the doc.** Sequencing step 10 now says "rework," not "wire," and spells out
+    in the doc.** ([OMNI-14]) Sequencing step 10 now says "rework," not "wire," and spells out
     that today's one-scalar `canary(pr_id, candidate_latency)` needs a `Contract` +
     live samples + latency arrays instead, plus a PR/target→`Contract` lookup that
     doesn't exist yet in `Workspace`/`SelfModel`.
-  - ~~**`CanaryVerdict` field mismatch.**~~ **Fixed in the doc** — the dataclass
+  - ~~**`CanaryVerdict` field mismatch.**~~ **Fixed in the doc** ([OMNI-8]) — the dataclass
     sketch now uses `baseline_p95`/`candidate_p95` (matching the gate 2 prose)
     instead of `p50`.
   - ~~**No stated concurrency rule once `serve_breach()` lands (step 11).**~~
-    **Fixed in the doc.** New rule: the impure wrapper around `serve_breach()`
+    **Fixed in the doc.** ([OMNI-10]) New rule: the impure wrapper around `serve_breach()`
     (`loop.serve()`/`run_loop()`, not the pure function itself) checks
     `SelfModel`'s existing green-slot state before calling `propose()` again — a
     canary already in flight holds the next cycle rather than starting one
     concurrently. Reuses existing slot-tracking state; no new field.
   - ~~**Doesn't reconcile with the "atomic actor swap" path.**~~ **Fixed in the
-    doc.** New "Scope" section: this doc covers only the Ray-Serve/HTTP-fronted
+    doc.** ([OMNI-2]) New "Scope" section: this doc covers only the Ray-Serve/HTTP-fronted
     half of `DESIGN.md` §4; the shadow-run-then-atomic-handle-swap path for
     internal, never-served actors is out of scope here, not superseded, and has
     no design doc yet — `evaluate_canary()`'s two gates are reusable for it,
@@ -626,8 +589,8 @@ bottom with the PR.
     the mechanism per target (Serve/HTTP → this doc; actor-to-actor only → the
     not-yet-written atomic-swap doc).
 
-**Minor (noted in the 2026-07-28 review; not separately tracked):** all six
-fixed 2026-08-05 — see the **Minor batch** entry under Resolved.
+**Minor (noted in the 2026-07-28 review):** all six fixed 2026-08-05 — see
+the **Minor batch** entry under Resolved ([OMNI-112]–[OMNI-117]).
 
 ## Sequencing for the first real-life test
 
@@ -635,8 +598,17 @@ The first real-life test = **real Claude proposer + real adapters + docker
 sandbox** on the scratch tenant — the first run where untrusted generated code
 and real money meet.
 
-> **✅ Passed (2026-07-28).** All five steps below are done — see the Resolved
-> entry for the validated cycle (`cb4f6fe13ed7`).
+> **✅ Passed (2026-07-28).** All five steps below are done. Real Claude
+> proposer (`claude-opus-4-8`) + real adapters + kernel-enforced docker
+> sandbox, on the scratch tenant. Cycle `cb4f6fe13ed7`: Claude proposed the
+> O(√n) `isqrt` form against the naive O(n) baseline (re-seeded on
+> `testrun/main` for the demo), the full gauntlet passed **inside the docker
+> sandbox** (192.4µs → 1.6µs, 99.2% faster), and it filed real artifacts —
+> Confluence spec `6356994`, Jira `TES-20`, GitHub `testrun` PR #4 — then
+> stopped at `verified_awaiting_human_merge`. Episodic-logged cost
+> **$0.014375**, reconciled against the Anthropic console. Every stage of the
+> loop fired end-to-end against live systems with real money for the first
+> time.
 
 1. ~~Fix **H1** (+ **M3**) with regression tests.~~ **Done** — see Resolved.
 2. ~~Enforce **M1** (docker sandbox with a real proposer).~~ **Done** — see
@@ -654,7 +626,26 @@ any long-lived cluster exists.
 
 ## Won't fix
 
-- **L6 — Preflight doesn't verify the PAT's Pull-requests scope.** Not fixable
+- [OMNI-88] **M7 — The benchmark's false-accept rate at the margin is a few times the
+  nominal** *(found 2026-09-26 by the statistics-lens review of the OMNI-41
+  gate, like H2; verified by simulation)* —
+  `benchmark_decision` bootstraps a ratio of raw wall-clock sums. Scheduler
+  stalls are not symmetric noise: a stall landing in a few pairs moves the sum,
+  and a percentile bootstrap over ~109 heavy-tailed pairs undercovers, so a
+  candidate sitting exactly at the margin is accepted ~3–4x more often than the
+  nominal 2.5%. The human PR merge still follows every accept. Fix direction:
+  read process CPU time alongside `perf_counter` per timing and re-draw a pair
+  whose wall-minus-CPU gap marks a stall (keep the verdict on wall time, since
+  `thread_time` alone is gameable by offloading work), or use a trimmed /
+  Winsorized ratio. Natural to do together with H2, which rebuilds the
+  measurement anyway.
+  **Disposition (2026-09-26):** not fixed for now. The harm is bounded — a
+  near-margin candidate is still correct and genuinely faster, and it still
+  goes through the canary and human review — and the obvious fix (trimming
+  the ratio) would reopen the size-conditional gaming hole OMNI-41 closed.
+  Re-measure once [OMNI-45] rebuilds the measurement, before deciding to fix.
+
+- [OMNI-89] **L6 — Preflight doesn't verify the PAT's Pull-requests scope.** Not fixable
   in our code. `check_connections.py::check_github` confirms repo access
   (`GET /repos/{owner}/{repo}`), but a real cycle needs two distinct
   fine-grained-PAT permissions — **Contents: read/write** (`_put_file`) and
@@ -673,7 +664,64 @@ any long-lived cluster exists.
 
 ## Resolved
 
-- **The benchmark gate measured a cache, not an algorithm — a memoised naive
+- [OMNI-46] **H4 — An output type that overrides `__eq__`/`__ne__` defeats every
+  correctness gate, offline and online** *(found 2026-09-26 by a completeness
+  critic; reproduced; **fixed 2026-09-26**)* — every gate compares a candidate's output with a plain
+  `==`/`!=`, candidate value on the left, so Python calls the candidate's own
+  `__eq__` first: the Class-1 differential loop (`cand_fn(*args) !=
+  oracle.reference(*args)`), every acceptance-test assertion, the roman
+  round-trip invariant, and the backtest comparators' exact-match branches.
+  Reproduced against the default contract: `class _Liar(int)` with `__eq__` →
+  `True`, `__ne__` → `False`, `__hash__` → `0`, returned from
+  `sum_of_divisors`, type-checks under `mypy --strict` (the declared return
+  type is `int`) and gets `"all gates passed"` — instantly, since the "answer"
+  never has to be computed. The same shape passes the roman acceptance cases
+  and round-trip law with a `str` subclass. Only the mandatory human PR review
+  stands between this and a merge. Fix: canonicalise candidate output to a
+  plain, hashable value built from only builtin `int`/`float`/`str`/`bool`/
+  `None`/`list`/`tuple`/`dict` before any comparison, in every gate script
+  (differential, acceptance conftest shim, invariant, backtest).
+  **Fixed:** `sis/canonical.py` rebuilds candidate output from exact builtins
+  (type *is* `int`/`float`/`str`/`bool`/`None`/`list`/`tuple`/`dict`, compared
+  with `is` since a metaclass can make a class *object* claim to equal `int`)
+  and raises `NotPlainError` for anything else. Applied at every comparison:
+  the differential loop, a gauntlet-written acceptance `conftest.py` that wraps
+  the contract's `public_api`, the invariant script (every export wrapped, so
+  round-trip's call to `from_roman` is covered), the backtest script, and the
+  live canary's agreement and invariant checks. FORBIDDEN, like the gauntlet.
+  Regression tests in `tests/test_adversarial.py` (default contract and roman,
+  full pipeline plus each gate on its own), `tests/test_canary.py`,
+  `tests/test_backtest.py` and `tests/test_canonical.py`; the full-pipeline
+  ones return "all gates passed" on the pre-fix code. Not covered: a candidate
+  that tampers with the harness itself from inside the process it shares with
+  it — that is H2/M9, [OMNI-45].
+
+- [OMNI-47] **M10 — Candidate and reference/baseline share mutable argument objects, so
+  a candidate can sabotage its own comparison** *(found 2026-09-26;
+  reproduced; **fixed 2026-09-26**)* — the differential loop calls `cand_fn(*args)` before
+  `oracle.reference(*args)` on the same list objects; the paired benchmark
+  passes the same `batch` lists to `timed(cand_fn, batch)` and
+  `timed(base_fn, batch)`. Reproduced against `sort`: a candidate that returns
+  `[]` for any list longer than 5 (clearing its input first) passes every
+  gate; so does a plain, no-faster bubble sort that appends to the shared list
+  so the baseline side looks slower. `specs/sort/tests.py::
+  test_does_not_mutate_its_input` only exercises a 3-element list, so the size
+  threshold slips past it, and the sort contract declares no invariants or
+  backtest to catch it another way. Fix: `copy.deepcopy` each side's
+  arguments, computed outside the timed window, in both the differential and
+  benchmark scripts.
+  **Fixed:** each side gets its own `copy.deepcopy`, made outside the timed
+  window — the candidate in the differential loop, both sides of every
+  benchmark pair, and each baseline repetition (also in `measure_baseline`).
+  The invariant script does the same, since a law judges the output against
+  `args` too. `specs/sort/tests.py` now checks non-mutation at four sizes up to
+  1200, and its permutation test compares against a copy taken before the
+  call (it had been satisfied by a candidate that emptied its input). Both
+  reproductions are regression tests in `tests/test_adversarial.py`; on the
+  pre-fix code the emptying candidate gets "all gates passed" and the
+  batch-slowing one is accepted with no speedup.
+
+- [OMNI-41] **The benchmark gate measured a cache, not an algorithm — a memoised naive
   candidate passed every gate** *(found and fixed 2026-09-26 under OMNI-41,
   while chasing what looked like a flaky test)* — the Class-1 benchmark timed
   five repetitions over the same fixed `oracle.BENCH_INPUTS` and kept the best.
@@ -719,7 +767,7 @@ any long-lived cluster exists.
   hole; no shipped contract declares an SLO yet, so it is latent. (Point (1)
   is **H2**; point (2) is now **L42**.)
 
-- **The docker sandbox could not read its own temp dir on native Linux — so
+- [OMNI-37] **The docker sandbox could not read its own temp dir on native Linux — so
   it blamed every candidate** *(found and fixed 2026-09-23, rehearsing the
   OMNI-29 box on a local Ubuntu 24.04 container)* — each validation's temp dir
   comes from `tempfile`, so it is `0700` and owned by the host user, and the
@@ -740,13 +788,13 @@ any long-lived cluster exists.
   report the harness's faults as the candidate's (a docker-daemon error on
   the mypy gate still reads as a type error — a follow-up worth doing).
 
-- **The AWS box could not start the operator console** *(found and fixed
+- [OMNI-110] **The AWS box could not start the operator console** *(found and fixed
   2026-09-23, same rehearsal)* — `docs/AWS_RUN.md` starts `sis.frontend` on
   the box, but `scripts/aws_bootstrap.sh` installed only `--with real --with
   llm`, so it died with `ModuleNotFoundError: panel`. The bootstrap now
   installs `--with ui` too.
 
-- **Serve replica CPU reservation deadlocked CI — `serve.run()` blocked
+- [OMNI-14] **Serve replica CPU reservation deadlocked CI — `serve.run()` blocked
   forever on a constrained runner** *(found and fixed 2026-08-09, during
   OMNI-14's first CI run, which hung for 2h+ inside pytest)* — Ray Serve
   reserves **1 whole CPU per replica at scheduling time** by default, the same
@@ -764,7 +812,7 @@ any long-lived cluster exists.
   because "waiting for resources that will never come" is indistinguishable
   from progress.
 
-- **The L5 noise floor, third appearance: Serve dispatch overhead swamps the
+- [OMNI-14] **The L5 noise floor, third appearance: Serve dispatch overhead swamps the
   target's own compute** *(2026-08-09, OMNI-14 tests)* — two `test_live_canary`
   tests asserted a live canary must *pass*, picking candidates with "real"
   offline margin (a merge sort; then O(√n) vs O(n) `sum_of_divisors`). Both
@@ -779,7 +827,7 @@ any long-lived cluster exists.
   why `sum_of_divisors(10_000)` makes a fine gauntlet target but a poor served
   one.
 
-- **Flaky Serve tests: per-test app churn blew `serve.delete`'s own timeout**
+- [OMNI-111] **Flaky Serve tests: per-test app churn blew `serve.delete`'s own timeout**
   *(found and fixed 2026-08-09, PR #78; shipped briefly via #77's merge)* —
   `tests/test_serve_cloud.py` stood a Serve application up and tore it down
   around *each* test (~20 `serve.run`/`serve.delete` pairs); under that churn
@@ -797,14 +845,14 @@ any long-lived cluster exists.
 
 - **Minor batch** *(2026-08-05)* The six unnumbered items from the 2026-07-28
   review, each with a regression test that fails without its fix:
-  - **`candidate_sha` dropped on the policy-block path** — `SWE.implement`'s
+  - [OMNI-112] **`candidate_sha` dropped on the policy-block path** — `SWE.implement`'s
     gauntlet-fail and success returns carried it, the policy-block return did
     not, so a policy-blocked cycle was logged with `candidate_sha=None`: the one
     field tying that episode to the exact diff, missing from precisely the
     rejection you most want to audit. Covered structurally by
     `tests/test_roles_contract.py` (every exit path must carry the key —
     reaching that branch for real needs a cluster plus a mispointed target).
-  - **A missing `tests/test_target.py` was blamed on the candidate.** The gate
+  - [OMNI-113] **A missing `tests/test_target.py` was blamed on the candidate.** The gate
     fell through to `pytest <a directory that was never created>`, which exits
     non-zero and surfaced as `"pytest failed"` — a valid candidate rejected with
     a reason pointing at the wrong side of the fence. Now fails closed (an unrun
@@ -812,19 +860,19 @@ any long-lived cluster exists.
     cause, and `gate_from_reason()` maps it to a new `harness` gate *before* the
     gate-name substring checks — otherwise a broken harness reads in the
     analytics as "candidates keep failing pytest".
-  - **Settings re-read per call.** `space_keys()`/`version_control_base()` are
+  - [OMNI-114] **Settings re-read per call.** `space_keys()`/`version_control_base()` are
     called several times per cycle from inside the Ray actors, and each call
     re-read and re-parsed the whole secrets source — a redundant file read
     locally, a redundant **Secrets Manager round-trip** under `SIS_ENV=aws`. New
     `settings.cached_settings()` (+ `reset_settings_cache()` for tests) caches
     the **no-argument** path only; `load_settings(source)` still reads every
     time, so explicit-source callers are unaffected.
-  - **Jira `children()` built JQL by f-string.** `/search/jql` takes JQL as a
+  - [OMNI-115] **Jira `children()` built JQL by f-string.** `/search/jql` takes JQL as a
     string with no parameter binding. Only internal keys reach it today — but
     that is a property of the callers, not an enforced one, and Confluence
     intake exists to let outside text into the org. `parent_id` is now validated
     against Jira's key grammar at the boundary, before any request goes out.
-  - **`transition()` was undone by a failed comment.** The comment POST was
+  - [OMNI-116] **`transition()` was undone by a failed comment.** The comment POST was
     chained onto the transition with `raise_for_status()`, so a 500 on the
     *comment* raised after the transition had already been applied and could not
     be rolled back. The caller saw the whole transition fail and retried, but
@@ -832,10 +880,10 @@ any long-lived cluster exists.
     the cycle. Now best-effort (mirroring `_apply_labels`), emitting
     `issue.comment_failed`: an audit note must not cost the state change it
     annotates.
-  - **Duplicate gate numbering** in `gauntlet.py` — the no-op check and mypy
+  - [OMNI-117] **Duplicate gate numbering** in `gauntlet.py` — the no-op check and mypy
     were both commented "Gate 2". The no-op check is now "Gate 1b", keeping the
     rest aligned with `DESIGN.md` §5.
-- **M2 + L9** *(2026-07-29)* Detached actors now share the `sis` Ray namespace and
+- [OMNI-92] [OMNI-93] **M2 + L9** *(2026-07-29)* Detached actors now share the `sis` Ray namespace and
   are created with atomic `get_if_exists=True`, so a persistent/AWS cluster reuses
   the one CEO/Workspace/SelfModel across runs instead of duplicating them into
   fresh anonymous namespaces. The CEO's brake/spend state is persisted to the
@@ -849,26 +897,26 @@ any long-lived cluster exists.
   oracle-hashed auto-reset, which need the L5 target contract to hash against.
 - **L10–L14** *(2026-07-28, one batch)* Five low-severity fixes, each with a
   regression test:
-  - **L10** — `policy.target_paths()` used `lstrip("./")` (strips `.`/`/`
+  - [OMNI-104] **L10** — `policy.target_paths()` used `lstrip("./")` (strips `.`/`/`
     *characters*, mangling `.github/x` → `github/x`); now `removeprefix("./")`,
     matching the L4 fix in `_rel()`.
-  - **L11** — a same-story retry 422'd at `open_pr` (L8's sibling); it now finds
+  - [OMNI-105] **L11** — a same-story retry 422'd at `open_pr` (L8's sibling); it now finds
     and reuses the existing open PR for the head (emits `pr.exists`).
-  - **L12** — a timed-out gate was misreported as that gate's generic failure;
+  - [OMNI-106] **L12** — a timed-out gate was misreported as that gate's generic failure;
     `validate()` now detects returncode 124 and returns a timeout reason, and
     `gate_from_reason()` checks timeout first so `reject_gate="timeout"` is
     reachable.
-  - **L13** — the soft-sandbox network guard now also blocks UDP
+  - [OMNI-107] **L13** — the soft-sandbox network guard now also blocks UDP
     (`sendto`/`sendmsg`) and DNS (`getaddrinfo`), not just TCP connect.
-  - **L14** — `_put_file` now requires the path be **SOFT** (refusing STRICT
+  - [OMNI-108] **L14** — `_put_file` now requires the path be **SOFT** (refusing STRICT
     engine code too, not only FORBIDDEN) — defence in depth at the write boundary.
-- **M6** *(2026-07-28)* No HTTP timeouts on real-adapter calls — `requests`
+- [OMNI-97] **M6** *(2026-07-28)* No HTTP timeouts on real-adapter calls — `requests`
   defaults to *no* timeout, so a wedged Confluence/Jira/GitHub API would hang a
   whole cycle with no breaker/bug/log. Fixed: `_session()` now returns a
   `_TimeoutHTTP` wrapper that applies a default `timeout` (30s, override
   `SIS_HTTP_TIMEOUT`; a bad value fails loudly) to every get/post/put, while an
   explicit per-call `timeout=` still wins. Covered by `tests/test_adapters_real.py`.
-- **M5** *(2026-07-28)* The CEO budget/brakes had no config knob — the docs said
+- [OMNI-96] **M5** *(2026-07-28)* The CEO budget/brakes had no config knob — the docs said
   "set a tiny budget for the first run" but the only path was editing source, so
   the L3 run used the hardcoded $5 cap. Fixed: `roles.ceo_config_from_env()` (a
   pure, unit-tested helper) reads `SIS_BUDGET_USD`, `SIS_BREAKER_THRESHOLD`,
@@ -876,73 +924,63 @@ any long-lived cluster exists.
   an unparseable/negative value fails loudly), threaded through `org.bootstrap()`
   into the CEO. Documented in the env tables. (A detached CEO on a persistent
   cluster still ignores new args — tied to M2.)
-- **First real-life test — PASSED** *(2026-07-28)* Real Claude proposer
-  (`claude-opus-4-8`) + real adapters + kernel-enforced docker sandbox, on the
-  scratch tenant. Cycle `cb4f6fe13ed7`: Claude proposed the O(√n) `isqrt` form
-  against the naive O(n) baseline (re-seeded on `testrun/main` for the demo),
-  the full gauntlet passed **inside the docker sandbox** (192.4µs → 1.6µs,
-  99.2% faster), and it filed real artifacts — Confluence spec `6356994`, Jira
-  `TES-20`, GitHub `testrun` PR #4 — then stopped at
-  `verified_awaiting_human_merge`. Episodic-logged cost **$0.014375**,
-  reconciled against the Anthropic console. Every stage of the loop fired
-  end-to-end against live systems with real money for the first time.
-- *(2026-07-25, PR #32)* Confluence duplicate-title 400 crashed re-runs →
+- [OMNI-118] *(2026-07-25, PR #32)* Confluence duplicate-title 400 crashed re-runs →
   `create_page` updates the existing page in place.
-- *(2026-07-25, PR #32)* Cross-space `parentId` 404 crashed the spec page →
+- [OMNI-119] *(2026-07-25, PR #32)* Cross-space `parentId` 404 crashed the spec page →
   parent dropped, provenance in the SelfModel.
-- *(2026-07-25, PR #31)* Cycles baselined on the stale local file for the
+- [OMNI-120] *(2026-07-25, PR #31)* Cycles baselined on the stale local file for the
   *proposer input* → `live_target_source()` pulls the merged target. (The
   gauntlet-internal half of this was **H1**, fixed below.)
-- **H1** *(2026-07-25)* `gauntlet.validate()` benchmarked against the local
+- [OMNI-90] **H1** *(2026-07-25)* `gauntlet.validate()` benchmarked against the local
   `runtime/target.py` instead of the cycle's baseline → after a merge a no-op
   candidate passed every gate. Fixed: `validate()` takes an explicit
   `baseline_source` (the merged target), passed by the SWE and QA; falls back
   to the local file only for direct callers/tests.
-- **M3** *(2026-07-25)* No identical-source short-circuit. Fixed alongside H1:
+- [OMNI-94] **M3** *(2026-07-25)* No identical-source short-circuit. Fixed alongside H1:
   a candidate byte-identical to the baseline is rejected up front as
   `no change` (episodic `reject_gate="noop"`), before the µs-scale benchmark
   race. Local in-memory demo still promotes; the H1/M3 behaviour is covered by
   new regression tests in `tests/test_gauntlet.py`.
-- **"No change" was treated as a failure** *(2026-07-25)* Once M3 lands, a
+- [OMNI-109] **"No change" was treated as a failure** *(2026-07-25)* Once M3 lands, a
   cycle against an already-optimal target ended in `rolled_back` — filing a bug
   and counting toward the circuit breaker, so three "nothing to improve" cycles
   falsely paged a human. Fixed: `run_cycle` returns a benign `no_change` status
   (no bug, no breaker increment); the CEO's new `record_neutral` records spend
   (so the hard spend cap + cost-per-accepted SLO still apply) but leaves the
   failure/accept counters untouched. Covered by `tests/test_org_no_change.py`.
-- **M1** *(2026-07-25)* Subprocess sandbox let untrusted LLM code read host
+- [OMNI-91] **M1** *(2026-07-25)* Subprocess sandbox let untrusted LLM code read host
   files. Fixed: `gauntlet.ensure_sandbox_allows_proposer()` raises when a
   non-stub `SIS_PROPOSER` runs without `SIS_SANDBOX=docker` — enforced fail-fast
   in `run_cycle` (before any spend/artifacts) and as a backstop in `validate()`.
   Loud, explicit override `SIS_ALLOW_UNSANDBOXED_LLM=1`. The stub (trusted,
   hand-written candidate) still runs in the subprocess sandbox. Covered by
   `tests/test_gauntlet.py`.
-- **M4** *(2026-07-25)* `SWE.implement` forked feature branches from a
+- [OMNI-95] **M4** *(2026-07-25)* `SWE.implement` forked feature branches from a
   hardcoded `"main"` while `live_target_source` read `settings.default_base` —
   inconsistent on a repo whose default branch isn't `main`. Fixed: the new
   `settings.version_control_base()` (mirrors `space_keys()`) is the single
   source; the SWE forks from it. In-memory path still forks from `"main"`.
   Covered by `tests/test_settings.py`.
-- **L3** *(2026-07-25)* Verified `cost.py`'s `PRICING` against published rates:
+- [OMNI-100] **L3** *(2026-07-25)* Verified `cost.py`'s `PRICING` against published rates:
   `claude-opus-4-8` $5/$25 (the model the loop prices spend with),
   `claude-sonnet-4-6` $3/$15, `claude-haiku-4-5` $1/$5, cache 1.25×/0.1× — all
   correct. Added `claude-sonnet-5` ($3/$15 standard, the conservative choice
   over the intro rate). Guarded by `tests/test_cost.py`.
-- **L2** *(2026-07-25)* The idempotent `create_page` fallback PUT a new version
+- [OMNI-99] **L2** *(2026-07-25)* The idempotent `create_page` fallback PUT a new version
   every run. Fixed: `_update_body` now fetches the stored body and skips the
   write (and version bump) when unchanged, emitting `page.unchanged`. Covered
   by `tests/test_adapters_real.py`.
-- **L4** *(2026-07-25)* `policy._rel()` used `lstrip("./")`, which strips
+- [OMNI-101] **L4** *(2026-07-25)* `policy._rel()` used `lstrip("./")`, which strips
   `.`/`/` characters rather than a `"./"` prefix (mangling `"../x"` → `"x"`).
   Fixed with `removeprefix("./")`. Covered by `tests/test_policy.py`.
-- **L7** *(2026-07-25)* `measure_baseline()` fell back to `0.0` silently. Fixed:
+- [OMNI-102] **L7** *(2026-07-25)* `measure_baseline()` fell back to `0.0` silently. Fixed:
   it now prints a warning to stderr (returncode + stderr) before returning the
   advisory `0.0`. Covered by `tests/test_gauntlet.py`.
-- **L8** *(2026-07-25)* Re-running a cycle for an existing story 422'd on
+- [OMNI-103] **L8** *(2026-07-25)* Re-running a cycle for an existing story 422'd on
   `create_branch`. Fixed: on "Reference already exists" the real GitHub adapter
   reuses the branch (emits `branch.exists`). Covered by
   `tests/test_adapters_real.py`.
-- **L1** *(2026-07-25)* The labels the roles tag pages with (charter/spec/
+- [OMNI-98] **L1** *(2026-07-25)* The labels the roles tag pages with (charter/spec/
   proposal/outline) were never written. Fixed (the write half): `create_page`
   now attaches them on both the create and update-in-place paths via the v1
   content-label endpoint (v2 has no label write), best-effort so a label
@@ -950,3 +988,92 @@ any long-lived cluster exists.
   The `list_pages` `label` filter stays a no-op — v2 has no label filter and no
   caller uses it (documented in the adapter). Covered by
   `tests/test_adapters_real.py`.
+
+<!-- Ticket link targets. -->
+[OMNI-1]: https://olafzumpe.atlassian.net/browse/OMNI-1
+[OMNI-2]: https://olafzumpe.atlassian.net/browse/OMNI-2
+[OMNI-4]: https://olafzumpe.atlassian.net/browse/OMNI-4
+[OMNI-5]: https://olafzumpe.atlassian.net/browse/OMNI-5
+[OMNI-6]: https://olafzumpe.atlassian.net/browse/OMNI-6
+[OMNI-7]: https://olafzumpe.atlassian.net/browse/OMNI-7
+[OMNI-8]: https://olafzumpe.atlassian.net/browse/OMNI-8
+[OMNI-9]: https://olafzumpe.atlassian.net/browse/OMNI-9
+[OMNI-10]: https://olafzumpe.atlassian.net/browse/OMNI-10
+[OMNI-14]: https://olafzumpe.atlassian.net/browse/OMNI-14
+[OMNI-37]: https://olafzumpe.atlassian.net/browse/OMNI-37
+[OMNI-41]: https://olafzumpe.atlassian.net/browse/OMNI-41
+[OMNI-42]: https://olafzumpe.atlassian.net/browse/OMNI-42
+[OMNI-45]: https://olafzumpe.atlassian.net/browse/OMNI-45
+[OMNI-46]: https://olafzumpe.atlassian.net/browse/OMNI-46
+[OMNI-47]: https://olafzumpe.atlassian.net/browse/OMNI-47
+[OMNI-48]: https://olafzumpe.atlassian.net/browse/OMNI-48
+[OMNI-49]: https://olafzumpe.atlassian.net/browse/OMNI-49
+[OMNI-50]: https://olafzumpe.atlassian.net/browse/OMNI-50
+[OMNI-51]: https://olafzumpe.atlassian.net/browse/OMNI-51
+[OMNI-52]: https://olafzumpe.atlassian.net/browse/OMNI-52
+[OMNI-53]: https://olafzumpe.atlassian.net/browse/OMNI-53
+[OMNI-54]: https://olafzumpe.atlassian.net/browse/OMNI-54
+[OMNI-55]: https://olafzumpe.atlassian.net/browse/OMNI-55
+[OMNI-56]: https://olafzumpe.atlassian.net/browse/OMNI-56
+[OMNI-57]: https://olafzumpe.atlassian.net/browse/OMNI-57
+[OMNI-58]: https://olafzumpe.atlassian.net/browse/OMNI-58
+[OMNI-59]: https://olafzumpe.atlassian.net/browse/OMNI-59
+[OMNI-61]: https://olafzumpe.atlassian.net/browse/OMNI-61
+[OMNI-62]: https://olafzumpe.atlassian.net/browse/OMNI-62
+[OMNI-64]: https://olafzumpe.atlassian.net/browse/OMNI-64
+[OMNI-65]: https://olafzumpe.atlassian.net/browse/OMNI-65
+[OMNI-66]: https://olafzumpe.atlassian.net/browse/OMNI-66
+[OMNI-67]: https://olafzumpe.atlassian.net/browse/OMNI-67
+[OMNI-68]: https://olafzumpe.atlassian.net/browse/OMNI-68
+[OMNI-69]: https://olafzumpe.atlassian.net/browse/OMNI-69
+[OMNI-70]: https://olafzumpe.atlassian.net/browse/OMNI-70
+[OMNI-71]: https://olafzumpe.atlassian.net/browse/OMNI-71
+[OMNI-72]: https://olafzumpe.atlassian.net/browse/OMNI-72
+[OMNI-73]: https://olafzumpe.atlassian.net/browse/OMNI-73
+[OMNI-74]: https://olafzumpe.atlassian.net/browse/OMNI-74
+[OMNI-75]: https://olafzumpe.atlassian.net/browse/OMNI-75
+[OMNI-76]: https://olafzumpe.atlassian.net/browse/OMNI-76
+[OMNI-77]: https://olafzumpe.atlassian.net/browse/OMNI-77
+[OMNI-78]: https://olafzumpe.atlassian.net/browse/OMNI-78
+[OMNI-79]: https://olafzumpe.atlassian.net/browse/OMNI-79
+[OMNI-80]: https://olafzumpe.atlassian.net/browse/OMNI-80
+[OMNI-81]: https://olafzumpe.atlassian.net/browse/OMNI-81
+[OMNI-82]: https://olafzumpe.atlassian.net/browse/OMNI-82
+[OMNI-83]: https://olafzumpe.atlassian.net/browse/OMNI-83
+[OMNI-84]: https://olafzumpe.atlassian.net/browse/OMNI-84
+[OMNI-85]: https://olafzumpe.atlassian.net/browse/OMNI-85
+[OMNI-86]: https://olafzumpe.atlassian.net/browse/OMNI-86
+[OMNI-87]: https://olafzumpe.atlassian.net/browse/OMNI-87
+[OMNI-88]: https://olafzumpe.atlassian.net/browse/OMNI-88
+[OMNI-89]: https://olafzumpe.atlassian.net/browse/OMNI-89
+[OMNI-90]: https://olafzumpe.atlassian.net/browse/OMNI-90
+[OMNI-91]: https://olafzumpe.atlassian.net/browse/OMNI-91
+[OMNI-92]: https://olafzumpe.atlassian.net/browse/OMNI-92
+[OMNI-93]: https://olafzumpe.atlassian.net/browse/OMNI-93
+[OMNI-94]: https://olafzumpe.atlassian.net/browse/OMNI-94
+[OMNI-95]: https://olafzumpe.atlassian.net/browse/OMNI-95
+[OMNI-96]: https://olafzumpe.atlassian.net/browse/OMNI-96
+[OMNI-97]: https://olafzumpe.atlassian.net/browse/OMNI-97
+[OMNI-98]: https://olafzumpe.atlassian.net/browse/OMNI-98
+[OMNI-99]: https://olafzumpe.atlassian.net/browse/OMNI-99
+[OMNI-100]: https://olafzumpe.atlassian.net/browse/OMNI-100
+[OMNI-101]: https://olafzumpe.atlassian.net/browse/OMNI-101
+[OMNI-102]: https://olafzumpe.atlassian.net/browse/OMNI-102
+[OMNI-103]: https://olafzumpe.atlassian.net/browse/OMNI-103
+[OMNI-104]: https://olafzumpe.atlassian.net/browse/OMNI-104
+[OMNI-105]: https://olafzumpe.atlassian.net/browse/OMNI-105
+[OMNI-106]: https://olafzumpe.atlassian.net/browse/OMNI-106
+[OMNI-107]: https://olafzumpe.atlassian.net/browse/OMNI-107
+[OMNI-108]: https://olafzumpe.atlassian.net/browse/OMNI-108
+[OMNI-109]: https://olafzumpe.atlassian.net/browse/OMNI-109
+[OMNI-110]: https://olafzumpe.atlassian.net/browse/OMNI-110
+[OMNI-111]: https://olafzumpe.atlassian.net/browse/OMNI-111
+[OMNI-112]: https://olafzumpe.atlassian.net/browse/OMNI-112
+[OMNI-113]: https://olafzumpe.atlassian.net/browse/OMNI-113
+[OMNI-114]: https://olafzumpe.atlassian.net/browse/OMNI-114
+[OMNI-115]: https://olafzumpe.atlassian.net/browse/OMNI-115
+[OMNI-116]: https://olafzumpe.atlassian.net/browse/OMNI-116
+[OMNI-117]: https://olafzumpe.atlassian.net/browse/OMNI-117
+[OMNI-118]: https://olafzumpe.atlassian.net/browse/OMNI-118
+[OMNI-119]: https://olafzumpe.atlassian.net/browse/OMNI-119
+[OMNI-120]: https://olafzumpe.atlassian.net/browse/OMNI-120
