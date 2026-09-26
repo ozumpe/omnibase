@@ -73,3 +73,65 @@ def test_a_pre_omni_24_integer_streak_still_rehydrates(handles) -> None:  # type
     ceo = CEO.remote(budget_usd=10.0, breaker_threshold=3, state=state)
     ray.get(ceo.report_outcome.remote(success=False, reject_gate="slo"))
     assert ray.get(ceo.state_snapshot.remote())["consecutive_failures"] == pytest.approx(1.5)
+
+
+# --- OMNI-61: fail closed, pause, and the operator's CLI -------------------------
+
+
+def test_a_ceo_booted_from_unreadable_state_holds_the_breaker(handles) -> None:  # type: ignore[no-untyped-def]
+    from sis.roles import unreadable_brake_state
+
+    ceo = CEO.remote(budget_usd=10.0, breaker_threshold=3,
+                     state=unreadable_brake_state("episodic_state.json: truncated"))
+    assert ray.get(ceo.breaker_open.remote()) is True
+    assert ray.get(ceo.approve_budget.remote(0.01)) is False
+    snap = ray.get(ceo.state_snapshot.remote())
+    assert "unreadable" in snap["trip_reason"]
+    # Only a deliberate reset clears it, and the reason goes with it.
+    ray.get(ceo.reset_breaker.remote())
+    assert ray.get(ceo.state_snapshot.remote())["trip_reason"] is None
+
+
+def test_a_trip_records_which_brake_tripped(handles) -> None:  # type: ignore[no-untyped-def]
+    ceo = CEO.remote(budget_usd=10.0, breaker_threshold=1)
+    ray.get(ceo.report_outcome.remote(success=False))
+    assert ray.get(ceo.state_snapshot.remote())["trip_reason"] == "consecutive failure threshold"
+
+
+def test_a_pause_refuses_cycles_without_touching_the_brakes(handles) -> None:  # type: ignore[no-untyped-def]
+    ceo = handles["CEO"]
+    before = ray.get(ceo.state_snapshot.remote())
+    ray.get(ceo.pause.remote("maintenance window for the test"))
+    try:
+        result = org.run_cycle(handles, "t", "b")
+        assert result["status"] == "paused"
+        assert result["pause_reason"] == "maintenance window for the test"
+        after = ray.get(ceo.state_snapshot.remote())
+        for key in ("spent_usd", "consecutive_failures", "accepted", "tripped"):
+            assert after[key] == before[key], key
+    finally:
+        ray.get(ceo.resume.remote())
+    assert ray.get(ceo.pause_reason.remote()) is None
+
+
+def test_the_admin_cli_acts_on_the_live_ceo_and_audits_it(  # type: ignore[no-untyped-def]
+    handles, tmp_path, monkeypatch
+) -> None:
+    import json
+
+    from sis import admin
+
+    audit = tmp_path / "audit.jsonl"
+    monkeypatch.setattr(admin, "OPERATOR_AUDIT_JSONL", audit)
+    reason = "pausing to check the CLI end to end"
+    assert admin.main(["pause", "--reason", reason]) == 0
+    assert ray.get(handles["CEO"].pause_reason.remote()) == reason
+    assert admin.main(["resume", "--reason", "resuming after the CLI check"]) == 0
+    assert ray.get(handles["CEO"].pause_reason.remote()) is None
+    # A refused action changes nothing and is not audited.
+    assert admin.main(["pause", "--reason", "short"]) == 1
+
+    entries = [json.loads(line) for line in audit.read_text(encoding="utf-8").splitlines()]
+    assert [e["path"] for e in entries] == ["ceo.pause", "ceo.resume"]
+    assert entries[0]["justification"] == reason
+    assert entries[0]["before"]["paused"] is None and entries[0]["after"]["paused"] == reason

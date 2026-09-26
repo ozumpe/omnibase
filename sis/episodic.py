@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from sis import config
+from sis.atomic import write_text_atomic
 from sis.clock import Clock, now_iso
 from sis.paths import EPISODIC_DUCKDB, EPISODIC_JSONL
 
@@ -61,7 +62,7 @@ class EpisodicEvent:
     ts: str
     # outcome: verified_awaiting_human_merge | rolled_back | qa_rejected |
     #          no_change | inconclusive (both neutral: NEUTRAL_OUTCOMES) |
-    #          budget_denied | circuit_breaker_open | ...
+    #          budget_denied | circuit_breaker_open | paused (sis.admin) | ...
     outcome: str
     proposer: str = "stub"
     model: str | None = None
@@ -133,6 +134,17 @@ def summarize(events: list[EpisodicEvent]) -> dict[str, Any]:
 # --------------------------------------------------------------------------
 
 
+class StateUnreadable(RuntimeError):
+    """Persisted state exists but cannot be read (OMNI-61).
+
+    Deliberately distinct from "no state": a first boot has nothing to
+    rehydrate, a corrupt file has *something* the brakes depended on. Treating
+    the second like the first reset the spend cap and failure streak to zero
+    without a word, so the caller must decide — and the CEO decides to boot
+    with the breaker open.
+    """
+
+
 class EpisodicStore(Protocol):
     def append(self, event: EpisodicEvent) -> None: ...
     def events(self) -> list[EpisodicEvent]: ...
@@ -140,6 +152,10 @@ class EpisodicStore(Protocol):
     # Small latest-wins key/value state alongside the append-only event log —
     # e.g. the CEO's persisted brake/spend state (L9). Distinct from events so
     # it survives cluster/actor restart and rehydrates on bootstrap.
+    #
+    # load_state returns None only when there is no state; unreadable state
+    # raises StateUnreadable. save_state never overwrites state it could not
+    # read — that would destroy the evidence of what the brakes were (OMNI-61).
     def save_state(self, key: str, value: dict[str, Any]) -> None: ...
     def load_state(self, key: str) -> dict[str, Any] | None: ...
 
@@ -178,25 +194,34 @@ class JsonlEpisodicStore:
             fh.write(json.dumps(asdict(event)) + "\n")
 
     def save_state(self, key: str, value: dict[str, Any]) -> None:
-        self._state_path.parent.mkdir(parents=True, exist_ok=True)
-        blob: dict[str, Any] = {}
-        if self._state_path.exists():
-            try:
-                blob = json.loads(self._state_path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
-                blob = {}  # corrupt/legacy → overwrite rather than crash
+        # Read-modify-write of the whole blob, replaced atomically: a crash
+        # leaves the previous file or the new one, never a truncated one. An
+        # unreadable existing file is NOT overwritten — it used to be replaced
+        # with {} here, which erased the spend the brakes had counted (OMNI-61).
+        blob = self._read_blob() if self._state_path.exists() else {}
         blob[key] = value
-        self._state_path.write_text(json.dumps(blob, indent=2), encoding="utf-8")
+        write_text_atomic(self._state_path, json.dumps(blob, indent=2))
 
     def load_state(self, key: str) -> dict[str, Any] | None:
         if not self._state_path.exists():
             return None
+        value = self._read_blob().get(key)
+        if value is None:
+            return None
+        if not isinstance(value, dict):
+            raise StateUnreadable(
+                f"{self._state_path}: state for {key!r} is a {type(value).__name__}, "
+                "not an object")
+        return value
+
+    def _read_blob(self) -> dict[str, Any]:
         try:
             blob = json.loads(self._state_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return None
-        value = blob.get(key)
-        return value if isinstance(value, dict) else None
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+            raise StateUnreadable(f"{self._state_path}: {exc}") from exc
+        if not isinstance(blob, dict):
+            raise StateUnreadable(f"{self._state_path}: not a JSON object")
+        return blob
 
     def events(self) -> list[EpisodicEvent]:
         if not self.path.exists():
@@ -264,6 +289,9 @@ class DuckDBEpisodicStore:
         return summarize(self.events())
 
     def save_state(self, key: str, value: dict[str, Any]) -> None:
+        # One upsert statement: DuckDB applies it transactionally, so this
+        # backend already has the all-or-nothing write the jsonl one needed
+        # sis.atomic for (OMNI-61).
         self._con.execute(
             "INSERT INTO kv_state (key, value) VALUES (?, ?) "
             "ON CONFLICT (key) DO UPDATE SET value = excluded.value",
@@ -275,8 +303,13 @@ class DuckDBEpisodicStore:
             "SELECT value FROM kv_state WHERE key = ?", [key]).fetchone()
         if row is None:
             return None
-        parsed: Any = json.loads(row[0])
-        return parsed if isinstance(parsed, dict) else None
+        try:
+            parsed: Any = json.loads(row[0])
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise StateUnreadable(f"duckdb kv_state[{key!r}]: {exc}") from exc
+        if not isinstance(parsed, dict):
+            raise StateUnreadable(f"duckdb kv_state[{key!r}]: not an object")
+        return parsed
 
     def sql(self, query: str) -> list[tuple[Any, ...]]:
         """Run an ad-hoc analytical query against the `episodes` table."""

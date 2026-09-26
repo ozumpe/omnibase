@@ -225,6 +225,26 @@ They fail independently: a runaway loop is caught by the CEO brake regardless
 of what AWS billing knows, and a forgotten instance is caught by the budget
 regardless of what the loop thinks it spent.
 
+The CEO brake also **fails closed** (OMNI-61): if `runtime/episodic_state.json`
+exists but cannot be read, the CEO boots with the breaker open and says why,
+instead of starting again at `spent=0`. `SIS_EPISODIC_STORE=none` is refused
+on this box — with a real proposer and real adapters it would mean no durable
+cap and no spend record.
+
+**Pausing, resuming, resetting** — from a second SSM session, as `ubuntu`, in
+`~/omnibase`, while the loop runs:
+
+```bash
+poetry run python -m sis.admin status
+poetry run python -m sis.admin pause --reason "<why, for the audit log>"
+poetry run python -m sis.admin resume --reason "<why>"
+poetry run python -m sis.admin reset-breaker --reason "<why>"   # spend is NOT reset
+```
+
+Every change is appended to `runtime/operator_audit.jsonl`, which step 5 below
+syncs to S3 with the episodic log. `pause` makes the loop idle rather than
+exit; to stop it outright, Ctrl-C the loop (it finishes the cycle in flight).
+
 ## What persists
 
 The most durable thing a run produces is the episodic log — per CLAUDE.md,

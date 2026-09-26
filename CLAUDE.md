@@ -165,6 +165,12 @@ internal target before it models anything external.
   in every adapter and `Workspace` exposes no merge-shaped method at all (both
   asserted by tests). It applies a human's decision; it never makes one.
 - Hard LLM spend cap + cost-per-accepted-improvement SLO + circuit breaker (CEO brakes).
+  **Brake state fails closed** (OMNI-61): written atomically (`sis/atomic.py`);
+  a state file that exists but cannot be read boots the CEO with the breaker
+  *open* and a named reason, and is never overwritten; `episodic.store=none` is
+  refused with a real proposer or real adapters (no override — `jsonl` costs
+  nothing). Operators pause/resume/reset through `python -m sis.admin`, each
+  change with a written `--reason`, audited; a reset never touches spend.
 
 ## Repo & GitHub workflow
 - Repo: **github.com/ozumpe/omnibase** (public since 2026-08-06). `gh` CLI is
@@ -287,6 +293,9 @@ internal target before it models anything external.
     layers do reach the actors. Prefer `--contract`/`run_cycle(contract_name=)`.
 - Real adapters: `cp secrets.example.yml secrets.local.yml`; then
   `poetry run python scripts/check_connections.py --deep` before a real cycle.
+- Operate a running loop: `poetry run python -m sis.admin status|pause|resume|reset-breaker
+  --reason "..."` (OMNI-61) — acts on the live CEO, audited to
+  `runtime/operator_audit.jsonl`. `pause` idles the loop without tripping anything.
 - Docker sandbox image: `docker build -t sis-gauntlet:latest -f Dockerfile.gauntlet .`
 - Confluence specs/docs live in the **"Software Development" (SD)** space (Atlassian MCP,
   cloudId `760ca470-0091-4601-9704-a56633b5e9b6`): Architecture, Validation Gauntlet,
@@ -585,9 +594,9 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   - Design + the Caddy/TLS decision: `docs/OPERATOR_FRONTEND.md`. Deployment
     artifacts (`Dockerfile.frontend`, `Caddyfile`) are deliberately not in this
     slice.
-- 740 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
+- 772 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
   Ray-Serve-integration tests run separately, see Operational quick reference
-  above; 802 total — corrected 2026-09-26, a multi-dimension review found the
+  above; 834 total — corrected 2026-09-26, a multi-dimension review found the
   previously-documented 616/678 stale); `ruff`/`mypy --strict`/`pytest` clean;
   CI green; `feature → develop → main` enforced by both the client-side
   pre-push hook and active server-side rulesets.
@@ -621,9 +630,9 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
 **Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L
 severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
 the IDs in commits/PRs. **Open after a 2026-09-26 multi-dimension review with
-adversarial verification: H2–H3, M8–M9, M11–M14, M16–M18, M20–M23, L15–L43**
-(M7 is won't-fix for now; H4, M10, M15 and M19 fixed 2026-09-26,
-OMNI-46/47/51/49). The headline, before
+adversarial verification: H2–H3, M8–M9, M11–M14, M16–M18, M20–M23,
+L15–L20, L22, L24–L43** (M7 is won't-fix for now; H4, M10, M15, M19, L21 and
+L23 fixed 2026-09-26, OMNI-46/47/51/49/61). The headline, before
 trusting any gauntlet verdict: **the gate scripts judge a candidate inside its
 own process**. A candidate can rewrite the exam files later gates read (M9) or
 exit 0 with no verdict (M8). One redesign closes these and H2 (epic
@@ -823,7 +832,8 @@ has the defect write-ups and the ID → ticket table:
   the merged target (M22, unblocked by OMNI-51), OMNI-59 tests inherit `SIS_*`
   env (M23).
 - **Before OMNI-29 (run day):** OMNI-60–63, filed with OMNI-51 as its
-  prerequisites (each `Blocks` OMNI-29).
+  prerequisites (each `Blocks` OMNI-29). OMNI-60 (CI fast path) and OMNI-61
+  (brake state, `sis.admin`) done 2026-09-26; OMNI-62 and OMNI-63 remain.
 
 Not yet scheduled: the **atomic actor swap** for internal, never-served actors,
 which `docs/SERVE_CANARY.md` scopes out and which has no design doc yet. E3/D2 in
