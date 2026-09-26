@@ -5,6 +5,12 @@ __pycache__/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+*.DS_Store
+
+# Local agent-tool config that isn't shared (graft's cache is at the bottom,
+# with the note on why ripgrep still sees it).
+.mcp.json
+GEMINI.md
 
 # Runtime-mutable state produced by the loop.
 # runtime/target.py is the committed naive baseline; the loop overwrites it
@@ -40,3 +46,6 @@ secrets.local.yml
 *.local.yml
 secrets/
 !secrets.example.yml
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
