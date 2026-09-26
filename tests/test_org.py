@@ -64,6 +64,13 @@ def test_bootstrap_registers_the_target_contract(handles) -> None:  # type: igno
     assert spec.entry == "sum_of_divisors"
 
 
+def test_bootstrap_records_the_code_that_is_running(handles) -> None:  # type: ignore[no-untyped-def]
+    # OMNI-63: a run's provenance names the commit that made its decisions.
+    code = [e for e in ray.get(handles["SelfModel"].provenance.remote()) if e["kind"] == "code"]
+    assert code, "bootstrap recorded no code version"
+    assert len(code[-1]["ref"]) == 40 and code[-1]["detail"]["describe"]
+
+
 def test_contract_registration_is_idempotent(handles) -> None:  # type: ignore[no-untyped-def]
     # bootstrap() is called repeatedly against a detached SelfModel that
     # survives restarts; re-registering must not accumulate duplicates.

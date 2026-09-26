@@ -132,7 +132,13 @@ def test_a_candidate_that_exits_125_is_still_judged() -> None:
 def test_a_passing_candidate_is_never_probed(monkeypatch: pytest.MonkeyPatch) -> None:
     # The whole cost of the fix sits on the failure path.
     monkeypatch.setattr(gauntlet, "probe_sandbox", _no_probe)
-    assert gauntlet.validate(GOOD).passed
+    # Reported, not just asserted: this failed once under full-suite load
+    # (2026-09-26) with only "the sandbox probe must not run here" — i.e. some
+    # gate failed a good candidate — and no way to tell which. The probe stub
+    # raises before validate() returns, so the reason is captured here instead.
+    monkeypatch.setattr(gauntlet, "_attribute", lambda failure, gate, ctx: failure)
+    result = gauntlet.validate(GOOD)
+    assert result.passed, f"a good candidate failed at gate: {result.reason}"
 
 
 def test_an_in_process_gate_failure_is_not_probed(monkeypatch: pytest.MonkeyPatch) -> None:

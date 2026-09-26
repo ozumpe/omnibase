@@ -38,7 +38,8 @@ order:
    every line ✓.
 3. **Install the SSM plugin** once: `brew install --cask session-manager-plugin`
    (`aws ssm start-session` needs it).
-4. **Stand it up:**
+4. **Stand it up** — from the release tag, which must already exist on
+   GitHub (user_data clones it; OMNI-63):
    ```bash
    cd infra/aws
    echo 'alert_email = "you@example.com"' > terraform.tfvars   # gitignored
@@ -323,10 +324,20 @@ instance lifecycle:
 
 ## The run itself
 
-The box runs whatever `var.repo_ref` pointed at when it booted — `develop` by
-default. Work sitting on an unmerged feature branch is *not* on the box; merge
-it first, or set `repo_ref` and re-apply. A run that silently exercises
-last week's engine is the kind of result that is worse than no result.
+The box runs the **release tag** in `var.repo_ref` — `v0.2.0` by default
+(OMNI-63). A tag, not `develop`: a run's results are only worth something if
+they name the code that produced them, and a branch names whatever it pointed
+at when the box booted. Running a branch needs `-var allow_branch_ref=true` on
+top of `-var repo_ref=<branch>`; `tofu plan` refuses otherwise. The bootstrap
+log's first line (`/var/log/sis-bootstrap.log`) and every run's provenance
+(`[sis] running ...` on startup, the SelfModel's `code` record,
+`code_version` in the episodic state) name the exact commit, and say `-dirty`
+if the tree was edited on the box.
+
+Run day uses the **`sort`** contract (decided 2026-09-26): its target scales
+with input size, so a live canary measures the function rather than the
+framework. Hence `--contract sort` below — it sets `contracts.default` before
+bootstrap, so the role actors see it.
 
 ```bash
 sudo -iu ubuntu   # if you are not already — a session lands as ssm-user
@@ -349,10 +360,10 @@ poetry run python main.py --show-config        # every value + which layer set i
 poetry run python scripts/check_connections.py --deep
 
 # 3. One cycle, watched.
-poetry run python main.py
+poetry run python main.py --contract sort
 
 # 4. Then a short loop.
-poetry run python main.py --loop --loop-max-cycles 3
+poetry run python main.py --contract sort --loop --loop-max-cycles 3
 
 # 5. Keep the dataset, stop the meter.
 aws s3 sync runtime/ s3://<artifacts-bucket>/runs/$(date +%Y%m%d-%H%M)/ \
