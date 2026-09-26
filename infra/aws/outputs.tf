@@ -21,3 +21,8 @@ output "ssm_session" {
 output "frontend_port_forward" {
   value = "aws ssm start-session --target ${aws_instance.sis.id} --region ${var.region} --document-name AWS-StartPortForwardingSession --parameters '{\"portNumber\":[\"8080\"],\"localPortNumber\":[\"8080\"]}'"
 }
+
+output "alerts_topic_arn" {
+  description = "The pager topic; exported on the box as SIS_NOTIFY_SNS_TOPIC_ARN"
+  value       = aws_sns_topic.alerts.arn
+}

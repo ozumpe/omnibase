@@ -169,6 +169,34 @@ def check_aws(settings: Settings) -> bool | None:
         return False
 
 
+def check_pager(settings: Settings) -> bool | None:
+    """The SNS topic that pages the operator (GetTopicAttributes). Read-only.
+
+    Missing is a failure only on the AWS box, where nobody is watching the
+    terminal and the page is the only way a breaker trip reaches a person
+    (OMNI-62). Anywhere else it is reported, not failed.
+    """
+    from sis import config
+
+    topic = config.get("adapters.notify_sns_topic_arn")
+    if not topic:
+        if settings.env == "aws":
+            _line(FAIL, "Pager", "SIS_NOTIFY_SNS_TOPIC_ARN unset on the AWS box — a "
+                                 "breaker trip would reach nobody")
+            return False
+        _line(SKIP, "Pager", "not configured — trips are recorded, nobody is paged")
+        return None
+    try:
+        from sis.adapters import InMemoryTelemetry
+        from sis.adapters_real import SNSNotifier
+
+        _line(OK, "Pager", SNSNotifier(str(topic), InMemoryTelemetry()).check())
+        return True
+    except Exception as exc:  # noqa: BLE001
+        _line(FAIL, "Pager", _summarise(exc))
+        return False
+
+
 def _summarise(exc: Exception) -> str:
     """One-line error summary that never echoes credentials."""
     text = str(exc)
@@ -188,6 +216,7 @@ def main() -> int:
         check_jira(settings),
         check_github(settings),
         check_aws(settings),
+        check_pager(settings),
     ]
     if deep:
         results.append(check_jira_workflow(settings))

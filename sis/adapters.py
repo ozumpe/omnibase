@@ -30,6 +30,7 @@ from sis.ports import (
     Page,
     PullRequest,
     RequiresHumanApproval,
+    Severity,
 )
 
 
@@ -45,6 +46,25 @@ class InMemoryTelemetry:
 
     def events(self) -> list[dict[str, object]]:
         return list(self._events)
+
+
+class InMemoryNotifier:
+    """Records pages instead of sending them — the default, and what tests read."""
+
+    def __init__(self, telemetry: InMemoryTelemetry) -> None:
+        self._tel = telemetry
+        self._ids = itertools.count(1)
+        self._sent: list[dict[str, str]] = []
+
+    def notify(self, severity: Severity, title: str, body: str) -> str:
+        delivery = f"N-{next(self._ids)}"
+        self._sent.append({"id": delivery, "severity": severity.value,
+                           "title": title, "body": body})
+        self._tel.emit("notify.sent", id=delivery, severity=severity.value, title=title)
+        return delivery
+
+    def sent(self) -> list[dict[str, str]]:
+        return list(self._sent)
 
 
 class InMemoryDocumentStore:

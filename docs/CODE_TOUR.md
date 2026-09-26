@@ -296,8 +296,10 @@ Two things to notice:
   fails the gauntlet (wrong/slower/untyped), or QA rejects, `run_cycle` calls
   `DevOps.file_bug` with the story + reason. Three consecutive failures trip
   `CEO.report_outcome`'s circuit breaker, which files a second, distinct
-  `CIRCUIT BREAKER OPEN` bug — the "page a human" from `ACTORS.md` made concrete
-  rather than left as dead code. (A `no_change` no-op is *not* a failure — no
+  `CIRCUIT BREAKER OPEN` bug and, through the `Notifier` port, actually pages
+  a human (SNS on the AWS box, OMNI-62) — the "page a human" from `ACTORS.md`
+  made concrete rather than left as dead code. The bug is the audit trail; the
+  page is what reaches a person. (A `no_change` no-op is *not* a failure — no
   bug, no breaker increment.)
   `org.bootstrap()` also has the CEO call `set_charter` once, so provenance
   roots at a goal instead of starting cold at the first spec.

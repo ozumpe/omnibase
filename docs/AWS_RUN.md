@@ -49,9 +49,15 @@ order:
    `$ANTHROPIC_API_KEY` and uploads it directly — no plaintext JSON file on
    disk, nothing printed but routing and ✓/✗. Run it without `--upload` first
    to see what it would send.
-5. **Run it:** `tofu -chdir=infra/aws output -raw ssm_session` prints the
+5. **Confirm the pager.** `tofu apply` subscribes `alert_email` to the
+   `<name_prefix>-alerts` SNS topic, and AWS mails a confirmation link to it.
+   **Click it before the first cycle** — until then SNS accepts every publish
+   and delivers nothing, so a breaker trip, a spend-cap hit or a broken
+   sandbox would page nobody (OMNI-62). On the box, `check_connections.py`'s
+   `Pager` line shows the count of confirmed subscriptions; it must be ≥ 1.
+6. **Run it:** `tofu -chdir=infra/aws output -raw ssm_session` prints the
    session command; then [The run itself](#the-run-itself).
-6. **Stop the meter:** sync the episodic log (step 5 of the run), stop the
+7. **Stop the meter:** sync the episodic log (step 5 of the run), stop the
    instance; `tofu destroy` when the experiment is over (see
    [What persists](#what-persists)).
 
@@ -336,7 +342,9 @@ export ANTHROPIC_API_KEY=$(aws secretsmanager get-secret-value \
   --secret-id sis/first-run/credentials --query SecretString --output text \
   | jq -r .anthropic.api_key)
 
-# 2. Prove the wiring before spending anything.
+# 2. Prove the wiring before spending anything. The Pager line must show a
+#    confirmed subscription; SIS_NOTIFY_SNS_TOPIC_ARN comes from
+#    /etc/profile.d/sis-pager.sh (user_data), so it is set in this login shell.
 poetry run python main.py --show-config        # every value + which layer set it
 poetry run python scripts/check_connections.py --deep
 

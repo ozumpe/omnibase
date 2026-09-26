@@ -224,6 +224,26 @@ class Cloud(Protocol):
     def live_version(self) -> str | None: ...
 
 
+class Severity(str, Enum):
+    """How urgently a human must look (OMNI-62)."""
+
+    CRITICAL = "critical"   # the loop has stopped, or must not be trusted to run
+    WARNING = "warning"     # it runs, but something a human should know broke
+
+
+@runtime_checkable
+class Notifier(Protocol):
+    """Pages a human. Default adapter: in-memory; real adapter: AWS SNS.
+
+    The TES bug a breaker trip files stays the audit trail. This is the part
+    that reaches a person: nobody watches a scratch Jira project in real time,
+    so on an unattended box a trip used to be silent until someone happened to
+    look (OMNI-62). Returns a delivery id.
+    """
+
+    def notify(self, severity: Severity, title: str, body: str) -> str: ...
+
+
 @runtime_checkable
 class Telemetry(Protocol):
     """Logs/metrics/traces + the audit trail of every artifact state change."""

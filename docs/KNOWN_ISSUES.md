@@ -51,7 +51,7 @@ reference with no link target below.
 > | M22 | [OMNI-58](https://olafzumpe.atlassian.net/browse/OMNI-58) — blocked by OMNI-51 |
 > | M23 | [OMNI-59](https://olafzumpe.atlassian.net/browse/OMNI-59) |
 > | L21, L23 | [OMNI-61](https://olafzumpe.atlassian.net/browse/OMNI-61) (brake state fails closed; `sis.admin`) — **fixed** |
-> | L24 | [OMNI-62](https://olafzumpe.atlassian.net/browse/OMNI-62) (Notifier port) — **blocks OMNI-29** |
+> | L24 | [OMNI-62](https://olafzumpe.atlassian.net/browse/OMNI-62) (Notifier port) — **fixed** |
 > | M7 | [OMNI-88] — **won't fix** for now (label `wont-fix`); see the Won't fix section |
 > | L15–L20, L22, L25–L29, L31–L38, L40–L43 | one ticket each, [OMNI-64]–[OMNI-87], on each entry below. Each is linked (Relates) in Jira to the ticket it should ship with. |
 > | L30 | [OMNI-55], with M16 |
@@ -329,9 +329,6 @@ reference with no link target below.
   stay open with nothing tracking them; merging one later promotes nothing
   but leaves a merged-looking PR with no effect. Fix: close (not merge) the
   PR as part of recording the rejected outcome.
-- [OMNI-62] **L24** — Budget exhaustion stops `--loop` silently; `loop.decide()`'s own
-  comment says a human is paged, but nothing files anything. Fix: route it
-  through the same alerting path as a breaker trip.
 - [OMNI-71] **L25** — Unknown/unpriced Anthropic model ids are silently billed at
   `claude-opus-4-8` rates in `cost.py`, which can undercount a pricier
   model's actual spend against the hard cap. Fix: fail loudly (or price at
@@ -617,6 +614,15 @@ any long-lived cluster exists.
   front.
 
 ## Resolved
+
+- [OMNI-62] **L24** — Budget exhaustion stops `--loop` silently; `loop.decide()`'s own
+  comment says a human is paged, but nothing files anything. Fix: route it
+  through the same alerting path as a breaker trip.
+  **Fixed 2026-09-26 (OMNI-62):** a loop that stops pages through the new
+  `Notifier` port (`loop.stop_alert`, pure: a budget stop always, a breaker
+  only if it was open before this run's first cycle — a trip during the run
+  was paged when it tripped), and so do breaker trips, spend-cap refusals
+  and broken-sandbox verdicts. SNS on the AWS box.
 
 - [OMNI-61] **L21** — CEO brake-state persistence fails open: a corrupt, unwritable, or
   newly-switched state store silently resets `spent=0` and clears the

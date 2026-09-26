@@ -40,6 +40,7 @@ from sis.ports import (
     Page,
     PullRequest,
     RequiresHumanApproval,
+    Severity,
 )
 from sis.settings import AtlassianSettings, GitHubSettings, Settings
 
@@ -544,6 +545,58 @@ def _status_from_name(name: str) -> IssueStatus:
         if status.value.lower() == name.lower():
             return status
     return IssueStatus.BACKLOG
+
+
+class SNSNotifier:
+    """Pages the operator through one SNS topic (OMNI-62).
+
+    SNS rather than SES, decided on the ticket: a topic with an email
+    subscription needs no verified sender identity and no SES-sandbox recipient
+    list, and the instance role needs only ``sns:Publish`` on this one topic —
+    no credential is held here at all, so there is nothing for anything sharing
+    the process to read. The region comes from the ARN, so a topic and a
+    ``SIS_AWS_REGION`` that disagree cannot publish into the wrong region.
+    """
+
+    def __init__(self, topic_arn: str, telemetry: InMemoryTelemetry,
+                 client: Any | None = None) -> None:
+        parts = topic_arn.split(":")
+        if len(parts) != 6 or parts[:3] != ["arn", "aws", "sns"]:
+            raise ValueError(f"not an SNS topic ARN: {topic_arn!r}")
+        self._arn = topic_arn
+        self._tel = telemetry
+        if client is None:
+            import boto3  # lazy: only needed when paging for real
+
+            client = boto3.client("sns", region_name=parts[3])
+        self._sns = client
+
+    def notify(self, severity: Severity, title: str, body: str) -> str:
+        response = self._sns.publish(
+            TopicArn=self._arn,
+            Subject=sns_subject(f"[sis {severity.value}] {title}"),
+            Message=body,
+        )
+        delivery = str(response["MessageId"])
+        self._tel.emit("notify.sent", id=delivery, severity=severity.value, title=title)
+        return delivery
+
+    def check(self) -> str:
+        """Read-only: the topic exists and this identity can see it (preflight)."""
+        attrs = self._sns.get_topic_attributes(TopicArn=self._arn)["Attributes"]
+        return f"{self._arn} ({attrs.get('SubscriptionsConfirmed', '?')} confirmed subscription(s))"
+
+
+def sns_subject(text: str) -> str:
+    """What SNS accepts as an email Subject. Pure.
+
+    ASCII, no line breaks or control characters, under 100 characters — a
+    publish with anything else is rejected, and the page never goes out. A
+    title can carry a brake reason or a gauntlet message, so it is cleaned
+    here rather than trusted.
+    """
+    flat = "".join(ch if 32 <= ord(ch) < 127 else " " for ch in text)
+    return " ".join(flat.split())[:99] or "sis alert"
 
 
 def make_real_adapters(

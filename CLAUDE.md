@@ -30,7 +30,8 @@ internal target before it models anything external.
   messages — the work queue, message bus, audit trail, and long-term memory. Handoffs
   are artifact state changes.
 - External subsystems behind ports/adapters (`sis/ports.py`): Document Store=Confluence,
-  Work Tracker=Jira, Version Control=GitHub, Cloud=AWS, Telemetry. Default = in-memory
+  Work Tracker=Jira, Version Control=GitHub, Cloud=AWS, Telemetry, Notifier=AWS SNS
+  (OMNI-62). Default = in-memory
   adapters; real adapters in `sis/adapters_real.py` (`SIS_ADAPTERS=real`).
 - SelfModel (digital twin): live actor registry, deploy slots, provenance graph,
   substrate — the first "piece of the world" the system models.
@@ -171,6 +172,12 @@ internal target before it models anything external.
   refused with a real proposer or real adapters (no override — `jsonl` costs
   nothing). Operators pause/resume/reset through `python -m sis.admin`, each
   change with a written `--reason`, audited; a reset never touches spend.
+  **A trip pages a human** (OMNI-62), not only files a TES bug nobody watches:
+  the `Notifier` port (SNS topic `adapters.notify_sns_topic_arn`, `sns:Publish`
+  on that one topic) pages on a breaker trip, a spend-cap refusal, a broken
+  sandbox, a loop that stops, and a boot from unreadable brake state. A failed
+  page never breaks the loop; it is printed, emitted, and kept in the episodic
+  store. Without a topic a real-adapter run warns, and the AWS preflight fails.
 
 ## Repo & GitHub workflow
 - Repo: **github.com/ozumpe/omnibase** (public since 2026-08-06). `gh` CLI is
@@ -594,9 +601,9 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   - Design + the Caddy/TLS decision: `docs/OPERATOR_FRONTEND.md`. Deployment
     artifacts (`Dockerfile.frontend`, `Caddyfile`) are deliberately not in this
     slice.
-- 772 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
+- 789 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
   Ray-Serve-integration tests run separately, see Operational quick reference
-  above; 834 total — corrected 2026-09-26, a multi-dimension review found the
+  above; 851 total — corrected 2026-09-26, a multi-dimension review found the
   previously-documented 616/678 stale); `ruff`/`mypy --strict`/`pytest` clean;
   CI green; `feature → develop → main` enforced by both the client-side
   pre-push hook and active server-side rulesets.
@@ -631,8 +638,8 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
 severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
 the IDs in commits/PRs. **Open after a 2026-09-26 multi-dimension review with
 adversarial verification: H2–H3, M8–M9, M11–M14, M16–M18, M20–M23,
-L15–L20, L22, L24–L43** (M7 is won't-fix for now; H4, M10, M15, M19, L21 and
-L23 fixed 2026-09-26, OMNI-46/47/51/49/61). The headline, before
+L15–L20, L22, L25–L43** (M7 is won't-fix for now; H4, M10, M15, M19, L21, L23
+and L24 fixed 2026-09-26, OMNI-46/47/51/49/61/62). The headline, before
 trusting any gauntlet verdict: **the gate scripts judge a candidate inside its
 own process**. A candidate can rewrite the exam files later gates read (M9) or
 exit 0 with no verdict (M8). One redesign closes these and H2 (epic
@@ -832,8 +839,9 @@ has the defect write-ups and the ID → ticket table:
   the merged target (M22, unblocked by OMNI-51), OMNI-59 tests inherit `SIS_*`
   env (M23).
 - **Before OMNI-29 (run day):** OMNI-60–63, filed with OMNI-51 as its
-  prerequisites (each `Blocks` OMNI-29). OMNI-60 (CI fast path) and OMNI-61
-  (brake state, `sis.admin`) done 2026-09-26; OMNI-62 and OMNI-63 remain.
+  prerequisites (each `Blocks` OMNI-29). OMNI-60 (CI fast path), OMNI-61
+  (brake state, `sis.admin`) and OMNI-62 (SNS pager) done 2026-09-26; OMNI-63
+  (release tag, run-day contract `sort`) remains.
 
 Not yet scheduled: the **atomic actor swap** for internal, never-served actors,
 which `docs/SERVE_CANARY.md` scopes out and which has no design doc yet. E3/D2 in

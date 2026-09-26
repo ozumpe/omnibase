@@ -13,6 +13,7 @@ GitHub/AWS) is a change *inside* this actor; the roles are unaffected.
 
 from __future__ import annotations
 
+import sys
 from typing import Any
 
 import ray
@@ -20,6 +21,7 @@ import ray
 from sis.adapters import (
     InMemoryCloud,
     InMemoryDocumentStore,
+    InMemoryNotifier,
     InMemoryTelemetry,
     InMemoryVersionControl,
     InMemoryWorkTracker,
@@ -32,8 +34,10 @@ from sis.ports import (
     Issue,
     IssueStatus,
     IssueType,
+    Notifier,
     Page,
     PullRequest,
+    Severity,
     VersionControl,
     WorkTracker,
 )
@@ -70,7 +74,41 @@ class Workspace:
             self.vcs = InMemoryVersionControl(tel)
             self.cloud = InMemoryCloud(tel)
 
+        # The pager (OMNI-62) is chosen by its own key, not adapters.mode: a
+        # real-adapter run without a topic still runs — but says, once and
+        # loudly, that a breaker trip will reach nobody.
+        from sis import config
+
+        self.notifier: Notifier
+        topic = config.get("adapters.notify_sns_topic_arn")
+        if topic:
+            from sis.adapters_real import SNSNotifier
+
+            self.notifier = SNSNotifier(str(topic), tel)
+        else:
+            self.notifier = InMemoryNotifier(tel)
+            if settings.adapters == "real":
+                print("[sis] WARNING: adapters.mode=real but no pager is configured "
+                      "(SIS_NOTIFY_SNS_TOPIC_ARN): a breaker trip will only file a "
+                      "bug nobody watches in real time", file=sys.stderr)
+
         tel.emit("workspace.ready", **settings_summary(settings))
+
+    # --- Notifier (SNS) ---
+    def notify(self, severity: Severity, title: str, body: str) -> dict[str, str]:
+        """Page a human. Never raises (OMNI-62).
+
+        A page that fails to send must not take down the loop it was reporting
+        on — but it must not vanish either: it is emitted, printed, and handed
+        back so the driver can record it in the episodic store.
+        """
+        try:
+            return {"delivered": self.notifier.notify(severity, title, body)}
+        except Exception as exc:  # noqa: BLE001 - a failed page is reported, not raised
+            self._tel.emit("notify.failed", severity=severity.value, title=title,
+                           error=str(exc))
+            print(f"[sis] WARNING: page not sent ({title}): {exc}", file=sys.stderr)
+            return {"error": str(exc)}
 
     # --- Document Store (Confluence) ---
     def create_page(

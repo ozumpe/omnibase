@@ -79,6 +79,14 @@ resource "aws_iam_role_policy" "least" {
           "${aws_s3_bucket.artifacts.arn}/*",
         ]
       },
+      {
+        # Publish is the pager; GetTopicAttributes is check_connections.py's
+        # read-only preflight. This one topic only (OMNI-62).
+        Sid      = "PageTheOperator"
+        Effect   = "Allow"
+        Action   = ["sns:Publish", "sns:GetTopicAttributes"]
+        Resource = aws_sns_topic.alerts.arn
+      },
     ]
   })
 }
@@ -168,10 +176,29 @@ resource "aws_instance" "sis" {
     apt-get -o DPkg::Lock::Timeout=600 install -y git
     git clone --branch ${var.repo_ref} ${var.repo_url} /home/ubuntu/omnibase
     chown -R ubuntu:ubuntu /home/ubuntu/omnibase
+    echo 'export SIS_NOTIFY_SNS_TOPIC_ARN=${aws_sns_topic.alerts.arn}' > /etc/profile.d/sis-pager.sh
     bash /home/ubuntu/omnibase/scripts/aws_bootstrap.sh
   EOT
 
   tags = { Name = var.name_prefix }
+}
+
+# --------------------------------------------------------------------------
+# The pager (OMNI-62). A breaker trip, a spend-cap hit or a broken sandbox
+# publishes here, and it reaches the same inbox as the budget alarm. The email
+# subscription must be confirmed once (a link AWS mails after apply) — until
+# then SNS accepts the publish and delivers nothing. The box finds the topic
+# through /etc/profile.d/sis-pager.sh, written by user_data above.
+# --------------------------------------------------------------------------
+
+resource "aws_sns_topic" "alerts" {
+  name = "${var.name_prefix}-alerts"
+}
+
+resource "aws_sns_topic_subscription" "operator" {
+  topic_arn = aws_sns_topic.alerts.arn
+  protocol  = "email"
+  endpoint  = var.alert_email
 }
 
 # --------------------------------------------------------------------------
