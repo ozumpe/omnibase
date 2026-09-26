@@ -138,3 +138,74 @@ def test_the_marking_rule_actually_selects_the_serve_modules() -> None:
             f"def {fixture}(" in path.read_text(encoding="utf-8")
             for path in TESTS_DIR.glob("test_*.py")
         ), f"SERVE_FIXTURES names {fixture}, which no test module defines"
+
+
+# --- OMNI-60: parallel jobs and the docs-only fast path -------------------------
+
+
+def _job_block(workflow: str, job: str) -> str:
+    """The text of one top-level job in ci.yml (no YAML parser in the dev deps)."""
+    lines = workflow.splitlines()
+    start = lines.index(f"  {job}:")
+    end = next((i for i in range(start + 1, len(lines))
+                if lines[i].startswith("  ") and not lines[i].startswith("   ")
+                and lines[i].strip().endswith(":") and not lines[i].strip().startswith("#")),
+               len(lines))
+    return "\n".join(lines[start:end])
+
+
+def test_the_required_check_waits_for_every_job_and_always_reports() -> None:
+    """`test` is the one required context, so its shape is the whole guarantee.
+
+    It must depend on every job (or a failure there could not fail it), and run
+    even when they were skipped or failed (or it would not report at all, and
+    the PR would wait on a required check that never comes).
+    """
+    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+    gate = _job_block(workflow, "test")
+    assert "needs: [changes, lint, fast, serve, docs]" in gate
+    assert "if: always()" in gate
+    assert "scripts/ci_gate.py verdict" in gate
+
+
+def test_the_workflow_is_never_skipped_by_path_filters() -> None:
+    # paths-ignore skips the *whole* run, so the required `test` never reports.
+    # Comments may explain why it is absent; only configuration counts.
+    config = [line.split("#", 1)[0] for line in
+              CI_WORKFLOW.read_text(encoding="utf-8").splitlines()]
+    assert not any("paths-ignore" in line or "paths:" in line for line in config)
+
+
+def test_the_suites_run_on_code_changes_and_the_docs_gate_on_docs_changes() -> None:
+    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+    for job in ("lint", "fast", "serve"):
+        assert "if: needs.changes.outputs.docs_only != 'true'" in _job_block(workflow, job)
+    docs = _job_block(workflow, "docs")
+    assert "if: needs.changes.outputs.docs_only == 'true'" in docs
+    assert "-m docs" in docs
+
+
+def test_the_docs_marker_is_registered() -> None:
+    markers = _pytest_config()["markers"]
+    assert isinstance(markers, list)
+    assert any(str(m).startswith("docs:") for m in markers)
+
+
+def test_every_test_that_reads_the_repos_markdown_is_marked_docs() -> None:
+    """A docs-only PR runs only `-m docs`, so an unmarked reader goes unrun there.
+
+    Heuristic, and deliberately so: a module that globs for Markdown, or joins a
+    `.md` path onto PROJECT_ROOT, reads the repository's docs. A generated
+    README in a temp directory does not, and is not flagged.
+    """
+    for path in sorted(TESTS_DIR.glob("test_*.py")):
+        if path.name == "test_test_layout.py":
+            continue
+        source = path.read_text(encoding="utf-8")
+        reads_docs = '"*.md"' in source or any(
+            "PROJECT_ROOT" in line and '.md"' in line for line in source.splitlines())
+        if reads_docs:
+            assert "mark.docs" in source, (
+                f"{path.name} reads the repo's Markdown but is not marked `docs`, so a "
+                "docs-only PR would skip it in CI"
+            )

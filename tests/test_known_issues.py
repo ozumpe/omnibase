@@ -18,7 +18,12 @@ from __future__ import annotations
 
 import re
 
+import pytest
+
 from sis.paths import PROJECT_ROOT
+
+# Reads docs/KNOWN_ISSUES.md, so a docs-only PR still runs it (OMNI-60).
+pytestmark = pytest.mark.docs
 
 KNOWN_ISSUES = PROJECT_ROOT / "docs" / "KNOWN_ISSUES.md"
 
