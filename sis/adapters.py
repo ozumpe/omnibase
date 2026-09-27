@@ -148,6 +148,7 @@ class InMemoryVersionControl:
     def __init__(self, telemetry: InMemoryTelemetry) -> None:
         self._branches: dict[str, Branch] = {}
         self._prs: dict[str, PullRequest] = {}
+        self._files: dict[tuple[str, str], str] = {}  # (branch, path) -> content
         self._ids = itertools.count(1)
         self._tel = telemetry
 
@@ -167,13 +168,22 @@ class InMemoryVersionControl:
         return sha
 
     def open_pr(
-        self, branch: str, title: str, *, artifact: str = "", path: str
+        self, branch: str, title: str, *, artifact: str = "", path: str, body: str = ""
     ) -> PullRequest:
         pr_id = f"PR-{next(self._ids)}"
         pr = PullRequest(id=pr_id, branch=branch, title=title, artifact=artifact, path=path)
         self._prs[pr_id] = pr
         self._tel.emit("pr.opened", pr_id=pr_id, branch=branch, title=title, path=path)
         return pr
+
+    def write_file(self, branch: str, path: str, content: str, message: str) -> None:
+        if branch == "main":
+            raise RequiresHumanApproval("the agent must never commit to main")
+        self._files[(branch, path)] = content
+        self._tel.emit("commit", branch=branch, path=path, message=message)
+
+    def read_file(self, ref: str, path: str) -> str:
+        return self._files.get((ref, path), "")
 
     def get_pr(self, pr_id: str, *, path: str | None) -> PullRequest:
         # Mirrors the real adapter, which fetches *path* at the PR's head: the

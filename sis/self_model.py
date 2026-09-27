@@ -62,6 +62,10 @@ class SelfModel:
         # recovering the id by splitting is guesswork. The merge watcher needs
         # an exact id, and this is already the actor that knows what is deployed.
         self._pending_pr: str | None = None
+        # The feature each contract is building (OMNI-130): its branch, the
+        # steps committed so far, and what each attempt taught. In memory only:
+        # a restart starts a fresh feature, leaving the old branch behind.
+        self._features: dict[str, dict[str, Any]] = {}
 
     # --- actor registry ---
     def register(self, name: str, role: str, parent: str | None = None) -> None:
@@ -89,6 +93,15 @@ class SelfModel:
     def set_pending_pr(self, pr_id: str | None) -> None:
         """Record (or clear) the PR whose merge would release the canary."""
         self._pending_pr = pr_id
+
+    def feature(self, contract_name: str) -> dict[str, Any] | None:
+        return self._features.get(contract_name)
+
+    def set_feature(self, contract_name: str, feature: dict[str, Any] | None) -> None:
+        if feature is None:
+            self._features.pop(contract_name, None)
+        else:
+            self._features[contract_name] = feature
 
     def deployment(self) -> dict[str, Any]:
         return {"slots": dict(self._slots), "live_version": self._live_version,

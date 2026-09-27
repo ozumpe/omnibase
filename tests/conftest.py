@@ -19,6 +19,12 @@ import pytest
 # backend construct it directly on a tmp path or set SIS_EPISODIC_STORE themselves.
 os.environ.setdefault("SIS_EPISODIC_STORE", "none")
 
+# One accepted step per feature: a cycle that passes opens its PR at once, the
+# behaviour every cycle test before OMNI-130 was written against. The
+# multi-step feature flow sets its own value, before its cluster starts
+# (tests/test_feature_cycles.py).
+os.environ.setdefault("SIS_FEATURE_MAX_STEPS", "1")
+
 
 # Modules whose every test needs a live Ray Serve deployment.
 SERVE_MODULES = frozenset({

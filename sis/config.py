@@ -286,6 +286,11 @@ SCHEMA: tuple[Key, ...] = (
         "SIS_LOOP_INTERVAL", "Seconds between cycles in --loop mode."),
     Key("loop", "max_cycles", ConfigTier.SOFT, Kind.OPT_INT, None,
         "SIS_LOOP_MAX_CYCLES", "Stop after N cycles; unset runs until signalled."),
+    Key("loop", "feature_max_steps", ConfigTier.SOFT, Kind.INT, 3,
+        "SIS_FEATURE_MAX_STEPS",
+        "Accepted steps a feature branch collects before its one PR to the base "
+        "branch opens; a step that finds no further gain ends the feature sooner "
+        "(OMNI-130)."),
 
     # --- contracts: which target a cycle optimises. --------------------------
     Key("contracts", "default", ConfigTier.SOFT, Kind.OPT_STR, None,
@@ -718,6 +723,7 @@ class CanaryConfig:
 class LoopConfig:
     interval_seconds: float
     max_cycles: int | None
+    feature_max_steps: int
 
 
 @dataclass(frozen=True)

@@ -33,7 +33,9 @@ from sis.clock import Clock, now_iso
 from sis.paths import EPISODIC_DUCKDB, EPISODIC_JSONL
 
 # Outcomes that count as an accepted improvement (passed gauntlet + QA, in a PR).
-ACCEPTED_OUTCOMES = frozenset({"verified_awaiting_human_merge", "promoted"})
+# A feature step (OMNI-130) passed the gauntlet and was committed to its
+# feature branch: accepted, though its PR comes when the feature is finished.
+ACCEPTED_OUTCOMES = frozenset({"verified_awaiting_human_merge", "promoted", "feature_step"})
 
 # Reject gates that are benign rather than failures, and the cycle status each
 # is recorded under: no bug filed, no breaker increment, spend still recorded.

@@ -3,7 +3,9 @@
 **Status:** decided 2026-09-27 with Olaf; epic
 [OMNI-128](https://olafzumpe.atlassian.net/browse/OMNI-128). Phase 0, the
 sandbox worker (`sis/sandbox_worker.py`,
-[OMNI-129](https://olafzumpe.atlassian.net/browse/OMNI-129)), is built. The
+[OMNI-129](https://olafzumpe.atlassian.net/browse/OMNI-129)), and phase 1,
+feature branches (`sis/feature.py`,
+[OMNI-130](https://olafzumpe.atlassian.net/browse/OMNI-130)), are built. The
 other phases are planned.
 
 ## Why

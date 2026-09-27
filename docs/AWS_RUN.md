@@ -24,10 +24,17 @@ the laptop — and what it produces is an episodic log worth keeping.
 
 ## Run day
 
-**Re-run checklist.** Credentials, the SSM plugin and `terraform.tfvars` are
-already in place from the first run; the steps below have the details.
+**Re-run checklist (run #3, staged delivery).** Credentials, the SSM plugin and
+`terraform.tfvars` are already in place from the first run; the steps below
+have the details.
 
-1. `tofu -chdir=infra/aws apply`. It builds `v0.2.1`, sends to the
+0. **Prepare `ozumpe/testrun` once:**
+   - create a `develop` branch from `main`;
+   - put the naive `sum_of_divisors` back in `runtime/target.py` on
+     `develop` (both targets there have already converged);
+   - set `github.default_base: develop` in `secrets.local.yml`, so the loop
+     forks features from `develop` and opens their PRs against it.
+1. `tofu -chdir=infra/aws apply`. It builds `v0.3.0`, sends to the
    `alert_email` in `terraform.tfvars`, and reuses the artifacts bucket
    ([step 4](#run-day)).
 2. When the confirmation email arrives, **don't click it**. Copy the link and
@@ -36,10 +43,17 @@ already in place from the first run; the steps below have the details.
 3. Upload the secret: `poetry run python scripts/aws_secret.py --upload`.
 4. On the box, run `check_connections.py --deep`. The `Pager` line should show
    a ✓ ([The run itself](#the-run-itself), step 2).
-5. `main.py --contract sort --loop --loop-max-cycles 3`. The first line should
-   say `[sis] contract: sort`. Go straight to the loop, with no single cycle
-   first: the loop waits for your merge, but a separate earlier run's PR is
-   forgotten ([The run itself](#the-run-itself), step 4).
+5. `main.py --contract sum_of_divisors --loop --loop-max-cycles 10`. The first
+   line should say `[sis] contract: sum_of_divisors`.
+   - Each passing cycle commits a step to one feature branch (`[cycle]
+     feature_step: step 1 committed to feature/tes-…`). No PR opens yet.
+   - After 3 steps (`loop.feature_max_steps`), or as soon as a step finds no
+     further gain, **one** PR opens against `develop`, with every step in
+     its description.
+   - The loop then holds until you merge or close that PR on GitHub, and the
+     next feature starts from `develop` afterwards.
+   - Keep one process running: a feature in progress lives in memory, so a
+     restart starts a new one.
 
 **First time**, everything that needs no credentials is done and rehearsed.
 What is left, in order:
@@ -414,10 +428,10 @@ log's first line (`/var/log/sis-bootstrap.log`) and every run's provenance
 `code_version` in the episodic state) name the exact commit, and say `-dirty`
 if the tree was edited on the box.
 
-Run day uses the **`sort`** contract (decided 2026-09-26): its target scales
-with input size, so a live canary measures the function rather than the
-framework. Hence `--contract sort` below — it sets `contracts.default` before
-bootstrap, so the role actors see it.
+Run #2 used the **`sort`** contract; run #3 uses **`sum_of_divisors`**,
+re-seeded naive on `testrun`'s `develop`, because in July it improved in four
+steps, and a feature needs room for several. `--contract` sets
+`contracts.default` before bootstrap, so the role actors see it.
 
 ```bash
 sudo -iu ubuntu   # if you are not already — a session lands as ssm-user
@@ -440,11 +454,11 @@ export ANTHROPIC_API_KEY=$(aws secretsmanager get-secret-value \
 poetry run python main.py --show-config        # every value + which layer set it
 poetry run python scripts/check_connections.py --deep
 
-# 3. A short loop, watched. Check the first line says `[sis] contract: sort`:
-#    the first run silently optimised the default contract (OMNI-121).
-#    After a verified cycle the loop HOLDS until you merge (or close) its PR
-#    on ozumpe/testrun, then carries on from the merged code. Take your time.
-poetry run python main.py --contract sort --loop --loop-max-cycles 3
+# 3. The loop, watched. Check the first line says
+#    `[sis] contract: sum_of_divisors` (OMNI-121). Steps commit to a feature
+#    branch; one PR per feature opens against develop, and then the loop
+#    HOLDS until you merge (or close) it on ozumpe/testrun. Take your time.
+poetry run python main.py --contract sum_of_divisors --loop --loop-max-cycles 10
 
 # 4. On v0.2.1, don't run a single `main.py` cycle and then the loop: the
 #    pending PR lives only in memory and dies with the process, so the loop

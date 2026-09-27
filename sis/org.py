@@ -336,11 +336,13 @@ def cycle_summary(result: Mapping[str, Any]) -> str:
         detail = "circuit breaker open, no cycle ran (python -m sis.admin status)"
     elif status == "budget_denied":
         detail = "spend cap reached, no cycle ran"
-    elif status == "verified_awaiting_human_merge":
+    elif status in ("verified_awaiting_human_merge", "feature_step"):
         base, cand = result.get("baseline_latency"), result.get("candidate_latency")
         timing = (f" (baseline {base:.6f}s -> candidate {cand:.6f}s)"
                   if isinstance(base, int | float) and isinstance(cand, int | float) else "")
-        detail = f"PR {result.get('pr_id')} awaits a human merge{timing}"
+        detail = (f"step {result.get('step')} committed to {result.get('branch')}{timing}"
+                  if status == "feature_step"
+                  else f"PR {result.get('pr_id')} awaits a human merge{timing}")
     else:
         reason = result.get("reason")
         if isinstance(reason, str) and reason:
@@ -556,6 +558,20 @@ def run_cycle(
                         "spec_id": spec_id, "story_id": story_id,
                         "candidate_sha": impl.get("candidate_sha"),
                         "bug_id": bug_id, "breaker_bug_id": breaker_bug_id,
+                        "economics": ray.get(ceo.economics.remote()),
+                        "provenance": ray.get(sm.provenance.remote())}, cost_usd)
+
+    # A step committed to a feature branch (OMNI-130): accepted by the gauntlet,
+    # but no PR until the feature is finished, so nothing for QA or a canary
+    # yet. The feature keeps growing on the next cycle.
+    if impl.get("feature_step"):
+        trip = ray.get(ceo.report_outcome.remote(success=True, cost_usd=cost_usd))
+        return _record({"status": "feature_step", "spec_id": spec_id, "story_id": story_id,
+                        "branch": impl.get("branch"), "step": impl.get("step"),
+                        "candidate_sha": impl.get("candidate_sha"),
+                        "baseline_latency": impl.get("baseline"),
+                        "candidate_latency": impl.get("candidate_latency"),
+                        "breaker_bug_id": _breaker_alarm(trip),
                         "economics": ray.get(ceo.economics.remote()),
                         "provenance": ray.get(sm.provenance.remote())}, cost_usd)
 
