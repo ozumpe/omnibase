@@ -20,7 +20,7 @@ from sis.adapters_real import (
     _http_timeout,
     _TimeoutHTTP,
 )
-from sis.ports import Cloud, IssueStatus, RequiresHumanApproval
+from sis.ports import Cloud, IssueStatus, PullRequestNotFound, RequiresHumanApproval
 from sis.settings import AtlassianSettings, GitHubSettings
 
 
@@ -214,6 +214,40 @@ def test_get_pr_artifact_empty_when_file_absent() -> None:
     http.get = _no_file  # type: ignore[method-assign]
     # A 404 on the file must not raise — artifact is simply empty.
     assert gh.get_pr("7", path="runtime/target.py").artifact == ""
+
+
+@pytest.mark.parametrize(("state", "merged", "closed"), [
+    ("open", False, False), ("closed", False, True), ("closed", True, True)])
+def test_get_pr_reports_whether_a_human_closed_it(
+    state: str, merged: bool, closed: bool
+) -> None:
+    # OMNI-57: a declined PR used to read exactly like one still under review.
+    gh, http = _github()
+    http.get = lambda url, params=None: _Resp(  # type: ignore[method-assign]
+        {"number": 7, "head": {"ref": "f"}, "title": "t", "state": state, "merged": merged})
+    pr = gh.get_pr("7", path=None)
+    assert (pr.merged, pr.closed) == (merged, closed)
+
+
+def test_a_pr_github_does_not_have_is_not_found() -> None:
+    # OMNI-126: a remembered PR can outlive the PR; only a definite 404 says so.
+    gh, http = _github()
+    http.get = lambda url, params=None: _Resp({}, status_code=404)  # type: ignore[method-assign]
+    with pytest.raises(PullRequestNotFound, match="o/r has no PR #11"):
+        gh.get_pr("11", path=None)
+
+
+def test_an_outage_is_not_mistaken_for_a_missing_pr() -> None:
+    # Anything but a 404 says nothing about the PR. Reading it as "gone" would
+    # release a remembered hold during an outage, and the duplicate follows.
+    class _Down(_Resp):
+        def raise_for_status(self) -> None:
+            raise RuntimeError("502 Bad Gateway")
+
+    gh, http = _github()
+    http.get = lambda url, params=None: _Down({}, status_code=502)  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="502"):
+        gh.get_pr("11", path=None)
 
 
 def test_live_target_source_reads_the_base_branch() -> None:

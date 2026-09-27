@@ -17,14 +17,15 @@ import hashlib
 import pathlib
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, Literal
 
 import ray
 
 from sis import config, contract, contract_author, gauntlet, policy, proposer
+from sis import feature as feature_mod
 from sis.canary import DEFAULT_MIN_CANARY_SAMPLES, CanaryMode, evaluate_canary
 from sis.paths import PROJECT_ROOT, TARGET_PATH
-from sis.ports import IssueStatus, IssueType, PullRequest
+from sis.ports import IssueStatus, IssueType, PullRequest, PullRequestNotFound
 from sis.self_model import get_self_model
 from sis.settings import space_keys, version_control_base
 from sis.workspace import get_workspace
@@ -232,6 +233,19 @@ def _version_for(pr: PullRequest) -> str:
     success.
     """
     return f"{pr.branch}@{pr.id}"
+
+
+def pr_resolution(pr: PullRequest) -> Literal["hold", "promote", "release"]:
+    """What a pending PR's state means for the canary it holds. Pure.
+
+    ``promote`` — a human merged it. ``release`` — a human closed it without
+    merging (OMNI-57): the canary goes, and the loop carries on from the
+    target as it was. ``hold`` — still under review, however long that takes.
+    Only a human's decision ends a hold; the agent can make neither.
+    """
+    if pr.merged:
+        return "promote"
+    return "release" if pr.closed else "hold"
 
 
 class Role:
@@ -582,17 +596,31 @@ class SWE(Role):
         # version control has no merged source (the in-memory path, or a target
         # not yet committed to the base).
 
-        merged_source = ray.get(self._ws.live_target_source.remote(spec.target_path))
-        origin = "merged_base" if merged_source else "local_file"
-        # Fall back to the *contract's* target, not a hardcoded path — otherwise
-        # a cycle for any contract but the bootstrap one silently optimises
-        # runtime/target.py while being judged against a different oracle.
-        current_source = merged_source or pathlib.Path(
-            spec.target_file).read_text(encoding="utf-8")
+        #
+        # Within a feature (OMNI-130), the next step starts from the feature
+        # branch's head instead: the steps build on each other there, and the
+        # base branch sees them only when a human merges the finished feature.
+        max_steps = int(config.get("loop.feature_max_steps"))
+        feature: dict[str, Any] | None = ray.get(self._sm.feature.remote(spec.name))
+        head = (ray.get(self._ws.read_file.remote(feature["branch"], spec.target_path))
+                if feature else "")
+        if feature and not head:
+            feature = None  # the branch lost its file: start a fresh feature
+        if head:
+            current_source, origin = head, "feature_branch"
+        else:
+            merged_source = ray.get(self._ws.live_target_source.remote(spec.target_path))
+            origin = "merged_base" if merged_source else "local_file"
+            # Fall back to the *contract's* target, not a hardcoded path — otherwise
+            # a cycle for any contract but the bootstrap one silently optimises
+            # runtime/target.py while being judged against a different oracle.
+            current_source = merged_source or pathlib.Path(
+                spec.target_file).read_text(encoding="utf-8")
         ray.get(self._ws.emit.remote("target.source", story_id=story_id, origin=origin))
         # sandboxed, not in-process
         baseline = gauntlet.measure_baseline(current_source, contract=spec)
-        candidate = proposer.propose(current_source, baseline, contract=spec)
+        candidate = proposer.propose(current_source, baseline, contract=spec,
+                                     history=feature["attempts"] if feature else ())
         candidate_sha = hashlib.sha256(candidate.encode("utf-8")).hexdigest()[:12]
         cost_usd = proposer.last_cost_usd()  # 0.0 for the stub; real $ for Claude
         # Benchmark the candidate against the source the cycle is based on (the
@@ -604,6 +632,15 @@ class SWE(Role):
             ray.get(self._ws.transition.remote(
                 story_id, IssueStatus.TBD, f"Gauntlet failed: {report.reason}"))
             ray.get(self._sm.record.remote("outcome", story_id, passed=False, reason=report.reason))
+            if feature is not None:
+                feature = feature_mod.with_note(feature, f"rejected: {report.reason}")
+                if feature["steps"] and feature_mod.ends_feature(report.reason):
+                    # The head cannot be beaten: the feature is finished, and
+                    # its PR carries the head, not this rejected candidate.
+                    return self._finish_feature(
+                        story_id, spec, feature, current_source, cost_usd, candidate_sha,
+                        f"no further gain ({report.reason})")
+                ray.get(self._sm.set_feature.remote(spec.name, feature))
             return {"passed": False, "reason": report.reason, "pr_id": None,
                     "cost_usd": cost_usd, "candidate_sha": candidate_sha,
                     "contract": spec.name}
@@ -627,24 +664,55 @@ class SWE(Role):
                     "pr_id": None, "cost_usd": cost_usd, "candidate_sha": candidate_sha,
                     "contract": spec.name}
 
-        # Fork from the same base the merged target was read from, not a
-        # hardcoded "main" — see KNOWN_ISSUES.md M4.
-        branch = f"feature/{story_id.lower()}"
-        ray.get(self._ws.create_branch.remote(branch, version_control_base()))
-        ray.get(self._ws.commit.remote(branch, f"Optimise target for {story_id}"))
-        pr = ray.get(self._ws.open_pr.remote(
-            branch, f"Optimise target ({story_id})", candidate, spec.target_path))
+        # A passing step is committed to the feature branch, forked (for the
+        # first step) from the same base the merged target was read from, not
+        # a hardcoded "main" — see KNOWN_ISSUES.md M4. No PR yet (OMNI-130).
+        if feature is None:
+            feature = feature_mod.new_feature(feature_mod.feature_branch(story_id), story_id)
+            ray.get(self._ws.create_branch.remote(feature["branch"], version_control_base()))
+            ray.get(self._sm.record.remote("branch", feature["branch"], story=story_id))
+        step = len(feature["steps"]) + 1
+        ray.get(self._ws.write_file.remote(
+            feature["branch"], spec.target_path, candidate,
+            f"Step {step}: optimise {spec.name} ({story_id})"))
+        feature = feature_mod.with_step(feature, story_id, baseline, report.latency_seconds)
+        ray.get(self._sm.record.remote("commit", feature["branch"], story=story_id, step=step))
+        if feature_mod.is_full(feature, max_steps):
+            return self._finish_feature(story_id, spec, feature, candidate, cost_usd,
+                                        candidate_sha, f"{step} of {max_steps} steps")
+        ray.get(self._sm.set_feature.remote(spec.name, feature))
         ray.get(self._ws.transition.remote(
-            story_id, IssueStatus.READY_FOR_REVIEW, f"PR {pr.id} ready"))
+            story_id, IssueStatus.DONE, f"Step {step} committed to {feature['branch']}"))
+        return {"passed": True, "feature_step": True, "step": step, "pr_id": None,
+                "branch": feature["branch"], "baseline": baseline,
+                "candidate_latency": report.latency_seconds, "cost_usd": cost_usd,
+                "candidate_sha": candidate_sha, "contract": spec.name}
+
+    def _finish_feature(
+        self, story_id: str, spec: contract.OptimizationContract, feature: dict[str, Any],
+        head: str, cost_usd: float, candidate_sha: str, finished_because: str,
+    ) -> dict[str, Any]:
+        """Open the feature's one PR, for its head, and hand it to review.
+
+        The PR's head never moves after this (the next feature gets a new
+        branch), so a human merges exactly the steps the PR shows.
+        """
+        pr = ray.get(self._ws.open_pr.remote(
+            feature["branch"], feature_mod.pr_title(spec.name, feature), head,
+            spec.target_path, feature_mod.pr_body(spec.name, feature, finished_because)))
+        ray.get(self._ws.transition.remote(
+            story_id, IssueStatus.READY_FOR_REVIEW, f"Feature PR {pr.id} ready"))
         # The canary needs this PR's contract later (oracle, entry point,
         # margin, route) and has only the PR id to go on by then.
         ray.get(self._sm.set_pr_contract.remote(pr.id, spec.name))
-        ray.get(self._sm.record.remote("branch", branch, story=story_id))
+        ray.get(self._sm.set_feature.remote(spec.name, None))
+        first, last = feature["steps"][0], feature["steps"][-1]
         ray.get(self._sm.record.remote(
-            "pr", pr.id, story=story_id,
-            baseline=baseline, candidate=report.latency_seconds))
-        return {"passed": True, "pr_id": str(pr.id), "branch": branch,
-                "baseline": baseline, "candidate_latency": report.latency_seconds,
+            "pr", pr.id, story=story_id, steps=len(feature["steps"]),
+            baseline=first["baseline_s"], candidate=last["candidate_s"]))
+        return {"passed": True, "pr_id": str(pr.id), "branch": feature["branch"],
+                "steps": len(feature["steps"]), "finished_because": finished_because,
+                "baseline": first["baseline_s"], "candidate_latency": last["candidate_s"],
                 "cost_usd": cost_usd, "candidate_sha": candidate_sha,
                 "contract": spec.name}
 
@@ -958,13 +1026,23 @@ class DevOps(Role):
         """
         # Status only: a poll that fires every few seconds while a human
         # reviews has no use for the file, so it does not fetch one.
-        pr = ray.get(self._ws.get_pr.remote(pr_id, None))
+        try:
+            pr = ray.get(self._ws.get_pr.remote(pr_id, None))
+        except PullRequestNotFound:
+            # A remembered PR that no longer exists (OMNI-126): nothing is left
+            # to wait for. Anything else raised here (an outage) propagates, and
+            # the hold stays.
+            green = ray.get(self._sm.deployment.remote())["slots"].get("green")
+            return self._release(pr_id, str(green) if green else None, "no longer exists")
         version = _version_for(pr)
-        if not pr.merged:
+        resolution = pr_resolution(pr)
+        if resolution == "hold":
             # The overwhelmingly common case on any given tick. Deliberately
             # silent — emitting here would bury the audit trail under one event
             # per poll while a human takes hours to review.
             return {"pr": pr_id, "version": version, "merged": False, "promoted": False}
+        if resolution == "release":
+            return self._release(pr_id, version, "closed without merging")
 
         if self._pr_backend.get(pr_id) == "serve":
             spec = self._contract_for_live_pr(pr_id)
@@ -989,6 +1067,57 @@ class DevOps(Role):
         ray.get(self._ws.emit.remote("merge.observed", pr_id=pr_id, version=version))
         return {"pr": pr_id, "version": version, "merged": True, "promoted": True,
                 "slot": record.slot, "live": record.live}
+
+    def _release(self, pr_id: str, version: str | None, why: str) -> dict[str, Any]:
+        """A human declined *pr_id* (or it is gone): retire its canary, free green.
+
+        Before OMNI-57 nothing did this, so a closed PR held the canary, and
+        under ``loop.serve`` the whole loop, forever.
+        """
+        if version is not None:
+            self.retire_canary(version, pr_id)
+        else:  # nothing deployed to retire, but the hold itself must go
+            ray.get(self._sm.set_slot.remote("green", None))
+            ray.get(self._sm.set_pending_pr.remote(None))
+        ray.get(self._ws.emit.remote("pr.released", pr_id=pr_id, version=version, why=why))
+        # The contract rides along so the driver's episodic record of this
+        # human decision says which target it was about (OMNI-57, OMNI-121).
+        spec: contract.OptimizationContract | None = ray.get(
+            self._sm.contract_for_pr.remote(pr_id))
+        return {"pr": pr_id, "version": version, "merged": False, "promoted": False,
+                "released": True, "reason": why, "contract": spec.name if spec else None}
+
+    def adopt_pending(
+        self, pr_id: str, version: str, contract_name: str | None = None
+    ) -> dict[str, Any]:
+        """Put back a hold a previous process left, then resolve it (OMNI-126).
+
+        The hold lives in this cluster's memory, and every ``main.py`` starts
+        its own cluster, so a PR still awaiting review used to be forgotten
+        on restart. The next run then proposed the same change again: on the
+        second AWS run, ``testrun`` PRs #11 and #12, 47 s apart.
+
+        Records in the SelfModel what ``canary()`` recorded there (green, the
+        pending PR, its contract; not the Cloud's deploy record, which
+        promotion does not need), then asks the PR's current state through
+        :meth:`observe_merge`: merged since → promote, closed → release,
+        open → the hold stands. Pure bookkeeping before the check, so when the
+        check itself fails (an outage) the hold is already in place: failing
+        closed, as the brake state does (OMNI-61).
+
+        A green slot already held by a *different* PR is left alone: a
+        surviving detached SelfModel knows better than a file does.
+        """
+        held = ray.get(self._sm.deployment.remote())
+        if held["pending_pr"] not in (None, pr_id):
+            return {"pr": pr_id, "version": version, "adopted": False,
+                    "reason": f"green is already held for PR {held['pending_pr']}"}
+        if contract_name:
+            ray.get(self._sm.set_pr_contract.remote(pr_id, contract_name))
+        ray.get(self._sm.set_slot.remote("green", version))
+        ray.get(self._sm.set_pending_pr.remote(pr_id))
+        ray.get(self._sm.record.remote("canary_restored", version, pr=pr_id))
+        return {"adopted": True, **self.observe_merge(pr_id)}
 
     def retire_canary(self, version: str, pr_id: str | None = None) -> dict[str, Any]:
         """Take the canary out of the green slot and stop its traffic.

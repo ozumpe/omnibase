@@ -5,7 +5,9 @@ Actor roles, external subsystems & the self-model: @ACTORS.md
 New to the code? `docs/CODE_TOUR.md` (Python + Ray walkthrough). Contributor flow: `CONTRIBUTING.md`.
 Architecture diagram: `ray_self_improving_control_loop.svg` (this folder).
 Class 2 (feature construction) design: `docs/CLASS2_CONTRACT.md`. What comes after
-Class 2, toward omnitrack: `docs/OMNITRACK_VISION.md`.
+Class 2, toward omnitrack: `docs/OMNITRACK_VISION.md`. How work is promoted
+(feature → develop → main, epic OMNI-128) and the sandbox worker behind hot
+deploys: `docs/STAGED_DELIVERY.md`.
 
 **Naming:** *omnibase* = this engine (the `sis/` package; `sis` is just the import handle).
 *omnitrack* = the future end product (modeling an external slice of the world).
@@ -56,6 +58,11 @@ internal target before it models anything external.
   with **no** override, until OMNI-48 isolates it (OMNI-49, M19;
   `gauntlet.serve_canary_problem`, checked at startup, per cycle, and in
   `ServeCloud.deploy_canary`).
+  **Hot deploys go through the sandbox worker** (`sis/sandbox_worker.py`,
+  OMNI-129): the candidate is served from the gauntlet's own sandbox over
+  stdin/stdout, so it needs no network. The host times each exchange and
+  JSON-decodes each answer, so neither can be faked from inside. OMNI-48 moves
+  the canary onto it; until then the refusal above stands.
   **A broken sandbox is never blamed on the candidate** (OMNI-37): when a
   sandboxed gate fails, the gauntlet first runs a trusted self-check in the
   same sandbox (`gauntlet.probe_sandbox`); if that fails too, the verdict is
@@ -124,7 +131,8 @@ internal target before it models anything external.
     counts as correct/better is per-target — see `sis/contract.py`.
 - **Change-authorization policy (`sis/policy.py`) — what the loop may rewrite:**
   - FORBIDDEN (never, no override): guardrail/safety code — the gauntlet and
-    its output canonicaliser (`sis/canonical.py`), the contract layer (`sis/contract.py`, `sis/backtest.py`, `sis/invariant.py`,
+    its output canonicaliser (`sis/canonical.py`), the hot-deploy sandbox
+    worker (`sis/sandbox_worker.py`, `sis/sandbox_worker_main.py`), the contract layer (`sis/contract.py`, `sis/backtest.py`, `sis/invariant.py`,
     `sis/slo.py`, `sis/clock.py`), the contract-author approval gate
     (`sis/contract_author.py`),
     `specs/` (the exam itself — oracles, acceptance tests, domain laws, backtest
@@ -320,9 +328,12 @@ internal target before it models anything external.
   live runs — don't put planning there.
 
 ## Current status — where to pick up
-Released through **v0.2.1** (2026-09-27): v0.2.0 plus the fixes from the first
-AWS run (OMNI-121–124) and commit-lint's large-message fix (OMNI-125), and the
-AWS box runs that tag, not `develop`. v0.2.0 (2026-09-26, OMNI-63) was the
+Released through **v0.3.0** (2026-09-27): staged delivery's phases 0 and 1
+(OMNI-129 sandbox worker, OMNI-130 feature branches), plus OMNI-126/57 (the
+hold survives a restart; a declined PR releases it). Before that, **v0.2.1**
+(2026-09-27): v0.2.0 plus the fixes from the first
+AWS run (OMNI-121–124) and commit-lint's large-message fix (OMNI-125). The
+AWS box runs the latest release tag, not `develop`. v0.2.0 (2026-09-26, OMNI-63) was the
 first release since v0.1.4 (2026-07-05) and carried everything below through
 the OMNI-29 prerequisites. The
 bootstrap skeleton (original "first task") is **done**, plus much more:
@@ -403,7 +414,12 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   holds green; when a human merges, the candidate is promoted, green is released
   and the next cycle starts — previously `--loop` ran one cycle and idled
   forever, because `Cloud.promote()` had no caller at all. Provenance now
-  terminates in `promote` instead of stopping at `canary`.
+  terminates in `promote` instead of stopping at `canary`. A PR closed
+  without merging releases the hold and is logged as `human_declined`, never
+  a failure (OMNI-57), and the hold survives a
+  restart (OMNI-126): with the real GitHub adapter the pending PR is kept
+  in the episodic state, and `bootstrap()` restores it and checks it before
+  any cycle, so a new process never re-proposes a change still in review.
 - **`DevOps.canary()` can judge a candidate against real traffic**
   (`canary_backend="serve"`, OMNI-14; `--canary serve` / `SIS_CANARY=serve`;
   RUNBOOK Level 0e) — `sis.loadgen` fills the window itself (nothing external
@@ -607,9 +623,23 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   - Design + the Caddy/TLS decision: `docs/OPERATOR_FRONTEND.md`. Deployment
     artifacts (`Dockerfile.frontend`, `Caddyfile`) are deliberately not in this
     slice.
-- 822 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
+- **Staged delivery is the new direction** (epic
+  [OMNI-128](https://olafzumpe.atlassian.net/browse/OMNI-128), decided
+  2026-09-27; design in `docs/STAGED_DELIVERY.md`). One PR per candidate,
+  followed by a wait for a human, capped the loop at the speed of human
+  review. Instead:
+  - the agent iterates on its own feature branches, committing only versions
+    that passed the gauntlet and its own review;
+  - one PR per finished feature goes to `develop`, merged by a human by
+    default, with AI approval an opt-in `forbidden_` key;
+  - `develop` → `main` is a human release PR.
+
+  **Phase 0 is built:** `sis/sandbox_worker.py` (OMNI-129) serves a candidate
+  hot from the sandbox. It is tested in both sandbox modes, including that a
+  docker candidate cannot reach the network, Ray or the host's environment.
+- 895 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
   Ray-Serve-integration tests run separately, see Operational quick reference
-  above; 884 total — corrected 2026-09-26, a multi-dimension review found the
+  above; 957 total — corrected 2026-09-26, a multi-dimension review found the
   previously-documented 616/678 stale); `ruff`/`mypy --strict`/`pytest` clean;
   CI green; `feature → develop → main` enforced by both the client-side
   pre-push hook and active server-side rulesets.
@@ -643,9 +673,12 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
 **Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L
 severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
 the IDs in commits/PRs. **Open after a 2026-09-26 multi-dimension review with
-adversarial verification: H2–H3, M8–M9, M11–M14, M16–M18, M20–M23,
-L15–L20, L22, L25–L43** (M7 is won't-fix for now; H4, M10, M15, M19, L21, L23
-and L24 fixed 2026-09-26, OMNI-46/47/51/49/61/62). The headline, before
+adversarial verification: H2–H3, M8–M9, M11–M14, M16–M17, M20–M23,
+L15–L20, L22, L25–L43; plus L46 from the second AWS run** (M7 is won't-fix for now; H4, M10, M15, M19, L21, L23
+and L24 fixed 2026-09-26, OMNI-46/47/51/49/61/62; H5, H6, M24 and L44, found
+in the first AWS run, and L45, found releasing it, fixed 2026-09-27,
+OMNI-121–125; M18 and M25, the second run's duplicate PR, fixed the same day,
+OMNI-57/126). The headline, before
 trusting any gauntlet verdict: **the gate scripts judge a candidate inside its
 own process**. A candidate can rewrite the exam files later gates read (M9) or
 exit 0 with no verdict (M8). One redesign closes these and H2 (epic
@@ -683,9 +716,9 @@ Two traps L5 surfaced, both worth knowing before writing similar code:
 
 **Next — the milestone plan is in Jira ([`OMNI`](https://olafzumpe.atlassian.net/browse/OMNI)),
 not here.** Check the board for current status rather than trusting this list.
-**Last reconciled against a live query on 2026-09-26** (120 issues, OMNI-1
-through OMNI-120; 60 Done, 1 In Progress, 59 To Do — most of the growth is the
-KNOWN_ISSUES backfill, see "Known issues" above):
+**Last reconciled against a live query on 2026-09-27** (134 issues, OMNI-1
+through OMNI-134; 76 Done, 1 In Progress, 57 To Do — most of the growth since 2026-09-26 is
+the KNOWN_ISSUES backfill, see "Known issues" above):
 
 1. ~~**[OMNI-1](https://olafzumpe.atlassian.net/browse/OMNI-1) — L5 target
    contract** (Class 1)~~ — **done 2026-08-06** (OMNI-4/5/6/7). Two targets ship
@@ -764,15 +797,15 @@ KNOWN_ISSUES backfill, see "Known issues" above):
    instance lifecycle: `user_data` racing Ubuntu's `unattended-upgrades` for
    the dpkg lock, and SSM sessions landing as `ssm-user` rather than `ubuntu`
    (every runbook step now starts with `sudo -iu ubuntu`). The box clones
-   the release tag in `var.repo_ref` (`v0.2.1`; a branch needs
+   the release tag in `var.repo_ref` (`v0.3.0`; a branch needs
    `allow_branch_ref = true`, OMNI-63) and every run records the commit it
    ran; run day uses `--contract sort`. **Rehearsed
    2026-09-23** on a local Ubuntu 24.04 box (`scripts/rehearse_aws_run.sh`),
    which found two more defects no read-through could: the docker sandbox
    could not read its temp dir on native Linux (it now runs as the host uid),
    and the bootstrap did not install the `ui` group the console needs.
-   `tofu plan` is clean against the account. **Not applied yet — what's left
-   needs credentials**, and the whole sequence is `docs/AWS_RUN.md` "Run day":
+   `tofu plan` was clean against the account, and it was **applied for the run
+   on 2026-09-27**. The whole sequence is `docs/AWS_RUN.md` "Run day":
    three tokens (Atlassian, GitHub PAT, Anthropic), `tofu apply`,
    `scripts/aws_secret.py --upload`, the supervised cycles, `tofu destroy`.
    Explicitly **not** RUNBOOK Level 4: no autostart, no autonomy — a human
@@ -824,6 +857,27 @@ KNOWN_ISSUES backfill, see "Known issues" above):
    `To Do`, Low, filed 2026-09-24 as a placeholder epic — deliberately not
    broken into stories until Phases A–C exist to write them against.
 
+10. **[OMNI-128](https://olafzumpe.atlassian.net/browse/OMNI-128) — staged
+    delivery** (epic, High, filed 2026-09-27). This is where work continues;
+    see `docs/STAGED_DELIVERY.md`. In order:
+    - OMNI-129 (phase 0), the sandbox worker. **Done:** built, not yet used
+      by the canary or the gates.
+    - OMNI-130 (phase 1), feature branches. **Built:**
+      - each passing step is committed to an agent-owned branch;
+      - after `loop.feature_max_steps` steps (default 3), or when a step finds
+        no further gain, one PR goes to the base branch with every step in
+        its description;
+      - the prompt carries the earlier attempts;
+      - the test suite runs one-step features (`conftest.py`).
+      Feature state is in memory only; persisting it, holds per contract, and
+      one Jira story per feature rather than per step are deferred to the
+      hardening cycle (OMNI-135).
+    - Olaf's `testrun` preparation: a `develop` branch and a re-seeded naive
+      `sum_of_divisors`. Then v0.3.0 and **AWS run #3**.
+    - Then OMNI-48 (the canary onto the worker), OMNI-133 (`develop`
+      blue/green), OMNI-131 (the agent's own review), OMNI-45, OMNI-132 (AI
+      approval, blocked by OMNI-45) and OMNI-134 (dynamic feature size).
+
 Also on the board, outside the numbered epics:
 - [OMNI-37](https://olafzumpe.atlassian.net/browse/OMNI-37) — **Done
   2026-09-25** (PR #106): a broken sandbox is never blamed on the candidate
@@ -854,7 +908,8 @@ has the defect write-ups and the ID → ticket table:
   OMNI-52 config YAML injection (M12), OMNI-53 OAuth never
   installed (M13), OMNI-54 worked examples limited to the public API (M14),
   OMNI-55 spend lost on exceptions (M16), OMNI-56 QA-stage reject reason
-  (M17), OMNI-57 PR closed without merging (M18), OMNI-58 Serve baseline from
+  (M17), ~~OMNI-57 PR closed without merging (M18)~~ (done 2026-09-27, with
+  OMNI-126), OMNI-58 Serve baseline from
   the merged target (M22, unblocked by OMNI-51), OMNI-59 tests inherit `SIS_*`
   env (M23).
 - **Before OMNI-29 (run day):** OMNI-60–63, filed with OMNI-51 as its

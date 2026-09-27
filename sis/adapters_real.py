@@ -39,6 +39,7 @@ from sis.ports import (
     IssueType,
     Page,
     PullRequest,
+    PullRequestNotFound,
     RequiresHumanApproval,
     Severity,
 )
@@ -382,7 +383,7 @@ class GitHubVersionControl:
         return ""
 
     def open_pr(
-        self, branch: str, title: str, *, artifact: str = "", path: str
+        self, branch: str, title: str, *, artifact: str = "", path: str, body: str = ""
     ) -> PullRequest:
         if artifact:
             # The contract's own target (OMNI-51). _put_file still refuses
@@ -391,7 +392,7 @@ class GitHubVersionControl:
         resp = self._http.post(
             self._api("/pulls"),
             json={"title": title, "head": branch, "base": self._s.default_base,
-                  "body": "Automated proposal. Human review + merge required."},
+                  "body": body or "Automated proposal. Human review + merge required."},
         )
         if resp.status_code == 422 and "already exists" in resp.text.lower():
             # L11 (L8's sibling): a retry of the same story — a PR for this head is
@@ -432,7 +433,13 @@ class GitHubVersionControl:
                 "SOFT optimisation target(s)"
             )
         existing = self._http.get(self._api(f"/contents/{path}"), params={"ref": branch})
-        sha = existing.json().get("sha") if existing.status_code == 200 else None
+        current = existing.json() if existing.status_code == 200 else {}
+        sha = current.get("sha")
+        if current.get("content") and base64.b64decode(current["content"]).decode() == content:
+            # Already there: a feature's last step, written again when its PR
+            # opens (OMNI-130). An identical commit would only add noise.
+            self._tel.emit("commit.unchanged", branch=branch, path=path)
+            return
         payload: dict[str, Any] = {
             "message": message,
             "content": base64.b64encode(content.encode()).decode(),
@@ -444,7 +451,14 @@ class GitHubVersionControl:
         self._tel.emit("commit", branch=branch, path=path, message=message)
 
     def get_pr(self, pr_id: str, *, path: str | None) -> PullRequest:
-        data = _json(self._http.get(self._api(f"/pulls/{pr_id}")))
+        response = self._http.get(self._api(f"/pulls/{pr_id}"))
+        if response.status_code == 404:
+            # Only a definite "no such PR" becomes this (OMNI-126). Any other
+            # failure stays an HTTP error: it says nothing about the PR, and a
+            # remembered hold must survive an outage rather than be released.
+            raise PullRequestNotFound(
+                f"{self._s.owner}/{self._s.repo} has no PR #{pr_id}")
+        data = _json(response)
         head_ref = str(data["head"]["ref"])
         # GitHub's PR API doesn't carry file contents, but QA re-validates the
         # candidate from pr.artifact — so fetch the caller's file at the head
@@ -455,7 +469,17 @@ class GitHubVersionControl:
             artifact=self._get_file(head_ref, path) if path else "",
             merged=bool(data.get("merged", False)),
             path=path or "",
+            closed=data.get("state") == "closed",  # merged or declined (OMNI-57)
         )
+
+    def write_file(self, branch: str, path: str, content: str, message: str) -> None:
+        # _put_file refuses anything that is not a SOFT target, and main.
+        if branch == "main":
+            raise RequiresHumanApproval("the agent must never commit to main")
+        self._put_file(branch, path, content, message)
+
+    def read_file(self, ref: str, path: str) -> str:
+        return self._get_file(ref, path)
 
     def live_target_source(self, path: str) -> str:
         """*path* as merged on the live base branch ("" if absent)."""

@@ -47,7 +47,7 @@ reference with no link target below.
 > | M14 | [OMNI-54](https://olafzumpe.atlassian.net/browse/OMNI-54) |
 > | M16 (and L30) | [OMNI-55](https://olafzumpe.atlassian.net/browse/OMNI-55) |
 > | M17 | [OMNI-56](https://olafzumpe.atlassian.net/browse/OMNI-56) — partly done by #108 (QA returns its reason; neutral verdicts routed) |
-> | M18 | [OMNI-57](https://olafzumpe.atlassian.net/browse/OMNI-57) |
+> | M18 | [OMNI-57](https://olafzumpe.atlassian.net/browse/OMNI-57) — **fixed** (with OMNI-126) |
 > | M22 | [OMNI-58](https://olafzumpe.atlassian.net/browse/OMNI-58) — blocked by OMNI-51 |
 > | M23 | [OMNI-59](https://olafzumpe.atlassian.net/browse/OMNI-59) |
 > | L21, L23 | [OMNI-61](https://olafzumpe.atlassian.net/browse/OMNI-61) (brake state fails closed; `sis.admin`) — **fixed** |
@@ -60,7 +60,9 @@ reference with no link target below.
 ## High
 
 - [OMNI-45] **H2 — The benchmark verdict can be forged from inside the measured
-  process** *(found 2026-09-26 by a statistics-lens review of the merged
+  process** *(infrastructure for the fix exists since 2026-09-27: the sandbox
+  worker, OMNI-129, times and decodes on the host; the gates are not moved onto
+  it yet)* *(found 2026-09-26 by a statistics-lens review of the merged
   OMNI-41 gate; reproduced)* — the Class-1 benchmark runs the candidate in the
   same Python process as the harness that times it and reports the verdict.
   OMNI-41 moved the verdict onto a duplicate of stdout, which stops a
@@ -105,6 +107,11 @@ reference with no link target below.
   container fed candidate calls over stdio/a socket, with no Ray connection.
   Until that lands, refuse `canary.backend=serve` for a non-stub proposer, the
   same way `ensure_sandbox_allows_proposer` refuses the soft sandbox for M1.
+  **Progress (2026-09-27):** the container that fix needs exists:
+  `sis/sandbox_worker.py` (OMNI-129) serves a candidate from the gauntlet's
+  sandbox over stdio, and tests show a docker candidate cannot reach Ray, the
+  network or the host's environment. Moving green onto it is OMNI-48, so H3
+  stays open, and so does the refusal.
 
 ## Medium
 
@@ -237,15 +244,6 @@ reference with no link target below.
   distinction that the SWE-stage rejection path already carries. Fix: thread
   the gauntlet `Result` through QA's rejection path the same way `SWE.
   implement`'s does.
-
-- [OMNI-57] **M18 — A PR a human closes without merging holds the canary — and, under
-  `loop.serve(watch_merges=True)`, the whole loop — open indefinitely**
-  *(found 2026-09-26 from two angles, `sis/loop.py` and `sis/roles.py`;
-  confirmed by reading the code)* — `observe_merge` and the poll loop only
-  check for a merge; there is no "closed, not merged" terminal state, so a
-  human declining a change leaves green attached and the next cycle blocked
-  forever rather than resuming. Fix: poll the PR's actual state, not just
-  mergedness, and retire the canary + resume the loop on `closed`.
 
 - [OMNI-50] **M20 — The live canary's p95/p99 gate is close to a coin flip for targets
   where dispatch overhead dominates compute** *(found 2026-09-26; simulated
@@ -414,6 +412,18 @@ reference with no link target below.
   calls FORBIDDEN. Fix: word CLAUDE.md precisely, and consider extracting the
   pure brake-decision functions into their own FORBIDDEN module so
   safety-critical logic doesn't share a STRICT file with ordinary actor code.
+
+- [OMNI-127] **L46** — The proposer is not told which candidates were already
+  rejected, so it resubmits identical code and is billed again *(found
+  2026-09-27 in the second AWS run, OMNI-29)*. With the sort target already
+  fast after the merge, two consecutive cycles submitted byte-identical code
+  (`candidate_sha` `ae2b8da062a6`). The second was paid for ($0.015),
+  sandboxed, benchmarked and rejected for the same reason as the first. The
+  episodic store records every attempt, but nothing reads it back into the
+  prompt. Fix: short-circuit a resubmission whose sha matches one already
+  rejected against the same baseline, and put the last few attempts (gate,
+  reason, ratio) into the prompt as data, not instructions (see L27). The
+  breaker and the budget bound the cost.
 
 ## Resolved (Low)
 
@@ -614,6 +624,48 @@ any long-lived cluster exists.
   front.
 
 ## Resolved
+
+- [OMNI-126] **M25 — A verified PR awaiting merge is forgotten when the process
+  exits, so the next run proposes the same change again** *(found 2026-09-27
+  in the second AWS run, OMNI-29; reproduced there)*. A single
+  `main.py --contract sort` cycle opened `testrun` PR #11. The `--loop` run that
+  followed opened PR #12 with the same optimisation 47 s later ($0.015, and a
+  PR closed by hand), because avoiding it would have needed a merge within
+  seconds. The pending PR lives only in memory: `SelfModel._pending_pr` and the
+  green slot. Every `main.py` starts its own Ray cluster, and cycles baseline
+  from the *merged* target, so an unmerged improvement looks like none at all.
+  Within one `--loop` process the hold works: after #12 it waited six minutes
+  for the human merge, observed it (OMNI-15), and built on the merged code.
+  Fix: persist the pending PR per contract next to the brake state (atomic, as
+  in OMNI-61). On startup, check it through the VCS port: if it is open, hold;
+  if merged, build on it; if closed, release (OMNI-57's case). Interim:
+  `docs/AWS_RUN.md` goes straight to `--loop`.
+  **Fixed 2026-09-27:** a verified cycle's PR is remembered in the episodic
+  state (`pending_pr`, next to the brake state), but only with the real GitHub
+  adapter, since an in-memory PR dies with its process. `bootstrap()` puts the
+  hold back before any cycle can run, then checks the PR: merged since →
+  promoted; closed, or gone (`PullRequestNotFound`, only on a 404) → released;
+  still open → `[sis] HOLDING`, and neither `--loop` nor a single `main.py`
+  run proposes. An outage keeps the hold rather than releasing it. A decided
+  PR is forgotten, and a PR recorded for another repo is ignored. One record,
+  not one per contract as first planned: the engine holds one canary at a
+  time, so any pending PR holds every new cycle, as `loop.serve` already did.
+
+- [OMNI-57] **M18 — A PR a human closes without merging holds the canary — and, under
+  `loop.serve(watch_merges=True)`, the whole loop — open indefinitely**
+  *(found 2026-09-26 from two angles, `sis/loop.py` and `sis/roles.py`;
+  confirmed by reading the code)* — `observe_merge` and the poll loop only
+  check for a merge; there is no "closed, not merged" terminal state, so a
+  human declining a change leaves green attached and the next cycle blocked
+  forever rather than resuming. Fix: poll the PR's actual state, not just
+  mergedness, and retire the canary + resume the loop on `closed`.
+  **Fixed 2026-09-27 (with OMNI-126):** a PR now reports `closed` as well as
+  `merged` (GitHub's `state`), and `roles.pr_resolution` (pure) reads a
+  declined PR as `release`. `observe_merge` then retires the canary and frees
+  green, and `loop.serve` resumes on the same tick. The decision is logged in
+  the episodic store as its own outcome, `human_declined` (`pr_vanished` for a
+  PR that no longer exists), at no cost, with no reject gate and no breaker
+  count: declining a change judges the change, not the loop.
 
 - [OMNI-125] **L45** — commit-lint reported a commit that had a key as
   keyless when its message was larger than the pipe buffer: under `pipefail`,
@@ -1188,3 +1240,5 @@ any long-lived cluster exists.
 [OMNI-123]: https://olafzumpe.atlassian.net/browse/OMNI-123
 [OMNI-124]: https://olafzumpe.atlassian.net/browse/OMNI-124
 [OMNI-125]: https://olafzumpe.atlassian.net/browse/OMNI-125
+[OMNI-126]: https://olafzumpe.atlassian.net/browse/OMNI-126
+[OMNI-127]: https://olafzumpe.atlassian.net/browse/OMNI-127

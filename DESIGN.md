@@ -125,7 +125,10 @@ cheapest, safest checks first:
 5. **Sandboxed run** — execute the candidate in an isolated Ray task with its own
    `runtime_env`, ideally inside a locked-down container: **no network egress, no
    credential mounts.** Steps 3 and 4 run *inside* this sandbox so an infinite loop
-   or malicious diff is contained.
+   or malicious diff is contained. A candidate served *hot* (a canary, a feature
+   under test) runs in the same sandbox through the sandbox worker,
+   `sis/sandbox_worker.py`: a long-lived process reached over stdin/stdout, so it
+   needs no network (OMNI-129, `docs/STAGED_DELIVERY.md`).
 6. **Human PR** — mandatory manual review before anything merges.
 
 ## 6. Guardrails (MCP + repo)

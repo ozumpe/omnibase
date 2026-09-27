@@ -118,6 +118,10 @@ loop:
   # Stop after N cycles; unset runs until signalled.
   # env: SIS_LOOP_MAX_CYCLES   flag: --loop-max-cycles
   soft_max_cycles: null
+  # Accepted steps a feature branch collects before its one PR to the base branch opens;
+  # a step that finds no further gain ends the feature sooner (OMNI-130).
+  # env: SIS_FEATURE_MAX_STEPS   flag: --loop-feature-max-steps
+  soft_feature_max_steps: 3
 
 contracts:
   # Default contract name; --contract still overrides it per cycle.

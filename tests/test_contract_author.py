@@ -335,3 +335,6 @@ def test_every_path_that_runs_generated_code_takes_the_sandbox_preconditions() -
     author_src = (PROJECT_ROOT / "sis/contract_author.py").read_text(encoding="utf-8")
     assert "ensure_sandbox_ready()" in gauntlet_src
     assert "gauntlet.ensure_sandbox_ready()" in author_src
+    # A third executor since OMNI-129: the hot-deploy worker serves candidates.
+    worker_src = (PROJECT_ROOT / "sis/sandbox_worker.py").read_text(encoding="utf-8")
+    assert "gauntlet.ensure_sandbox_ready()" in worker_src

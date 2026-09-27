@@ -51,6 +51,11 @@ GUARDRAIL_PATHS: tuple[str, ...] = (
     # What every comparing gate reduces candidate output to before `==` (H4):
     # a loop able to loosen it could return a value with its own __eq__ again.
     "sis/canonical.py",
+    # The hot-deploy sandbox (OMNI-129): a candidate served here is judged by
+    # what the host reads off the pipe, so a loop able to edit either side
+    # could serve itself outside the sandbox, or forge what the host reads.
+    "sis/sandbox_worker.py",
+    "sis/sandbox_worker_main.py",
     # The contract layer. This module's docstring has always named *contracts*
     # as FORBIDDEN, but the list only ever protected `specs/` — the exam's
     # content — and not the declarations that decide how it is marked. That gap

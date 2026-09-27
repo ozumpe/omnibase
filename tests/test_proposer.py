@@ -37,7 +37,7 @@ def test_non_stub_mode_dispatches_to_llm(monkeypatch) -> None:  # type: ignore[n
     monkeypatch.setenv("SIS_PROPOSER", "claude")
     captured: dict[str, object] = {}
 
-    def fake(source: str, baseline: float, spec: object) -> str:
+    def fake(source: str, baseline: float, spec: object, history: object = ()) -> str:
         captured["source"] = source
         captured["baseline"] = baseline
         captured["contract"] = spec

@@ -73,6 +73,20 @@ class PullRequest:
     # Repo-relative file the artifact is for — the contract's target, never a
     # constant (OMNI-51). Empty when the PR was read without asking for a file.
     path: str = ""
+    # No longer open: merged, or closed by a human without merging. ``merged``
+    # says which. Without it a declined PR looked exactly like one still
+    # under review, and held the canary forever (OMNI-57).
+    closed: bool = False
+
+
+class PullRequestNotFound(LookupError):
+    """The version-control system has no PR with that id (OMNI-126).
+
+    A pending PR is remembered across restarts, so it can outlive the PR
+    itself: deleted, or opened by an in-memory adapter that died with its
+    process. Distinct from a network failure, which says nothing about the
+    PR and must not release the hold it keeps.
+    """
 
 
 @dataclass
@@ -143,7 +157,7 @@ class VersionControl(Protocol):
     def commit(self, branch: str, message: str) -> str: ...
 
     def open_pr(
-        self, branch: str, title: str, *, artifact: str = "", path: str
+        self, branch: str, title: str, *, artifact: str = "", path: str, body: str = ""
     ) -> PullRequest:
         """Open a PR proposing *artifact* as the new content of *path*.
 
@@ -161,6 +175,18 @@ class VersionControl(Protocol):
         would let a caller that needs the artifact forget to say which one and
         silently get an empty string.
         """
+        ...
+
+    def write_file(self, branch: str, path: str, content: str, message: str) -> None:
+        """Commit *content* to *path* on *branch*, an agent-owned feature branch.
+
+        How a feature collects its steps (OMNI-130): one commit per step that
+        passed, and no PR until the feature is finished.
+        """
+        ...
+
+    def read_file(self, ref: str, path: str) -> str:
+        """*path* at *ref* (a branch), or "" if it is not there."""
         ...
 
     def live_target_source(self, path: str) -> str:

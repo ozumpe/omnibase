@@ -82,6 +82,7 @@ type-annotated.
 | Area | Files | Notes |
 |---|---|---|
 | Validation gauntlet | `sis/gauntlet.py` | The moat. Sandbox modes + timeout live here. |
+| Sandbox worker | `sis/sandbox_worker.py`, `sandbox_worker_main.py` | Serves a candidate hot from the same sandbox, over stdio. POLICY-FORBIDDEN. See `docs/STAGED_DELIVERY.md`. |
 | Proposer | `sis/proposer.py` | Stub (default) or Claude behind `SIS_PROPOSER=claude`. |
 | Ports & adapters | `sis/ports.py`, `adapters.py`, `adapters_real.py` | Add a real backend by implementing the Protocols. |
 | Actor org | `sis/roles.py`, `org.py` | The seven roles + the cycle. |

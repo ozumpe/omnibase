@@ -17,6 +17,7 @@ and every handoff is recorded in the SelfModel provenance graph.
 
 from __future__ import annotations
 
+import datetime
 import logging
 import sys
 from collections.abc import Mapping
@@ -40,7 +41,7 @@ from sis.roles import (
     unreadable_brake_state,
 )
 from sis.self_model import get_self_model
-from sis.settings import space_keys
+from sis.settings import cached_settings, space_keys
 from sis.version import code_version
 from sis.workspace import get_workspace
 
@@ -101,6 +102,145 @@ def record_page_outcome(
             "title": title, "severity": severity.value, "error": outcome["error"]}})
     except Exception:  # noqa: BLE001 - notify() has already printed and emitted it
         pass
+
+
+# The episodic-state key for a verified PR still awaiting a human (OMNI-126).
+PENDING_PR_KEY = "pending_pr"
+
+
+def durable_vcs() -> str | None:
+    """``owner/repo`` when a PR outlives this process, else None.
+
+    Only the real GitHub adapter qualifies. An in-memory PR dies with its
+    adapter, and ids restart at PR-1 in the next process, so remembering one
+    would only ever restore a hold on nothing.
+    """
+    if str(config.get("adapters.mode")) != "real":
+        return None
+    try:
+        github = cached_settings().github
+    except Exception:  # noqa: BLE001 - no settings means nothing durable to find
+        return None
+    return f"{github.owner}/{github.repo}" if github and github.owner and github.repo else None
+
+
+def pending_pr_record(
+    result: Mapping[str, Any], *, repo: str | None, now: str
+) -> dict[str, Any] | None:
+    """What a finished cycle leaves for the next process to wait on, or None. Pure.
+
+    Only a verified candidate leaves a PR for a human, and only a durable
+    version-control system (*repo* set) can still show it to the next process.
+    The version is kept so the hold can be restored before the PR is checked:
+    if that check fails, the hold is already in place (OMNI-126).
+    """
+    if repo is None or result.get("status") != "verified_awaiting_human_merge":
+        return None
+    pr_id, version = result.get("pr_id"), (result.get("canary") or {}).get("version")
+    if not pr_id or not version:
+        return None
+    return {"pr_id": str(pr_id), "version": str(version),
+            "contract": result.get("contract"), "repo": repo, "since": now}
+
+
+def remember_pending_pr(
+    store: episodic.EpisodicStore, result: Mapping[str, Any], *, repo: str | None
+) -> None:
+    """Persist a verified cycle's PR so a restart still waits for it. Never raises."""
+    now = datetime.datetime.now(datetime.UTC).isoformat()
+    if (record := pending_pr_record(result, repo=repo, now=now)) is None:
+        return
+    try:
+        store.save_state(PENDING_PR_KEY, record)
+    except Exception as exc:  # noqa: BLE001 - like the brake state: loud, never fatal
+        print(f"[sis] WARNING: pending PR {record['pr_id']} not persisted; a restart "
+              f"will not wait for it: {exc}", file=sys.stderr)
+
+
+def forget_pending_pr(store: episodic.EpisodicStore, pr_id: str) -> None:
+    """Drop the remembered PR once a human has decided it. Never raises.
+
+    Only if it is *pr_id*: a stale caller must not clear a newer PR's hold.
+    """
+    try:
+        record = store.load_state(PENDING_PR_KEY)
+        if record and str(record.get("pr_id")) == str(pr_id):
+            store.save_state(PENDING_PR_KEY, {})
+    except Exception as exc:  # noqa: BLE001
+        print(f"[sis] WARNING: resolved PR {pr_id} not forgotten; the next start "
+              f"will check it again: {exc}", file=sys.stderr)
+
+
+# How a hold ended by a human's decision is recorded (OMNI-57): an outcome of
+# its own, never a gauntlet rejection and never a breaker count, because
+# declining a change is a judgement on the change, not a failure of the loop.
+RELEASE_OUTCOMES = {"closed without merging": "human_declined",
+                    "no longer exists": "pr_vanished"}
+
+
+def release_result(seen: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The episodic record of a released hold, as a cycle-result dict, or None. Pure.
+
+    No ``reason`` key on purpose: the episodic log reads ``reason`` as a
+    gauntlet rejection, and a human closing a PR is not one.
+    """
+    if not seen.get("released"):
+        return None
+    return {"status": RELEASE_OUTCOMES.get(str(seen.get("reason")), "released"),
+            "pr_id": seen.get("pr"), "contract": seen.get("contract")}
+
+
+def record_release(store: episodic.EpisodicStore, seen: Mapping[str, Any]) -> None:
+    """Append a released hold to the episodic log, at no cost. Never raises."""
+    if (result := release_result(seen)) is None:
+        return
+    try:
+        store.append(episodic.event_from_cycle_result(result, proposer="human"))
+    except Exception as exc:  # noqa: BLE001 - the log is auxiliary, as in run_cycle
+        print(f"[sis] WARNING: {result['status']} for PR {result['pr_id']} not "
+              f"recorded: {exc}", file=sys.stderr)
+
+
+def restore_pending_pr(
+    handles: Mapping[str, Any], store: episodic.EpisodicStore, *, repo: str | None
+) -> str | None:
+    """Put back the hold the last process left, resolved against the PR as it is now.
+
+    Returns the console line saying what happened, or None if there was
+    nothing to restore. Merged since → promoted; closed or gone → released;
+    still open → held, so no cycle proposes the same change again (OMNI-126).
+    """
+    if repo is None:
+        return None
+    try:
+        record = store.load_state(PENDING_PR_KEY)
+    except episodic.StateUnreadable:
+        return None  # the CEO has already booted with its breaker open over this file
+    if not record or not record.get("pr_id"):
+        return None
+    pr_id, contract = str(record["pr_id"]), record.get("contract")
+    label = f"PR {pr_id}" + (f" ({contract})" if contract else "")
+    if record.get("repo") != repo:
+        forget_pending_pr(store, pr_id)
+        return (f"[sis] forgot pending {label}: it is in {record.get('repo')}, "
+                f"this run uses {repo}")
+    try:
+        outcome = ray.get(handles["DevOps"].adopt_pending.remote(
+            pr_id, str(record["version"]), contract))
+    except Exception as exc:  # noqa: BLE001 - an outage keeps the hold; it never releases it
+        return (f"[sis] HOLDING for {label} from the last run: could not check it on "
+                f"{repo} ({exc}). No cycle starts until it can be checked.")
+    if not outcome.get("adopted", False):
+        return f"[sis] {label} from the last run not restored: {outcome.get('reason')}"
+    if outcome.get("promoted") or outcome.get("merged"):
+        forget_pending_pr(store, pr_id)
+        return f"[sis] {label} was merged since the last run: promoted; cycles build on it"
+    if outcome.get("released"):
+        record_release(store, outcome)
+        forget_pending_pr(store, pr_id)
+        return f"[sis] {label} from the last run was {outcome.get('reason')}: hold released"
+    return (f"[sis] HOLDING: {label} from the last run still awaits a human merge or "
+            f"close on {repo}. No cycle starts until then.")
 
 
 def bootstrap() -> dict[str, Any]:
@@ -169,6 +309,11 @@ def bootstrap() -> dict[str, Any]:
         print(f"[sis] WARNING: code version not persisted: {exc}", file=sys.stderr)
     print(f"[sis] running {version['describe']} ({version['sha']})", file=sys.stderr)
 
+    # A PR the last run left for a human is still pending until a human says
+    # otherwise (OMNI-126): restored before any cycle can propose it again.
+    if (line := restore_pending_pr(handles, store, repo=durable_vcs())) is not None:
+        print(line, file=sys.stderr)
+
     if held_open:
         page(workspace, store, Severity.CRITICAL, "brakes held open at startup",
              f"The CEO booted with its circuit breaker open: {held_open}")
@@ -191,11 +336,13 @@ def cycle_summary(result: Mapping[str, Any]) -> str:
         detail = "circuit breaker open, no cycle ran (python -m sis.admin status)"
     elif status == "budget_denied":
         detail = "spend cap reached, no cycle ran"
-    elif status == "verified_awaiting_human_merge":
+    elif status in ("verified_awaiting_human_merge", "feature_step"):
         base, cand = result.get("baseline_latency"), result.get("candidate_latency")
         timing = (f" (baseline {base:.6f}s -> candidate {cand:.6f}s)"
                   if isinstance(base, int | float) and isinstance(cand, int | float) else "")
-        detail = f"PR {result.get('pr_id')} awaits a human merge{timing}"
+        detail = (f"step {result.get('step')} committed to {result.get('branch')}{timing}"
+                  if status == "feature_step"
+                  else f"PR {result.get('pr_id')} awaits a human merge{timing}")
     else:
         reason = result.get("reason")
         if isinstance(reason, str) and reason:
@@ -414,6 +561,20 @@ def run_cycle(
                         "economics": ray.get(ceo.economics.remote()),
                         "provenance": ray.get(sm.provenance.remote())}, cost_usd)
 
+    # A step committed to a feature branch (OMNI-130): accepted by the gauntlet,
+    # but no PR until the feature is finished, so nothing for QA or a canary
+    # yet. The feature keeps growing on the next cycle.
+    if impl.get("feature_step"):
+        trip = ray.get(ceo.report_outcome.remote(success=True, cost_usd=cost_usd))
+        return _record({"status": "feature_step", "spec_id": spec_id, "story_id": story_id,
+                        "branch": impl.get("branch"), "step": impl.get("step"),
+                        "candidate_sha": impl.get("candidate_sha"),
+                        "baseline_latency": impl.get("baseline"),
+                        "candidate_latency": impl.get("candidate_latency"),
+                        "breaker_bug_id": _breaker_alarm(trip),
+                        "economics": ray.get(ceo.economics.remote()),
+                        "provenance": ray.get(sm.provenance.remote())}, cost_usd)
+
     # 6. Verify (QA + deterministic gauntlet).
     approved, qa_reason = ray.get(qa.review.remote(story_id, impl["pr_id"], contract_name))
 
@@ -459,7 +620,7 @@ def run_cycle(
         bug_id = None
     breaker_bug_id = _breaker_alarm(trip)
 
-    return _record({
+    result = _record({
         "status": status,
         # Feeds episodic.event_from_cycle_result's existing reason/reject_gate
         # extraction (result.get("reason")) with zero new plumbing there —
@@ -479,3 +640,7 @@ def run_cycle(
         "economics": ray.get(ceo.economics.remote()),
         "provenance": ray.get(sm.provenance.remote()),
     }, cost_usd)
+    # A verified candidate waits for a human, possibly longer than this
+    # process lives: remembered so the next start still waits (OMNI-126).
+    remember_pending_pr(store, result, repo=durable_vcs())
+    return result

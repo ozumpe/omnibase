@@ -29,6 +29,7 @@ from sis.ports import (
     IssueType,
     Page,
     PullRequest,
+    PullRequestNotFound,
     RequiresHumanApproval,
     Severity,
 )
@@ -147,6 +148,7 @@ class InMemoryVersionControl:
     def __init__(self, telemetry: InMemoryTelemetry) -> None:
         self._branches: dict[str, Branch] = {}
         self._prs: dict[str, PullRequest] = {}
+        self._files: dict[tuple[str, str], str] = {}  # (branch, path) -> content
         self._ids = itertools.count(1)
         self._tel = telemetry
 
@@ -166,7 +168,7 @@ class InMemoryVersionControl:
         return sha
 
     def open_pr(
-        self, branch: str, title: str, *, artifact: str = "", path: str
+        self, branch: str, title: str, *, artifact: str = "", path: str, body: str = ""
     ) -> PullRequest:
         pr_id = f"PR-{next(self._ids)}"
         pr = PullRequest(id=pr_id, branch=branch, title=title, artifact=artifact, path=path)
@@ -174,12 +176,24 @@ class InMemoryVersionControl:
         self._tel.emit("pr.opened", pr_id=pr_id, branch=branch, title=title, path=path)
         return pr
 
+    def write_file(self, branch: str, path: str, content: str, message: str) -> None:
+        if branch == "main":
+            raise RequiresHumanApproval("the agent must never commit to main")
+        self._files[(branch, path)] = content
+        self._tel.emit("commit", branch=branch, path=path, message=message)
+
+    def read_file(self, ref: str, path: str) -> str:
+        return self._files.get((ref, path), "")
+
     def get_pr(self, pr_id: str, *, path: str | None) -> PullRequest:
         # Mirrors the real adapter, which fetches *path* at the PR's head: the
         # artifact comes back only for the file it was written to. Returning it
         # for any path would let a caller asking for the wrong file pass every
         # in-memory test and fail only against GitHub (OMNI-51).
-        pr = self._prs[pr_id]
+        if (pr := self._prs.get(pr_id)) is None:
+            # A remembered PR can outlive its adapter (OMNI-126): this one dies
+            # with its process, and ids restart at PR-1 in the next.
+            raise PullRequestNotFound(f"no PR {pr_id!r} in this in-memory adapter")
         if path == pr.path:
             return pr
         return dataclasses.replace(pr, artifact="", path=path or "")
@@ -211,7 +225,20 @@ class InMemoryVersionControl:
         """
         pr = self._prs[pr_id]
         pr.merged = True
+        pr.closed = True  # a merged PR is closed on GitHub too
         self._tel.emit("pr.merged", pr_id=pr_id, by="human")
+        return pr
+
+    def simulate_human_close(self, pr_id: str) -> PullRequest:
+        """Model a human closing a PR *without* merging it (OMNI-57).
+
+        The other human decision a canary can wait on, with the same caveats
+        as :meth:`simulate_human_merge`: not on the port, not on the
+        ``Workspace``, unreachable from any role.
+        """
+        pr = self._prs[pr_id]
+        pr.closed = True
+        self._tel.emit("pr.closed", pr_id=pr_id, by="human")
         return pr
 
 

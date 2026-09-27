@@ -58,6 +58,14 @@ def run_org_cycle(contract_name: str | None = None, canary_backend: str | None =
     handles = org.bootstrap()
     print("[main] org bootstrapped:", ", ".join(handles))
 
+    # The single-run counterpart of loop.serve's hold: a PR the last run left
+    # for a human is still pending (OMNI-126). Proposing now would open a
+    # second PR with the same change, as testrun #11/#12 did on 2026-09-27.
+    if (held := loop.canary_in_flight(ray.get(handles["SelfModel"].deployment.remote()))):
+        print(f"[main] no cycle started: {held} still awaits a human merge or close. "
+              "Merge or close it, then run again.")
+        return
+
     title, body = _proposal(contract_name)
     result = org.run_cycle(
         handles,

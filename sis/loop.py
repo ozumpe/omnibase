@@ -360,7 +360,7 @@ def serve(
     """
     import ray
 
-    from sis import org
+    from sis import episodic, org
 
     ceo = handles["CEO"]
     self_model = handles["SelfModel"]
@@ -382,8 +382,16 @@ def serve(
             # that observes the merge is also the tick that may start the next
             # cycle — rather than idling one whole interval after the release.
             pending = pending_merge(deployment) if (held_by and watch_merges) else None
-            if pending and ray.get(devops.observe_merge.remote(pending))["promoted"]:
-                held_by = None
+            if pending:
+                seen = ray.get(devops.observe_merge.remote(pending))
+                # A merge promotes; a close without merging releases (OMNI-57).
+                # Either way a human has decided, so the PR is no longer
+                # remembered for the next start (OMNI-126).
+                if seen["promoted"] or seen.get("released"):
+                    held_by = None
+                    store = episodic.get_episodic_store()
+                    org.record_release(store, seen)   # a decline is logged (OMNI-57)
+                    org.forget_pending_pr(store, pending)
             if held_by:
                 ray.get(workspace.emit.remote("loop.held_for_canary", version=held_by))
         # Don't pull new work while frozen or while a canary is still being
@@ -403,7 +411,6 @@ def serve(
     def on_stop(tick: Tick, cycles_run: int) -> None:
         stopped_by.append(tick)
         if (alert := stop_alert(tick, cycles_run)) is not None:
-            from sis import episodic
             from sis.ports import Severity
 
             org.page(workspace, episodic.get_episodic_store(), Severity.CRITICAL, *alert)
