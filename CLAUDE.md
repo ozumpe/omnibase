@@ -320,9 +320,11 @@ internal target before it models anything external.
   live runs — don't put planning there.
 
 ## Current status — where to pick up
-Released through **v0.2.0** (2026-09-26, OMNI-63) — the first release since
-v0.1.4 (2026-07-05): everything below through the OMNI-29 prerequisites is in
-it, and the AWS box runs that tag, not `develop`. The
+Released through **v0.2.1** (2026-09-27): v0.2.0 plus the fixes from the first
+AWS run (OMNI-121–124) and commit-lint's large-message fix (OMNI-125), and the
+AWS box runs that tag, not `develop`. v0.2.0 (2026-09-26, OMNI-63) was the
+first release since v0.1.4 (2026-07-05) and carried everything below through
+the OMNI-29 prerequisites. The
 bootstrap skeleton (original "first task") is **done**, plus much more:
 - Actor org + SelfModel + Workspace; one intake→deploy cycle runs locally and stops at
   the human PR merge.
@@ -762,7 +764,7 @@ KNOWN_ISSUES backfill, see "Known issues" above):
    instance lifecycle: `user_data` racing Ubuntu's `unattended-upgrades` for
    the dpkg lock, and SSM sessions landing as `ssm-user` rather than `ubuntu`
    (every runbook step now starts with `sudo -iu ubuntu`). The box clones
-   the release tag in `var.repo_ref` (`v0.2.0`; a branch needs
+   the release tag in `var.repo_ref` (`v0.2.1`; a branch needs
    `allow_branch_ref = true`, OMNI-63) and every run records the commit it
    ran; run day uses `--contract sort`. **Rehearsed
    2026-09-23** on a local Ubuntu 24.04 box (`scripts/rehearse_aws_run.sh`),

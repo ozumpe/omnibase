@@ -333,7 +333,7 @@ instance lifecycle:
 
 ## The run itself
 
-The box runs the **release tag** in `var.repo_ref` — `v0.2.0` by default
+The box runs the **release tag** in `var.repo_ref` — `v0.2.1` by default
 (OMNI-63). A tag, not `develop`: a run's results are only worth something if
 they name the code that produced them, and a branch names whatever it pointed
 at when the box booted. Running a branch needs `-var allow_branch_ref=true` on
