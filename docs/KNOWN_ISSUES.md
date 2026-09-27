@@ -615,6 +615,17 @@ any long-lived cluster exists.
 
 ## Resolved
 
+- [OMNI-125] **L45** — commit-lint reported a commit that had a key as
+  keyless when its message was larger than the pipe buffer: under `pipefail`,
+  `echo "$msg" | grep -q` fails when grep exits at the first match and `echo`
+  dies of SIGPIPE. Found on the v0.2.0 back-merge (#124), whose release squash
+  (165 KB, 138 OMNI keys) was rejected. It failed closed, blocking valid PRs
+  and never admitting a bad one. `hooks/commit-msg` greps the file and was
+  never affected.
+  **Fixed 2026-09-27:** grep reads a here-string. `tests/test_commit_lint.py`
+  runs the workflow's own script against a throwaway repository, large and
+  small, with a key and without.
+
 - [OMNI-123] **M24 — `main.py` is silent where it matters** *(found
   2026-09-27 in the first AWS run, OMNI-29; **fixed 2026-09-27**)* — a rolled-back cycle prints
   `[main] cycle status: rolled_back` and nothing about the gate or the reason
@@ -1176,3 +1187,4 @@ any long-lived cluster exists.
 [OMNI-122]: https://olafzumpe.atlassian.net/browse/OMNI-122
 [OMNI-123]: https://olafzumpe.atlassian.net/browse/OMNI-123
 [OMNI-124]: https://olafzumpe.atlassian.net/browse/OMNI-124
+[OMNI-125]: https://olafzumpe.atlassian.net/browse/OMNI-125

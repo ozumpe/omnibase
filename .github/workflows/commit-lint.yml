@@ -73,11 +73,15 @@ jobs:
               continue
             fi
 
+            # A here-string, never `echo "$msg" | grep -q` (OMNI-125): grep -q
+            # exits at the first match, so on a message larger than the pipe
+            # buffer echo dies of SIGPIPE and pipefail turns a match into a
+            # miss. The v0.2.0 release squash (165 KB, 138 keys) was rejected.
             msg="$(git show -s --format=%B "$sha")"
-            if echo "$msg" | grep -qiE '(^|[^A-Za-z0-9])OMNI-[0-9]+([^A-Za-z0-9]|$)'; then
+            if grep -qiE '(^|[^A-Za-z0-9])OMNI-[0-9]+([^A-Za-z0-9]|$)' <<<"$msg"; then
               continue
             fi
-            if echo "$msg" | grep -qiE '^No-Ticket:'; then
+            if grep -qiE '^No-Ticket:' <<<"$msg"; then
               continue
             fi
 
