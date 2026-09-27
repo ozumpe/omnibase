@@ -82,6 +82,10 @@ def page(
     """
     outcome: dict[str, str] = ray.get(workspace.notify.remote(severity, title, body))
     record_page_outcome(store, severity, title, outcome)
+    if "delivered" in outcome:
+        # On the console too (OMNI-122): on a supervised run it is where the
+        # operator is looking, and the first AWS run's page left no trace there.
+        print(f"[sis] paged ({severity.value}): {title}", file=sys.stderr)
     return outcome
 
 

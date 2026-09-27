@@ -605,9 +605,9 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   - Design + the Caddy/TLS decision: `docs/OPERATOR_FRONTEND.md`. Deployment
     artifacts (`Dockerfile.frontend`, `Caddyfile`) are deliberately not in this
     slice.
-- 796 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
+- 808 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
   Ray-Serve-integration tests run separately, see Operational quick reference
-  above; 858 total — corrected 2026-09-26, a multi-dimension review found the
+  above; 870 total — corrected 2026-09-26, a multi-dimension review found the
   previously-documented 616/678 stale); `ruff`/`mypy --strict`/`pytest` clean;
   CI green; `feature → develop → main` enforced by both the client-side
   pre-push hook and active server-side rulesets.
@@ -642,7 +642,7 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
 severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
 the IDs in commits/PRs. **Open after a 2026-09-26 multi-dimension review with
 adversarial verification: H2–H3, M8–M9, M11–M14, M16–M18, M20–M23,
-L15–L20, L22, L25–L43** (M7 is won't-fix for now; H4, M10, M15, M19, L21, L23
+L15–L20, L22, L25–L44, M24** (M7 is won't-fix for now; H4, M10, M15, M19, L21, L23
 and L24 fixed 2026-09-26, OMNI-46/47/51/49/61/62). The headline, before
 trusting any gauntlet verdict: **the gate scripts judge a candidate inside its
 own process**. A candidate can rewrite the exam files later gates read (M9) or
@@ -737,7 +737,16 @@ KNOWN_ISSUES backfill, see "Known issues" above):
 
 7. **[OMNI-29](https://olafzumpe.atlassian.net/browse/OMNI-29) — first AWS
    run** (one node, a few supervised cycles — watch the provenance graph and
-   the bill). **In Progress:** designed 2026-08-16 (PR #94), pre-flighted
+   the bill). **Done 2026-09-27.** The box ran release `v0.2.0` end to end:
+   real Claude proposer in the docker sandbox, real Confluence/Jira/GitHub
+   artifacts (`TES-43`…`TES-53`), three cycles all rejected by the benchmark
+   gate with tight intervals (ratios 1.34 / 0.93 / 1.04), breaker tripped on
+   the third, **$0.107 of a $1.00 budget**; artifacts in
+   `s3://sis-first-run-artifacts-696644743351/runs/20260927-0007/`, console
+   log attached to OMNI-29. It ran the *default* contract, not `sort`
+   (OMNI-121), and its page reached nobody — 0 confirmed SNS subscriptions
+   passed the preflight (OMNI-122); both fixed; OMNI-123/124 open.
+   History: designed 2026-08-16 (PR #94), pre-flighted
    2026-08-30 (PR #99). `docs/AWS_RUN.md` is the design note and runbook,
    `infra/aws/` a small Terraform-language config driven with **OpenTofu**
    (`tofu`) — same HCL, provider and state format, but MPL-2.0 rather than

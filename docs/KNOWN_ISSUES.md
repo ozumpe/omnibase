@@ -298,6 +298,15 @@ reference with no link target below.
   autouse fixture, with an explicit opt-in fixture for the handful of tests
   that intentionally want a real backend.
 
+- [OMNI-123] **M24 — `main.py` is silent where it matters** *(found
+  2026-09-27 in the first AWS run, OMNI-29)* — a rolled-back cycle prints
+  `[main] cycle status: rolled_back` and nothing about the gate or the reason
+  (e.g. "no improvement: … total-time ratio 1.3384, 95% interval [1.2271,
+  1.4743]"), and a loop prints `loop stopped after 2 cycle(s)` without saying
+  the breaker had tripped. On a supervised run the console is what the
+  operator reads; the reasons were only in the episodic log. Fix: print the
+  gate, reason, cost and running spend per cycle, and why the loop stopped.
+
 ## Low
 
 - [OMNI-64] **L15** — `validate()` can be made to raise instead of returning a
@@ -414,6 +423,14 @@ reference with no link target below.
   calls FORBIDDEN. Fix: word CLAUDE.md precisely, and consider extracting the
   pure brake-decision functions into their own FORBIDDEN module so
   safety-critical logic doesn't share a STRICT file with ordinary actor code.
+- [OMNI-124] **L44** — The run box does not know its artifacts bucket: the
+  runbook's sync step reads `s3://<artifacts-bucket>/…`, and in the first AWS
+  run (2026-09-27) it took three attempts — the literal placeholder, a guessed
+  bucket (AccessDenied), then the right one. Fix: export the bucket name via
+  `/etc/profile.d`, as OMNI-62 does for the pager topic, and use it in the
+  runbook.
+  (Same run: the first `tofu init` timed out on the registry;
+  `TF_REGISTRY_CLIENT_TIMEOUT=60` worked.)
 
 ## Resolved (Low)
 
@@ -614,6 +631,23 @@ any long-lived cluster exists.
   front.
 
 ## Resolved
+
+- [OMNI-121] **H5 — The first AWS run optimised the default contract, and
+  nothing showed or recorded which** *(found and fixed 2026-09-27, OMNI-29)*
+  — run day was planned for `sort`; `main.py` ran without `--contract`, so
+  `sum_of_divisors` (already ~1 µs/call from July's runs) got three real
+  proposals, all correctly rejected, and the breaker tripped. The contract
+  had to be inferred from `--show-config`. **Fixed:** `main.py` prints
+  `[sis] contract: …` before bootstrap (saying when it is the default); every
+  episodic event records `contract`; DuckDB adds missing columns
+  (`ADD COLUMN IF NOT EXISTS`) so older databases keep accepting rows.
+- [OMNI-122] **H6 — The pager preflight passed with 0 confirmed SNS
+  subscriptions** *(found and fixed 2026-09-27, OMNI-29)* — the box printed
+  `✓ Pager … (0 confirmed subscription(s))`; SNS accepts every publish to a
+  topic nobody confirmed and delivers none, so the run's breaker-trip page
+  reached nobody. **Fixed:** `adapters_real.pager_problem` (pure) — the
+  preflight fails with what to do, the Workspace warns at startup, and a sent
+  page is printed on the console.
 
 - [OMNI-62] **L24** — Budget exhaustion stops `--loop` silently; `loop.decide()`'s own
   comment says a human is paged, but nothing files anything. Fix: route it
@@ -1126,3 +1160,7 @@ any long-lived cluster exists.
 [OMNI-118]: https://olafzumpe.atlassian.net/browse/OMNI-118
 [OMNI-119]: https://olafzumpe.atlassian.net/browse/OMNI-119
 [OMNI-120]: https://olafzumpe.atlassian.net/browse/OMNI-120
+[OMNI-121]: https://olafzumpe.atlassian.net/browse/OMNI-121
+[OMNI-122]: https://olafzumpe.atlassian.net/browse/OMNI-122
+[OMNI-123]: https://olafzumpe.atlassian.net/browse/OMNI-123
+[OMNI-124]: https://olafzumpe.atlassian.net/browse/OMNI-124

@@ -581,10 +581,35 @@ class SNSNotifier:
         self._tel.emit("notify.sent", id=delivery, severity=severity.value, title=title)
         return delivery
 
-    def check(self) -> str:
-        """Read-only: the topic exists and this identity can see it (preflight)."""
+    def subscriptions(self) -> tuple[int, int]:
+        """Read-only: ``(confirmed, pending)`` subscriptions on the topic."""
         attrs = self._sns.get_topic_attributes(TopicArn=self._arn)["Attributes"]
-        return f"{self._arn} ({attrs.get('SubscriptionsConfirmed', '?')} confirmed subscription(s))"
+        return (int(attrs.get("SubscriptionsConfirmed", 0)),
+                int(attrs.get("SubscriptionsPending", 0)))
+
+    def check(self) -> str:
+        """Preflight: the topic exists, is visible, and reaches someone.
+
+        Raises when no subscription is confirmed (OMNI-122). The first AWS run's
+        preflight printed a tick next to "0 confirmed subscription(s)", and the
+        breaker-trip page that followed was accepted by SNS and delivered to
+        nobody.
+        """
+        confirmed, pending = self.subscriptions()
+        if problem := pager_problem(confirmed, pending):
+            raise RuntimeError(problem)
+        return f"{self._arn} ({confirmed} confirmed subscription(s))"
+
+
+def pager_problem(confirmed: int, pending: int) -> str | None:
+    """Why a topic with these subscription counts pages nobody, or None. Pure."""
+    if confirmed > 0:
+        return None
+    waiting = (f"{pending} subscription(s) await confirmation — click the link AWS "
+               "mailed to alert_email" if pending
+               else "nothing is subscribed — check infra/aws's alert_email")
+    return (f"the pager topic has no confirmed subscription, so every page is "
+            f"delivered to nobody: {waiting}")
 
 
 def sns_subject(text: str) -> str:

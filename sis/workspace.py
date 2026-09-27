@@ -82,9 +82,18 @@ class Workspace:
         self.notifier: Notifier
         topic = config.get("adapters.notify_sns_topic_arn")
         if topic:
-            from sis.adapters_real import SNSNotifier
+            from sis.adapters_real import SNSNotifier, pager_problem
 
-            self.notifier = SNSNotifier(str(topic), tel)
+            sns = SNSNotifier(str(topic), tel)
+            self.notifier = sns
+            # OMNI-122: a topic nobody confirmed accepts every page and delivers
+            # none. The first AWS run started that way; say so before a cycle.
+            try:
+                if problem := pager_problem(*sns.subscriptions()):
+                    print(f"[sis] WARNING: {problem}", file=sys.stderr)
+            except Exception as exc:  # noqa: BLE001 - a warning, not a refusal
+                print(f"[sis] WARNING: could not verify the pager's subscriptions: {exc}",
+                      file=sys.stderr)
         else:
             self.notifier = InMemoryNotifier(tel)
             if settings.adapters == "real":
