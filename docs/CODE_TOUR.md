@@ -122,7 +122,9 @@ Read in this order — each builds on the last:
    `sis/` knows either by name. What each one must implement and be judged by
    lives in its contract plus `specs/<name>/`, never in the engine.
 2. **`sis/gauntlet.py`** — `validate(code, baseline) -> Result`. The moat. Read
-   this closely; it's the heart of the safety story (§5).
+   this closely; it's the heart of the safety story (§5). Its sibling
+   `sis/sandbox_worker.py` serves a candidate *hot* from the same sandbox, over
+   stdin/stdout, for canaries and feature tests (`docs/STAGED_DELIVERY.md`).
 3. **`sis/proposer.py`** — `propose(...) -> code`. Stub by default; real Claude
    behind a flag. Small.
 4. **`sis/ports.py` + `sis/adapters.py`** — the ports/adapters pattern (§6).

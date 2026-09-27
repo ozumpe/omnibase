@@ -13,7 +13,8 @@ from sis.policy import (
 def test_guardrail_code_is_forbidden() -> None:
     for path in ("sis/gauntlet.py", "sis/policy.py", "sis/cost.py",
                  "sis/settings.py", "sis/adapters.py", "sis/adapters_real.py",
-                 "Dockerfile.gauntlet"):
+                 "Dockerfile.gauntlet", "sis/sandbox_worker.py",
+                 "sis/sandbox_worker_main.py"):
         assert classify(path) is ChangeTier.FORBIDDEN, path
 
 

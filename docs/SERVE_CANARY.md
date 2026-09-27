@@ -9,6 +9,13 @@ is orthogonal follow-on work, not this doc's core loop. Tracked as
 Depends on [`docs/CLASS2_CONTRACT.md`](CLASS2_CONTRACT.md) — read that first.
 This doc is the extension of it that makes the canary step real.
 
+> **Where green is going (2026-09-27).** Green still runs as an ordinary Ray
+> worker, which is why `--canary serve` is refused with a real proposer
+> (KNOWN_ISSUES H3, OMNI-49). Its replacement exists: the sandbox worker
+> (`sis/sandbox_worker.py`, OMNI-129) serves a candidate from the gauntlet's
+> own sandbox over stdio. OMNI-48 moves green onto it. See
+> [`docs/STAGED_DELIVERY.md`](STAGED_DELIVERY.md).
+
 > Mirrored in Confluence (SD space) as a child of **The Validation Gauntlet**, sibling
 > of the Class-2 contract page:
 > <https://olafzumpe.atlassian.net/wiki/spaces/SD/pages/8028161>. This repo copy is
