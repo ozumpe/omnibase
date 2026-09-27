@@ -93,6 +93,37 @@ def stop_alert(tick: Tick, cycles_run: int) -> tuple[str, str] | None:
     return None
 
 
+def stop_summary(
+    tick: Tick | None,
+    cycles_run: int,
+    *,
+    max_cycles: int | None,
+    interrupted: bool,
+    trip_reason: str | None,
+    spent_usd: float,
+    budget_usd: float,
+) -> str:
+    """One console line: why the loop stopped, and where spend stands. Pure.
+
+    OMNI-123: the first AWS run printed ``loop stopped after 2 cycle(s)`` — not
+    that the breaker had tripped, nor why. *tick* is the one that made
+    :func:`decide` return STOP, or None when the loop ended by max_cycles or a
+    stop signal rather than by a condition.
+    """
+    if tick is not None and tick.breaker_open:
+        why = f"circuit breaker open ({trip_reason or 'reason not recorded'})"
+    elif tick is not None and not tick.budget_ok:
+        why = "spend budget exhausted"
+    elif interrupted:
+        why = "interrupted (Ctrl-C / SIGTERM)"
+    elif max_cycles is not None and cycles_run >= max_cycles:
+        why = f"reached loop.max_cycles ({max_cycles})"
+    else:
+        why = "no further work"
+    return (f"[loop] stopped after {cycles_run} cycle(s): {why}; "
+            f"spent ${spent_usd:.4f} of ${budget_usd:.2f}")
+
+
 def run_loop(
     poll: Callable[[], Tick],
     run_cycle: Callable[[Work], dict[str, Any]],
@@ -362,15 +393,28 @@ def serve(
                     paused=paused)
 
     def run_cycle(work: Work) -> dict[str, Any]:
-        return org.run_cycle(handles, work.title, work.body, estimate_usd=estimate_usd,
-                             canary_backend=canary_backend)
+        result = org.run_cycle(handles, work.title, work.body, estimate_usd=estimate_usd,
+                               canary_backend=canary_backend)
+        print(org.cycle_summary(result), flush=True)  # OMNI-123: every cycle says why
+        return result
+
+    stopped_by: list[Tick] = []
 
     def on_stop(tick: Tick, cycles_run: int) -> None:
+        stopped_by.append(tick)
         if (alert := stop_alert(tick, cycles_run)) is not None:
             from sis import episodic
             from sis.ports import Severity
 
             org.page(workspace, episodic.get_episodic_store(), Severity.CRITICAL, *alert)
 
-    return run_loop(poll, run_cycle, interval_s=interval_s,
-                    max_cycles=max_cycles, stop_event=stop, on_stop=on_stop)
+    results = run_loop(poll, run_cycle, interval_s=interval_s,
+                       max_cycles=max_cycles, stop_event=stop, on_stop=on_stop)
+    econ = ray.get(ceo.economics.remote())
+    print(stop_summary(
+        stopped_by[0] if stopped_by else None, len(results),
+        max_cycles=max_cycles, interrupted=stop.is_set(),
+        trip_reason=ray.get(ceo.state_snapshot.remote()).get("trip_reason"),
+        spent_usd=float(econ["spent_usd"]), budget_usd=float(econ["budget_usd"]),
+    ), flush=True)
+    return results

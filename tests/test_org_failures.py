@@ -44,6 +44,10 @@ def test_failed_cycle_files_a_bug(handles) -> None:  # type: ignore[no-untyped-d
     assert result["bug_id"] is not None
     bug = ray.get(handles["Workspace"].get_issue.remote(result["bug_id"]))
     assert bug.type is IssueType.BUG
+    # OMNI-123: every result carries its cost and the spend so far, so the
+    # console line can report money for every exit, not just the success path.
+    assert "cost_usd" in result and result["economics"]["budget_usd"] > 0
+    assert org.cycle_summary(result).startswith("[cycle] rolled_back: ")
 
 
 def test_circuit_breaker_files_a_page_then_opens(handles) -> None:  # type: ignore[no-untyped-def]
