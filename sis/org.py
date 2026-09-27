@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from collections.abc import Mapping
 from typing import Any
 
 import ray
@@ -174,6 +175,44 @@ def bootstrap() -> dict[str, Any]:
     return handles
 
 
+def cycle_summary(result: Mapping[str, Any]) -> str:
+    """One console line: what a cycle did, why, and what it cost. Pure (OMNI-123).
+
+    The first AWS run printed ``cycle status: rolled_back`` and nothing else;
+    the reason ("no improvement: … ratio 1.3384, 95% interval [1.2271,
+    1.4743]") was only in the episodic log synced off the box afterwards. On a
+    supervised run the console is what the operator reads, so the gate and
+    the reason go there, as the log records them.
+    """
+    status = str(result.get("status", "unknown"))
+    if status == "paused":
+        detail = f"paused by an operator: {result.get('pause_reason')}"
+    elif status == "circuit_breaker_open":
+        detail = "circuit breaker open, no cycle ran (python -m sis.admin status)"
+    elif status == "budget_denied":
+        detail = "spend cap reached, no cycle ran"
+    elif status == "verified_awaiting_human_merge":
+        base, cand = result.get("baseline_latency"), result.get("candidate_latency")
+        timing = (f" (baseline {base:.6f}s -> candidate {cand:.6f}s)"
+                  if isinstance(base, int | float) and isinstance(cand, int | float) else "")
+        detail = f"PR {result.get('pr_id')} awaits a human merge{timing}"
+    else:
+        reason = result.get("reason")
+        if isinstance(reason, str) and reason:
+            gate = episodic.gate_from_reason(reason) or "gate unknown"
+            detail = f"{gate}: {' '.join(reason.split())}"
+        else:
+            detail = "no reason recorded"
+    money = []
+    cost, econ = result.get("cost_usd"), result.get("economics")
+    if isinstance(cost, int | float):
+        money.append(f"cost ${cost:.4f}")
+    if isinstance(econ, Mapping):
+        money.append(f"spent ${float(econ['spent_usd']):.4f} of "
+                     f"${float(econ['budget_usd']):.2f}")
+    return f"[cycle] {status}: {detail}" + (f" ({'; '.join(money)})" if money else "")
+
+
 def cycle_outcome(approved: bool, canary: dict[str, Any] | None) -> tuple[str, bool, str | None]:
     """Fold QA's verdict and (if one ran) the canary's into one cycle outcome.
 
@@ -254,6 +293,10 @@ def run_cycle(
 
     def _record(res: dict[str, Any], cost: float = 0.0) -> dict[str, Any]:
         res.setdefault("contract", known_contract["name"])
+        # What the cycle cost and where spend stands, on every result — the
+        # console line (cycle_summary, OMNI-123) reports both for every exit.
+        res.setdefault("cost_usd", cost)
+        res.setdefault("economics", ray.get(ceo.economics.remote()))
         # Episodic logging + CEO-state persistence are auxiliary — they must never
         # break a cycle. The driver is the single writer (keeps DuckDB happy).
         try:

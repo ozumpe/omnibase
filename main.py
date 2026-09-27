@@ -67,15 +67,11 @@ def run_org_cycle(contract_name: str | None = None, canary_backend: str | None =
         canary_backend=canary_backend,
     )
 
-    print("\n[main] cycle status:", result["status"])
-    if "baseline_latency" in result:
-        print(
-            f"  baseline={result['baseline_latency']:.6f}s"
-            f"  candidate={result['candidate_latency']:.6f}s"
-            f"  PR={result['pr_id']}  (awaiting human merge)"
-        )
-    if result.get("canary", {}).get("verdict"):
-        verdict = result["canary"]["verdict"]
+    # OMNI-123: the status alone was all the first AWS run printed.
+    print("\n" + org.cycle_summary(result))
+    # `or {}`, not a .get default: a QA-rejected cycle carries canary=None, and
+    # None.get() used to crash main.py right after the cycle had finished.
+    if (verdict := (result.get("canary") or {}).get("verdict")):
         print(f"  live canary: {'PASS' if verdict['passed'] else 'FAIL'} — {verdict['reason']}")
 
     print("\n[main] provenance graph:")
@@ -98,14 +94,14 @@ def run_server_loop(
     # unbounded run keeps improving until Ctrl-C (rather than idling after one).
     # The contract itself reaches every cycle through contracts.default, which
     # --contract set before bootstrap (the role actors read it at creation).
-    results = loop.serve(
+    # loop.serve prints each cycle's outcome and why it stopped (OMNI-123).
+    loop.serve(
         handles,
         loop.repeat(*_proposal(contract_name)),
         interval_s=pacing.interval_seconds,
         max_cycles=pacing.max_cycles,
         canary_backend=canary_backend,
     )
-    print(f"[main] loop stopped after {len(results)} cycle(s)")
 
 
 def main() -> None:
