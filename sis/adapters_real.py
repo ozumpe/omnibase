@@ -383,7 +383,7 @@ class GitHubVersionControl:
         return ""
 
     def open_pr(
-        self, branch: str, title: str, *, artifact: str = "", path: str
+        self, branch: str, title: str, *, artifact: str = "", path: str, body: str = ""
     ) -> PullRequest:
         if artifact:
             # The contract's own target (OMNI-51). _put_file still refuses
@@ -392,7 +392,7 @@ class GitHubVersionControl:
         resp = self._http.post(
             self._api("/pulls"),
             json={"title": title, "head": branch, "base": self._s.default_base,
-                  "body": "Automated proposal. Human review + merge required."},
+                  "body": body or "Automated proposal. Human review + merge required."},
         )
         if resp.status_code == 422 and "already exists" in resp.text.lower():
             # L11 (L8's sibling): a retry of the same story — a PR for this head is
@@ -433,7 +433,13 @@ class GitHubVersionControl:
                 "SOFT optimisation target(s)"
             )
         existing = self._http.get(self._api(f"/contents/{path}"), params={"ref": branch})
-        sha = existing.json().get("sha") if existing.status_code == 200 else None
+        current = existing.json() if existing.status_code == 200 else {}
+        sha = current.get("sha")
+        if current.get("content") and base64.b64decode(current["content"]).decode() == content:
+            # Already there: a feature's last step, written again when its PR
+            # opens (OMNI-130). An identical commit would only add noise.
+            self._tel.emit("commit.unchanged", branch=branch, path=path)
+            return
         payload: dict[str, Any] = {
             "message": message,
             "content": base64.b64encode(content.encode()).decode(),
@@ -465,6 +471,15 @@ class GitHubVersionControl:
             path=path or "",
             closed=data.get("state") == "closed",  # merged or declined (OMNI-57)
         )
+
+    def write_file(self, branch: str, path: str, content: str, message: str) -> None:
+        # _put_file refuses anything that is not a SOFT target, and main.
+        if branch == "main":
+            raise RequiresHumanApproval("the agent must never commit to main")
+        self._put_file(branch, path, content, message)
+
+    def read_file(self, ref: str, path: str) -> str:
+        return self._get_file(ref, path)
 
     def live_target_source(self, path: str) -> str:
         """*path* as merged on the live base branch ("" if absent)."""

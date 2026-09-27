@@ -22,6 +22,7 @@ from typing import Any, Literal
 import ray
 
 from sis import config, contract, contract_author, gauntlet, policy, proposer
+from sis import feature as feature_mod
 from sis.canary import DEFAULT_MIN_CANARY_SAMPLES, CanaryMode, evaluate_canary
 from sis.paths import PROJECT_ROOT, TARGET_PATH
 from sis.ports import IssueStatus, IssueType, PullRequest, PullRequestNotFound
@@ -595,17 +596,31 @@ class SWE(Role):
         # version control has no merged source (the in-memory path, or a target
         # not yet committed to the base).
 
-        merged_source = ray.get(self._ws.live_target_source.remote(spec.target_path))
-        origin = "merged_base" if merged_source else "local_file"
-        # Fall back to the *contract's* target, not a hardcoded path — otherwise
-        # a cycle for any contract but the bootstrap one silently optimises
-        # runtime/target.py while being judged against a different oracle.
-        current_source = merged_source or pathlib.Path(
-            spec.target_file).read_text(encoding="utf-8")
+        #
+        # Within a feature (OMNI-130), the next step starts from the feature
+        # branch's head instead: the steps build on each other there, and the
+        # base branch sees them only when a human merges the finished feature.
+        max_steps = int(config.get("loop.feature_max_steps"))
+        feature: dict[str, Any] | None = ray.get(self._sm.feature.remote(spec.name))
+        head = (ray.get(self._ws.read_file.remote(feature["branch"], spec.target_path))
+                if feature else "")
+        if feature and not head:
+            feature = None  # the branch lost its file: start a fresh feature
+        if head:
+            current_source, origin = head, "feature_branch"
+        else:
+            merged_source = ray.get(self._ws.live_target_source.remote(spec.target_path))
+            origin = "merged_base" if merged_source else "local_file"
+            # Fall back to the *contract's* target, not a hardcoded path — otherwise
+            # a cycle for any contract but the bootstrap one silently optimises
+            # runtime/target.py while being judged against a different oracle.
+            current_source = merged_source or pathlib.Path(
+                spec.target_file).read_text(encoding="utf-8")
         ray.get(self._ws.emit.remote("target.source", story_id=story_id, origin=origin))
         # sandboxed, not in-process
         baseline = gauntlet.measure_baseline(current_source, contract=spec)
-        candidate = proposer.propose(current_source, baseline, contract=spec)
+        candidate = proposer.propose(current_source, baseline, contract=spec,
+                                     history=feature["attempts"] if feature else ())
         candidate_sha = hashlib.sha256(candidate.encode("utf-8")).hexdigest()[:12]
         cost_usd = proposer.last_cost_usd()  # 0.0 for the stub; real $ for Claude
         # Benchmark the candidate against the source the cycle is based on (the
@@ -617,6 +632,15 @@ class SWE(Role):
             ray.get(self._ws.transition.remote(
                 story_id, IssueStatus.TBD, f"Gauntlet failed: {report.reason}"))
             ray.get(self._sm.record.remote("outcome", story_id, passed=False, reason=report.reason))
+            if feature is not None:
+                feature = feature_mod.with_note(feature, f"rejected: {report.reason}")
+                if feature["steps"] and feature_mod.ends_feature(report.reason):
+                    # The head cannot be beaten: the feature is finished, and
+                    # its PR carries the head, not this rejected candidate.
+                    return self._finish_feature(
+                        story_id, spec, feature, current_source, cost_usd, candidate_sha,
+                        f"no further gain ({report.reason})")
+                ray.get(self._sm.set_feature.remote(spec.name, feature))
             return {"passed": False, "reason": report.reason, "pr_id": None,
                     "cost_usd": cost_usd, "candidate_sha": candidate_sha,
                     "contract": spec.name}
@@ -640,24 +664,55 @@ class SWE(Role):
                     "pr_id": None, "cost_usd": cost_usd, "candidate_sha": candidate_sha,
                     "contract": spec.name}
 
-        # Fork from the same base the merged target was read from, not a
-        # hardcoded "main" — see KNOWN_ISSUES.md M4.
-        branch = f"feature/{story_id.lower()}"
-        ray.get(self._ws.create_branch.remote(branch, version_control_base()))
-        ray.get(self._ws.commit.remote(branch, f"Optimise target for {story_id}"))
-        pr = ray.get(self._ws.open_pr.remote(
-            branch, f"Optimise target ({story_id})", candidate, spec.target_path))
+        # A passing step is committed to the feature branch, forked (for the
+        # first step) from the same base the merged target was read from, not
+        # a hardcoded "main" — see KNOWN_ISSUES.md M4. No PR yet (OMNI-130).
+        if feature is None:
+            feature = feature_mod.new_feature(feature_mod.feature_branch(story_id), story_id)
+            ray.get(self._ws.create_branch.remote(feature["branch"], version_control_base()))
+            ray.get(self._sm.record.remote("branch", feature["branch"], story=story_id))
+        step = len(feature["steps"]) + 1
+        ray.get(self._ws.write_file.remote(
+            feature["branch"], spec.target_path, candidate,
+            f"Step {step}: optimise {spec.name} ({story_id})"))
+        feature = feature_mod.with_step(feature, story_id, baseline, report.latency_seconds)
+        ray.get(self._sm.record.remote("commit", feature["branch"], story=story_id, step=step))
+        if feature_mod.is_full(feature, max_steps):
+            return self._finish_feature(story_id, spec, feature, candidate, cost_usd,
+                                        candidate_sha, f"{step} of {max_steps} steps")
+        ray.get(self._sm.set_feature.remote(spec.name, feature))
         ray.get(self._ws.transition.remote(
-            story_id, IssueStatus.READY_FOR_REVIEW, f"PR {pr.id} ready"))
+            story_id, IssueStatus.DONE, f"Step {step} committed to {feature['branch']}"))
+        return {"passed": True, "feature_step": True, "step": step, "pr_id": None,
+                "branch": feature["branch"], "baseline": baseline,
+                "candidate_latency": report.latency_seconds, "cost_usd": cost_usd,
+                "candidate_sha": candidate_sha, "contract": spec.name}
+
+    def _finish_feature(
+        self, story_id: str, spec: contract.OptimizationContract, feature: dict[str, Any],
+        head: str, cost_usd: float, candidate_sha: str, finished_because: str,
+    ) -> dict[str, Any]:
+        """Open the feature's one PR, for its head, and hand it to review.
+
+        The PR's head never moves after this (the next feature gets a new
+        branch), so a human merges exactly the steps the PR shows.
+        """
+        pr = ray.get(self._ws.open_pr.remote(
+            feature["branch"], feature_mod.pr_title(spec.name, feature), head,
+            spec.target_path, feature_mod.pr_body(spec.name, feature, finished_because)))
+        ray.get(self._ws.transition.remote(
+            story_id, IssueStatus.READY_FOR_REVIEW, f"Feature PR {pr.id} ready"))
         # The canary needs this PR's contract later (oracle, entry point,
         # margin, route) and has only the PR id to go on by then.
         ray.get(self._sm.set_pr_contract.remote(pr.id, spec.name))
-        ray.get(self._sm.record.remote("branch", branch, story=story_id))
+        ray.get(self._sm.set_feature.remote(spec.name, None))
+        first, last = feature["steps"][0], feature["steps"][-1]
         ray.get(self._sm.record.remote(
-            "pr", pr.id, story=story_id,
-            baseline=baseline, candidate=report.latency_seconds))
-        return {"passed": True, "pr_id": str(pr.id), "branch": branch,
-                "baseline": baseline, "candidate_latency": report.latency_seconds,
+            "pr", pr.id, story=story_id, steps=len(feature["steps"]),
+            baseline=first["baseline_s"], candidate=last["candidate_s"]))
+        return {"passed": True, "pr_id": str(pr.id), "branch": feature["branch"],
+                "steps": len(feature["steps"]), "finished_because": finished_because,
+                "baseline": first["baseline_s"], "candidate_latency": last["candidate_s"],
                 "cost_usd": cost_usd, "candidate_sha": candidate_sha,
                 "contract": spec.name}
 

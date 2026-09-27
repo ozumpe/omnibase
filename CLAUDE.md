@@ -634,9 +634,9 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   **Phase 0 is built:** `sis/sandbox_worker.py` (OMNI-129) serves a candidate
   hot from the sandbox. It is tested in both sandbox modes, including that a
   docker candidate cannot reach the network, Ray or the host's environment.
-- 884 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
+- 895 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
   Ray-Serve-integration tests run separately, see Operational quick reference
-  above; 946 total — corrected 2026-09-26, a multi-dimension review found the
+  above; 957 total — corrected 2026-09-26, a multi-dimension review found the
   previously-documented 616/678 stale); `ruff`/`mypy --strict`/`pytest` clean;
   CI green; `feature → develop → main` enforced by both the client-side
   pre-push hook and active server-side rulesets.
@@ -857,11 +857,18 @@ the KNOWN_ISSUES backfill, see "Known issues" above):
 10. **[OMNI-128](https://olafzumpe.atlassian.net/browse/OMNI-128) — staged
     delivery** (epic, High, filed 2026-09-27). This is where work continues;
     see `docs/STAGED_DELIVERY.md`. In order:
-    - OMNI-129 (phase 0), the sandbox worker. **In Progress:** built, not yet
-      used by the canary or the gates.
-    - OMNI-130 (phase 1), feature branches. A feature is done after `N` steps
-      (config, default 3) or when a step finds no further gain, with feedback
-      from earlier attempts in the prompt.
+    - OMNI-129 (phase 0), the sandbox worker. **Done:** built, not yet used
+      by the canary or the gates.
+    - OMNI-130 (phase 1), feature branches. **Built:**
+      - each passing step is committed to an agent-owned branch;
+      - after `loop.feature_max_steps` steps (default 3), or when a step finds
+        no further gain, one PR goes to the base branch with every step in
+        its description;
+      - the prompt carries the earlier attempts;
+      - the test suite runs one-step features (`conftest.py`).
+      Feature state is in memory only; persisting it, holds per contract, and
+      one Jira story per feature rather than per step are deferred to the
+      hardening cycle (OMNI-135).
     - Olaf's `testrun` preparation: a `develop` branch and a re-seeded naive
       `sum_of_divisors`. Then v0.3.0 and **AWS run #3**.
     - Then OMNI-48 (the canary onto the worker), OMNI-133 (`develop`
