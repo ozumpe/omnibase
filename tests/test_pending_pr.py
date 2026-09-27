@@ -140,3 +140,32 @@ def test_a_human_closing_a_pr_is_not_a_merge() -> None:
     assert (seen.merged, seen.closed) == (False, True)
     vcs.simulate_human_merge(vcs.open_pr("feature/y", "t", path="p").id)
     assert vcs.get_pr("PR-2", path=None).closed is True
+
+
+# --- a human's decision is logged as one (OMNI-57) -----------------------------
+
+
+@pytest.mark.parametrize(("reason", "status"), [
+    ("closed without merging", "human_declined"), ("no longer exists", "pr_vanished")])
+def test_a_released_hold_is_logged_as_what_ended_it(reason: str, status: str) -> None:
+    seen = {"released": True, "reason": reason, "pr": "11", "contract": "sort"}
+    assert org.release_result(seen) == {"status": status, "pr_id": "11", "contract": "sort"}
+
+
+def test_a_hold_that_was_not_released_logs_nothing() -> None:
+    assert org.release_result({"released": False, "promoted": True}) is None
+    assert org.release_result({}) is None
+
+
+def test_a_decline_is_never_read_as_a_gauntlet_rejection(tmp_path: Path) -> None:
+    # A human closing a PR judges the change; it is not the loop failing. No
+    # reject gate, no cost, and nothing the breaker or the gate stats count.
+    store = _store(tmp_path)
+    org.record_release(store, {"released": True, "reason": "closed without merging",
+                               "pr": "11", "contract": "sort"})
+    (event,) = store.events()
+    assert (event.outcome, event.pr_id, event.contract) == ("human_declined", "11", "sort")
+    assert event.reject_gate is None and event.reject_reason is None
+    assert event.gauntlet_passed is None and event.cost_usd == 0.0
+    assert event.proposer == "human"
+    assert store.summary()["rejected_by_gate"] == {}
