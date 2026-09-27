@@ -644,7 +644,7 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
 severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
 the IDs in commits/PRs. **Open after a 2026-09-26 multi-dimension review with
 adversarial verification: H2–H3, M8–M9, M11–M14, M16–M18, M20–M23,
-L15–L20, L22, L25–L43** (M7 is won't-fix for now; H4, M10, M15, M19, L21, L23
+L15–L20, L22, L25–L43; plus M25 and L46 from the second AWS run** (M7 is won't-fix for now; H4, M10, M15, M19, L21, L23
 and L24 fixed 2026-09-26, OMNI-46/47/51/49/61/62; H5, H6, M24 and L44, found
 in the first AWS run, and L45, found releasing it, fixed 2026-09-27,
 OMNI-121–125). The headline, before
@@ -685,8 +685,8 @@ Two traps L5 surfaced, both worth knowing before writing similar code:
 
 **Next — the milestone plan is in Jira ([`OMNI`](https://olafzumpe.atlassian.net/browse/OMNI)),
 not here.** Check the board for current status rather than trusting this list.
-**Last reconciled against a live query on 2026-09-27** (125 issues, OMNI-1
-through OMNI-125; 74 Done, 51 To Do — most of the growth since 2026-09-26 is
+**Last reconciled against a live query on 2026-09-27** (127 issues, OMNI-1
+through OMNI-127; 74 Done, 53 To Do — most of the growth since 2026-09-26 is
 the KNOWN_ISSUES backfill, see "Known issues" above):
 
 1. ~~**[OMNI-1](https://olafzumpe.atlassian.net/browse/OMNI-1) — L5 target

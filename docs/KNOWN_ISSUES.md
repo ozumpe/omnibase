@@ -298,6 +298,22 @@ reference with no link target below.
   autouse fixture, with an explicit opt-in fixture for the handful of tests
   that intentionally want a real backend.
 
+- [OMNI-126] **M25 — A verified PR awaiting merge is forgotten when the process
+  exits, so the next run proposes the same change again** *(found 2026-09-27
+  in the second AWS run, OMNI-29; reproduced there)*. A single
+  `main.py --contract sort` cycle opened `testrun` PR #11. The `--loop` run that
+  followed opened PR #12 with the same optimisation 47 s later ($0.015, and a
+  PR closed by hand), because avoiding it would have needed a merge within
+  seconds. The pending PR lives only in memory: `SelfModel._pending_pr` and the
+  green slot. Every `main.py` starts its own Ray cluster, and cycles baseline
+  from the *merged* target, so an unmerged improvement looks like none at all.
+  Within one `--loop` process the hold works: after #12 it waited six minutes
+  for the human merge, observed it (OMNI-15), and built on the merged code.
+  Fix: persist the pending PR per contract next to the brake state (atomic, as
+  in OMNI-61). On startup, check it through the VCS port: if it is open, hold;
+  if merged, build on it; if closed, release (OMNI-57's case). Interim:
+  `docs/AWS_RUN.md` goes straight to `--loop`.
+
 ## Low
 
 - [OMNI-64] **L15** — `validate()` can be made to raise instead of returning a
@@ -414,6 +430,18 @@ reference with no link target below.
   calls FORBIDDEN. Fix: word CLAUDE.md precisely, and consider extracting the
   pure brake-decision functions into their own FORBIDDEN module so
   safety-critical logic doesn't share a STRICT file with ordinary actor code.
+
+- [OMNI-127] **L46** — The proposer is not told which candidates were already
+  rejected, so it resubmits identical code and is billed again *(found
+  2026-09-27 in the second AWS run, OMNI-29)*. With the sort target already
+  fast after the merge, two consecutive cycles submitted byte-identical code
+  (`candidate_sha` `ae2b8da062a6`). The second was paid for ($0.015),
+  sandboxed, benchmarked and rejected for the same reason as the first. The
+  episodic store records every attempt, but nothing reads it back into the
+  prompt. Fix: short-circuit a resubmission whose sha matches one already
+  rejected against the same baseline, and put the last few attempts (gate,
+  reason, ratio) into the prompt as data, not instructions (see L27). The
+  breaker and the budget bound the cost.
 
 ## Resolved (Low)
 
@@ -1188,3 +1216,5 @@ any long-lived cluster exists.
 [OMNI-123]: https://olafzumpe.atlassian.net/browse/OMNI-123
 [OMNI-124]: https://olafzumpe.atlassian.net/browse/OMNI-124
 [OMNI-125]: https://olafzumpe.atlassian.net/browse/OMNI-125
+[OMNI-126]: https://olafzumpe.atlassian.net/browse/OMNI-126
+[OMNI-127]: https://olafzumpe.atlassian.net/browse/OMNI-127
