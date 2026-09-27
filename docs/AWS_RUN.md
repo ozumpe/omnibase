@@ -1,11 +1,15 @@
 # First AWS run (OMNI-29) — one node, a few cycles
 
-**Status:** designed (2026-08-16, PR #94), pre-flighted (2026-08-30, PR #99 —
-two boot-time defects fixed, switched to OpenTofu), and **rehearsed** end to end
-on a local Ubuntu 24.04 box (2026-09-23 — two more defects fixed, see
-[Rehearsal](#rehearsal)); `tofu plan` is clean against the account. Not yet
-applied: what is left needs credentials — see [Run day](#run-day). See
-[OMNI-29](https://olafzumpe.atlassian.net/browse/OMNI-29). This is the "small
+**Status:** the **first run happened on 2026-09-27**, on `v0.2.0`. Three
+cycles ran; the benchmark gate rejected all three, the breaker tripped and the
+run spent $0.107. It ran the wrong contract, and its page reached nobody. Every
+finding from it is fixed in **`v0.2.1`** (OMNI-121–125), which the next run
+uses. A second attempt the same day stopped at the pager: see
+[Run day](#run-day) step 5 before you click anything. History: designed
+(2026-08-16, PR #94), pre-flighted (2026-08-30, PR #99: two boot-time defects
+fixed, switched to OpenTofu), and **rehearsed** end to end on a local Ubuntu
+24.04 box (2026-09-23: two more defects fixed, see [Rehearsal](#rehearsal)).
+See [OMNI-29](https://olafzumpe.atlassian.net/browse/OMNI-29). This is the "small
 AWS run — watch the provenance graph and the bill" that CLAUDE.md carried as
 *not yet scheduled*: the full loop (real Claude proposer, real
 Confluence/Jira/GitHub adapters, kernel-enforced docker sandbox) on one EC2
@@ -20,8 +24,23 @@ the laptop — and what it produces is an episodic log worth keeping.
 
 ## Run day
 
-Everything that needs no credentials is done and rehearsed. What is left, in
-order:
+**Re-run checklist.** Credentials, the SSM plugin and `terraform.tfvars` are
+already in place from the first run; the steps below have the details.
+
+1. `tofu -chdir=infra/aws apply`. It builds `v0.2.1`, sends to the
+   `alert_email` in `terraform.tfvars`, and reuses the artifacts bucket
+   ([step 4](#run-day)).
+2. When the confirmation email arrives, **don't click it**. Copy the link and
+   run the `aws sns confirm-subscription … --authenticate-on-unsubscribe true`
+   command, then check the topic shows `1` confirmed ([step 5](#run-day)).
+3. Upload the secret: `poetry run python scripts/aws_secret.py --upload`.
+4. On the box, run `check_connections.py --deep`. The `Pager` line should show
+   a ✓ ([The run itself](#the-run-itself), step 2).
+5. `main.py --contract sort`. The first line should say
+   `[sis] contract: sort`.
+
+**First time**, everything that needs no credentials is done and rehearsed.
+What is left, in order:
 
 1. **Three credentials** — nothing else is missing.
    - Atlassian API token (id.atlassian.com → Security → API tokens) →
@@ -42,7 +61,7 @@ order:
    GitHub (user_data clones it; OMNI-63):
    ```bash
    cd infra/aws
-   echo 'alert_email = "you@example.com"' > terraform.tfvars   # gitignored
+   echo 'alert_email = "you@example.com"' > terraform.tfvars   # gitignored; first time only
    tofu init && tofu apply        # ~1 min; the box then bootstraps for ~10 min
    # If init times out reaching registry.opentofu.org (it did on the first
    # run): TF_REGISTRY_CLIENT_TIMEOUT=60 tofu init
@@ -51,15 +70,65 @@ order:
    The last line builds the secret from `secrets.local.yml` +
    `$ANTHROPIC_API_KEY` and uploads it directly — no plaintext JSON file on
    disk, nothing printed but routing and ✓/✗. Run it without `--upload` first
-   to see what it would send.
-5. **Confirm the pager.** `tofu apply` subscribes `alert_email` to the
-   `<name_prefix>-alerts` SNS topic, and AWS mails a confirmation link to it.
-   **Click it before the first cycle** — until then SNS accepts every publish
-   and delivers nothing, so a breaker trip, a spend-cap hit or a broken
-   sandbox would page nobody (OMNI-62). On the box, `check_connections.py`'s
-   `Pager` line **fails** until a subscription is confirmed, and the engine
-   warns at startup (OMNI-122) — the first run went ahead with a tick next to
-   "0 confirmed", and its breaker-trip page reached nobody.
+   to see what it would send. Upload again after every `tofu destroy`: the
+   destroy deletes the secret, and `apply` recreates it empty.
+
+   **Applying again after a `tofu destroy`** is expected to work as is.
+   `terraform.tfvars` already exists, so skip the `echo`. The artifacts bucket
+   survived the destroy (see [What persists](#what-persists)) and is still in
+   the local state, so `apply` keeps it and creates everything else:
+   **12 to add**, the bucket not among them. Only a lost `terraform.tfstate`
+   breaks this: `apply` would then try to create a bucket that already
+   exists. Fix that with
+   `tofu import aws_s3_bucket.artifacts sis-first-run-artifacts-<account-id>`.
+5. **Confirm the pager — from the terminal, not by clicking.** `tofu apply`
+   subscribes `alert_email` to the `<name_prefix>-alerts` SNS topic, and AWS
+   mails a confirmation link. Until a subscription is confirmed, SNS accepts
+   every publish and delivers nothing, so a breaker trip, a spend-cap hit or a
+   broken sandbox would page nobody (OMNI-62). The first run went ahead with
+   "0 confirmed" and its page reached nobody. On the box,
+   `check_connections.py`'s `Pager` line now **fails** until a subscription is
+   confirmed, and the engine warns at startup (OMNI-122).
+
+   **Don't click the link.** On 2026-09-27 the Gmail confirmation landed in
+   spam, and every click on *Confirm subscription* was followed immediately by
+   an unsubscribe. SNS's confirmation page carries an unsubscribe link that
+   works without any login, and something followed it. Confirm from the
+   terminal instead, with unsubscribing locked behind AWS authentication:
+
+   1. Find the "AWS Notification - Subscription Confirmation" email; check
+      spam too. Right-click **Confirm subscription**, choose "Copy link
+      address", and copy nothing else afterwards.
+   2. From the repo root (macOS: `pbpaste` reads the clipboard):
+      ```bash
+      aws sns confirm-subscription --region us-east-1 \
+        --topic-arn "$(tofu -chdir=infra/aws output -raw alerts_topic_arn)" \
+        --authenticate-on-unsubscribe true \
+        --token "$(pbpaste | python3 -c 'import sys,urllib.parse as u; q=u.parse_qs(u.urlparse(sys.stdin.read().strip()).query); q=q if "Token" in q else u.parse_qs(u.urlparse(q["q"][0]).query); print(q["Token"][0])')"
+      ```
+      It prints a `SubscriptionArn`. A `KeyError` from Python means the
+      clipboard doesn't hold the link.
+   3. Check the topic now has 1 confirmed subscription:
+      ```bash
+      aws sns get-topic-attributes --region us-east-1 \
+        --topic-arn "$(tofu -chdir=infra/aws output -raw alerts_topic_arn)" \
+        --query 'Attributes.[SubscriptionsConfirmed,SubscriptionsPending]' --output text
+      ```
+      The output should be `1	0`.
+
+   **No email?** Subscribing the same address again re-sends the confirmation
+   for the pending subscription. It creates no second subscription, and tofu
+   sees no drift:
+   ```bash
+   aws sns subscribe --region us-east-1 --protocol email --return-subscription-arn \
+     --topic-arn "$(tofu -chdir=infra/aws output -raw alerts_topic_arn)" \
+     --notification-endpoint "$(sed -nE 's/^alert_email *= *"(.*)"/\1/p' infra/aws/terraform.tfvars)"
+   ```
+   **Unsubscribed by accident?** Then `list-subscriptions-by-topic` shows
+   `Deleted`, and there is nothing left to confirm. Run `tofu apply` again to
+   recreate the subscription, or change `alert_email` (an address change
+   replaces the subscription, and updates the budget alerts in place). Then
+   repeat 1–3.
 6. **Run it:** `tofu -chdir=infra/aws output -raw ssm_session` prints the
    session command; to open the session straight away:
    ```bash
@@ -369,7 +438,8 @@ export ANTHROPIC_API_KEY=$(aws secretsmanager get-secret-value \
 poetry run python main.py --show-config        # every value + which layer set it
 poetry run python scripts/check_connections.py --deep
 
-# 3. One cycle, watched.
+# 3. One cycle, watched. Check the first line says `[sis] contract: sort`:
+#    the first run silently optimised the default contract (OMNI-121).
 poetry run python main.py --contract sort
 
 # 4. Then a short loop.
