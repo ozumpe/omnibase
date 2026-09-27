@@ -446,11 +446,12 @@ poetry run python scripts/check_connections.py --deep
 #    on ozumpe/testrun, then carries on from the merged code. Take your time.
 poetry run python main.py --contract sort --loop --loop-max-cycles 3
 
-# 4. Don't run a single `main.py` cycle and then the loop: the pending PR
-#    lives only in memory and dies with the process, so the loop would
-#    propose the same change again. The second run did this on 2026-09-27
-#    (PRs #11 and #12, 47 s apart). If an earlier process left a PR open,
-#    merge or close it before starting another run.
+# 4. On v0.2.1, don't run a single `main.py` cycle and then the loop: the
+#    pending PR lives only in memory and dies with the process, so the loop
+#    would propose the same change again. The second run did this on
+#    2026-09-27 (PRs #11 and #12, 47 s apart). If an earlier process left a
+#    PR open, merge or close it before starting another run. Fixed after
+#    v0.2.1 (OMNI-126): startup prints `[sis] HOLDING: PR ...` and waits.
 
 # 5. Keep the dataset, stop the meter. The first run needed three attempts
 #    here with a <placeholder> bucket; the box now knows its own (OMNI-124).

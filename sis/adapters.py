@@ -29,6 +29,7 @@ from sis.ports import (
     IssueType,
     Page,
     PullRequest,
+    PullRequestNotFound,
     RequiresHumanApproval,
     Severity,
 )
@@ -179,7 +180,10 @@ class InMemoryVersionControl:
         # artifact comes back only for the file it was written to. Returning it
         # for any path would let a caller asking for the wrong file pass every
         # in-memory test and fail only against GitHub (OMNI-51).
-        pr = self._prs[pr_id]
+        if (pr := self._prs.get(pr_id)) is None:
+            # A remembered PR can outlive its adapter (OMNI-126): this one dies
+            # with its process, and ids restart at PR-1 in the next.
+            raise PullRequestNotFound(f"no PR {pr_id!r} in this in-memory adapter")
         if path == pr.path:
             return pr
         return dataclasses.replace(pr, artifact="", path=path or "")
@@ -211,7 +215,20 @@ class InMemoryVersionControl:
         """
         pr = self._prs[pr_id]
         pr.merged = True
+        pr.closed = True  # a merged PR is closed on GitHub too
         self._tel.emit("pr.merged", pr_id=pr_id, by="human")
+        return pr
+
+    def simulate_human_close(self, pr_id: str) -> PullRequest:
+        """Model a human closing a PR *without* merging it (OMNI-57).
+
+        The other human decision a canary can wait on, with the same caveats
+        as :meth:`simulate_human_merge`: not on the port, not on the
+        ``Workspace``, unreachable from any role.
+        """
+        pr = self._prs[pr_id]
+        pr.closed = True
+        self._tel.emit("pr.closed", pr_id=pr_id, by="human")
         return pr
 
 

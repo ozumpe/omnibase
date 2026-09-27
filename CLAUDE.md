@@ -403,7 +403,11 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   holds green; when a human merges, the candidate is promoted, green is released
   and the next cycle starts — previously `--loop` ran one cycle and idled
   forever, because `Cloud.promote()` had no caller at all. Provenance now
-  terminates in `promote` instead of stopping at `canary`.
+  terminates in `promote` instead of stopping at `canary`. A PR closed
+  without merging releases the hold (OMNI-57), and the hold survives a
+  restart (OMNI-126): with the real GitHub adapter the pending PR is kept
+  in the episodic state, and `bootstrap()` restores it and checks it before
+  any cycle, so a new process never re-proposes a change still in review.
 - **`DevOps.canary()` can judge a candidate against real traffic**
   (`canary_backend="serve"`, OMNI-14; `--canary serve` / `SIS_CANARY=serve`;
   RUNBOOK Level 0e) — `sis.loadgen` fills the window itself (nothing external
@@ -607,9 +611,9 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   - Design + the Caddy/TLS decision: `docs/OPERATOR_FRONTEND.md`. Deployment
     artifacts (`Dockerfile.frontend`, `Caddyfile`) are deliberately not in this
     slice.
-- 822 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
+- 852 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
   Ray-Serve-integration tests run separately, see Operational quick reference
-  above; 884 total — corrected 2026-09-26, a multi-dimension review found the
+  above; 914 total — corrected 2026-09-26, a multi-dimension review found the
   previously-documented 616/678 stale); `ruff`/`mypy --strict`/`pytest` clean;
   CI green; `feature → develop → main` enforced by both the client-side
   pre-push hook and active server-side rulesets.
@@ -643,11 +647,12 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
 **Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L
 severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
 the IDs in commits/PRs. **Open after a 2026-09-26 multi-dimension review with
-adversarial verification: H2–H3, M8–M9, M11–M14, M16–M18, M20–M23,
-L15–L20, L22, L25–L43; plus M25 and L46 from the second AWS run** (M7 is won't-fix for now; H4, M10, M15, M19, L21, L23
+adversarial verification: H2–H3, M8–M9, M11–M14, M16–M17, M20–M23,
+L15–L20, L22, L25–L43; plus L46 from the second AWS run** (M7 is won't-fix for now; H4, M10, M15, M19, L21, L23
 and L24 fixed 2026-09-26, OMNI-46/47/51/49/61/62; H5, H6, M24 and L44, found
 in the first AWS run, and L45, found releasing it, fixed 2026-09-27,
-OMNI-121–125). The headline, before
+OMNI-121–125; M18 and M25, the second run's duplicate PR, fixed the same day,
+OMNI-57/126). The headline, before
 trusting any gauntlet verdict: **the gate scripts judge a candidate inside its
 own process**. A candidate can rewrite the exam files later gates read (M9) or
 exit 0 with no verdict (M8). One redesign closes these and H2 (epic
@@ -856,7 +861,8 @@ has the defect write-ups and the ID → ticket table:
   OMNI-52 config YAML injection (M12), OMNI-53 OAuth never
   installed (M13), OMNI-54 worked examples limited to the public API (M14),
   OMNI-55 spend lost on exceptions (M16), OMNI-56 QA-stage reject reason
-  (M17), OMNI-57 PR closed without merging (M18), OMNI-58 Serve baseline from
+  (M17), ~~OMNI-57 PR closed without merging (M18)~~ (done 2026-09-27, with
+  OMNI-126), OMNI-58 Serve baseline from
   the merged target (M22, unblocked by OMNI-51), OMNI-59 tests inherit `SIS_*`
   env (M23).
 - **Before OMNI-29 (run day):** OMNI-60–63, filed with OMNI-51 as its
