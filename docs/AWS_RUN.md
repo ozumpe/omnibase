@@ -36,8 +36,10 @@ already in place from the first run; the steps below have the details.
 3. Upload the secret: `poetry run python scripts/aws_secret.py --upload`.
 4. On the box, run `check_connections.py --deep`. The `Pager` line should show
    a ✓ ([The run itself](#the-run-itself), step 2).
-5. `main.py --contract sort`. The first line should say
-   `[sis] contract: sort`.
+5. `main.py --contract sort --loop --loop-max-cycles 3`. The first line should
+   say `[sis] contract: sort`. Go straight to the loop, with no single cycle
+   first: the loop waits for your merge, but a separate earlier run's PR is
+   forgotten ([The run itself](#the-run-itself), step 4).
 
 **First time**, everything that needs no credentials is done and rehearsed.
 What is left, in order:
@@ -438,12 +440,17 @@ export ANTHROPIC_API_KEY=$(aws secretsmanager get-secret-value \
 poetry run python main.py --show-config        # every value + which layer set it
 poetry run python scripts/check_connections.py --deep
 
-# 3. One cycle, watched. Check the first line says `[sis] contract: sort`:
+# 3. A short loop, watched. Check the first line says `[sis] contract: sort`:
 #    the first run silently optimised the default contract (OMNI-121).
-poetry run python main.py --contract sort
-
-# 4. Then a short loop.
+#    After a verified cycle the loop HOLDS until you merge (or close) its PR
+#    on ozumpe/testrun, then carries on from the merged code. Take your time.
 poetry run python main.py --contract sort --loop --loop-max-cycles 3
+
+# 4. Don't run a single `main.py` cycle and then the loop: the pending PR
+#    lives only in memory and dies with the process, so the loop would
+#    propose the same change again. The second run did this on 2026-09-27
+#    (PRs #11 and #12, 47 s apart). If an earlier process left a PR open,
+#    merge or close it before starting another run.
 
 # 5. Keep the dataset, stop the meter. The first run needed three attempts
 #    here with a <placeholder> bucket; the box now knows its own (OMNI-124).
