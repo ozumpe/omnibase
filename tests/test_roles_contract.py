@@ -41,3 +41,13 @@ def test_swe_implement_reports_candidate_sha_on_every_path() -> None:
             f"SWE.implement returns at line {literal.lineno} without candidate_sha — "
             "every exit path must report the diff it was judging"
         )
+
+
+def test_swe_implement_reports_its_contract_on_every_path() -> None:
+    # OMNI-121: the episodic log names the contract each cycle ran against,
+    # and the SWE is where the contract is resolved.
+    for literal in _returned_dict_literals(_method("SWE", "implement")):
+        keys = {k.value for k in literal.keys if isinstance(k, ast.Constant)}
+        assert "contract" in keys, (
+            f"SWE.implement returns at line {literal.lineno} without its contract")
+

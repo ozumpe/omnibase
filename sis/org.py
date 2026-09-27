@@ -82,6 +82,10 @@ def page(
     """
     outcome: dict[str, str] = ray.get(workspace.notify.remote(severity, title, body))
     record_page_outcome(store, severity, title, outcome)
+    if "delivered" in outcome:
+        # On the console too (OMNI-122): on a supervised run it is where the
+        # operator is looking, and the first AWS run's page left no trace there.
+        print(f"[sis] paged ({severity.value}): {title}", file=sys.stderr)
     return outcome
 
 
@@ -242,7 +246,14 @@ def run_cycle(
     model = llm.configured_model() if proposer != "stub" else None
     store = episodic.get_episodic_store()
 
+    # The contract this cycle runs against, as far as it is known yet: the
+    # caller's choice until the SWE has resolved it (OMNI-121). _record stamps
+    # it on every result, so the episodic log says which target a cycle was
+    # about — the first AWS run's log could not.
+    known_contract: dict[str, str | None] = {"name": contract_name}
+
     def _record(res: dict[str, Any], cost: float = 0.0) -> dict[str, Any]:
+        res.setdefault("contract", known_contract["name"])
         # Episodic logging + CEO-state persistence are auxiliary — they must never
         # break a cycle. The driver is the single writer (keeps DuckDB happy).
         try:
@@ -312,6 +323,7 @@ def run_cycle(
     # 5. Implement (SWE → validated change on a feature branch + PR).
     impl = ray.get(swe.implement.remote(story_id, contract_name))
     cost_usd = float(impl.get("cost_usd", 0.0))
+    known_contract["name"] = impl.get("contract", contract_name)
 
     # A "no change" outcome — the candidate is identical to the current baseline
     # — is not a failure: the loop correctly found nothing to improve. Record

@@ -55,7 +55,9 @@ order:
    **Click it before the first cycle** — until then SNS accepts every publish
    and delivers nothing, so a breaker trip, a spend-cap hit or a broken
    sandbox would page nobody (OMNI-62). On the box, `check_connections.py`'s
-   `Pager` line shows the count of confirmed subscriptions; it must be ≥ 1.
+   `Pager` line **fails** until a subscription is confirmed, and the engine
+   warns at startup (OMNI-122) — the first run went ahead with a tick next to
+   "0 confirmed", and its breaker-trip page reached nobody.
 6. **Run it:** `tofu -chdir=infra/aws output -raw ssm_session` prints the
    session command; then [The run itself](#the-run-itself).
 7. **Stop the meter:** sync the episodic log (step 5 of the run), stop the
