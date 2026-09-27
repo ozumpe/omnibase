@@ -423,14 +423,6 @@ reference with no link target below.
   calls FORBIDDEN. Fix: word CLAUDE.md precisely, and consider extracting the
   pure brake-decision functions into their own FORBIDDEN module so
   safety-critical logic doesn't share a STRICT file with ordinary actor code.
-- [OMNI-124] **L44** — The run box does not know its artifacts bucket: the
-  runbook's sync step reads `s3://<artifacts-bucket>/…`, and in the first AWS
-  run (2026-09-27) it took three attempts — the literal placeholder, a guessed
-  bucket (AccessDenied), then the right one. Fix: export the bucket name via
-  `/etc/profile.d`, as OMNI-62 does for the pager topic, and use it in the
-  runbook.
-  (Same run: the first `tofu init` timed out on the registry;
-  `TF_REGISTRY_CLIENT_TIMEOUT=60` worked.)
 
 ## Resolved (Low)
 
@@ -631,6 +623,19 @@ any long-lived cluster exists.
   front.
 
 ## Resolved
+
+- [OMNI-124] **L44** — The run box does not know its artifacts bucket: the
+  runbook's sync step reads `s3://<artifacts-bucket>/…`, and in the first AWS
+  run (2026-09-27) it took three attempts — the literal placeholder, a guessed
+  bucket (AccessDenied), then the right one. Fix: export the bucket name via
+  `/etc/profile.d`, as OMNI-62 does for the pager topic, and use it in the
+  runbook.
+  (Same run: the first `tofu init` timed out on the registry;
+  `TF_REGISTRY_CLIENT_TIMEOUT=60` worked.)
+  **Fixed 2026-09-27:** `user_data` writes `/etc/profile.d/sis-run.sh`
+  exporting `ARTIFACTS_BUCKET` next to the pager topic, and both sync
+  commands use `$ARTIFACTS_BUCKET`; the registry-timeout workaround is a
+  comment under "Run day" step 4.
 
 - [OMNI-121] **H5 — The first AWS run optimised the default contract, and
   nothing showed or recorded which** *(found and fixed 2026-09-27, OMNI-29)*
