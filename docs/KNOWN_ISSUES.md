@@ -60,7 +60,9 @@ reference with no link target below.
 ## High
 
 - [OMNI-45] **H2 — The benchmark verdict can be forged from inside the measured
-  process** *(found 2026-09-26 by a statistics-lens review of the merged
+  process** *(infrastructure for the fix exists since 2026-09-27: the sandbox
+  worker, OMNI-129, times and decodes on the host; the gates are not moved onto
+  it yet)* *(found 2026-09-26 by a statistics-lens review of the merged
   OMNI-41 gate; reproduced)* — the Class-1 benchmark runs the candidate in the
   same Python process as the harness that times it and reports the verdict.
   OMNI-41 moved the verdict onto a duplicate of stdout, which stops a
@@ -105,6 +107,11 @@ reference with no link target below.
   container fed candidate calls over stdio/a socket, with no Ray connection.
   Until that lands, refuse `canary.backend=serve` for a non-stub proposer, the
   same way `ensure_sandbox_allows_proposer` refuses the soft sandbox for M1.
+  **Progress (2026-09-27):** the container that fix needs exists:
+  `sis/sandbox_worker.py` (OMNI-129) serves a candidate from the gauntlet's
+  sandbox over stdio, and tests show a docker candidate cannot reach Ray, the
+  network or the host's environment. Moving green onto it is OMNI-48, so H3
+  stays open, and so does the refusal.
 
 ## Medium
 
