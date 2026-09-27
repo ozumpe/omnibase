@@ -605,9 +605,9 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   - Design + the Caddy/TLS decision: `docs/OPERATOR_FRONTEND.md`. Deployment
     artifacts (`Dockerfile.frontend`, `Caddyfile`) are deliberately not in this
     slice.
-- 809 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
+- 815 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
   Ray-Serve-integration tests run separately, see Operational quick reference
-  above; 871 total — corrected 2026-09-26, a multi-dimension review found the
+  above; 877 total — corrected 2026-09-26, a multi-dimension review found the
   previously-documented 616/678 stale); `ruff`/`mypy --strict`/`pytest` clean;
   CI green; `feature → develop → main` enforced by both the client-side
   pre-push hook and active server-side rulesets.
