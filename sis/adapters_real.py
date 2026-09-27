@@ -39,6 +39,7 @@ from sis.ports import (
     IssueType,
     Page,
     PullRequest,
+    PullRequestNotFound,
     RequiresHumanApproval,
     Severity,
 )
@@ -444,7 +445,14 @@ class GitHubVersionControl:
         self._tel.emit("commit", branch=branch, path=path, message=message)
 
     def get_pr(self, pr_id: str, *, path: str | None) -> PullRequest:
-        data = _json(self._http.get(self._api(f"/pulls/{pr_id}")))
+        response = self._http.get(self._api(f"/pulls/{pr_id}"))
+        if response.status_code == 404:
+            # Only a definite "no such PR" becomes this (OMNI-126). Any other
+            # failure stays an HTTP error: it says nothing about the PR, and a
+            # remembered hold must survive an outage rather than be released.
+            raise PullRequestNotFound(
+                f"{self._s.owner}/{self._s.repo} has no PR #{pr_id}")
+        data = _json(response)
         head_ref = str(data["head"]["ref"])
         # GitHub's PR API doesn't carry file contents, but QA re-validates the
         # candidate from pr.artifact — so fetch the caller's file at the head
@@ -455,6 +463,7 @@ class GitHubVersionControl:
             artifact=self._get_file(head_ref, path) if path else "",
             merged=bool(data.get("merged", False)),
             path=path or "",
+            closed=data.get("state") == "closed",  # merged or declined (OMNI-57)
         )
 
     def live_target_source(self, path: str) -> str:

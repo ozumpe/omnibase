@@ -198,6 +198,140 @@ def test_watch_merges_can_be_turned_off(handles, canary) -> None:  # type: ignor
     assert loop.canary_in_flight(_deployment(handles)) is not None
 
 
+# --- a PR a human declines (OMNI-57) ------------------------------------------
+
+
+def test_a_human_closing_the_pr_releases_green(handles, canary) -> None:  # type: ignore[no-untyped-def]
+    # Before OMNI-57 only a merge ended a hold, so a declined PR held the
+    # canary, and under loop.serve the whole loop, forever.
+    _mark_closed(handles, canary.id)
+
+    result = ray.get(handles["DevOps"].observe_merge.remote(canary.id))
+
+    assert result["released"] is True and result["promoted"] is False
+    assert result["reason"] == "closed without merging"
+    deployment = _deployment(handles)
+    assert loop.canary_in_flight(deployment) is None and loop.pending_merge(deployment) is None
+    assert ray.get(handles["Workspace"].live_version.remote()) != result["version"]
+
+
+def test_the_loop_resumes_when_a_human_closes_the_pr(handles, canary) -> None:  # type: ignore[no-untyped-def]
+    _mark_closed(handles, canary.id)
+    assert _consulted(handles), "the loop stayed held after the PR was closed"
+
+
+def test_a_pr_that_no_longer_exists_releases_its_hold(handles) -> None:  # type: ignore[no-untyped-def]
+    # A remembered PR can outlive the PR (OMNI-126). PullRequestNotFound must
+    # survive the trip through Ray as itself, or this would read as an outage.
+    sm = handles["SelfModel"]
+    ray.get(sm.set_slot.remote("green", "feature/gone@PR-999"))
+    ray.get(sm.set_pending_pr.remote("PR-999"))
+
+    result = ray.get(handles["DevOps"].observe_merge.remote("PR-999"))
+
+    assert result["released"] is True and result["reason"] == "no longer exists"
+    assert loop.canary_in_flight(_deployment(handles)) is None
+
+
+# --- a restart still waits for the human (OMNI-126) -----------------------------
+
+
+def test_a_restart_waits_for_the_last_runs_pr(handles, tmp_path, monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    # The second AWS run, replayed: a verified cycle leaves a PR, the process
+    # ends, the next one starts. Before OMNI-126 it proposed the same change again.
+    store = _durable(monkeypatch, tmp_path)
+    result = org.run_cycle(handles, "Speed up divisor-sum", "Too slow; same results.")
+    assert result["status"] == "verified_awaiting_human_merge"
+    pr_id = str(result["pr_id"])
+    assert store.load_state(org.PENDING_PR_KEY)["pr_id"] == pr_id
+
+    _forget_in_memory(handles)                 # a new process knows nothing...
+    capsys.readouterr()
+    org.bootstrap()                            # ...the restart path itself...
+    assert f"[sis] HOLDING: PR {pr_id}" in capsys.readouterr().err
+    assert loop.pending_merge(_deployment(handles)) == pr_id   # ...restores it
+
+    assert not _consulted(handles), "a restarted loop proposed while the PR was open"
+
+    _mark_closed(handles, pr_id)               # the human declines it
+    assert _consulted(handles), "the loop stayed held after the PR was closed"
+    assert not store.load_state(org.PENDING_PR_KEY), "a decided PR is still remembered"
+
+
+def test_a_pr_merged_offline_is_promoted_at_startup(handles, tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    store = _durable(monkeypatch, tmp_path)
+    result = org.run_cycle(handles, "Speed up divisor-sum", "Too slow; same results.")
+    pr_id = str(result["pr_id"])
+    _forget_in_memory(handles)
+    _mark_merged(handles, pr_id)               # merged while no process was running
+
+    line = org.restore_pending_pr(handles, store, repo="o/r")
+
+    assert line is not None and "was merged since the last run" in line
+    deployment = _deployment(handles)
+    assert deployment["live_version"] == result["canary"]["version"]
+    assert loop.canary_in_flight(deployment) is None
+    assert not store.load_state(org.PENDING_PR_KEY)
+
+
+def test_a_single_run_starts_no_cycle_while_a_pr_awaits_a_human(handles, canary, capsys) -> None:  # type: ignore[no-untyped-def]
+    # main.py without --loop: the other way the runbook's order produced #12.
+    import main
+
+    before = len(ray.get(handles["SelfModel"].provenance.remote()))
+    main.run_org_cycle()
+
+    assert "no cycle started" in capsys.readouterr().out
+    kinds = [e["kind"] for e in ray.get(handles["SelfModel"].provenance.remote())[before:]]
+    assert "pr" not in kinds and "story" not in kinds, "a cycle ran anyway"
+    assert loop.pending_merge(_deployment(handles)) == canary.id
+
+
+def test_restoring_never_takes_green_from_another_pr(handles, canary) -> None:  # type: ignore[no-untyped-def]
+    # A surviving detached SelfModel knows better than a file does.
+    outcome = ray.get(handles["DevOps"].adopt_pending.remote("PR-other", "x@PR-other"))
+    assert outcome["adopted"] is False
+    assert loop.pending_merge(_deployment(handles)) == canary.id
+
+
+def _durable(monkeypatch, tmp_path):  # type: ignore[no-untyped-def]
+    """Behave as the real adapters do (a PR outlives the process), in memory."""
+    from sis.episodic import JsonlEpisodicStore
+
+    store = JsonlEpisodicStore(tmp_path / "episodic.jsonl")
+    monkeypatch.setattr(org, "durable_vcs", lambda: "o/r")
+    monkeypatch.setattr(org.episodic, "get_episodic_store", lambda *a, **k: store)
+    return store
+
+
+def _forget_in_memory(handles) -> None:  # type: ignore[no-untyped-def]
+    """What a fresh process's SelfModel holds about the last run's PR: nothing."""
+    ray.get(handles["SelfModel"].set_slot.remote("green", None))
+    ray.get(handles["SelfModel"].set_pending_pr.remote(None))
+
+
+def _consulted(handles) -> bool:  # type: ignore[no-untyped-def]
+    """Whether a briefly-run loop.serve got as far as asking for new work."""
+    import threading
+
+    consulted: list[int] = []
+
+    def _trigger():  # type: ignore[no-untyped-def]
+        consulted.append(1)
+        return None            # no work: keeps the check fast
+
+    stop = threading.Event()
+    threading.Timer(0.4, stop.set).start()
+    loop.serve(handles, _trigger, interval_s=0.01, stop_event=stop)
+    return bool(consulted)
+
+
+def _mark_closed(handles, pr_id: str) -> None:  # type: ignore[no-untyped-def]
+    """Simulate a human closing the PR without merging, as ``_mark_merged`` does."""
+    ray.get(handles["Workspace"].__ray_call__.remote(
+        lambda self, pid: self.vcs.simulate_human_close(pid), pr_id))
+
+
 def _mark_merged(handles, pr_id: str) -> None:  # type: ignore[no-untyped-def]
     """Simulate a human merging on GitHub.
 
