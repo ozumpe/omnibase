@@ -58,3 +58,13 @@ def test_code_version_names_this_checkout() -> None:
 
 def test_code_version_outside_a_repository_says_unknown(tmp_path: Path) -> None:
     assert code_version(tmp_path) == {"sha": "unknown", "describe": "unknown"}
+
+
+def test_the_box_knows_its_artifacts_bucket() -> None:
+    # OMNI-124: the first run's sync took three attempts — the literal
+    # <artifacts-bucket> placeholder, a guessed bucket, then the right one.
+    main = (_INFRA / "main.tf").read_text(encoding="utf-8")
+    assert "export ARTIFACTS_BUCKET=${aws_s3_bucket.artifacts.bucket}" in main
+    runbook = (PROJECT_ROOT / "docs" / "AWS_RUN.md").read_text(encoding="utf-8")
+    assert "<artifacts-bucket>" not in runbook
+    assert runbook.count("s3://$ARTIFACTS_BUCKET/runs/") == 2
