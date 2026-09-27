@@ -220,6 +220,15 @@ def test_the_loop_resumes_when_a_human_closes_the_pr(handles, canary) -> None:  
     assert _consulted(handles), "the loop stayed held after the PR was closed"
 
 
+def test_a_decline_seen_by_the_loop_is_logged(handles, canary, tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # OMNI-57's second criterion: the episodic log records the human rejection.
+    store = _durable(monkeypatch, tmp_path)
+    _mark_closed(handles, canary.id)
+    assert _consulted(handles)
+    outcomes = [(e.outcome, e.pr_id) for e in store.events()]
+    assert outcomes == [("human_declined", canary.id)]
+
+
 def test_a_pr_that_no_longer_exists_releases_its_hold(handles) -> None:  # type: ignore[no-untyped-def]
     # A remembered PR can outlive the PR (OMNI-126). PullRequestNotFound must
     # survive the trip through Ray as itself, or this would read as an outage.
@@ -292,6 +301,22 @@ def test_restoring_never_takes_green_from_another_pr(handles, canary) -> None:  
     outcome = ray.get(handles["DevOps"].adopt_pending.remote("PR-other", "x@PR-other"))
     assert outcome["adopted"] is False
     assert loop.pending_merge(_deployment(handles)) == canary.id
+
+
+def test_a_pr_declined_offline_is_released_and_logged(handles, tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    store = _durable(monkeypatch, tmp_path)
+    result = org.run_cycle(handles, "Speed up divisor-sum", "Too slow; same results.")
+    pr_id = str(result["pr_id"])
+    _forget_in_memory(handles)
+    _mark_closed(handles, pr_id)               # declined while no process was running
+
+    line = org.restore_pending_pr(handles, store, repo="o/r")
+
+    assert line is not None and "closed without merging: hold released" in line
+    assert loop.canary_in_flight(_deployment(handles)) is None
+    declined = [e for e in store.events() if e.outcome == "human_declined"]
+    assert [(e.pr_id, e.contract) for e in declined] == [(pr_id, result["contract"])]
+    assert not store.load_state(org.PENDING_PR_KEY)
 
 
 def _durable(monkeypatch, tmp_path):  # type: ignore[no-untyped-def]

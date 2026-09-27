@@ -655,7 +655,10 @@ any long-lived cluster exists.
   **Fixed 2026-09-27 (with OMNI-126):** a PR now reports `closed` as well as
   `merged` (GitHub's `state`), and `roles.pr_resolution` (pure) reads a
   declined PR as `release`. `observe_merge` then retires the canary and frees
-  green, and `loop.serve` resumes on the same tick.
+  green, and `loop.serve` resumes on the same tick. The decision is logged in
+  the episodic store as its own outcome, `human_declined` (`pr_vanished` for a
+  PR that no longer exists), at no cost, with no reject gate and no breaker
+  count: declining a change judges the change, not the loop.
 
 - [OMNI-125] **L45** — commit-lint reported a commit that had a key as
   keyless when its message was larger than the pipe buffer: under `pipefail`,

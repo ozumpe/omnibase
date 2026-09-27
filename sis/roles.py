@@ -1025,8 +1025,12 @@ class DevOps(Role):
             ray.get(self._sm.set_slot.remote("green", None))
             ray.get(self._sm.set_pending_pr.remote(None))
         ray.get(self._ws.emit.remote("pr.released", pr_id=pr_id, version=version, why=why))
+        # The contract rides along so the driver's episodic record of this
+        # human decision says which target it was about (OMNI-57, OMNI-121).
+        spec: contract.OptimizationContract | None = ray.get(
+            self._sm.contract_for_pr.remote(pr_id))
         return {"pr": pr_id, "version": version, "merged": False, "promoted": False,
-                "released": True, "reason": why}
+                "released": True, "reason": why, "contract": spec.name if spec else None}
 
     def adopt_pending(
         self, pr_id: str, version: str, contract_name: str | None = None

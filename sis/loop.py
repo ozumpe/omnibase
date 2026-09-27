@@ -389,7 +389,9 @@ def serve(
                 # remembered for the next start (OMNI-126).
                 if seen["promoted"] or seen.get("released"):
                     held_by = None
-                    org.forget_pending_pr(episodic.get_episodic_store(), pending)
+                    store = episodic.get_episodic_store()
+                    org.record_release(store, seen)   # a decline is logged (OMNI-57)
+                    org.forget_pending_pr(store, pending)
             if held_by:
                 ray.get(workspace.emit.remote("loop.held_for_canary", version=held_by))
         # Don't pull new work while frozen or while a canary is still being

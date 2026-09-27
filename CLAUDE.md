@@ -404,7 +404,8 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   and the next cycle starts — previously `--loop` ran one cycle and idled
   forever, because `Cloud.promote()` had no caller at all. Provenance now
   terminates in `promote` instead of stopping at `canary`. A PR closed
-  without merging releases the hold (OMNI-57), and the hold survives a
+  without merging releases the hold and is logged as `human_declined`, never
+  a failure (OMNI-57), and the hold survives a
   restart (OMNI-126): with the real GitHub adapter the pending PR is kept
   in the episodic state, and `bootstrap()` restores it and checks it before
   any cycle, so a new process never re-proposes a change still in review.
@@ -611,9 +612,9 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   - Design + the Caddy/TLS decision: `docs/OPERATOR_FRONTEND.md`. Deployment
     artifacts (`Dockerfile.frontend`, `Caddyfile`) are deliberately not in this
     slice.
-- 852 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
+- 858 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
   Ray-Serve-integration tests run separately, see Operational quick reference
-  above; 914 total — corrected 2026-09-26, a multi-dimension review found the
+  above; 920 total — corrected 2026-09-26, a multi-dimension review found the
   previously-documented 616/678 stale); `ruff`/`mypy --strict`/`pytest` clean;
   CI green; `feature → develop → main` enforced by both the client-side
   pre-push hook and active server-side rulesets.

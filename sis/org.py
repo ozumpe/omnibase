@@ -171,6 +171,36 @@ def forget_pending_pr(store: episodic.EpisodicStore, pr_id: str) -> None:
               f"will check it again: {exc}", file=sys.stderr)
 
 
+# How a hold ended by a human's decision is recorded (OMNI-57): an outcome of
+# its own, never a gauntlet rejection and never a breaker count, because
+# declining a change is a judgement on the change, not a failure of the loop.
+RELEASE_OUTCOMES = {"closed without merging": "human_declined",
+                    "no longer exists": "pr_vanished"}
+
+
+def release_result(seen: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The episodic record of a released hold, as a cycle-result dict, or None. Pure.
+
+    No ``reason`` key on purpose: the episodic log reads ``reason`` as a
+    gauntlet rejection, and a human closing a PR is not one.
+    """
+    if not seen.get("released"):
+        return None
+    return {"status": RELEASE_OUTCOMES.get(str(seen.get("reason")), "released"),
+            "pr_id": seen.get("pr"), "contract": seen.get("contract")}
+
+
+def record_release(store: episodic.EpisodicStore, seen: Mapping[str, Any]) -> None:
+    """Append a released hold to the episodic log, at no cost. Never raises."""
+    if (result := release_result(seen)) is None:
+        return
+    try:
+        store.append(episodic.event_from_cycle_result(result, proposer="human"))
+    except Exception as exc:  # noqa: BLE001 - the log is auxiliary, as in run_cycle
+        print(f"[sis] WARNING: {result['status']} for PR {result['pr_id']} not "
+              f"recorded: {exc}", file=sys.stderr)
+
+
 def restore_pending_pr(
     handles: Mapping[str, Any], store: episodic.EpisodicStore, *, repo: str | None
 ) -> str | None:
@@ -206,6 +236,7 @@ def restore_pending_pr(
         forget_pending_pr(store, pr_id)
         return f"[sis] {label} was merged since the last run: promoted; cycles build on it"
     if outcome.get("released"):
+        record_release(store, outcome)
         forget_pending_pr(store, pr_id)
         return f"[sis] {label} from the last run was {outcome.get('reason')}: hold released"
     return (f"[sis] HOLDING: {label} from the last run still awaits a human merge or "
