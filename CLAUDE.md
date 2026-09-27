@@ -645,7 +645,9 @@ severity) from the 2026-07-25 full review + a 2026-07-28 second pass — referen
 the IDs in commits/PRs. **Open after a 2026-09-26 multi-dimension review with
 adversarial verification: H2–H3, M8–M9, M11–M14, M16–M18, M20–M23,
 L15–L20, L22, L25–L43** (M7 is won't-fix for now; H4, M10, M15, M19, L21, L23
-and L24 fixed 2026-09-26, OMNI-46/47/51/49/61/62). The headline, before
+and L24 fixed 2026-09-26, OMNI-46/47/51/49/61/62; H5, H6, M24 and L44, found
+in the first AWS run, and L45, found releasing it, fixed 2026-09-27,
+OMNI-121–125). The headline, before
 trusting any gauntlet verdict: **the gate scripts judge a candidate inside its
 own process**. A candidate can rewrite the exam files later gates read (M9) or
 exit 0 with no verdict (M8). One redesign closes these and H2 (epic
@@ -683,9 +685,9 @@ Two traps L5 surfaced, both worth knowing before writing similar code:
 
 **Next — the milestone plan is in Jira ([`OMNI`](https://olafzumpe.atlassian.net/browse/OMNI)),
 not here.** Check the board for current status rather than trusting this list.
-**Last reconciled against a live query on 2026-09-26** (120 issues, OMNI-1
-through OMNI-120; 60 Done, 1 In Progress, 59 To Do — most of the growth is the
-KNOWN_ISSUES backfill, see "Known issues" above):
+**Last reconciled against a live query on 2026-09-27** (125 issues, OMNI-1
+through OMNI-125; 74 Done, 51 To Do — most of the growth since 2026-09-26 is
+the KNOWN_ISSUES backfill, see "Known issues" above):
 
 1. ~~**[OMNI-1](https://olafzumpe.atlassian.net/browse/OMNI-1) — L5 target
    contract** (Class 1)~~ — **done 2026-08-06** (OMNI-4/5/6/7). Two targets ship
@@ -771,8 +773,8 @@ KNOWN_ISSUES backfill, see "Known issues" above):
    which found two more defects no read-through could: the docker sandbox
    could not read its temp dir on native Linux (it now runs as the host uid),
    and the bootstrap did not install the `ui` group the console needs.
-   `tofu plan` is clean against the account. **Not applied yet — what's left
-   needs credentials**, and the whole sequence is `docs/AWS_RUN.md` "Run day":
+   `tofu plan` was clean against the account, and it was **applied for the run
+   on 2026-09-27**. The whole sequence is `docs/AWS_RUN.md` "Run day":
    three tokens (Atlassian, GitHub PAT, Anthropic), `tofu apply`,
    `scripts/aws_secret.py --upload`, the supervised cycles, `tofu destroy`.
    Explicitly **not** RUNBOOK Level 4: no autostart, no autonomy — a human
