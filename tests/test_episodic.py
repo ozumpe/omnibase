@@ -174,3 +174,40 @@ def test_duckdb_backend_parity(tmp_path) -> None:  # type: ignore[no-untyped-def
     assert store.summary()["rejected_by_gate"] == {"benchmark": 1}
     # Ad-hoc SQL works.
     assert store.sql("SELECT count(*) FROM episodes")[0][0] == 2
+
+
+# --- OMNI-121: every event names the contract it ran against ---------------------
+
+
+def test_an_event_records_its_contract() -> None:
+    event = event_from_cycle_result({"status": "rolled_back", "contract": "sort"})
+    assert event.contract == "sort"
+    assert event_from_cycle_result({"status": "paused"}).contract is None
+
+
+def test_an_old_jsonl_row_without_a_contract_still_loads(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    # The first AWS run's log (2026-09-27) predates the field.
+    path = tmp_path / "ep.jsonl"
+    path.write_text('{"cycle_id": "ce5bb3a707ac", "ts": "2026-09-26T23:58:38", '
+                    '"outcome": "rolled_back", "cost_usd": 0.04}\n', encoding="utf-8")
+    (event,) = JsonlEpisodicStore(path).events()
+    assert event.contract is None and event.outcome == "rolled_back"
+
+
+def test_a_duckdb_file_from_before_a_field_existed_keeps_accepting_rows(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    duckdb = pytest.importorskip("duckdb")
+    path = tmp_path / "ep.duckdb"
+    old = duckdb.connect(str(path))
+    old.execute("CREATE TABLE episodes (cycle_id VARCHAR, ts VARCHAR, outcome VARCHAR, "
+                "proposer VARCHAR, model VARCHAR, spec_id VARCHAR, story_id VARCHAR, "
+                "pr_id VARCHAR, candidate_sha VARCHAR, gauntlet_passed BOOLEAN, "
+                "reject_gate VARCHAR, reject_reason VARCHAR, baseline_latency DOUBLE, "
+                "candidate_latency DOUBLE, improvement_pct DOUBLE, cost_usd DOUBLE)")
+    old.execute("INSERT INTO episodes (cycle_id, ts, outcome, cost_usd) "
+                "VALUES ('old', '2026-09-26', 'rolled_back', 0.04)")
+    old.close()
+    store = DuckDBEpisodicStore(path)
+    store.append(_ev("rolled_back", contract="sort"))
+    by_id = {e.cycle_id: e for e in store.events()}
+    assert by_id["old"].contract is None
+    assert [e.contract for e in store.events() if e.cycle_id != "old"] == ["sort"]

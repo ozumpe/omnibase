@@ -17,7 +17,7 @@ import pytest
 
 from sis import config
 from sis.adapters import InMemoryNotifier, InMemoryTelemetry
-from sis.adapters_real import SNSNotifier, sns_subject
+from sis.adapters_real import SNSNotifier, pager_problem, sns_subject
 from sis.episodic import JsonlEpisodicStore
 from sis.loop import Tick, Work, run_loop, stop_alert
 from sis.org import record_page_outcome
@@ -167,3 +167,60 @@ def test_a_missing_pager_fails_the_preflight_only_on_the_aws_box(
     check = _check_connections().check_pager
     assert check(_Settings("aws")) is False
     assert check(_Settings("local")) is None
+
+
+# --- OMNI-122: a pager nobody confirmed is not a pager ---------------------------
+
+
+class _Topic:
+    """An SNS client whose topic has the given subscription counts."""
+
+    def __init__(self, confirmed: int, pending: int) -> None:
+        self._attrs = {"SubscriptionsConfirmed": str(confirmed),
+                       "SubscriptionsPending": str(pending)}
+
+    def get_topic_attributes(self, **kwargs: Any) -> dict[str, Any]:
+        return {"Attributes": self._attrs}
+
+
+def test_a_confirmed_subscription_is_a_working_pager() -> None:
+    assert pager_problem(1, 0) is None
+    assert pager_problem(2, 3) is None
+
+
+def test_the_first_aws_runs_topic_is_a_pager_problem() -> None:
+    # Exactly the run's state: the link mailed, never clicked.
+    problem = pager_problem(0, 1)
+    assert problem is not None
+    assert "delivered to nobody" in problem and "click the link" in problem
+
+
+def test_a_topic_with_nothing_subscribed_says_where_to_look() -> None:
+    problem = pager_problem(0, 0)
+    assert problem is not None and "alert_email" in problem
+
+
+def test_the_check_raises_rather_than_ticking_an_unconfirmed_topic() -> None:
+    notifier = SNSNotifier(_ARN, InMemoryTelemetry(), client=_Topic(0, 1))
+    assert notifier.subscriptions() == (0, 1)
+    with pytest.raises(RuntimeError, match="delivered to nobody"):
+        notifier.check()
+    assert "1 confirmed" in SNSNotifier(_ARN, InMemoryTelemetry(), client=_Topic(1, 0)).check()
+
+
+@pytest.mark.parametrize(("confirmed", "expected"), [(0, False), (1, True)])
+def test_the_preflight_fails_an_unconfirmed_pager(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    confirmed: int, expected: bool,
+) -> None:
+    import sis.adapters_real as real
+
+    monkeypatch.setenv("SIS_NOTIFY_SNS_TOPIC_ARN", _ARN)
+    config.reset_config_cache()
+    monkeypatch.setattr(real, "SNSNotifier", lambda arn, tel: SNSNotifier(
+        arn, tel, client=_Topic(confirmed, 1 - confirmed)))
+    assert _check_connections().check_pager(_Settings("aws")) is expected
+    if not expected:
+        # Printed whole: the part that says what to do is at the end.
+        assert "click the link AWS mailed to alert_email" in capsys.readouterr().out
+

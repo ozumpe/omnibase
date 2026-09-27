@@ -44,6 +44,8 @@ order:
    cd infra/aws
    echo 'alert_email = "you@example.com"' > terraform.tfvars   # gitignored
    tofu init && tofu apply        # ~1 min; the box then bootstraps for ~10 min
+   # If init times out reaching registry.opentofu.org (it did on the first
+   # run): TF_REGISTRY_CLIENT_TIMEOUT=60 tofu init
    cd ../.. && poetry run python scripts/aws_secret.py --upload
    ```
    The last line builds the secret from `secrets.local.yml` +
@@ -55,9 +57,15 @@ order:
    **Click it before the first cycle** — until then SNS accepts every publish
    and delivers nothing, so a breaker trip, a spend-cap hit or a broken
    sandbox would page nobody (OMNI-62). On the box, `check_connections.py`'s
-   `Pager` line shows the count of confirmed subscriptions; it must be ≥ 1.
+   `Pager` line **fails** until a subscription is confirmed, and the engine
+   warns at startup (OMNI-122) — the first run went ahead with a tick next to
+   "0 confirmed", and its breaker-trip page reached nobody.
 6. **Run it:** `tofu -chdir=infra/aws output -raw ssm_session` prints the
-   session command; then [The run itself](#the-run-itself).
+   session command; to open the session straight away:
+   ```bash
+   eval "$(tofu -chdir=infra/aws output -raw ssm_session)"
+   ```
+   then [The run itself](#the-run-itself).
 7. **Stop the meter:** sync the episodic log (step 5 of the run), stop the
    instance; `tofu destroy` when the experiment is over (see
    [What persists](#what-persists)).
@@ -260,7 +268,8 @@ not. At the end of a session:
 
 ```bash
 # As ubuntu (sudo -iu ubuntu) — ssm-user has no checkout to sync.
-aws s3 sync ~/omnibase/runtime/ s3://<artifacts-bucket>/runs/$(date +%Y%m%d-%H%M)/ \
+# $ARTIFACTS_BUCKET comes from /etc/profile.d/sis-run.sh (user_data, OMNI-124).
+aws s3 sync ~/omnibase/runtime/ "s3://$ARTIFACTS_BUCKET/runs/$(date +%Y%m%d-%H%M)/" \
   --exclude "*" --include "episodic*" --include "operator_audit*"
 ```
 
@@ -324,7 +333,7 @@ instance lifecycle:
 
 ## The run itself
 
-The box runs the **release tag** in `var.repo_ref` — `v0.2.0` by default
+The box runs the **release tag** in `var.repo_ref` — `v0.2.1` by default
 (OMNI-63). A tag, not `develop`: a run's results are only worth something if
 they name the code that produced them, and a branch names whatever it pointed
 at when the box booted. Running a branch needs `-var allow_branch_ref=true` on
@@ -354,8 +363,9 @@ export ANTHROPIC_API_KEY=$(aws secretsmanager get-secret-value \
   | jq -r .anthropic.api_key)
 
 # 2. Prove the wiring before spending anything. The Pager line must show a
-#    confirmed subscription; SIS_NOTIFY_SNS_TOPIC_ARN comes from
-#    /etc/profile.d/sis-pager.sh (user_data), so it is set in this login shell.
+#    confirmed subscription; SIS_NOTIFY_SNS_TOPIC_ARN (and ARTIFACTS_BUCKET,
+#    step 5) come from /etc/profile.d/sis-run.sh (user_data), so they are set
+#    in this login shell.
 poetry run python main.py --show-config        # every value + which layer set it
 poetry run python scripts/check_connections.py --deep
 
@@ -365,8 +375,9 @@ poetry run python main.py --contract sort
 # 4. Then a short loop.
 poetry run python main.py --contract sort --loop --loop-max-cycles 3
 
-# 5. Keep the dataset, stop the meter.
-aws s3 sync runtime/ s3://<artifacts-bucket>/runs/$(date +%Y%m%d-%H%M)/ \
+# 5. Keep the dataset, stop the meter. The first run needed three attempts
+#    here with a <placeholder> bucket; the box now knows its own (OMNI-124).
+aws s3 sync runtime/ "s3://$ARTIFACTS_BUCKET/runs/$(date +%Y%m%d-%H%M)/" \
   --exclude "*" --include "episodic*" --include "operator_audit*"
 ```
 

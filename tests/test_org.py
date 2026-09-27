@@ -99,6 +99,7 @@ def test_full_cycle_against_the_second_contract(handles) -> None:  # type: ignor
         contract_name="sort")
     assert result["status"] == "verified_awaiting_human_merge", result.get("reason")
     assert result["candidate_latency"] < result["baseline_latency"]
+    assert result["contract"] == "sort"  # OMNI-121: recorded, not inferred
     # Prove it really was the sort, not the default target passing by luck.
     ws = handles["Workspace"]
     pr = ray.get(ws.get_pr.remote(result["pr_id"], "runtime/sort_target.py"))

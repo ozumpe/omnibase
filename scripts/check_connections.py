@@ -188,13 +188,20 @@ def check_pager(settings: Settings) -> bool | None:
         return None
     try:
         from sis.adapters import InMemoryTelemetry
-        from sis.adapters_real import SNSNotifier
+        from sis.adapters_real import SNSNotifier, pager_problem
 
-        _line(OK, "Pager", SNSNotifier(str(topic), InMemoryTelemetry()).check())
-        return True
+        confirmed, pending = SNSNotifier(str(topic), InMemoryTelemetry()).subscriptions()
     except Exception as exc:  # noqa: BLE001
         _line(FAIL, "Pager", _summarise(exc))
         return False
+    # A topic nobody confirmed is a failure, not a tick with a zero in it
+    # (OMNI-122: the first AWS run's preflight passed that way, and its
+    # breaker-trip page reached nobody). Printed in full — it says what to do.
+    if problem := pager_problem(confirmed, pending):
+        _line(FAIL, "Pager", problem)
+        return False
+    _line(OK, "Pager", f"{topic} ({confirmed} confirmed subscription(s))")
+    return True
 
 
 def _summarise(exc: Exception) -> str:

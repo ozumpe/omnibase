@@ -605,7 +605,8 @@ class SWE(Role):
                 story_id, IssueStatus.TBD, f"Gauntlet failed: {report.reason}"))
             ray.get(self._sm.record.remote("outcome", story_id, passed=False, reason=report.reason))
             return {"passed": False, "reason": report.reason, "pr_id": None,
-                    "cost_usd": cost_usd, "candidate_sha": candidate_sha}
+                    "cost_usd": cost_usd, "candidate_sha": candidate_sha,
+                    "contract": spec.name}
 
         # Change-authorization policy: the loop may only write paths its tier
         # permits. The target is SOFT (allowed once checks pass); a mis-pointed
@@ -623,7 +624,8 @@ class SWE(Role):
             ray.get(self._sm.record.remote(
                 "outcome", story_id, passed=False, reason=f"policy: {decision.reason}"))
             return {"passed": False, "reason": f"policy: {decision.reason}",
-                    "pr_id": None, "cost_usd": cost_usd, "candidate_sha": candidate_sha}
+                    "pr_id": None, "cost_usd": cost_usd, "candidate_sha": candidate_sha,
+                    "contract": spec.name}
 
         # Fork from the same base the merged target was read from, not a
         # hardcoded "main" — see KNOWN_ISSUES.md M4.
@@ -643,7 +645,8 @@ class SWE(Role):
             baseline=baseline, candidate=report.latency_seconds))
         return {"passed": True, "pr_id": str(pr.id), "branch": branch,
                 "baseline": baseline, "candidate_latency": report.latency_seconds,
-                "cost_usd": cost_usd, "candidate_sha": candidate_sha}
+                "cost_usd": cost_usd, "candidate_sha": candidate_sha,
+                "contract": spec.name}
 
 
 @ray.remote

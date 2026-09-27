@@ -89,6 +89,11 @@ class EpisodicEvent:
     candidate_latency: float | None = None
     improvement_pct: float | None = None
     cost_usd: float = 0.0
+    # Which contract the cycle ran against (OMNI-121). The first AWS run's log
+    # could not say — it optimised the default contract instead of the planned
+    # `sort`, and that had to be inferred from the console. Last, and optional,
+    # so older rows and older DuckDB files still load.
+    contract: str | None = None
 
     @staticmethod
     def new_cycle_id() -> str:
@@ -249,7 +254,7 @@ _DUCK_TYPES: dict[str, str] = {
     "story_id": "VARCHAR", "pr_id": "VARCHAR", "candidate_sha": "VARCHAR",
     "gauntlet_passed": "BOOLEAN", "reject_gate": "VARCHAR", "reject_reason": "VARCHAR",
     "baseline_latency": "DOUBLE", "candidate_latency": "DOUBLE",
-    "improvement_pct": "DOUBLE", "cost_usd": "DOUBLE",
+    "improvement_pct": "DOUBLE", "cost_usd": "DOUBLE", "contract": "VARCHAR",
 }
 assert tuple(_DUCK_TYPES) == _FIELD_NAMES, "DuckDB schema drifted from EpisodicEvent"
 
@@ -268,6 +273,11 @@ class DuckDBEpisodicStore:
         self._con = duckdb.connect(str(path))
         cols = ", ".join(f"{name} {dtype}" for name, dtype in _DUCK_TYPES.items())
         self._con.execute(f"CREATE TABLE IF NOT EXISTS episodes ({cols})")
+        # Schema evolution: a database created before a field existed gets the
+        # column, instead of every later insert failing (OMNI-121 added
+        # `contract`). No-op for columns already there.
+        for name, dtype in _DUCK_TYPES.items():
+            self._con.execute(f"ALTER TABLE episodes ADD COLUMN IF NOT EXISTS {name} {dtype}")
         # Latest-wins key/value state (e.g. persisted CEO brake state, L9).
         self._con.execute(
             "CREATE TABLE IF NOT EXISTS kv_state (key VARCHAR PRIMARY KEY, value VARCHAR)")
@@ -473,6 +483,7 @@ def event_from_cycle_result(
         candidate_latency=cand if isinstance(cand, int | float) else None,
         improvement_pct=improvement,
         cost_usd=cost_usd,
+        contract=_opt_str(result.get("contract")),
     )
 
 

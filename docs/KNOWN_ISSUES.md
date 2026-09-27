@@ -615,6 +615,63 @@ any long-lived cluster exists.
 
 ## Resolved
 
+- [OMNI-125] **L45** — commit-lint reported a commit that had a key as
+  keyless when its message was larger than the pipe buffer: under `pipefail`,
+  `echo "$msg" | grep -q` fails when grep exits at the first match and `echo`
+  dies of SIGPIPE. Found on the v0.2.0 back-merge (#124), whose release squash
+  (165 KB, 138 OMNI keys) was rejected. It failed closed, blocking valid PRs
+  and never admitting a bad one. `hooks/commit-msg` greps the file and was
+  never affected.
+  **Fixed 2026-09-27:** grep reads a here-string. `tests/test_commit_lint.py`
+  runs the workflow's own script against a throwaway repository, large and
+  small, with a key and without.
+
+- [OMNI-123] **M24 — `main.py` is silent where it matters** *(found
+  2026-09-27 in the first AWS run, OMNI-29; **fixed 2026-09-27**)* — a rolled-back cycle prints
+  `[main] cycle status: rolled_back` and nothing about the gate or the reason
+  (e.g. "no improvement: … total-time ratio 1.3384, 95% interval [1.2271,
+  1.4743]"), and a loop prints `loop stopped after 2 cycle(s)` without saying
+  the breaker had tripped. On a supervised run the console is what the
+  operator reads; the reasons were only in the episodic log. Fix: print the
+  gate, reason, cost and running spend per cycle, and why the loop stopped.
+  **Fixed:** `org.cycle_summary` (pure) prints one line per cycle — status,
+  gate, reason, cost, and spend against the budget — from `main.py` and after
+  every `--loop` cycle; `loop.stop_summary` (pure) says why the loop stopped
+  (breaker open with its trip reason, budget exhausted, interrupted, or
+  max_cycles). `_record` now stamps cost and spend on every result. Also
+  fixed on the way: `main.py` crashed after a QA-rejected cycle
+  (`result.get("canary", {})` returns `None` when the key holds `None`).
+
+- [OMNI-124] **L44** — The run box does not know its artifacts bucket: the
+  runbook's sync step reads `s3://<artifacts-bucket>/…`, and in the first AWS
+  run (2026-09-27) it took three attempts — the literal placeholder, a guessed
+  bucket (AccessDenied), then the right one. Fix: export the bucket name via
+  `/etc/profile.d`, as OMNI-62 does for the pager topic, and use it in the
+  runbook.
+  (Same run: the first `tofu init` timed out on the registry;
+  `TF_REGISTRY_CLIENT_TIMEOUT=60` worked.)
+  **Fixed 2026-09-27:** `user_data` writes `/etc/profile.d/sis-run.sh`
+  exporting `ARTIFACTS_BUCKET` next to the pager topic, and both sync
+  commands use `$ARTIFACTS_BUCKET`; the registry-timeout workaround is a
+  comment under "Run day" step 4.
+
+- [OMNI-121] **H5 — The first AWS run optimised the default contract, and
+  nothing showed or recorded which** *(found and fixed 2026-09-27, OMNI-29)*
+  — run day was planned for `sort`; `main.py` ran without `--contract`, so
+  `sum_of_divisors` (already ~1 µs/call from July's runs) got three real
+  proposals, all correctly rejected, and the breaker tripped. The contract
+  had to be inferred from `--show-config`. **Fixed:** `main.py` prints
+  `[sis] contract: …` before bootstrap (saying when it is the default); every
+  episodic event records `contract`; DuckDB adds missing columns
+  (`ADD COLUMN IF NOT EXISTS`) so older databases keep accepting rows.
+- [OMNI-122] **H6 — The pager preflight passed with 0 confirmed SNS
+  subscriptions** *(found and fixed 2026-09-27, OMNI-29)* — the box printed
+  `✓ Pager … (0 confirmed subscription(s))`; SNS accepts every publish to a
+  topic nobody confirmed and delivers none, so the run's breaker-trip page
+  reached nobody. **Fixed:** `adapters_real.pager_problem` (pure) — the
+  preflight fails with what to do, the Workspace warns at startup, and a sent
+  page is printed on the console.
+
 - [OMNI-62] **L24** — Budget exhaustion stops `--loop` silently; `loop.decide()`'s own
   comment says a human is paged, but nothing files anything. Fix: route it
   through the same alerting path as a breaker trip.
@@ -1126,3 +1183,8 @@ any long-lived cluster exists.
 [OMNI-118]: https://olafzumpe.atlassian.net/browse/OMNI-118
 [OMNI-119]: https://olafzumpe.atlassian.net/browse/OMNI-119
 [OMNI-120]: https://olafzumpe.atlassian.net/browse/OMNI-120
+[OMNI-121]: https://olafzumpe.atlassian.net/browse/OMNI-121
+[OMNI-122]: https://olafzumpe.atlassian.net/browse/OMNI-122
+[OMNI-123]: https://olafzumpe.atlassian.net/browse/OMNI-123
+[OMNI-124]: https://olafzumpe.atlassian.net/browse/OMNI-124
+[OMNI-125]: https://olafzumpe.atlassian.net/browse/OMNI-125

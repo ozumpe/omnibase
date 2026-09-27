@@ -176,7 +176,8 @@ resource "aws_instance" "sis" {
     apt-get -o DPkg::Lock::Timeout=600 install -y git
     git clone --branch ${var.repo_ref} ${var.repo_url} /home/ubuntu/omnibase
     chown -R ubuntu:ubuntu /home/ubuntu/omnibase
-    echo 'export SIS_NOTIFY_SNS_TOPIC_ARN=${aws_sns_topic.alerts.arn}' > /etc/profile.d/sis-pager.sh
+    echo 'export SIS_NOTIFY_SNS_TOPIC_ARN=${aws_sns_topic.alerts.arn}' > /etc/profile.d/sis-run.sh
+    echo 'export ARTIFACTS_BUCKET=${aws_s3_bucket.artifacts.bucket}' >> /etc/profile.d/sis-run.sh
     bash /home/ubuntu/omnibase/scripts/aws_bootstrap.sh
   EOT
 
@@ -198,7 +199,9 @@ resource "aws_instance" "sis" {
 # publishes here, and it reaches the same inbox as the budget alarm. The email
 # subscription must be confirmed once (a link AWS mails after apply) — until
 # then SNS accepts the publish and delivers nothing. The box finds the topic
-# through /etc/profile.d/sis-pager.sh, written by user_data above.
+# through /etc/profile.d/sis-run.sh, written by user_data above — which also
+# names the artifacts bucket (ARTIFACTS_BUCKET, OMNI-124), so the runbook's
+# sync step needs no placeholder filled in by hand.
 # --------------------------------------------------------------------------
 
 resource "aws_sns_topic" "alerts" {

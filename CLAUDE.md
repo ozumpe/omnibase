@@ -320,9 +320,11 @@ internal target before it models anything external.
   live runs — don't put planning there.
 
 ## Current status — where to pick up
-Released through **v0.2.0** (2026-09-26, OMNI-63) — the first release since
-v0.1.4 (2026-07-05): everything below through the OMNI-29 prerequisites is in
-it, and the AWS box runs that tag, not `develop`. The
+Released through **v0.2.1** (2026-09-27): v0.2.0 plus the fixes from the first
+AWS run (OMNI-121–124) and commit-lint's large-message fix (OMNI-125), and the
+AWS box runs that tag, not `develop`. v0.2.0 (2026-09-26, OMNI-63) was the
+first release since v0.1.4 (2026-07-05) and carried everything below through
+the OMNI-29 prerequisites. The
 bootstrap skeleton (original "first task") is **done**, plus much more:
 - Actor org + SelfModel + Workspace; one intake→deploy cycle runs locally and stops at
   the human PR merge.
@@ -605,9 +607,9 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   - Design + the Caddy/TLS decision: `docs/OPERATOR_FRONTEND.md`. Deployment
     artifacts (`Dockerfile.frontend`, `Caddyfile`) are deliberately not in this
     slice.
-- 796 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
+- 822 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
   Ray-Serve-integration tests run separately, see Operational quick reference
-  above; 858 total — corrected 2026-09-26, a multi-dimension review found the
+  above; 884 total — corrected 2026-09-26, a multi-dimension review found the
   previously-documented 616/678 stale); `ruff`/`mypy --strict`/`pytest` clean;
   CI green; `feature → develop → main` enforced by both the client-side
   pre-push hook and active server-side rulesets.
@@ -737,7 +739,18 @@ KNOWN_ISSUES backfill, see "Known issues" above):
 
 7. **[OMNI-29](https://olafzumpe.atlassian.net/browse/OMNI-29) — first AWS
    run** (one node, a few supervised cycles — watch the provenance graph and
-   the bill). **In Progress:** designed 2026-08-16 (PR #94), pre-flighted
+   the bill). **Done 2026-09-27.** The box ran release `v0.2.0` end to end:
+   real Claude proposer in the docker sandbox, real Confluence/Jira/GitHub
+   artifacts (`TES-43`…`TES-53`), three cycles all rejected by the benchmark
+   gate with tight intervals (ratios 1.34 / 0.93 / 1.04), breaker tripped on
+   the third, **$0.107 of a $1.00 budget**; artifacts in
+   `s3://sis-first-run-artifacts-696644743351/runs/20260927-0007/`, console
+   log attached to OMNI-29. It ran the *default* contract, not `sort`
+   (OMNI-121), and its page reached nobody — 0 confirmed SNS subscriptions
+   passed the preflight (OMNI-122). All four findings fixed 2026-09-27
+   (OMNI-121–124), incl. the console now saying why a cycle rolled back and
+   why the loop stopped.
+   History: designed 2026-08-16 (PR #94), pre-flighted
    2026-08-30 (PR #99). `docs/AWS_RUN.md` is the design note and runbook,
    `infra/aws/` a small Terraform-language config driven with **OpenTofu**
    (`tofu`) — same HCL, provider and state format, but MPL-2.0 rather than
@@ -751,7 +764,7 @@ KNOWN_ISSUES backfill, see "Known issues" above):
    instance lifecycle: `user_data` racing Ubuntu's `unattended-upgrades` for
    the dpkg lock, and SSM sessions landing as `ssm-user` rather than `ubuntu`
    (every runbook step now starts with `sudo -iu ubuntu`). The box clones
-   the release tag in `var.repo_ref` (`v0.2.0`; a branch needs
+   the release tag in `var.repo_ref` (`v0.2.1`; a branch needs
    `allow_branch_ref = true`, OMNI-63) and every run records the commit it
    ran; run day uses `--contract sort`. **Rehearsed
    2026-09-23** on a local Ubuntu 24.04 box (`scripts/rehearse_aws_run.sh`),
