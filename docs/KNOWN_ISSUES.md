@@ -298,15 +298,6 @@ reference with no link target below.
   autouse fixture, with an explicit opt-in fixture for the handful of tests
   that intentionally want a real backend.
 
-- [OMNI-123] **M24 — `main.py` is silent where it matters** *(found
-  2026-09-27 in the first AWS run, OMNI-29)* — a rolled-back cycle prints
-  `[main] cycle status: rolled_back` and nothing about the gate or the reason
-  (e.g. "no improvement: … total-time ratio 1.3384, 95% interval [1.2271,
-  1.4743]"), and a loop prints `loop stopped after 2 cycle(s)` without saying
-  the breaker had tripped. On a supervised run the console is what the
-  operator reads; the reasons were only in the episodic log. Fix: print the
-  gate, reason, cost and running spend per cycle, and why the loop stopped.
-
 ## Low
 
 - [OMNI-64] **L15** — `validate()` can be made to raise instead of returning a
@@ -623,6 +614,22 @@ any long-lived cluster exists.
   front.
 
 ## Resolved
+
+- [OMNI-123] **M24 — `main.py` is silent where it matters** *(found
+  2026-09-27 in the first AWS run, OMNI-29; **fixed 2026-09-27**)* — a rolled-back cycle prints
+  `[main] cycle status: rolled_back` and nothing about the gate or the reason
+  (e.g. "no improvement: … total-time ratio 1.3384, 95% interval [1.2271,
+  1.4743]"), and a loop prints `loop stopped after 2 cycle(s)` without saying
+  the breaker had tripped. On a supervised run the console is what the
+  operator reads; the reasons were only in the episodic log. Fix: print the
+  gate, reason, cost and running spend per cycle, and why the loop stopped.
+  **Fixed:** `org.cycle_summary` (pure) prints one line per cycle — status,
+  gate, reason, cost, and spend against the budget — from `main.py` and after
+  every `--loop` cycle; `loop.stop_summary` (pure) says why the loop stopped
+  (breaker open with its trip reason, budget exhausted, interrupted, or
+  max_cycles). `_record` now stamps cost and spend on every result. Also
+  fixed on the way: `main.py` crashed after a QA-rejected cycle
+  (`result.get("canary", {})` returns `None` when the key holds `None`).
 
 - [OMNI-124] **L44** — The run box does not know its artifacts bucket: the
   runbook's sync step reads `s3://<artifacts-bucket>/…`, and in the first AWS
