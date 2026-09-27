@@ -25,7 +25,21 @@ from __future__ import annotations
 
 import ray
 
-from sis import config, gauntlet, loop, org
+from sis import config, contract, gauntlet, loop, org
+
+
+def contract_banner(contract_name: str | None) -> str:
+    """The startup line that names the contract this run will optimise. Pure.
+
+    OMNI-121: the first AWS run optimised the default contract instead of the
+    planned `sort`, and nothing on screen said which one was active — it had to
+    be read back out of `--show-config`'s `contracts.default None`. A defaulted
+    contract says so, and how to choose another, before anything is spent.
+    """
+    if contract_name:
+        return f"[sis] contract: {contract_name}"
+    return (f"[sis] contract: {contract.default_contract().name} "
+            "(the default — pass --contract <name> to choose another)")
 
 
 def _proposal(contract_name: str | None) -> tuple[str, str]:
@@ -121,6 +135,7 @@ def main() -> None:
     # Before bootstrap, not at the first cycle: `--loop` may idle for a long
     # time before a breach starts one, and a refusal belongs at startup (OMNI-49).
     gauntlet.ensure_canary_allows_proposer(canary_backend)
+    print(contract_banner(contract_name), file=sys.stderr)
 
     if "--loop" in sys.argv:
         run_server_loop(canary_backend, contract_name)
