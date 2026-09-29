@@ -328,7 +328,11 @@ internal target before it models anything external.
   live runs — don't put planning there.
 
 ## Current status — where to pick up
-Released through **v0.3.0** (2026-09-27): staged delivery's phases 0 and 1
+Released through **v0.3.1** (2026-09-29): v0.3.0 plus OMNI-136, the fix from
+the third AWS run (the loop asks GitHub which of its PRs are still open before
+every cycle, so a rebuilt box no longer opens a second, conflicting PR), and
+the restructured runbook with a working rehearsal (OMNI-29). Before that,
+**v0.3.0** (2026-09-27): staged delivery's phases 0 and 1
 (OMNI-129 sandbox worker, OMNI-130 feature branches), plus OMNI-126/57 (the
 hold survives a restart; a declined PR releases it). Before that, **v0.2.1**
 (2026-09-27): v0.2.0 plus the fixes from the first
@@ -420,6 +424,13 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   restart (OMNI-126): with the real GitHub adapter the pending PR is kept
   in the episodic state, and `bootstrap()` restores it and checks it before
   any cycle, so a new process never re-proposes a change still in review.
+  **The VCS is the source of truth for what awaits a human** (OMNI-136):
+  that file lives on the box, and the third AWS run's rebuilt box opened
+  testrun #14 beside #13. Before every cycle (`loop.serve` and a single
+  `main.py` run), `org.hold_for_open_prs` asks `VersionControl.open_prs()`
+  and holds for the oldest open PR on a `feature/` branch, one at a time
+  until all are decided. A failed listing holds (fail closed). Deliberately
+  not in `bootstrap()`, which tools that never start a cycle also call.
 - **`DevOps.canary()` can judge a candidate against real traffic**
   (`canary_backend="serve"`, OMNI-14; `--canary serve` / `SIS_CANARY=serve`;
   RUNBOOK Level 0e) — `sis.loadgen` fills the window itself (nothing external
@@ -637,9 +648,9 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   **Phase 0 is built:** `sis/sandbox_worker.py` (OMNI-129) serves a candidate
   hot from the sandbox. It is tested in both sandbox modes, including that a
   docker candidate cannot reach the network, Ray or the host's environment.
-- 895 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
+- 913 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
   Ray-Serve-integration tests run separately, see Operational quick reference
-  above; 957 total — corrected 2026-09-26, a multi-dimension review found the
+  above; 975 total, recounted 2026-09-29 — corrected 2026-09-26, a multi-dimension review found the
   previously-documented 616/678 stale); `ruff`/`mypy --strict`/`pytest` clean;
   CI green; `feature → develop → main` enforced by both the client-side
   pre-push hook and active server-side rulesets.
@@ -678,7 +689,8 @@ L15–L20, L22, L25–L43; plus L46 from the second AWS run** (M7 is won't-fix f
 and L24 fixed 2026-09-26, OMNI-46/47/51/49/61/62; H5, H6, M24 and L44, found
 in the first AWS run, and L45, found releasing it, fixed 2026-09-27,
 OMNI-121–125; M18 and M25, the second run's duplicate PR, fixed the same day,
-OMNI-57/126). The headline, before
+OMNI-57/126; M26, the third run's conflicting second PR, fixed 2026-09-29,
+OMNI-136). The headline, before
 trusting any gauntlet verdict: **the gate scripts judge a candidate inside its
 own process**. A candidate can rewrite the exam files later gates read (M9) or
 exit 0 with no verdict (M8). One redesign closes these and H2 (epic
@@ -716,8 +728,8 @@ Two traps L5 surfaced, both worth knowing before writing similar code:
 
 **Next — the milestone plan is in Jira ([`OMNI`](https://olafzumpe.atlassian.net/browse/OMNI)),
 not here.** Check the board for current status rather than trusting this list.
-**Last reconciled against a live query on 2026-09-27** (134 issues, OMNI-1
-through OMNI-134; 76 Done, 1 In Progress, 57 To Do — most of the growth since 2026-09-26 is
+**Last reconciled against a live query on 2026-09-29** (136 issues, OMNI-1
+through OMNI-136; 78 Done, 1 In Progress, 57 To Do — most of the growth since 2026-09-26 is
 the KNOWN_ISSUES backfill, see "Known issues" above):
 
 1. ~~**[OMNI-1](https://olafzumpe.atlassian.net/browse/OMNI-1) — L5 target
@@ -797,7 +809,7 @@ the KNOWN_ISSUES backfill, see "Known issues" above):
    instance lifecycle: `user_data` racing Ubuntu's `unattended-upgrades` for
    the dpkg lock, and SSM sessions landing as `ssm-user` rather than `ubuntu`
    (every runbook step now starts with `sudo -iu ubuntu`). The box clones
-   the release tag in `var.repo_ref` (`v0.3.0`; a branch needs
+   the release tag in `var.repo_ref` (`v0.3.1`; a branch needs
    `allow_branch_ref = true`, OMNI-63) and every run records the commit it
    ran; run day uses `--contract sort`. **Rehearsed
    2026-09-23** on a local Ubuntu 24.04 box (`scripts/rehearse_aws_run.sh`),

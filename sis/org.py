@@ -243,6 +243,47 @@ def restore_pending_pr(
             f"close on {repo}. No cycle starts until then.")
 
 
+def hold_for_open_prs(
+    handles: Mapping[str, Any], store: episodic.EpisodicStore
+) -> tuple[bool, str | None]:
+    """Whether a cycle must wait for a PR the VCS says is open: ``(hold, line)``.
+
+    Asked before every cycle start (OMNI-136), because only the version-control
+    system knows every PR still awaiting a human, whichever process or box
+    opened it. :func:`restore_pending_pr` reads a file on this box; the third
+    AWS run's box was rebuilt, and a second PR opened beside the first.
+
+    Fails closed: a listing that fails holds, since "could not ask" is not
+    "nothing open" (as OMNI-61's unreadable brake state is not "no spend"). A
+    PR decided between the listing and the check releases as usual, but the
+    hold stands while any other of the loop's PRs is still open; the next
+    check adopts it.
+    """
+    try:
+        outcome = ray.get(handles["DevOps"].adopt_open_pr.remote())
+    except Exception as exc:  # noqa: BLE001 - an outage holds; it never lets a cycle through
+        detail = " ".join(str(exc).split())[:200]
+        return True, (f"[sis] HOLDING: could not list open PRs ({detail}). "
+                      "No cycle starts until they can be checked.")
+    if outcome is None:
+        return False, None
+    pr_id = str(outcome.get("pr"))
+    others = [str(p) for p in outcome.get("open", []) if str(p) != pr_id]
+    also = f" (also open: {', '.join(f'PR {p}' for p in others)})" if others else ""
+    if not outcome.get("adopted", False):
+        return True, (f"[sis] HOLDING: PR {pr_id} is open but not adopted: "
+                      f"{outcome.get('reason')}{also}")
+    if outcome.get("released"):
+        record_release(store, outcome)
+        forget_pending_pr(store, pr_id)
+        return bool(others), f"[sis] PR {pr_id} was {outcome.get('reason')}: not held{also}"
+    if outcome.get("promoted") or outcome.get("merged"):
+        forget_pending_pr(store, pr_id)
+        return bool(others), f"[sis] PR {pr_id} was merged: promoted; cycles build on it{also}"
+    return True, (f"[sis] HOLDING: PR {pr_id} is open and awaits a human merge or close"
+                  f"{also}. No cycle starts until then.")
+
+
 def bootstrap() -> dict[str, Any]:
     """Start Ray, the shared substrate, and the named role actors."""
     # Before anything starts: brakes that reset on every restart are refused

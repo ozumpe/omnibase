@@ -601,3 +601,45 @@ def test_a_sort_pr_writes_the_sort_target_and_nothing_else() -> None:
     assert len(puts) == 1 and puts[0].endswith("/contents/runtime/sort_target.py")
     assert not any("runtime/target.py" in url for _, url in calls)
     assert pr.path == "runtime/sort_target.py"
+
+
+# --- open_prs: the VCS as the source of truth for pending decisions (OMNI-136) ---
+
+
+def test_open_prs_asks_for_the_base_branchs_open_prs_oldest_first() -> None:
+    gh, http = _github()
+
+    def _listing(url: str, params: Any = None) -> _Resp:
+        http.calls.append(("GET", url, params))
+        return _Resp([  # type: ignore[arg-type]  # the /pulls listing is a JSON array
+            {"number": 13, "head": {"ref": "feature/tes-77"},
+             "title": "Optimise sum_of_divisors: 1 step (TES-77)"},
+            {"number": 14, "head": {"ref": "feature/tes-83"},
+             "title": "Optimise sum_of_divisors: 2 steps (TES-83)"},
+        ])
+
+    http.get = _listing  # type: ignore[method-assign]
+    prs = gh.open_prs()
+
+    assert [(p.id, p.branch) for p in prs] == [("13", "feature/tes-77"), ("14", "feature/tes-83")]
+    assert all(p.artifact == "" for p in prs)  # status only: no file fetched per PR
+    ((_, url, params),) = http.calls
+    assert url.endswith("/repos/o/r/pulls")
+    assert params == {"state": "open", "base": "main", "sort": "created",
+                      "direction": "asc", "per_page": 100}
+
+
+def test_open_prs_raises_when_github_cannot_answer() -> None:
+    # Never an empty list on failure: the loop would read "could not ask" as
+    # "nothing open" and propose beside a PR still under review.
+    import requests
+
+    gh, http = _github()
+
+    class _Down(_Resp):
+        def raise_for_status(self) -> None:
+            raise requests.HTTPError("503 Service Unavailable")
+
+    http.get = lambda url, params=None: _Down({})  # type: ignore[method-assign]
+    with pytest.raises(requests.HTTPError):
+        gh.open_prs()

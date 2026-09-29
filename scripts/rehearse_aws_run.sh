@@ -4,8 +4,9 @@
 # Runs the instance's user_data and scripts/aws_bootstrap.sh on an Ubuntu 24.04
 # container, then the runbook's commands as `ubuntu` through a login shell
 # (the way an SSM session is told to work), with the gauntlet's docker sandbox
-# on a real Linux daemon. A full stub-proposer cycle must reach
-# verified_awaiting_human_merge, and the operator console must answer.
+# on a real Linux daemon. A full stub-proposer cycle must pass every gate
+# (`[cycle] feature_step`, or `verified_awaiting_human_merge` for a feature that
+# ends in one step), and the operator console must answer.
 #
 # Why this exists: the first rehearsal found two defects that no unit test and
 # no read-through could see, each of which would have cost an EC2 lifecycle —
@@ -97,10 +98,20 @@ deps=$(poetry run python -c 'import ray, panel, boto3, anthropic, hypothesis; pr
 
 export SIS_SANDBOX=docker
 poetry run python main.py > /tmp/cycle.log 2>&1
-status=$(grep -oE "cycle status: [a-z_]+" /tmp/cycle.log | head -1)
-[ "$status" = "cycle status: verified_awaiting_human_merge" ] \
-  && check "full cycle in the docker sandbox ($status)" ok \
-  || check "full cycle in the docker sandbox" no "${status:-no status} — see /tmp/cycle.log"
+# main.py reports "[cycle] <status>: ..." (OMNI-123 replaced "cycle status:",
+# which this check went on grepping for). A cycle that passed every gate is a
+# committed feature step since staged delivery (OMNI-130), or a PR when the
+# feature ends after one step. The same set as episodic.ACCEPTED_OUTCOMES,
+# minus "promoted", which only a human merge produces.
+status=$(sed -nE 's/^\[cycle\] ([a-z_]+):.*/\1/p' /tmp/cycle.log | head -1)
+case "$status" in
+  feature_step|verified_awaiting_human_merge)
+    check "full cycle in the docker sandbox ($status)" ok ;;
+  *)
+    check "full cycle in the docker sandbox" no "${status:-no [cycle] line} — tail of /tmp/cycle.log:"
+    # The container is removed on exit unless KEEP=1, so show the evidence here.
+    tail -20 /tmp/cycle.log | sed 's/^/      /' ;;
+esac
 
 SIS_FRONTEND_AUTH=none timeout 90 poetry run python -m sis.frontend > /tmp/fe.log 2>&1 &
 code=000
