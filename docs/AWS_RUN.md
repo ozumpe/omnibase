@@ -22,7 +22,7 @@ This document has four parts:
 
 | | |
 |---|---|
-| Code | release tag **`v0.3.2`** (`var.repo_ref`), never a branch — see [Which code runs](#which-code-runs) |
+| Code | release tag **`v0.3.3`** (`var.repo_ref`), never a branch — see [Which code runs](#which-code-runs) |
 | Box | one `m7i.xlarge`, `us-east-1`, **no inbound ports**; shell via SSM only |
 | Contract | `sum_of_divisors`, re-seeded naive on `ozumpe/testrun`'s `develop` |
 | Where artifacts land | Jira `TES`, GitHub `ozumpe/testrun` (PRs against `develop`) |
@@ -180,7 +180,7 @@ tail -f /var/log/sis-bootstrap.log
 ### 5. The run itself (box)
 
 All of it as `ubuntu`, in `~/omnibase`, in one shell, **and that shell lives in
-tmux** (OMNI-139; a box built after `v0.3.2`, see the note below):
+tmux** (OMNI-139, in `v0.3.3`; see the note below):
 
 ```bash
 tmux new-session -A -s sis
@@ -250,9 +250,9 @@ poetry run python -u main.py --contract sum_of_divisors --loop --loop-max-cycles
 ```
 
 `tee` keeps the console output on disk, where a new session can follow it
-without attaching (`tail -f ~/omnibase/runtime/loop.log`) and, from the release
-after `v0.3.2`, where the loop's syncs upload it (on `v0.3.2` the by-hand sync
-in [step 5d](#5-the-run-itself-box) does). `-u` sends each line as it is printed, because a pipe,
+without attaching (`tail -f ~/omnibase/runtime/loop.log`) and, from `v0.3.3`,
+where the loop's syncs upload it (before that, the by-hand sync in
+[step 5d](#5-the-run-itself-box) does). `-u` sends each line as it is printed, because a pipe,
 unlike a terminal, is buffered. `-i` makes tee ignore Ctrl-C, so that Ctrl-C
 stops the loop and tee still writes what the loop prints on its way out.
 
@@ -285,7 +285,7 @@ What to expect:
   (OMNI-138). Before that fix, the same situation filed a bug per attempt and
   tripped the circuit breaker.
 
-**d. The dataset keeps itself** (OMNI-140; not in `v0.3.2`). The loop uploads
+**d. The dataset keeps itself** (OMNI-140, in `v0.3.3`). The loop uploads
 the episodic log, its state, the operator audit and the console log
 (`runtime/loop.log`, from step c) to
 `s3://<bucket>/runs/<start time>/` after every cycle
@@ -323,7 +323,7 @@ syncs. `pause` idles the loop without exiting; to stop it outright, reattach
 (`tmux new-session -A -s sis`), press `q` if the pane is scrolled back, then
 Ctrl-C, and wait for `[loop] stopped` (the loop finishes the cycle in flight
 first). Closing the tmux session or its pane also stops the loop, the same way,
-from the release after `v0.3.2`; on `v0.3.2` it kills it on the spot.
+from `v0.3.3`; before that it kills it on the spot.
 
 **The operator console** stays bound to loopback on the box and is reached
 over port forwarding:
@@ -487,7 +487,7 @@ human, one box: a remote state backend is ceremony this doesn't need yet.
 
 ### Which code runs
 
-The box runs the **release tag** in `var.repo_ref` — `v0.3.2` by default
+The box runs the **release tag** in `var.repo_ref` — `v0.3.3` by default
 (OMNI-63). A tag, not `develop`: a run's results are only worth something if
 they name the code that produced them, and a branch names whatever it pointed
 at when the box booted. `tofu plan` refuses a branch unless
@@ -612,8 +612,8 @@ and no spend record.
 
 The most durable thing a run produces is the episodic log, "the dataset the
 system learns from" (CLAUDE.md). The instance is disposable; the log is not.
-From the release after `v0.3.2` the loop syncs it itself (step 5d): every
-cycle, and when it stops. Until then, and for anything that is not `--loop`,
+From `v0.3.3` the loop syncs it itself (step 5d): every cycle, and when it
+stops. Before that, and for anything that is not `--loop`,
 sync by hand at the end of any session, as `ubuntu` (`ssm-user` has no
 checkout to sync):
 
