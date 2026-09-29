@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import pathlib
+import sys
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
@@ -555,7 +556,14 @@ class CTO(Role):
     def __init__(self) -> None:
         super().__init__("CTO", "CTO")
 
-    def plan(self, spec_page_id: str) -> dict[str, str]:
+    def plan(self, spec_page_id: str, contract_name: str | None = None) -> dict[str, str]:
+        """Plan a feature: an epic and its stories, kept until its PR opens.
+
+        Every step of the feature works under this plan (OMNI-135). Before, each
+        cycle planned afresh, and the fourth AWS run filed 22 TES issues for
+        six cycles.
+        """
+        contract_ = self._contract(contract_name)
         spec = ray.get(self._ws.get_page.remote(spec_page_id))
         epic = ray.get(self._ws.create_issue.remote(IssueType.EPIC, f"Epic: {spec.title}", None))
         infra = ray.get(self._ws.create_issue.remote(
@@ -565,8 +573,52 @@ class CTO(Role):
         ray.get(self._ws.transition.remote(feature.id, IssueStatus.TODO, "Planned by CTO"))
         ray.get(self._sm.record.remote("epic", epic.id, spec=spec_page_id))
         ray.get(self._sm.record.remote("story", feature.id, epic=epic.id))
-        return {"epic_id": str(epic.id), "infra_story_id": str(infra.id),
-                "feature_story_id": str(feature.id)}
+        plan = {"spec_id": str(spec_page_id), "epic_id": str(epic.id),
+                "infra_story_id": str(infra.id), "feature_story_id": str(feature.id)}
+        ray.get(self._sm.set_plan.remote(contract_.name, plan))
+        return plan
+
+    def open_plan(self, contract_name: str | None = None) -> dict[str, Any] | None:
+        """The plan the next step of *contract_name* works under, if one is open.
+
+        One plan per feature (OMNI-135): kept from its first step until its PR
+        opens. With none in memory, a feature a previous process left half
+        built is found on its branch and carried on
+        (:func:`sis.feature.resumable_feature`); the result then says so under
+        ``resumed``. The version-control system is the source of truth, as for
+        open PRs (OMNI-136): a file on the box would not survive the box being
+        replaced, which every new release does (OMNI-137).
+
+        A failure to look starts a fresh feature. That leaves the old branch
+        behind, which is what happened before this check existed, and never
+        carries on a branch nobody can see.
+        """
+        spec = self._contract(contract_name)
+        plan: dict[str, Any] | None = ray.get(self._sm.plan.remote(spec.name))
+        if plan is not None or ray.get(self._sm.feature.remote(spec.name)) is not None:
+            return plan
+        try:
+            branches = ray.get(self._ws.unproposed_branches.remote(feature_mod.BRANCH_PREFIX))
+        except Exception as exc:  # noqa: BLE001 - see the docstring: start fresh, say why
+            detail = " ".join(str(exc).split())[:200]
+            print(f"[sis] WARNING: could not look for an unfinished {spec.name} feature "
+                  f"({detail}); starting a new one", file=sys.stderr)
+            ray.get(self._ws.emit.remote("feature.resume_failed", contract=spec.name,
+                                         error=detail))
+            return None
+        found = feature_mod.resumable_feature(spec.name, branches)
+        if found is None:
+            return None
+        feature, plan = found["feature"], found["plan"]
+        ray.get(self._sm.set_feature.remote(spec.name, feature))
+        ray.get(self._sm.set_plan.remote(spec.name, plan))
+        ray.get(self._sm.record.remote(
+            "feature_resumed", feature["branch"], story=plan["feature_story_id"],
+            steps=len(feature["steps"])))
+        ray.get(self._ws.emit.remote(
+            "feature.resumed", contract=spec.name, branch=feature["branch"],
+            steps=len(feature["steps"])))
+        return {**plan, "resumed": feature["branch"], "steps": len(feature["steps"])}
 
 
 # --------------------------------------------------------------------------
@@ -602,6 +654,10 @@ class SWE(Role):
         # base branch sees them only when a human merges the finished feature.
         max_steps = int(config.get("loop.feature_max_steps"))
         feature: dict[str, Any] | None = ray.get(self._sm.feature.remote(spec.name))
+        # The plan this step works under (CTO.plan). Its ids ride on the step's
+        # commit, so a restart can rebuild the feature from the branch (OMNI-135).
+        plan: dict[str, Any] = ray.get(self._sm.plan.remote(spec.name)) or {
+            "feature_story_id": story_id, "spec_id": "unplanned", "epic_id": "unplanned"}
         head = (ray.get(self._ws.read_file.remote(feature["branch"], spec.target_path))
                 if feature else "")
         if feature and not head:
@@ -676,15 +732,17 @@ class SWE(Role):
         step = len(feature["steps"]) + 1
         ray.get(self._ws.write_file.remote(
             feature["branch"], spec.target_path, candidate,
-            f"Step {step}: optimise {spec.name} ({story_id})"))
+            feature_mod.step_message(spec.name, plan, step, baseline, report.latency_seconds)))
         feature = feature_mod.with_step(feature, story_id, baseline, report.latency_seconds)
         ray.get(self._sm.record.remote("commit", feature["branch"], story=story_id, step=step))
         if feature_mod.is_full(feature, max_steps):
             return self._finish_feature(story_id, spec, feature, candidate, cost_usd,
                                         candidate_sha, f"{step} of {max_steps} steps")
         ray.get(self._sm.set_feature.remote(spec.name, feature))
+        # The story is the feature's, not the step's (OMNI-135): it stays in
+        # progress until the feature's PR opens.
         ray.get(self._ws.transition.remote(
-            story_id, IssueStatus.DONE, f"Step {step} committed to {feature['branch']}"))
+            story_id, IssueStatus.IN_PROGRESS, f"Step {step} committed to {feature['branch']}"))
         return {"passed": True, "feature_step": True, "step": step, "pr_id": None,
                 "branch": feature["branch"], "baseline": baseline,
                 "candidate_latency": report.latency_seconds, "cost_usd": cost_usd,
@@ -707,7 +765,9 @@ class SWE(Role):
         # The canary needs this PR's contract later (oracle, entry point,
         # margin, route) and has only the PR id to go on by then.
         ray.get(self._sm.set_pr_contract.remote(pr.id, spec.name))
+        # The next feature starts from a new plan, and so a new story.
         ray.get(self._sm.set_feature.remote(spec.name, None))
+        ray.get(self._sm.set_plan.remote(spec.name, None))
         first, last = feature["steps"][0], feature["steps"][-1]
         ray.get(self._sm.record.remote(
             "pr", pr.id, story=story_id, steps=len(feature["steps"]),

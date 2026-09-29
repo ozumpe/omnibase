@@ -77,11 +77,16 @@ def test_no_change_files_no_bug(handles) -> None:  # type: ignore[no-untyped-def
 def test_no_change_never_trips_the_breaker(handles) -> None:  # type: ignore[no-untyped-def]
     # Many "nothing to do" cycles, well past the 3-failure threshold, must not
     # page a human: a no-op is not a failure.
+    stories = set()
     for _ in range(6):
         r = org.run_cycle(handles, "again", "still nothing")
         assert r["status"] == handles["_expected_status"]
         assert r.get("breaker_bug_id") is None
+        stories.add(r["story_id"])
     assert not ray.get(handles["CEO"].breaker_open.remote())
+    # No feature started, so no PR opened: every attempt works under one plan
+    # and one story (OMNI-135), where the fourth AWS run filed three of each.
+    assert len(stories) == 1, stories
     # A further cycle still runs (not refused with circuit_breaker_open).
     assert org.run_cycle(handles, "x", "y")["status"] == handles["_expected_status"]
 

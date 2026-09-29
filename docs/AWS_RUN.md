@@ -229,8 +229,12 @@ What to expect:
   in `v0.3.1`). On `v0.3.0`, a rebuilt box does not know about an
   open PR and opens a second one beside it: merge or close the loop's PRs
   before `tofu destroy`.
-- Keep this one process running: a feature in progress lives in memory, so a
-  restart starts a new one.
+- A feature's steps share one Confluence spec, one epic and one story in
+  `TES`, however many cycles it takes (OMNI-135).
+- A restart, or a new box, carries on a feature in progress from its branch:
+  `[sis] carrying on feature/tes-… (2 step(s) committed) …` (OMNI-135). On
+  `v0.3.1` and earlier, keep one process running: the feature lives in memory
+  there, and a restart starts a new one beside the old branch.
 - When the target has **converged** — `loop.converged_after` (default 3)
   attempts in a row find nothing to improve — the loop stops itself:
   `[loop] stopped …: <contract> has converged`, and a WARNING page. Nothing

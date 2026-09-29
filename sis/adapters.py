@@ -23,6 +23,7 @@ from collections.abc import Callable
 from sis.metrics import summarise
 from sis.ports import (
     Branch,
+    BranchState,
     DeployRecord,
     Issue,
     IssueStatus,
@@ -149,6 +150,7 @@ class InMemoryVersionControl:
         self._branches: dict[str, Branch] = {}
         self._prs: dict[str, PullRequest] = {}
         self._files: dict[tuple[str, str], str] = {}  # (branch, path) -> content
+        self._messages: dict[str, list[str]] = {}  # branch -> its commit messages
         self._ids = itertools.count(1)
         self._tel = telemetry
 
@@ -180,6 +182,7 @@ class InMemoryVersionControl:
         if branch == "main":
             raise RequiresHumanApproval("the agent must never commit to main")
         self._files[(branch, path)] = content
+        self._messages.setdefault(branch, []).append(message)
         self._tel.emit("commit", branch=branch, path=path, message=message)
 
     def read_file(self, ref: str, path: str) -> str:
@@ -202,6 +205,13 @@ class InMemoryVersionControl:
         # Insertion order is creation order. Status only, like get_pr(path=None).
         return [dataclasses.replace(pr, artifact="", path="")
                 for pr in self._prs.values() if not pr.closed]
+
+    def unproposed_branches(self, prefix: str) -> list[BranchState]:
+        # No base branch history in memory, so nothing is ever behind it.
+        proposed = {pr.branch for pr in self._prs.values()}
+        return [BranchState(name=name, behind_by=0, messages=list(self._messages.get(name, [])))
+                for name in self._branches
+                if name.startswith(prefix) and name not in proposed]
 
     def live_target_source(self, path: str) -> str:
         # No merged base branch in memory; the local file is the source of

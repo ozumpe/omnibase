@@ -33,6 +33,7 @@ from sis import config
 from sis.adapters import InMemoryTelemetry
 from sis.ports import (
     Branch,
+    BranchState,
     DeployRecord,
     Issue,
     IssueStatus,
@@ -484,6 +485,45 @@ class GitHubVersionControl:
         return [PullRequest(id=str(p["number"]), branch=str(p["head"]["ref"]),
                             title=str(p.get("title", "")))
                 for p in cast("list[dict[str, Any]]", listing.json())]
+
+    # Pages of 100 PRs read to learn which branches were ever proposed. A repo
+    # with more has outgrown a scratch target; reading part of the list could
+    # resume a branch a human declined, so it raises instead.
+    _MAX_PR_PAGES = 10
+
+    def unproposed_branches(self, prefix: str) -> list[BranchState]:
+        # One call for the loop's branches, one per page of PRs, then a compare
+        # only for the (few) branches no PR was opened from. Every HTTP failure
+        # raises: the caller starts a fresh feature rather than guess (OMNI-135).
+        refs = self._http.get(self._api(f"/git/matching-refs/heads/{prefix}"))
+        refs.raise_for_status()
+        names = [str(r["ref"]).removeprefix("refs/heads/")
+                 for r in cast("list[dict[str, Any]]", refs.json())]
+        if not names:
+            return []
+        proposed: set[str] = set()
+        for page in range(1, self._MAX_PR_PAGES + 1):
+            listing = self._http.get(self._api("/pulls"), params={
+                "state": "all", "per_page": 100, "page": page})
+            listing.raise_for_status()
+            prs = cast("list[dict[str, Any]]", listing.json())
+            proposed.update(str(p["head"]["ref"]) for p in prs)
+            if len(prs) < 100:
+                break
+        else:
+            raise RuntimeError(f"more than {self._MAX_PR_PAGES * 100} PRs; "
+                               "cannot tell which branches were proposed")
+        states = []
+        for name in names:
+            if name in proposed:
+                continue
+            compare = self._http.get(self._api(f"/compare/{self._s.default_base}...{name}"))
+            compare.raise_for_status()
+            data = compare.json()
+            states.append(BranchState(
+                name=name, behind_by=int(data.get("behind_by", 0)),
+                messages=[str(c["commit"]["message"]) for c in data.get("commits", [])]))
+        return states
 
     def write_file(self, branch: str, path: str, content: str, message: str) -> None:
         # _put_file refuses anything that is not a SOFT target, and main.
