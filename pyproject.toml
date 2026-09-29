@@ -75,7 +75,7 @@ panel = "^1.9"          # dashboard + built-in OAuth; chosen over Streamlit for 
 
 # Optional extras (only present with their groups); don't fail mypy when absent.
 [[tool.mypy.overrides]]
-module = ["yaml", "boto3", "requests", "requests.*", "anthropic", "duckdb"]
+module = ["yaml", "boto3", "botocore", "botocore.*", "requests", "requests.*", "anthropic", "duckdb"]
 ignore_missing_imports = true
 
 # Panel (operator UI) is only partly annotated, so under --strict it reports

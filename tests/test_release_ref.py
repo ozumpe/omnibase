@@ -68,6 +68,9 @@ def test_the_box_knows_its_artifacts_bucket() -> None:
     # <artifacts-bucket> placeholder, a guessed bucket, then the right one.
     main = (_INFRA / "main.tf").read_text(encoding="utf-8")
     assert "export ARTIFACTS_BUCKET=${aws_s3_bucket.artifacts.bucket}" in main
+    # And the loop's own name for it (OMNI-140): the config schema's env vars
+    # all start with SIS_, so the bucket it syncs to cannot be the bare one.
+    assert "export SIS_ARTIFACTS_BUCKET=${aws_s3_bucket.artifacts.bucket}" in main
     runbook = (PROJECT_ROOT / "docs" / "AWS_RUN.md").read_text(encoding="utf-8")
     assert "<artifacts-bucket>" not in runbook
     assert runbook.count("s3://$ARTIFACTS_BUCKET/runs/") == 2
