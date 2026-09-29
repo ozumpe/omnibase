@@ -361,6 +361,21 @@ def bootstrap() -> dict[str, Any]:
     return handles
 
 
+def neutral_cycle_status(impl: Mapping[str, Any]) -> str | None:
+    """The neutral status an implementation outcome is recorded under, or None. Pure.
+
+    Neutral means spend recorded, no bug filed, no breaker count: a verdict
+    that says nothing against the loop. The gate decides for "no change" and
+    "inconclusive" (``episodic.neutral_status``); the SWE decides for "no
+    gain", because the same "no improvement" reason is neutral only when no
+    feature is in progress (OMNI-138).
+    """
+    if impl.get("passed"):
+        return None
+    return episodic.neutral_status(impl.get("reason")) or (
+        episodic.NO_GAIN if impl.get("no_gain") else None)
+
+
 def cycle_summary(result: Mapping[str, Any]) -> str:
     """One console line: what a cycle did, why, and what it cost. Pure (OMNI-123).
 
@@ -539,17 +554,26 @@ def run_cycle(
              "runs until the budget (brakes.budget_usd) is raised.")
         return _record({"status": "budget_denied"})
 
-    # 2. Intake: a non-technical user drops a proposal into the proposal space.
-    proposal = ray.get(ws.create_page.remote(
-        space_keys()["proposal"], proposal_title, proposal_body, None, ["proposal"]))
+    # 2–4 happen once per feature (OMNI-135): a step of a feature in progress
+    # works under the plan its first step made, so a feature files one spec,
+    # one epic and one story rather than one of each per cycle.
+    plan = ray.get(cto.open_plan.remote(contract_name))
+    if plan is None:
+        # 2. Intake: a non-technical user drops a proposal into the proposal space.
+        proposal = ray.get(ws.create_page.remote(
+            space_keys()["proposal"], proposal_title, proposal_body, None, ["proposal"]))
 
-    # 3. Spec & design (PM + Designer).
-    spec_id = ray.get(pm.refine_proposal.remote(proposal.id))
-    ray.get(designer.outline.remote(spec_id))
+        # 3. Spec & design (PM + Designer).
+        spec_id = ray.get(pm.refine_proposal.remote(proposal.id))
+        ray.get(designer.outline.remote(spec_id))
 
-    # 4. Plan (CTO → Jira epic + stories).
-    plan = ray.get(cto.plan.remote(spec_id))
-    story_id = plan["feature_story_id"]
+        # 4. Plan (CTO → Jira epic + stories).
+        plan = ray.get(cto.plan.remote(spec_id, contract_name))
+    elif plan.get("resumed"):
+        print(f"[sis] carrying on {plan['resumed']} ({plan['steps']} step(s) committed), "
+              "left unfinished by an earlier run", file=sys.stderr)
+    spec_id = str(plan["spec_id"])
+    story_id = str(plan["feature_story_id"])
 
     # 5. Implement (SWE → validated change on a feature branch + PR).
     impl = ray.get(swe.implement.remote(story_id, contract_name))
@@ -563,7 +587,9 @@ def run_cycle(
     # An inconclusive benchmark (OMNI-41) is benign the same way: the gate could
     # not tell the candidate from the margin, which says nothing against the
     # candidate. It keeps its own status so the log never calls it "no change".
-    neutral_status = None if impl["passed"] else episodic.neutral_status(impl.get("reason"))
+    # So is a new feature that finds no further gain (OMNI-138): the target has
+    # converged. loop.serve stops after loop.converged_after of these in a row.
+    neutral_status = neutral_cycle_status(impl)
     if neutral_status:
         trip = ray.get(ceo.record_neutral.remote(cost_usd=cost_usd))
         breaker_bug_id = _breaker_alarm(trip)

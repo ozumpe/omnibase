@@ -22,7 +22,7 @@ This document has four parts:
 
 | | |
 |---|---|
-| Code | release tag **`v0.3.1`** (`var.repo_ref`), never a branch — see [Which code runs](#which-code-runs) |
+| Code | release tag **`v0.3.2`** (`var.repo_ref`), never a branch — see [Which code runs](#which-code-runs) |
 | Box | one `m7i.xlarge`, `us-east-1`, **no inbound ports**; shell via SSM only |
 | Contract | `sum_of_divisors`, re-seeded naive on `ozumpe/testrun`'s `develop` |
 | Where artifacts land | Jira `TES`, GitHub `ozumpe/testrun` (PRs against `develop`) |
@@ -102,6 +102,13 @@ After an earlier `tofu destroy`, `apply` reports **12 to add**. The artifacts
 bucket is not among them, because it survives the destroy and stays in the
 local state. If `init` times out or `apply` wants to create the bucket, see
 [Troubleshooting](#troubleshooting).
+
+**Moving a running box to a new release** is the same `apply`, run from a
+checkout where `var.repo_ref` names the new tag. It **replaces the instance**:
+everything under `runtime/` goes with the old box, so sync it first
+([step 5d](#5-the-run-itself-box)). The secret and the pager subscription
+stay, so steps 2 and 3 are not needed again. The new box re-reads from GitHub
+which of the loop's PRs are still open, and waits for them (OMNI-136).
 
 ### 2. Upload the secret (laptop)
 
@@ -222,8 +229,18 @@ What to expect:
   in `v0.3.1`). On `v0.3.0`, a rebuilt box does not know about an
   open PR and opens a second one beside it: merge or close the loop's PRs
   before `tofu destroy`.
-- Keep this one process running: a feature in progress lives in memory, so a
-  restart starts a new one.
+- A feature's steps share one Confluence spec, one epic and one story in
+  `TES`, however many cycles it takes (OMNI-135).
+- A restart, or a new box, carries on a feature in progress from its branch:
+  `[sis] carrying on feature/tes-… (2 step(s) committed) …` (OMNI-135, in
+  `v0.3.2`). On `v0.3.1` and earlier, keep one process running: the feature
+  lives in memory there, and a restart starts a new one beside the old branch.
+- When the target has **converged** — `loop.converged_after` (default 3)
+  attempts in a row find nothing to improve — the loop stops itself:
+  `[loop] stopped …: <contract> has converged`, and a WARNING page. Nothing
+  is broken and there is nothing to reset; choose another contract or target
+  (OMNI-138). Before that fix, the same situation filed a bug per attempt and
+  tripped the circuit breaker.
 
 **d. Keep the dataset.** When the loop has stopped:
 
@@ -399,7 +416,7 @@ human, one box: a remote state backend is ceremony this doesn't need yet.
 
 ### Which code runs
 
-The box runs the **release tag** in `var.repo_ref` — `v0.3.1` by default
+The box runs the **release tag** in `var.repo_ref` — `v0.3.2` by default
 (OMNI-63). A tag, not `develop`: a run's results are only worth something if
 they name the code that produced them, and a branch names whatever it pointed
 at when the box booted. `tofu plan` refuses a branch unless
@@ -407,6 +424,12 @@ at when the box booted. `tofu plan` refuses a branch unless
 provenance (`[sis] running ...` on startup, the SelfModel's `code` record,
 `code_version` in the episodic state) name the exact commit, with `-dirty` if
 the tree was edited on the box.
+
+A new `repo_ref` builds a **new** box (`user_data_replace_on_change`,
+OMNI-137). `repo_ref` appears only in `user_data`, and cloud-init runs
+`user_data` on an instance's first boot only. Without the setting, a changed
+tag merely stopped and started the same instance: it came back on the old tag,
+its loop killed, while `apply` reported success.
 
 Run #2 used the `sort` contract. Run #3 uses `sum_of_divisors`, re-seeded
 naive on `testrun`'s `develop`, because in July it improved in four steps, and
@@ -625,3 +648,14 @@ second operator, a second node.
   pending PR had lived in a file on the old box. Fixed in `v0.3.1`
   (OMNI-136): before every cycle, the loop asks GitHub which of its PRs are
   still open.
+- **2026-09-29 — run #4, on `v0.3.1`, contract `sum_of_divisors`**, on a
+  fresh box after #13 and #14 were closed by hand. Staged delivery worked end
+  to end: three accepted steps on one branch, one PR (testrun #15), the loop
+  held, a human merged it, and the loop continued from `develop`. Then
+  `sum_of_divisors` had converged (~1 µs per call): three attempts in a row
+  found no further gain (ratios 0.933, 3.24, 0.949 against the 0.90 margin),
+  each filed a bug, and the third tripped the breaker — a CRITICAL page for a
+  loop that was not broken (M27). $0.27 of $1.00 spent; the pager worked.
+  Fixed in `v0.3.2` (OMNI-138): no gain from `develop` is neutral, and
+  convergence is its own polite stop. Artifacts in
+  `s3://sis-first-run-artifacts-696644743351/runs/20260929-0450/`.

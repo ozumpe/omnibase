@@ -24,10 +24,12 @@ from __future__ import annotations
 
 import signal
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any
+
+from sis.episodic import NEUTRAL_STATUSES
 
 if TYPE_CHECKING:
     from sis.ports import Cloud
@@ -70,6 +72,18 @@ def decide(tick: Tick) -> Action:
     return Action.RUN
 
 
+def converged(statuses: Sequence[str], after: int) -> bool:
+    """Whether the last *after* cycles all found nothing to improve. Pure (OMNI-138).
+
+    "Nothing to improve" is every neutral status: no change, an inconclusive
+    benchmark, no gain from the base. They cost no breaker count, so without
+    this a finished target would keep spending until the budget ran out.
+    Anything else in between — an accepted step, a failure — resets the run.
+    """
+    n = max(1, after)
+    return len(statuses) >= n and all(s in NEUTRAL_STATUSES for s in statuses[-n:])
+
+
 def stop_alert(tick: Tick, cycles_run: int) -> tuple[str, str] | None:
     """The page a loop stop needs, as (title, body), or None. Pure (OMNI-62).
 
@@ -102,18 +116,23 @@ def stop_summary(
     trip_reason: str | None,
     spent_usd: float,
     budget_usd: float,
+    converged_note: str | None = None,
 ) -> str:
     """One console line: why the loop stopped, and where spend stands. Pure.
 
     OMNI-123: the first AWS run printed ``loop stopped after 2 cycle(s)`` — not
     that the breaker had tripped, nor why. *tick* is the one that made
     :func:`decide` return STOP, or None when the loop ended by max_cycles or a
-    stop signal rather than by a condition.
+    stop signal rather than by a condition. *converged_note* says the loop
+    stopped itself because the target converged (OMNI-138); it sets the stop
+    event to do so, which is why it is checked before *interrupted*.
     """
     if tick is not None and tick.breaker_open:
         why = f"circuit breaker open ({trip_reason or 'reason not recorded'})"
     elif tick is not None and not tick.budget_ok:
         why = "spend budget exhausted"
+    elif converged_note:
+        why = converged_note
     elif interrupted:
         why = "interrupted (Ctrl-C / SIGTERM)"
     elif max_cycles is not None and cycles_run >= max_cycles:
@@ -335,8 +354,13 @@ def serve(
     one_canary_in_flight: bool = True,
     watch_merges: bool = True,
     canary_backend: str | None = None,
+    converged_after: int | None = None,
 ) -> list[dict[str, Any]]:
     """Run the loop against a live actor org, with graceful SIGINT/SIGTERM stop.
+
+    ``converged_after`` (default: ``loop.converged_after``) neutral cycles in a
+    row stop the loop: the target has converged (OMNI-138). A WARNING page, not
+    a breaker trip — nothing is broken, and there is nothing to reset.
 
     ``canary_backend`` is threaded to every cycle's ``DevOps.canary()`` call
     (OMNI-14) — ``"serve"`` for a real Ray Serve deployment judged against
@@ -360,8 +384,10 @@ def serve(
     """
     import ray
 
-    from sis import episodic, org
+    from sis import config, episodic, org
 
+    after = (converged_after if converged_after is not None
+             else int(config.config().loop.converged_after))
     ceo = handles["CEO"]
     self_model = handles["SelfModel"]
     workspace = handles["Workspace"]
@@ -415,10 +441,19 @@ def serve(
         return Tick(breaker_open=breaker_open, budget_ok=budget_ok, work=work,
                     paused=paused)
 
+    statuses: list[str] = []
+    converged_note: list[str | None] = [None]
+
     def run_cycle(work: Work) -> dict[str, Any]:
         result = org.run_cycle(handles, work.title, work.body, estimate_usd=estimate_usd,
                                canary_backend=canary_backend)
         print(org.cycle_summary(result), flush=True)  # OMNI-123: every cycle says why
+        statuses.append(str(result.get("status")))
+        if converged(statuses, after):
+            target = result.get("contract") or "the target"
+            converged_note[0] = (f"{target} has converged ({max(1, after)} cycle(s) in a "
+                                 "row found nothing to improve)")
+            stop.set()   # this run is done; the loop ends before the next poll
         return result
 
     stopped_by: list[Tick] = []
@@ -433,10 +468,21 @@ def serve(
     results = run_loop(poll, run_cycle, interval_s=interval_s,
                        max_cycles=max_cycles, stop_event=stop, on_stop=on_stop)
     econ = ray.get(ceo.economics.remote())
+    if converged_note[0] is not None:
+        # A human decides what to optimise next; the loop is not broken, so
+        # WARNING rather than the CRITICAL a breaker trip pages (OMNI-138).
+        from sis.ports import Severity
+
+        org.page(workspace, episodic.get_episodic_store(), Severity.WARNING,
+                 f"loop stopped: {converged_note[0]}",
+                 f"{converged_note[0]}. Spent ${float(econ['spent_usd']):.4f} of "
+                 f"${float(econ['budget_usd']):.2f}. Nothing to reset: choose another "
+                 "contract (--contract) or add a target, then start the loop again.")
     print(stop_summary(
         stopped_by[0] if stopped_by else None, len(results),
         max_cycles=max_cycles, interrupted=stop.is_set(),
         trip_reason=ray.get(ceo.state_snapshot.remote()).get("trip_reason"),
         spent_usd=float(econ["spent_usd"]), budget_usd=float(econ["budget_usd"]),
+        converged_note=converged_note[0],
     ), flush=True)
     return results

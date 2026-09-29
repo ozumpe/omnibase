@@ -193,3 +193,35 @@ def test_canary_in_flight_is_none_when_green_is_free() -> None:
     assert canary_in_flight({"slots": {"blue": "v0", "green": None}}) is None
     assert canary_in_flight({"slots": {}}) is None
     assert canary_in_flight({}) is None
+
+
+# --- a converged target stops the loop, politely (OMNI-138) ----------------------
+
+
+def test_converged_after_n_neutral_cycles_in_a_row() -> None:
+    from sis.loop import converged
+
+    # The fourth AWS run: an accepted step, then only "nothing to improve".
+    run = ["feature_step", "no_gain", "inconclusive", "no_change"]
+    assert converged(run, 3)
+    assert not converged(run, 4)            # the accepted step is in the window
+
+
+def test_any_other_outcome_resets_the_run() -> None:
+    from sis.loop import converged
+
+    assert not converged(["no_gain", "no_gain", "rolled_back"], 2)   # a failure
+    assert not converged(["no_gain", "feature_step"], 1)             # progress
+    assert not converged([], 3)
+    assert converged(["no_gain"], 0)        # a nonsense setting still means "one"
+
+
+def test_the_stop_line_says_the_target_converged() -> None:
+    from sis.loop import stop_summary
+
+    line = stop_summary(None, 4, max_cycles=10, interrupted=True, trip_reason=None,
+                        spent_usd=0.27, budget_usd=1.0,
+                        converged_note="sum_of_divisors has converged (3 cycle(s) ...)")
+    # The loop sets its own stop event to end the run: never "interrupted".
+    assert "sum_of_divisors has converged" in line and "interrupted" not in line
+    assert line.startswith("[loop] stopped after 4 cycle(s)")

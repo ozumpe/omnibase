@@ -75,3 +75,109 @@ def test_a_feature_branch_holds_its_own_file() -> None:
     assert vcs.read_file("feature/tes-1", "runtime/target.py") == "v2"
     with pytest.raises(RequiresHumanApproval):
         vcs.write_file("main", "runtime/target.py", "x", "never")
+
+
+# --- no further gain from the base is neutral (OMNI-138) --------------------------
+
+_NO_IMPROVEMENT = "no improvement: candidate ~0.000001s vs baseline 0.000001s per call"
+
+
+def test_no_gain_from_the_base_means_the_target_converged() -> None:
+    assert feature.finds_no_gain(None, _NO_IMPROVEMENT)
+    assert feature.finds_no_gain(None, "no change: candidate is identical to the baseline")
+    # Inside a feature the same verdict ends the feature instead (its PR opens).
+    assert not feature.finds_no_gain(feature.new_feature("feature/x", "TES-1"), _NO_IMPROVEMENT)
+    # A real failure is never "no gain".
+    assert not feature.finds_no_gain(None, "correctness mismatch (candidate disagrees)")
+    assert not feature.finds_no_gain(None, None)
+
+
+def test_only_the_swe_can_make_no_improvement_neutral() -> None:
+    from sis import org
+
+    assert org.neutral_cycle_status(
+        {"passed": False, "reason": _NO_IMPROVEMENT, "no_gain": True}) == "no_gain"
+    # The same reason without the SWE's say-so (e.g. QA's re-run) stays a failure.
+    assert org.neutral_cycle_status({"passed": False, "reason": _NO_IMPROVEMENT}) is None
+    # The gate's own neutral verdicts keep their names.
+    assert org.neutral_cycle_status(
+        {"passed": False, "reason": "no change: identical", "no_gain": True}) == "no_change"
+    assert org.neutral_cycle_status({"passed": True, "no_gain": True}) is None
+
+
+# --- OMNI-135: a feature is rebuilt from its branch after a restart ---
+
+_PLAN = {"spec_id": "6356994", "epic_id": "TES-100", "feature_story_id": "TES-101"}
+
+
+def _branch(name: str, *steps: tuple[float, float | None], behind_by: int = 0,
+            contract: str = "sort", plan: dict[str, str] = _PLAN) -> Any:
+    from sis.ports import BranchState
+
+    return BranchState(name=name, behind_by=behind_by, messages=[
+        feature.step_message(contract, plan, i, base, cand)
+        for i, (base, cand) in enumerate(steps, 1)])
+
+
+def test_a_step_message_reads_back_exactly() -> None:
+    message = feature.step_message("sort", _PLAN, 2, 0.000123456789, 4.5e-05)
+    assert message.startswith("Step 2: optimise sort (TES-101)\n\n")
+    assert feature.parse_step(message) == {
+        "contract": "sort", "story": "TES-101", "spec": "6356994", "epic": "TES-100",
+        "baseline_s": 0.000123456789, "candidate_s": 4.5e-05}
+    no_timing = feature.step_message("sort", _PLAN, 1, 0.001, None)
+    assert feature.parse_step(no_timing)["candidate_s"] is None  # type: ignore[index]
+
+
+@pytest.mark.parametrize("message", [
+    "Fix a typo in the target",                                    # a human's commit
+    feature.step_message("sort", _PLAN, 1, 0.001, 0.0005).replace("0.001", "nan"),
+    feature.step_message("sort", _PLAN, 1, 0.001, 0.0005).replace("0.0005", "-1.0"),
+    feature.step_message("sort", _PLAN, 1, 0.001, 0.0005).replace("TES-101", "TES 101"),
+    feature.step_message("sort", _PLAN, 1, 0.001, 0.0005).replace(
+        "Sis-Epic: TES-100\n", ""),
+])
+def test_anything_but_a_well_formed_step_is_not_a_step(message: str) -> None:
+    # Commit messages are written by anyone who can push to the branch.
+    assert feature.parse_step(message) is None
+
+
+def test_the_unfinished_feature_is_rebuilt_with_its_plan_and_steps() -> None:
+    found = feature.resumable_feature(
+        "sort", [_branch("feature/tes-101", (0.004, 0.002), (0.002, 0.0015))])
+
+    assert found is not None
+    assert found["plan"] == _PLAN
+    rebuilt = found["feature"]
+    assert (rebuilt["branch"], rebuilt["story"]) == ("feature/tes-101", "TES-101")
+    assert [(s["baseline_s"], s["candidate_s"]) for s in rebuilt["steps"]] == [
+        (0.004, 0.002), (0.002, 0.0015)]
+    assert rebuilt["attempts"][-1].startswith("step 2 accepted: 25.0% faster")
+
+
+@pytest.mark.parametrize("branch", [
+    _branch("feature/tes-101", (0.004, 0.002), behind_by=1),       # the base moved on
+    _branch("feature/tes-101", (0.004, 0.002), contract="sum_of_divisors"),
+    _branch("feature/tes-101"),                                    # no commits
+    _branch("hotfix/tes-101", (0.004, 0.002)),                     # not the loop's namespace
+], ids=["behind-the-base", "another-contract", "empty", "outside-namespace"])
+def test_a_branch_that_does_not_qualify_is_left_alone(branch: Any) -> None:
+    assert feature.resumable_feature("sort", [branch]) is None
+
+
+def test_a_branch_with_a_human_commit_or_two_plans_is_left_alone() -> None:
+    human = _branch("feature/tes-101", (0.004, 0.002))
+    human.messages.append("Tweak the target by hand")
+    other_plan = _branch("feature/tes-101", (0.004, 0.002))
+    other_plan.messages += _branch(
+        "x", (0.002, 0.001), plan={**_PLAN, "feature_story_id": "TES-120"}).messages
+    assert feature.resumable_feature("sort", [human]) is None
+    assert feature.resumable_feature("sort", [other_plan]) is None
+
+
+def test_of_several_the_longest_feature_wins_whatever_the_listing_order() -> None:
+    short = _branch("feature/tes-130", (0.004, 0.002))
+    long = _branch("feature/tes-101", (0.004, 0.002), (0.002, 0.0015))
+    for order in ([short, long], [long, short]):
+        found = feature.resumable_feature("sort", order)
+        assert found is not None and found["feature"]["branch"] == "feature/tes-101"

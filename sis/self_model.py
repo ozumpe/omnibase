@@ -63,9 +63,13 @@ class SelfModel:
         # an exact id, and this is already the actor that knows what is deployed.
         self._pending_pr: str | None = None
         # The feature each contract is building (OMNI-130): its branch, the
-        # steps committed so far, and what each attempt taught. In memory only:
-        # a restart starts a fresh feature, leaving the old branch behind.
+        # steps committed so far, and what each attempt taught. In memory; a
+        # restart rebuilds it from the branch's commits (OMNI-135).
         self._features: dict[str, dict[str, Any]] = {}
+        # The plan (spec page, epic, stories) each contract's next step works
+        # under, kept until its feature's PR opens: one story per feature, not
+        # per cycle (OMNI-135).
+        self._plans: dict[str, dict[str, Any]] = {}
 
     # --- actor registry ---
     def register(self, name: str, role: str, parent: str | None = None) -> None:
@@ -102,6 +106,15 @@ class SelfModel:
             self._features.pop(contract_name, None)
         else:
             self._features[contract_name] = feature
+
+    def plan(self, contract_name: str) -> dict[str, Any] | None:
+        return self._plans.get(contract_name)
+
+    def set_plan(self, contract_name: str, plan: dict[str, Any] | None) -> None:
+        if plan is None:
+            self._plans.pop(contract_name, None)
+        else:
+            self._plans[contract_name] = plan
 
     def deployment(self) -> dict[str, Any]:
         return {"slots": dict(self._slots), "live_version": self._live_version,

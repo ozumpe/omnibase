@@ -79,6 +79,20 @@ class PullRequest:
     closed: bool = False
 
 
+@dataclass
+class BranchState:
+    """A branch no PR was ever opened from, as the version-control system sees it.
+
+    How a restarted process finds a feature its predecessor left half built
+    (OMNI-135). ``messages`` are the branch's own commits, oldest first;
+    ``behind_by`` counts the base branch's commits since the branch forked.
+    """
+
+    name: str
+    behind_by: int
+    messages: list[str] = field(default_factory=list)
+
+
 class PullRequestNotFound(LookupError):
     """The version-control system has no PR with that id (OMNI-126).
 
@@ -184,6 +198,16 @@ class VersionControl(Protocol):
         them (OMNI-136). A process's memory of the PR it waits on dies with its
         box; the PR does not. No artifacts: callers only need to know what is
         still open, and fetching a file per PR would cost a call each.
+        """
+        ...
+
+    def unproposed_branches(self, prefix: str) -> list[BranchState]:
+        """Every branch under *prefix* that no PR was ever opened from.
+
+        A feature's steps are committed before its PR opens (OMNI-130), so
+        these are the features a process started and did not finish, whichever
+        box it ran on (OMNI-135). A branch with a PR in any state is left out:
+        merged or declined, a human has decided it. A failure to list raises.
         """
         ...
 

@@ -71,3 +71,12 @@ def test_the_box_knows_its_artifacts_bucket() -> None:
     runbook = (PROJECT_ROOT / "docs" / "AWS_RUN.md").read_text(encoding="utf-8")
     assert "<artifacts-bucket>" not in runbook
     assert runbook.count("s3://$ARTIFACTS_BUCKET/runs/") == 2
+
+
+def test_a_new_tag_builds_a_new_box() -> None:
+    # OMNI-137: repo_ref lives only in user_data, and a changed user_data used
+    # to stop and start the same instance. cloud-init runs user_data on first
+    # boot only, so `tofu apply` with a new release reported success and left
+    # the box on the old tag, its loop killed.
+    main = (_INFRA / "main.tf").read_text(encoding="utf-8")
+    assert "user_data_replace_on_change = true" in main
