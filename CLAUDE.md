@@ -328,7 +328,11 @@ internal target before it models anything external.
   live runs — don't put planning there.
 
 ## Current status — where to pick up
-Released through **v0.3.0** (2026-09-27): staged delivery's phases 0 and 1
+Released through **v0.3.1** (2026-09-29): v0.3.0 plus OMNI-136, the fix from
+the third AWS run (the loop asks GitHub which of its PRs are still open before
+every cycle, so a rebuilt box no longer opens a second, conflicting PR), and
+the restructured runbook with a working rehearsal (OMNI-29). Before that,
+**v0.3.0** (2026-09-27): staged delivery's phases 0 and 1
 (OMNI-129 sandbox worker, OMNI-130 feature branches), plus OMNI-126/57 (the
 hold survives a restart; a declined PR releases it). Before that, **v0.2.1**
 (2026-09-27): v0.2.0 plus the fixes from the first
@@ -805,7 +809,7 @@ the KNOWN_ISSUES backfill, see "Known issues" above):
    instance lifecycle: `user_data` racing Ubuntu's `unattended-upgrades` for
    the dpkg lock, and SSM sessions landing as `ssm-user` rather than `ubuntu`
    (every runbook step now starts with `sudo -iu ubuntu`). The box clones
-   the release tag in `var.repo_ref` (`v0.3.0`; a branch needs
+   the release tag in `var.repo_ref` (`v0.3.1`; a branch needs
    `allow_branch_ref = true`, OMNI-63) and every run records the commit it
    ran; run day uses `--contract sort`. **Rehearsed
    2026-09-23** on a local Ubuntu 24.04 box (`scripts/rehearse_aws_run.sh`),
