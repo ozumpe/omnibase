@@ -704,8 +704,8 @@ any long-lived cluster exists.
   `TF_REGISTRY_CLIENT_TIMEOUT=60` worked.)
   **Fixed 2026-09-27:** `user_data` writes `/etc/profile.d/sis-run.sh`
   exporting `ARTIFACTS_BUCKET` next to the pager topic, and both sync
-  commands use `$ARTIFACTS_BUCKET`; the registry-timeout workaround is a
-  comment under "Run day" step 4.
+  commands use `$ARTIFACTS_BUCKET`; the registry-timeout workaround is in the
+  runbook's Troubleshooting section.
 
 - [OMNI-121] **H5 — The first AWS run optimised the default contract, and
   nothing showed or recorded which** *(found and fixed 2026-09-27, OMNI-29)*
