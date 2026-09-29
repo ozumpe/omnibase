@@ -31,6 +31,7 @@ def _runtime(tmp_path: Path) -> Path:
     (runtime / "episodic.jsonl").write_text('{"cycle": 1}\n')
     (runtime / "episodic_state.json").write_text('{"ceo": {}}')
     (runtime / "operator_audit.jsonl").write_text('{"key": "x"}\n')
+    (runtime / "loop.log").write_text("[loop] stopped after 3 cycle(s)\n")   # OMNI-139
     (runtime / "episodic.duckdb").write_bytes(b"a live database")
     (runtime / "target.py").write_text("def f(): ...\n")
     (runtime / "candidates" / "optimised_target.py").write_text("x = 1\n")
@@ -46,14 +47,15 @@ def test_only_the_dataset_is_synced(tmp_path: Path) -> None:
     # The log, its state and the audit. Not the target or the candidates (they
     # are code, and on GitHub), and not a DuckDB file that may be mid-write.
     names = [p.name for p in artifact_sync.files_to_sync(_runtime(tmp_path))]
-    assert names == ["episodic.jsonl", "episodic_state.json", "operator_audit.jsonl"]
+    assert names == ["episodic.jsonl", "episodic_state.json", "loop.log",
+                     "operator_audit.jsonl"]
 
 
 def test_a_run_with_no_audit_yet_syncs_what_exists(tmp_path: Path) -> None:
     runtime = _runtime(tmp_path)
     (runtime / "operator_audit.jsonl").unlink()
     assert [p.name for p in artifact_sync.files_to_sync(runtime)] == [
-        "episodic.jsonl", "episodic_state.json"]
+        "episodic.jsonl", "episodic_state.json", "loop.log"]
 
 
 def test_an_empty_or_missing_runtime_dir_syncs_nothing(tmp_path: Path) -> None:
@@ -83,12 +85,12 @@ def test_every_sync_of_a_run_overwrites_the_same_keys(tmp_path: Path) -> None:
     second = sync.sync()
 
     assert first.uploaded == second.uploaded == [
-        "episodic.jsonl", "episodic_state.json", "operator_audit.jsonl"]
+        "episodic.jsonl", "episodic_state.json", "loop.log", "operator_audit.jsonl"]
     keys = [k for _, k, _ in uploader.calls]
     assert set(keys) == {f"runs/20260929-2028/{n}" for n in first.uploaded}
-    assert len(keys) == 6 and len(set(keys)) == 3
+    assert len(keys) == 8 and len(set(keys)) == 4
     newer = b'{"cycle": 1}\n{"cycle": 2}\n'
-    assert uploader.calls[3][2] == newer, "the second sync sends the newer log"
+    assert uploader.calls[4][2] == newer, "the second sync sends the newer log"
     assert sync.destination == "s3://b/runs/20260929-2028/"
 
 
@@ -99,7 +101,7 @@ def test_a_failing_upload_is_reported_never_raised(tmp_path: Path) -> None:
     assert result.error is not None and "episodic.jsonl" in result.error
     assert "ConnectionError" in result.error and "Read timeout" in result.error
     # The other files still went: one bad file must not cost the rest.
-    assert result.uploaded == ["episodic_state.json", "operator_audit.jsonl"]
+    assert result.uploaded == ["episodic_state.json", "loop.log", "operator_audit.jsonl"]
 
 
 def test_the_first_failure_is_the_one_reported(tmp_path: Path) -> None:

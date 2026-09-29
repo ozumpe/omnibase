@@ -262,9 +262,10 @@ SCHEMA: tuple[Key, ...] = (
     # the same reason as the pager: it decides where the audit trail lands.
     Key("adapters", "artifacts_bucket", ConfigTier.FORBIDDEN, Kind.OPT_STR, None,
         "SIS_ARTIFACTS_BUCKET",
-        "S3 bucket that receives the episodic log and the operator audit under "
-        "runs/<start time>/, while the loop runs and when it stops. Unset: nothing "
-        "is synced and nothing fails; the box's user_data sets it."),
+        "S3 bucket that receives the episodic log, the operator audit and the "
+        "console log under runs/<start time>/, while the loop runs and when it "
+        "stops. Unset: nothing is synced and nothing fails; the box's user_data "
+        "sets it."),
 
     # --- proposer: who writes the candidate, and with what model. ------------
     # Strict rather than forbidden: switching proposer changes *who* writes the
@@ -305,7 +306,7 @@ SCHEMA: tuple[Key, ...] = (
         "to reset (OMNI-138)."),
     Key("loop", "artifact_sync_every", ConfigTier.SOFT, Kind.INT, 1,
         "SIS_LOOP_ARTIFACT_SYNC_EVERY",
-        "Cycles between syncs of the run's episodic log and audit to "
+        "Cycles between syncs of the run's episodic log, audit and console log to "
         "adapters.artifacts_bucket; a killed process or a replaced box loses at "
         "most this many. 0 syncs only when the loop stops (OMNI-140)."),
 

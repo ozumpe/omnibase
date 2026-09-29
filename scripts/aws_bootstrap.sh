@@ -21,7 +21,9 @@ echo "sis code: $(git -C "$REPO_DIR" describe --tags --always --dirty 2>/dev/nul
 # `set -e` aborts the bootstrap partway (see the same option in main.tf).
 APT_WAIT="-o DPkg::Lock::Timeout=600"
 apt-get $APT_WAIT update
-DEBIAN_FRONTEND=noninteractive apt-get $APT_WAIT install -y docker.io git curl jq unzip
+# tmux: the loop runs in a session that outlives the SSM session it was started
+# from (docs/AWS_RUN.md step 5, OMNI-139). It is not part of the AMI.
+DEBIAN_FRONTEND=noninteractive apt-get $APT_WAIT install -y docker.io git curl jq unzip tmux
 systemctl enable --now docker
 usermod -aG docker ubuntu
 

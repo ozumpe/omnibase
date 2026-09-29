@@ -34,6 +34,8 @@ runtime/episodic.duckdb
 # Who changed which config key, when, and why (OMNI-28) — a local operational
 # record of this machine's console, not source.
 runtime/operator_audit.jsonl
+# The console output of a supervised run, tee'd by the runbook's step 5c.
+runtime/loop.log
 # Drafted contracts awaiting human approval — local review state, not source.
 runtime/contract_staging/
 

@@ -5,6 +5,7 @@ from collections.abc import Callable
 
 import pytest
 
+from sis import loop
 from sis.loop import (
     Action,
     Tick,
@@ -225,3 +226,37 @@ def test_the_stop_line_says_the_target_converged() -> None:
     # The loop sets its own stop event to end the run: never "interrupted".
     assert "sum_of_divisors has converged" in line and "interrupted" not in line
     assert line.startswith("[loop] stopped after 4 cycle(s)")
+
+
+# --- OMNI-139: a closed terminal is a graceful stop, not a kill ---
+
+
+@pytest.mark.parametrize("name", ["SIGINT", "SIGTERM", "SIGHUP"])
+def test_every_way_a_terminal_can_end_is_a_graceful_stop(name: str) -> None:
+    # SIGHUP is what a closed tmux pane (or an SSM session with no tmux under
+    # it) delivers. Its default action kills the process with no final sync
+    # and no stop summary; as a graceful stop the cycle in flight finishes and
+    # the dataset goes to the bucket.
+    import os
+    import signal
+    import threading
+
+    if threading.current_thread() is not threading.main_thread():
+        pytest.skip("signal handlers can only be installed from the main thread")
+    sig = getattr(signal, name)
+    saved = {s: signal.getsignal(s)
+             for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
+    try:
+        stop = threading.Event()
+        loop._install_signal_handlers(stop)
+        os.kill(os.getpid(), sig)
+        assert stop.wait(2), f"{name} did not set the stop event"
+    finally:
+        for s, handler in saved.items():
+            signal.signal(s, handler)
+
+
+def test_the_interrupted_summary_names_a_closed_terminal() -> None:
+    line = loop.stop_summary(None, 3, max_cycles=None, interrupted=True,
+                             trip_reason=None, spent_usd=0.1, budget_usd=1.0)
+    assert "interrupted (Ctrl-C, SIGTERM or a closed terminal)" in line

@@ -209,7 +209,7 @@ def test_a_failing_sync_warns_and_the_loop_runs_on(
 
 @pytest.mark.parametrize(
     "handles", [(NO_CHANGE_IMPL, "no_change")], indirect=True, ids=["no_change"])
-def test_a_crash_still_syncs(handles, tmp_path) -> None:  # type: ignore[no-untyped-def]
+def test_a_crash_still_syncs(handles, tmp_path, capsys) -> None:  # type: ignore[no-untyped-def]
     from sis import loop
     from sis.loop import Work
 
@@ -229,6 +229,9 @@ def test_a_crash_still_syncs(handles, tmp_path) -> None:  # type: ignore[no-unty
 
     assert uploads.keys == ["runs/20260929-2028/episodic.jsonl"], \
         "the log is the point of the run: it goes to the bucket even when the loop dies"
+    # And the console log says why it ended: Python prints the traceback only
+    # when the process exits, after the upload (OMNI-139).
+    assert "[loop] crashed: RuntimeError: the trigger blew up" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
@@ -239,3 +242,30 @@ def test_no_configured_sync_changes_nothing(handles) -> None:  # type: ignore[no
     results = loop.serve(handles, loop.repeat("again", "nothing left"), interval_s=0.01,
                          max_cycles=2, converged_after=99, artifacts=lambda: None)
     assert len(results) == 2
+
+
+@pytest.mark.parametrize(
+    "handles", [(NO_CHANGE_IMPL, "no_change")], indirect=True, ids=["no_change"])
+def test_the_last_sync_follows_the_stop_summary(
+        handles, tmp_path, capsys) -> None:  # type: ignore[no-untyped-def]
+    # OMNI-139: the runbook tees the console to runtime/loop.log, and the
+    # loop's last sync uploads it. It must go up with its final line in it,
+    # which is the one that says why the loop stopped.
+    from sis import loop
+    from sis.artifact_sync import ArtifactSync
+
+    said_before_upload: list[str] = []
+
+    class _Watch:
+        def upload(self, path: Any, key: str) -> None:
+            said_before_upload.append(capsys.readouterr().out)
+
+    (tmp_path / "loop.log").write_text("[cycle] no_change: ...\n")
+    sync = ArtifactSync(_Watch(), bucket="b", prefix="runs/x/", runtime_dir=tmp_path)
+
+    loop.serve(handles, loop.repeat("again", "nothing left"), interval_s=0.01,
+               max_cycles=2, converged_after=99, artifacts=lambda: sync,
+               artifact_sync_every=0)   # the stop is the only sync
+
+    assert len(said_before_upload) == 1
+    assert "[loop] stopped after 2 cycle(s)" in said_before_upload[0]
