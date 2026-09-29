@@ -715,7 +715,8 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
 severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
 the IDs in commits/PRs. **Open after a 2026-09-26 multi-dimension review with
 adversarial verification: H2–H3, M8–M9, M11–M14, M16–M17, M20–M23,
-L15–L20, L22, L25–L43; plus L46 from the second AWS run** (M7 is won't-fix for now; H4, M10, M15, M19, L21, L23
+L15–L20, L22, L25–L43; plus L46 from the second AWS run and L48–L50
+from the fifth (OMNI-143–145)** (M7 is won't-fix for now; H4, M10, M15, M19, L21, L23
 and L24 fixed 2026-09-26, OMNI-46/47/51/49/61/62; H5, H6, M24 and L44, found
 in the first AWS run, and L45, found releasing it, fixed 2026-09-27,
 OMNI-121–125; M18 and M25, the second run's duplicate PR, fixed the same day,

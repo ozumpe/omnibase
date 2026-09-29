@@ -425,6 +425,35 @@ reference with no link target below.
   reason, ratio) into the prompt as data, not instructions (see L27). The
   breaker and the budget bound the cost.
 
+- [OMNI-143] **L48** — The runbook's manual sync copies a `--loop` run a
+  second time, under a folder named for the wrong time *(found 2026-09-29
+  reviewing AWS run #5's artifacts)*. Since OMNI-140 the loop syncs itself to
+  `runs/<start time>/`, yet the runbook still has the operator run
+  `aws s3 sync runtime/ ".../runs/$(date +%Y%m%d-%H%M)/"` afterwards. Run #5
+  left `runs/20260929-2230/` beside `-2218/` and `-2238/` beside `-2233/`,
+  each identical but for one log line; `-2238` reads as a third run that never
+  happened. Fix: keep the manual sync for a single `main.py` run only, or aim
+  it at the folder the loop printed.
+- [OMNI-144] **L49** — A run's S3 folder carries every earlier run on the box
+  *(found 2026-09-29, same review)*. `sis/artifact_sync.py` uploads the
+  episodic log, its state and `loop.log` whole, and all three accumulate across
+  processes (carried spend is deliberate). Run #5's `sort` folder also holds
+  the six `sum_of_divisors` cycles, and its state reports both runs' spend and
+  acceptances. Nothing is lost, but reading a folder as one run double-counts.
+  Fix: a per-folder `run.json` manifest (start, code version, contract,
+  first/last `cycle_id`, spend at start and end), or upload this process's
+  slice alongside the cumulative files.
+- [OMNI-145] **L50** — An inconclusive candidate counts toward "converged"
+  and is never measured again *(found 2026-09-29 in AWS run #5, cycle
+  `6ea64dd07e95`)*. It measured a ratio of 0.8305, interval [0.6860, 0.9624]
+  over 109 pairs: the point estimate cleared the 0.90 margin, the interval did
+  not, so the verdict was neutral (OMNI-41). OMNI-138 counts every neutral
+  cycle toward `loop.converged_after`, so this one helped stop the loop with
+  "converged". Inconclusive is reachable only by a candidate that *looks*
+  faster, so it is the one neutral outcome that is not evidence of
+  convergence. Fix: count only `no_gain`/`no_change` toward convergence, and
+  consider one bounded re-measurement with a fresh seed before discarding.
+
 ## Resolved (Low)
 
 - [OMNI-1] **L5 — The gauntlet is hardwired to `sum_of_divisors`.** **RESOLVED
@@ -1301,3 +1330,6 @@ any long-lived cluster exists.
 [OMNI-136]: https://olafzumpe.atlassian.net/browse/OMNI-136
 [OMNI-137]: https://olafzumpe.atlassian.net/browse/OMNI-137
 [OMNI-138]: https://olafzumpe.atlassian.net/browse/OMNI-138
+[OMNI-143]: https://olafzumpe.atlassian.net/browse/OMNI-143
+[OMNI-144]: https://olafzumpe.atlassian.net/browse/OMNI-144
+[OMNI-145]: https://olafzumpe.atlassian.net/browse/OMNI-145
