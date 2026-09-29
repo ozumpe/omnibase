@@ -368,6 +368,8 @@ def serve(
     devops = handles["DevOps"]
     stop = stop_event or threading.Event()
     _install_signal_handlers(stop)
+    # The last open-PR line printed, so a hold says so once rather than every tick.
+    last_line: list[str | None] = [None]
 
     def poll() -> Tick:
         econ = ray.get(ceo.economics.remote())  # read-only; no telemetry side effects
@@ -394,6 +396,19 @@ def serve(
                     org.forget_pending_pr(store, pending)
             if held_by:
                 ray.get(workspace.emit.remote("loop.held_for_canary", version=held_by))
+            elif not paused:
+                # Nothing held in this process's memory; the VCS may still know
+                # of a PR awaiting a human (OMNI-136) — opened on a box since
+                # rebuilt, or left open without a hold. Checked before any new
+                # cycle: an adopted PR holds green, and the branch above takes
+                # over from the next tick.
+                hold, line = org.hold_for_open_prs(handles, episodic.get_episodic_store())
+                if line and line != last_line[0]:
+                    print(line, flush=True)
+                last_line[0] = line
+                if hold:
+                    held_by = "an open PR"
+                    ray.get(workspace.emit.remote("loop.held_for_open_pr", detail=line))
         # Don't pull new work while frozen or while a canary is still being
         # evaluated — decide() will SKIP/STOP on a None work item.
         work = None if (breaker_open or held_by or paused) else trigger()

@@ -198,6 +198,11 @@ class InMemoryVersionControl:
             return pr
         return dataclasses.replace(pr, artifact="", path=path or "")
 
+    def open_prs(self) -> list[PullRequest]:
+        # Insertion order is creation order. Status only, like get_pr(path=None).
+        return [dataclasses.replace(pr, artifact="", path="")
+                for pr in self._prs.values() if not pr.closed]
+
     def live_target_source(self, path: str) -> str:
         # No merged base branch in memory; the local file is the source of
         # truth, so the SWE falls back to it.

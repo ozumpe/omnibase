@@ -625,6 +625,29 @@ any long-lived cluster exists.
 
 ## Resolved
 
+- [OMNI-136] **M26 — A replaced box forgets the PR awaiting review, so the loop
+  opens a second, conflicting PR** *(found 2026-09-29 in the third AWS run,
+  OMNI-29, `v0.3.0`; confirmed from the run's own artifacts)*. `testrun` #13
+  opened at 02:07 UTC on 09-28 and the loop held, as M25's fix meant it to. At
+  02:26 UTC on 09-29 the box was rebuilt (its root volume dates from that
+  second), and at 02:53 UTC the loop opened #14: a fresh feature from `develop`,
+  changing the same file from the same base. Whichever merges first, the other
+  conflicts. M25 kept the pending PR in `runtime/episodic_state.json`, a file
+  on the box: it survives a process restart and nothing else. A second path to
+  the same result, found reading the code: only `DevOps.canary()` sets the
+  hold, so a feature PR that QA then rejects, or finds inconclusive, stays open
+  with no hold, and the next feature opens another PR.
+  **Fixed 2026-09-29:** the version-control system is the source of truth.
+  Before every cycle — in `loop.serve` and in a single `main.py` run —
+  `org.hold_for_open_prs` asks `VersionControl.open_prs()` (GitHub:
+  `GET /pulls?state=open&base=<default_base>`) what is still open, and
+  `DevOps.adopt_open_pr` holds for the oldest PR on a `feature/` branch through
+  M25's `adopt_pending`. The loop proposes nothing while any such PR is open:
+  when one is decided, the next is adopted. A listing that fails holds (fail
+  closed). A human's PR from another branch namespace does not hold. M25's file
+  stays as a cache. Not in `bootstrap()`, which tools that never start a cycle
+  also call.
+
 - [OMNI-126] **M25 — A verified PR awaiting merge is forgotten when the process
   exits, so the next run proposes the same change again** *(found 2026-09-27
   in the second AWS run, OMNI-29; reproduced there)*. A single
@@ -1242,3 +1265,4 @@ any long-lived cluster exists.
 [OMNI-125]: https://olafzumpe.atlassian.net/browse/OMNI-125
 [OMNI-126]: https://olafzumpe.atlassian.net/browse/OMNI-126
 [OMNI-127]: https://olafzumpe.atlassian.net/browse/OMNI-127
+[OMNI-136]: https://olafzumpe.atlassian.net/browse/OMNI-136

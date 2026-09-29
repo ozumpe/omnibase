@@ -28,7 +28,7 @@ This document has four parts:
 | Where artifacts land | Jira `TES`, GitHub `ozumpe/testrun` (PRs against `develop`) |
 | Spend brakes | `SIS_BUDGET_USD=1.00` in the loop; an AWS Budget alarm (default $25/month) on the account |
 | Cost | about $0.20 an hour while the instance runs |
-| Next | run #3 (staged delivery) |
+| Latest | run #3 (staged delivery), 2026-09-28/29 — see [History](#history) |
 
 ---
 
@@ -216,6 +216,12 @@ What to expect:
   every step in its description.
 - The loop then **holds** until you merge or close that PR on GitHub. The next
   feature starts from `develop` afterwards. Take your time.
+- It also holds while **any** PR from a `feature/` branch is open against
+  `develop`, including one opened by an earlier process or box: it prints
+  `[sis] HOLDING: PR <n> is open …` and waits for each in turn (OMNI-136,
+  after `v0.3.0`). On `v0.3.0` itself, a rebuilt box does not know about an
+  open PR and opens a second one beside it: merge or close the loop's PRs
+  before `tofu destroy`.
 - Keep this one process running: a feature in progress lives in memory, so a
   restart starts a new one.
 
@@ -270,7 +276,9 @@ aws ec2 stop-instances --region us-east-1 \
   --instance-ids "$(tofu -chdir=infra/aws output -raw instance_id)"
 ```
 
-When the experiment is over, tear it down:
+When the experiment is over, tear it down. On `v0.3.0`, first merge or close
+the loop's open PRs on `ozumpe/testrun`: the next box does not know about them
+(M26; fixed after `v0.3.0` by OMNI-136, which waits for them instead).
 
 ```bash
 tofu -chdir=infra/aws destroy
@@ -328,9 +336,14 @@ startup.** The subscription is not confirmed yet: do
 still `ssm-user`: run `sudo -iu ubuntu`. Use `-i`: the login shell is what
 puts `~/.local/bin`, where Poetry lives, on the path.
 
-**Startup prints `[sis] HOLDING: PR ...` and waits.** A PR from an earlier
-process is still open on `ozumpe/testrun`. Merge or close it, and the loop
-carries on (OMNI-126).
+**The loop prints `[sis] HOLDING: PR ...` and waits.** One of the loop's PRs
+is still open on `ozumpe/testrun`, possibly from an earlier process or box; the
+line names the others that are open too. Merge or close them, and the loop
+carries on (OMNI-126, OMNI-136).
+
+**`[sis] HOLDING: could not list open PRs (...)`.** GitHub did not answer, or
+the token lacks **Pull requests: read**. The loop starts nothing until it can
+check, rather than risk proposing beside an open PR; it retries every tick.
 
 **`destroy` stops with `BucketNotEmpty`.** Expected; see
 [step 7](#7-finish-laptop).
@@ -603,6 +616,12 @@ second operator, a second node.
   and #12, 47 s apart): the pending PR lived only in memory and died with the
   first process. Fixed in `v0.3.0` (OMNI-126): startup restores the hold and
   prints `[sis] HOLDING: PR ...`.
-- **Next — run #3, on `v0.3.0`, contract `sum_of_divisors`**: the first run
-  with staged delivery (OMNI-130), where steps build on a feature branch and
-  one PR goes out per feature.
+- **2026-09-28/29 — run #3, on `v0.3.0`, contract `sum_of_divisors`**: the
+  first run with staged delivery (OMNI-130). The first feature finished after
+  one step and opened testrun #13 (09-28, 02:07 UTC), and the loop held. On
+  09-29 the box was **rebuilt** (02:26 UTC); the new one knew nothing of #13,
+  started a fresh feature from `develop`, and opened #14 (02:53 UTC, two
+  steps) — the same file from the same base, so the two conflict (M26). The
+  pending PR had lived in a file on the old box. Fixed after `v0.3.0`
+  (OMNI-136): before every cycle, the loop asks GitHub which of its PRs are
+  still open.

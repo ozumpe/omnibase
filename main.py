@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import ray
 
-from sis import config, contract, gauntlet, loop, org
+from sis import config, contract, episodic, gauntlet, loop, org
 
 
 def contract_banner(contract_name: str | None) -> str:
@@ -64,6 +64,14 @@ def run_org_cycle(contract_name: str | None = None, canary_backend: str | None =
     if (held := loop.canary_in_flight(ray.get(handles["SelfModel"].deployment.remote()))):
         print(f"[main] no cycle started: {held} still awaits a human merge or close. "
               "Merge or close it, then run again.")
+        return
+    # And whatever the VCS says is open, which this process may never have seen:
+    # a rebuilt box forgot testrun #13 and opened #14 beside it (OMNI-136).
+    hold, line = org.hold_for_open_prs(handles, episodic.get_episodic_store())
+    if line:
+        print(line)
+    if hold:
+        print("[main] no cycle started: merge or close the open PR(s), then run again.")
         return
 
     title, body = _proposal(contract_name)

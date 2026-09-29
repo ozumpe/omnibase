@@ -1,20 +1,24 @@
-"""OMNI-126 (and OMNI-57): a PR awaiting a human survives a restart. No Ray here.
+"""OMNI-126, OMNI-57, OMNI-136: a PR awaiting a human is waited for. No Ray here.
 
 The second AWS run (2026-09-27) ran one `main.py` cycle, which opened testrun
 PR #11, then started `--loop`. The pending PR lived only in the first
 process's SelfModel, so the loop proposed the same change again as PR #12,
-47 s later. The live wiring (restore → hold → a human decides → released) is
-in ``tests/test_merge_observation.py``.
+47 s later. OMNI-126 remembered it in a file on the box; the third run's box
+was rebuilt, and #14 opened beside #13 (OMNI-136), so the version-control
+system is now asked what is open before every cycle. The live wiring
+(restore → hold → a human decides → released) is in
+``tests/test_merge_observation.py``.
 """
 
 from __future__ import annotations
 
+import types
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from sis import org
+from sis import feature, org
 from sis.adapters import InMemoryTelemetry, InMemoryVersionControl
 from sis.episodic import JsonlEpisodicStore
 from sis.ports import PullRequest, PullRequestNotFound
@@ -169,3 +173,99 @@ def test_a_decline_is_never_read_as_a_gauntlet_rejection(tmp_path: Path) -> None
     assert event.gauntlet_passed is None and event.cost_usd == 0.0
     assert event.proposer == "human"
     assert store.summary()["rejected_by_gate"] == {}
+
+
+# --- the VCS is the source of truth (OMNI-136) ----------------------------------
+
+
+def test_only_the_loops_own_prs_await_a_decision() -> None:
+    prs = [PullRequest(id="13", branch="feature/tes-77", title="t"),
+           PullRequest(id="15", branch="docs/readme", title="t"),
+           PullRequest(id="14", branch="feature/tes-83", title="t")]
+    assert [p.id for p in feature.awaiting_decision(prs)] == ["13", "14"]  # order kept
+
+
+@pytest.mark.parametrize(("title", "expected"), [
+    ("Optimise sum_of_divisors: 2 steps (TES-83)", "sum_of_divisors"),
+    ("Optimise sort: 1 step (TES-9)", "sort"),
+    ("Optimise target (TES-61)", None),         # a title from before OMNI-130
+    ("Optimise evil: 1 step (TES-1)", None),    # edited to a name nobody registered
+])
+def test_a_title_names_a_contract_only_if_it_is_registered(
+    title: str, expected: str | None
+) -> None:
+    assert feature.contract_from_title(title, ["sum_of_divisors", "sort"]) == expected
+
+
+def test_the_in_memory_adapter_lists_what_is_still_open() -> None:
+    vcs = InMemoryVersionControl(InMemoryTelemetry())
+    first = vcs.open_pr("feature/a", "t", artifact="code", path="runtime/target.py")
+    merged = vcs.open_pr("feature/b", "t", path="p")
+    closed = vcs.open_pr("feature/c", "t", path="p")
+    last = vcs.open_pr("feature/d", "t", path="p")
+    vcs.simulate_human_merge(merged.id)
+    vcs.simulate_human_close(closed.id)
+
+    listed = vcs.open_prs()
+
+    assert [p.id for p in listed] == [first.id, last.id]      # oldest first
+    assert (listed[0].artifact, listed[0].path) == ("", "")   # status only
+
+
+def _decide(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, outcome: dict[str, Any] | None
+) -> tuple[bool, str | None]:
+    """hold_for_open_prs over a canned ``DevOps.adopt_open_pr`` outcome, without Ray."""
+    devops = types.SimpleNamespace(adopt_open_pr=types.SimpleNamespace(remote=lambda: outcome))
+    monkeypatch.setattr(org.ray, "get", lambda ref: ref)
+    return org.hold_for_open_prs({"DevOps": devops}, _store(tmp_path))
+
+
+def test_nothing_open_lets_a_cycle_start(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    assert _decide(monkeypatch, tmp_path, None) == (False, None)
+
+
+def test_an_open_pr_holds_and_names_the_others(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    hold, line = _decide(monkeypatch, tmp_path, {
+        "adopted": True, "pr": "13", "merged": False, "promoted": False, "open": ["13", "14"]})
+    assert hold is True
+    assert line is not None and "HOLDING: PR 13 is open" in line and "also open: PR 14" in line
+
+
+def test_a_decided_pr_still_holds_while_another_is_open(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Closed between the listing and the check: released and logged, but #14
+    # is still open, and the next check adopts it before any cycle starts.
+    hold, _ = _decide(monkeypatch, tmp_path, {
+        "adopted": True, "pr": "13", "released": True, "reason": "closed without merging",
+        "open": ["13", "14"], "contract": "sum_of_divisors"})
+    assert hold is True
+    (event,) = _store(tmp_path).events()
+    assert (event.outcome, event.pr_id) == ("human_declined", "13")
+
+
+@pytest.mark.parametrize("outcome", [
+    {"adopted": True, "pr": "13", "released": True, "reason": "closed without merging",
+     "open": ["13"]},
+    {"adopted": True, "pr": "13", "merged": True, "promoted": True, "open": ["13"]},
+])
+def test_the_last_open_pr_decided_lets_a_cycle_start(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, outcome: dict[str, Any]
+) -> None:
+    hold, line = _decide(monkeypatch, tmp_path, outcome)
+    assert hold is False and line is not None and "PR 13" in line
+
+
+def test_a_listing_that_fails_holds(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # "Could not ask" is not "nothing open": fail closed, as with the brakes.
+    def _down(ref: object) -> object:
+        raise ConnectionError("api.github.com unreachable")
+
+    devops = types.SimpleNamespace(adopt_open_pr=types.SimpleNamespace(remote=lambda: "ref"))
+    monkeypatch.setattr(org.ray, "get", _down)
+    hold, line = org.hold_for_open_prs({"DevOps": devops}, _store(tmp_path))
+    assert hold is True
+    assert line is not None and "could not list open PRs" in line and "unreachable" in line

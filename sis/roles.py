@@ -1119,6 +1119,32 @@ class DevOps(Role):
         ray.get(self._sm.record.remote("canary_restored", version, pr=pr_id))
         return {"adopted": True, **self.observe_merge(pr_id)}
 
+    def adopt_open_pr(self) -> dict[str, Any] | None:
+        """Hold for the oldest of the loop's PRs still open on the VCS (OMNI-136).
+
+        The version-control system is the source of truth for what awaits a
+        human. OMNI-126's record of the pending PR is a file on the box, and a
+        rebuilt box started without it: ``testrun`` #14 opened next to #13,
+        from the same base, on 2026-09-29. A feature PR that QA did not approve
+        is open with no hold at all. Both end here, before the next cycle.
+
+        None when something is already held, or nothing of the loop's is open.
+        Otherwise :meth:`adopt_pending`'s outcome, plus ``open``: every such PR,
+        oldest first. The next one is adopted once this one is decided. A
+        failure to list raises, so the caller never reads "could not ask" as
+        "nothing open".
+        """
+        if ray.get(self._sm.deployment.remote())["pending_pr"] is not None:
+            return None
+        waiting = feature_mod.awaiting_decision(ray.get(self._ws.open_prs.remote()))
+        if not waiting:
+            return None
+        pr = waiting[0]
+        known = [c.name for c in contract.DEFAULT_CONTRACTS]
+        outcome = self.adopt_pending(
+            pr.id, _version_for(pr), feature_mod.contract_from_title(pr.title, known))
+        return {**outcome, "open": [p.id for p in waiting]}
+
     def retire_canary(self, version: str, pr_id: str | None = None) -> dict[str, Any]:
         """Take the canary out of the green slot and stop its traffic.
 
