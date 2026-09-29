@@ -22,7 +22,7 @@ This document has four parts:
 
 | | |
 |---|---|
-| Code | release tag **`v0.3.2`** (`var.repo_ref`), never a branch — see [Which code runs](#which-code-runs) |
+| Code | release tag **`v0.3.3`** (`var.repo_ref`), never a branch — see [Which code runs](#which-code-runs) |
 | Box | one `m7i.xlarge`, `us-east-1`, **no inbound ports**; shell via SSM only |
 | Contract | `sum_of_divisors`, re-seeded naive on `ozumpe/testrun`'s `develop` |
 | Where artifacts land | Jira `TES`, GitHub `ozumpe/testrun` (PRs against `develop`) |
@@ -91,7 +91,8 @@ It must end with `PASS`.
 ### 1. Stand up the box (laptop)
 
 The release tag in `var.repo_ref` must already exist on GitHub, because
-`user_data` clones it.
+`user_data` clones it. A box applied before its tag exists is stuck; see
+[Troubleshooting](#troubleshooting).
 
 ```bash
 tofu -chdir=infra/aws init      # first time on this machine only
@@ -105,8 +106,8 @@ local state. If `init` times out or `apply` wants to create the bucket, see
 
 **Moving a running box to a new release** is the same `apply`, run from a
 checkout where `var.repo_ref` names the new tag. It **replaces the instance**:
-everything under `runtime/` goes with the old box, so sync it first
-([step 5d](#5-the-run-itself-box)). The secret and the pager subscription
+everything under `runtime/` goes with the old box, so make sure it has synced
+first ([step 5d](#5-the-run-itself-box)). The secret and the pager subscription
 stay, so steps 2 and 3 are not needed again. The new box re-reads from GitHub
 which of the loop's PRs are still open, and waits for them (OMNI-136).
 
@@ -178,7 +179,39 @@ tail -f /var/log/sis-bootstrap.log
 
 ### 5. The run itself (box)
 
-All of it as `ubuntu`, in `~/omnibase`, in one shell.
+All of it as `ubuntu`, in `~/omnibase`, in one shell, **and that shell lives in
+tmux** (OMNI-139, in `v0.3.3`; see the note below):
+
+```bash
+tmux new-session -A -s sis
+```
+
+An SSM session ends when the laptop sleeps, the network drops, or it sits idle
+(20 minutes by default), and it takes its shell, and whatever runs in that
+shell's foreground, with it. tmux keeps the shell on the box instead.
+
+- **Detach** with Ctrl-b, then d. The loop keeps running.
+- **Reattach**, from a new session ([step 4](#4-open-a-session-laptop--box)),
+  after `sudo -iu ubuntu`, with the same command. `-A` attaches to `sis` if it
+  exists and starts it if not, so there is only ever one.
+- **Scroll back** with Ctrl-b, then `[` (arrow keys), and leave with `q`. While
+  a pane is scrolled back, tmux takes Ctrl-C for itself, and it stays scrolled
+  back across a detach: press `q` before you press Ctrl-C to stop the loop.
+
+What this does not survive: the instance stopping or rebooting, and possibly
+the SSM agent restarting itself (unverified). If the loop is gone, start it
+again. A feature in progress is carried on from its branch (OMNI-135). What the
+loop had recorded is in S3 only if it had synced: on a box that runs `v0.3.2`
+or earlier, sync by hand ([step 5d](#5-the-run-itself-box)) before anything
+replaces the box.
+
+A box built from `v0.3.2` or earlier has no tmux. Install it from the
+`ssm-user` session, before `sudo -iu ubuntu`:
+
+```bash
+sudo apt-get -o DPkg::Lock::Timeout=600 update
+sudo apt-get -o DPkg::Lock::Timeout=600 install -y tmux
+```
 
 **a. Set the environment.** Export everything **before** the first
 `poetry run`: the role actors are detached Ray processes that snapshot the
@@ -195,8 +228,10 @@ export ANTHROPIC_API_KEY=$(aws secretsmanager get-secret-value \
   | jq -r .anthropic.api_key)
 ```
 
-`SIS_NOTIFY_SNS_TOPIC_ARN` and `ARTIFACTS_BUCKET` are already set in this
-login shell by `/etc/profile.d/sis-run.sh`, which `user_data` writes.
+`SIS_NOTIFY_SNS_TOPIC_ARN`, `SIS_ARTIFACTS_BUCKET` (the loop's own copy of the
+bucket, OMNI-140) and `ARTIFACTS_BUCKET` (for the commands below) are already
+set in this login shell by `/etc/profile.d/sis-run.sh`, which `user_data`
+writes.
 
 **b. Prove the wiring before spending anything.** The `Pager` line must show a
 ✓; it fails until [step 3](#3-confirm-the-pager-laptop--dont-click-the-link)
@@ -210,8 +245,16 @@ poetry run python scripts/check_connections.py --deep
 **c. Run the loop, and watch it.**
 
 ```bash
-poetry run python main.py --contract sum_of_divisors --loop --loop-max-cycles 10
+poetry run python -u main.py --contract sum_of_divisors --loop --loop-max-cycles 10 \
+  2>&1 | tee -i -a runtime/loop.log
 ```
+
+`tee` keeps the console output on disk, where a new session can follow it
+without attaching (`tail -f ~/omnibase/runtime/loop.log`) and, from `v0.3.3`,
+where the loop's syncs upload it (before that, the by-hand sync in
+[step 5d](#5-the-run-itself-box) does). `-u` sends each line as it is printed, because a pipe,
+unlike a terminal, is buffered. `-i` makes tee ignore Ctrl-C, so that Ctrl-C
+stops the loop and tee still writes what the loop prints on its way out.
 
 What to expect:
 
@@ -242,11 +285,23 @@ What to expect:
   (OMNI-138). Before that fix, the same situation filed a bug per attempt and
   tripped the circuit breaker.
 
-**d. Keep the dataset.** When the loop has stopped:
+**d. The dataset keeps itself** (OMNI-140, in `v0.3.3`). The loop uploads
+the episodic log, its state, the operator audit and the console log
+(`runtime/loop.log`, from step c) to
+`s3://<bucket>/runs/<start time>/` after every cycle
+(`loop.artifact_sync_every`), and once more when it stops for any reason:
+converged, breaker, `--loop-max-cycles`, Ctrl-C, or a crash. It ends with
+`[sis] artifacts synced to s3://… (episodic.jsonl, …)`. A killed process or a
+replaced box loses at most the cycle in flight. A slow or failing bucket prints
+`[sis] WARNING: artifacts not synced …` and the loop carries on.
+
+By hand, for `v0.3.2` and earlier, for a single `main.py` run (only `--loop`
+syncs), or after a process was killed:
 
 ```bash
 aws s3 sync runtime/ "s3://$ARTIFACTS_BUCKET/runs/$(date +%Y%m%d-%H%M)/" \
-  --exclude "*" --include "episodic*" --include "operator_audit*"
+  --exclude "*" --include "episodic*" --include "operator_audit*" \
+  --include "loop*.log"
 ```
 
 ### 6. While it runs (box, a second session)
@@ -264,8 +319,11 @@ poetry run python -m sis.admin reset-breaker --reason "<why>"   # spend is NOT r
 ```
 
 Every change is appended to `runtime/operator_audit.jsonl`, which step 5d
-syncs. `pause` idles the loop without exiting; to stop it outright, press
-Ctrl-C in the loop's session (it finishes the cycle in flight).
+syncs. `pause` idles the loop without exiting; to stop it outright, reattach
+(`tmux new-session -A -s sis`), press `q` if the pane is scrolled back, then
+Ctrl-C, and wait for `[loop] stopped` (the loop finishes the cycle in flight
+first). Closing the tmux session or its pane also stops the loop, the same way,
+from `v0.3.3`; before that it kills it on the spot.
 
 **The operator console** stays bound to loopback on the box and is reached
 over port forwarding:
@@ -362,6 +420,19 @@ carries on (OMNI-126, OMNI-136).
 the token lacks **Pull requests: read**. The loop starts nothing until it can
 check, rather than risk proposing beside an open PR; it retries every tick.
 
+**The bootstrap log ends with `fatal: Remote branch vX.Y.Z not found in upstream
+origin`.** `apply` ran before the release tag was pushed, so `user_data` could
+not clone it. The box will never recover by itself: `user_data` runs on first
+boot only, and a plain `apply` finds nothing to change. Push the tag
+([step 1](#1-stand-up-the-box-laptop)), then replace the instance:
+```bash
+tofu -chdir=infra/aws apply -replace=aws_instance.sis
+```
+The same command replaces any box whose bootstrap failed part-way. It loses
+`runtime/`, so if the box ran a cycle first, sync it
+([step 5d](#5-the-run-itself-box)) before replacing it: run #5's first cycle
+was lost that way.
+
 **`destroy` stops with `BucketNotEmpty`.** Expected; see
 [step 7](#7-finish-laptop).
 
@@ -416,7 +487,7 @@ human, one box: a remote state backend is ceremony this doesn't need yet.
 
 ### Which code runs
 
-The box runs the **release tag** in `var.repo_ref` — `v0.3.2` by default
+The box runs the **release tag** in `var.repo_ref` — `v0.3.3` by default
 (OMNI-63). A tag, not `develop`: a run's results are only worth something if
 they name the code that produced them, and a branch names whatever it pointed
 at when the box booted. `tofu plan` refuses a branch unless
@@ -541,12 +612,15 @@ and no spend record.
 
 The most durable thing a run produces is the episodic log, "the dataset the
 system learns from" (CLAUDE.md). The instance is disposable; the log is not.
-Step 5d syncs it at the end of a run; at the end of any session, as `ubuntu`
-(`ssm-user` has no checkout to sync):
+From `v0.3.3` the loop syncs it itself (step 5d): every cycle, and when it
+stops. Before that, and for anything that is not `--loop`,
+sync by hand at the end of any session, as `ubuntu` (`ssm-user` has no
+checkout to sync):
 
 ```bash
 aws s3 sync ~/omnibase/runtime/ "s3://$ARTIFACTS_BUCKET/runs/$(date +%Y%m%d-%H%M)/" \
-  --exclude "*" --include "episodic*" --include "operator_audit*"
+  --exclude "*" --include "episodic*" --include "operator_audit*" \
+  --include "loop*.log"
 ```
 
 `operator_audit.jsonl` rides along because it records which config key a human
@@ -567,7 +641,7 @@ reserved and would make the next `apply` fail.
 `/var/log/sis-bootstrap.log`. It also writes `/etc/profile.d/sis-run.sh`,
 which exports the pager topic and the artifacts bucket for every login shell.
 The script itself lives in the repo, versioned and reviewable rather than
-embedded in Terraform. It installs docker and the AWS CLI, Python 3.14 via
+embedded in Terraform. It installs docker, tmux and the AWS CLI, Python 3.14 via
 `uv` (standard CPython, **not** free-threaded — Ray has no `cp314t` wheels;
 `uv` because 24.04's apt doesn't carry 3.14), Poetry, and
 `poetry install --with real --with llm --with ui` (`ui` because the operator
@@ -659,3 +733,19 @@ second operator, a second node.
   Fixed in `v0.3.2` (OMNI-138): no gain from `develop` is neutral, and
   convergence is its own polite stop. Artifacts in
   `s3://sis-first-run-artifacts-696644743351/runs/20260929-0450/`.
+- **2026-09-29 — run #5, on `v0.3.2`, contracts `sort` and `sum_of_divisors`**
+  (reset to naive). `apply` ran before the `v0.3.2` tag was pushed, so the
+  first box could not clone it and was replaced by hand (`-replace`). Then the
+  fixes of run #4 held. `sort` had converged: three attempts, all `no_gain`
+  (ratios 0.968, 1.025, 0.976), then "sort has converged" and a WARNING page.
+  `sum_of_divisors` took two steps (245 µs → 2 µs → 1 µs); a third attempt found
+  no further gain and opened testrun #16 (20:22 UTC). A human merged it at
+  20:26, the loop started its next cycle 43 s later, and the second feature
+  converged the same way. No bug filed, breaker untouched, two WARNING pages
+  (both arrived), $0.2849 of $1.00, with spend carried across the two
+  processes. One plan per feature (OMNI-135): 9 TES issues for 9 cycles,
+  where run #4 filed 22 for 6. The one loss: an earlier cycle (TES-118 to 121,
+  20:04 UTC, rejected for a correctness mismatch) ran on a box that was then
+  replaced before its log was synced, so only its TES bug survives
+  (OMNI-140). Artifacts in
+  `s3://sis-first-run-artifacts-696644743351/runs/20260929-2028/`.

@@ -124,3 +124,148 @@ def test_record_neutral_records_spend_but_not_a_failure(handles) -> None:  # typ
     # The hard spend cap still applies to neutral spend (0.3 + 0.3 > 0.5).
     assert ray.get(ceo.record_neutral.remote(cost_usd=0.3)) == "hard spend cap exceeded"
     assert ray.get(ceo.breaker_open.remote())
+
+
+# --- OMNI-140: the run's dataset is synced while the loop runs and when it stops ---
+#
+# Same cluster as the neutral-cycle tests (the no_change param), and neutral
+# cycles because they cost nothing and need no proposer.
+
+
+class _Uploads:
+    """An Uploader that counts, and can be told to fail."""
+
+    def __init__(self, fail: bool = False) -> None:
+        self.keys: list[str] = []
+        self._fail = fail
+
+    def upload(self, path: Any, key: str) -> None:
+        if self._fail:
+            raise ConnectionError("Read timeout on endpoint URL")
+        self.keys.append(key)
+
+
+def _sync_of(tmp_path: Any, uploads: _Uploads) -> Any:
+    from sis.artifact_sync import ArtifactSync
+
+    (tmp_path / "episodic.jsonl").write_text('{"cycle": 1}\n')
+    return ArtifactSync(uploads, bucket="b", prefix="runs/20260929-2028/", runtime_dir=tmp_path)
+
+
+@pytest.mark.parametrize(
+    "handles", [(NO_CHANGE_IMPL, "no_change")], indirect=True, ids=["no_change"])
+def test_the_loop_syncs_every_n_cycles_and_once_more_when_it_stops(
+        handles, tmp_path, capsys) -> None:  # type: ignore[no-untyped-def]
+    from sis import loop
+
+    uploads = _Uploads()
+    sync = _sync_of(tmp_path, uploads)
+
+    results = loop.serve(handles, loop.repeat("again", "nothing left"), interval_s=0.01,
+                         max_cycles=5, converged_after=99,
+                         artifacts=lambda: sync, artifact_sync_every=2)
+
+    assert len(results) == 5
+    # After cycles 2 and 4, then the stop.
+    assert uploads.keys == ["runs/20260929-2028/episodic.jsonl"] * 3
+    out = capsys.readouterr().out
+    assert out.count("artifacts synced to s3://b/runs/20260929-2028/") == 1, \
+        "only the last sync of a run says so; the console is not a line longer per cycle"
+
+
+@pytest.mark.parametrize(
+    "handles", [(NO_CHANGE_IMPL, "no_change")], indirect=True, ids=["no_change"])
+def test_a_convergence_stop_syncs_too(handles, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from sis import loop
+
+    uploads = _Uploads()
+    results = loop.serve(handles, loop.repeat("again", "nothing left"), interval_s=0.01,
+                         max_cycles=9, converged_after=2,
+                         artifacts=lambda: _sync_of(tmp_path, uploads),
+                         artifact_sync_every=0)   # only when the loop stops
+
+    assert len(results) == 2
+    assert uploads.keys == ["runs/20260929-2028/episodic.jsonl"]
+
+
+@pytest.mark.parametrize(
+    "handles", [(NO_CHANGE_IMPL, "no_change")], indirect=True, ids=["no_change"])
+def test_a_failing_sync_warns_and_the_loop_runs_on(
+        handles, tmp_path, capsys) -> None:  # type: ignore[no-untyped-def]
+    from sis import loop
+
+    results = loop.serve(handles, loop.repeat("again", "nothing left"), interval_s=0.01,
+                         max_cycles=3, converged_after=99,
+                         artifacts=lambda: _sync_of(tmp_path, _Uploads(fail=True)),
+                         artifact_sync_every=1)
+
+    assert len(results) == 3, "a bucket that times out must not stop the loop"
+    err = capsys.readouterr().err
+    assert err.count("WARNING: artifacts not synced to s3://b/runs/20260929-2028/") == 4
+    assert "ConnectionError: Read timeout" in err
+    events = [e["event"] for e in ray.get(handles["Workspace"].events.remote())]
+    assert "artifacts.sync_failed" in events
+
+
+@pytest.mark.parametrize(
+    "handles", [(NO_CHANGE_IMPL, "no_change")], indirect=True, ids=["no_change"])
+def test_a_crash_still_syncs(handles, tmp_path, capsys) -> None:  # type: ignore[no-untyped-def]
+    from sis import loop
+    from sis.loop import Work
+
+    uploads = _Uploads()
+    calls = 0
+
+    def trigger() -> Work | None:
+        nonlocal calls
+        calls += 1
+        if calls > 2:
+            raise RuntimeError("the trigger blew up")
+        return Work("again", "nothing left")
+
+    with pytest.raises(RuntimeError, match="the trigger blew up"):
+        loop.serve(handles, trigger, interval_s=0.01, max_cycles=9, converged_after=99,
+                   artifacts=lambda: _sync_of(tmp_path, uploads), artifact_sync_every=0)
+
+    assert uploads.keys == ["runs/20260929-2028/episodic.jsonl"], \
+        "the log is the point of the run: it goes to the bucket even when the loop dies"
+    # And the console log says why it ended: Python prints the traceback only
+    # when the process exits, after the upload (OMNI-139).
+    assert "[loop] crashed: RuntimeError: the trigger blew up" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "handles", [(NO_CHANGE_IMPL, "no_change")], indirect=True, ids=["no_change"])
+def test_no_configured_sync_changes_nothing(handles) -> None:  # type: ignore[no-untyped-def]
+    from sis import loop
+
+    results = loop.serve(handles, loop.repeat("again", "nothing left"), interval_s=0.01,
+                         max_cycles=2, converged_after=99, artifacts=lambda: None)
+    assert len(results) == 2
+
+
+@pytest.mark.parametrize(
+    "handles", [(NO_CHANGE_IMPL, "no_change")], indirect=True, ids=["no_change"])
+def test_the_last_sync_follows_the_stop_summary(
+        handles, tmp_path, capsys) -> None:  # type: ignore[no-untyped-def]
+    # OMNI-139: the runbook tees the console to runtime/loop.log, and the
+    # loop's last sync uploads it. It must go up with its final line in it,
+    # which is the one that says why the loop stopped.
+    from sis import loop
+    from sis.artifact_sync import ArtifactSync
+
+    said_before_upload: list[str] = []
+
+    class _Watch:
+        def upload(self, path: Any, key: str) -> None:
+            said_before_upload.append(capsys.readouterr().out)
+
+    (tmp_path / "loop.log").write_text("[cycle] no_change: ...\n")
+    sync = ArtifactSync(_Watch(), bucket="b", prefix="runs/x/", runtime_dir=tmp_path)
+
+    loop.serve(handles, loop.repeat("again", "nothing left"), interval_s=0.01,
+               max_cycles=2, converged_after=99, artifacts=lambda: sync,
+               artifact_sync_every=0)   # the stop is the only sync
+
+    assert len(said_before_upload) == 1
+    assert "[loop] stopped after 2 cycle(s)" in said_before_upload[0]

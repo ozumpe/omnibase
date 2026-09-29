@@ -12,7 +12,7 @@
 
 [project]
 name = "self-improving-server"
-version = "0.3.2"
+version = "0.3.3"
 description = "A self-improving server on a Ray actor hierarchy that generates, validates, and safely deploys its own code."
 authors = [{ name = "Olaf Zumpe", email = "olaf.zumpe@gmail.com" }]
 license = "Apache-2.0"
@@ -75,7 +75,7 @@ panel = "^1.9"          # dashboard + built-in OAuth; chosen over Streamlit for 
 
 # Optional extras (only present with their groups); don't fail mypy when absent.
 [[tool.mypy.overrides]]
-module = ["yaml", "boto3", "requests", "requests.*", "anthropic", "duckdb"]
+module = ["yaml", "boto3", "botocore", "botocore.*", "requests", "requests.*", "anthropic", "duckdb"]
 ignore_missing_imports = true
 
 # Panel (operator UI) is only partly annotated, so under --strict it reports

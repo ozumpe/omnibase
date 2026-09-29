@@ -23,12 +23,15 @@ The loop also exits when the breaker trips or the budget is exhausted.
 from __future__ import annotations
 
 import signal
+import sys
 import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
+from sis import artifact_sync
+from sis.artifact_sync import ArtifactSync
 from sis.episodic import NEUTRAL_STATUSES
 
 if TYPE_CHECKING:
@@ -134,7 +137,7 @@ def stop_summary(
     elif converged_note:
         why = converged_note
     elif interrupted:
-        why = "interrupted (Ctrl-C / SIGTERM)"
+        why = "interrupted (Ctrl-C, SIGTERM or a closed terminal)"
     elif max_cycles is not None and cycles_run >= max_cycles:
         why = f"reached loop.max_cycles ({max_cycles})"
     else:
@@ -332,11 +335,41 @@ def pending_merge(deployment: Mapping[str, Any]) -> str | None:
     return str(pending) if pending else None
 
 
+def sync_artifacts(sync: ArtifactSync | None, workspace: Any, *, final: bool) -> None:
+    """Send the run's dataset to the artifacts bucket, if one is configured (OMNI-140).
+
+    Says something only when it matters: a failure always (on stderr, and as a
+    ``artifacts.sync_failed`` event), a success only for the last sync of the
+    run, so a supervised console is not one line longer per cycle. Never raises.
+    """
+    if sync is None:
+        return
+    result = sync.sync()
+    if result.error is not None:
+        print(f"[sis] WARNING: artifacts not synced to {sync.destination}: {result.error}",
+              file=sys.stderr, flush=True)
+        try:
+            workspace.emit.remote("artifacts.sync_failed", destination=sync.destination,
+                                  error=result.error)
+        except Exception:  # noqa: BLE001 - the warning above already told the operator
+            pass
+    elif final:
+        print(f"[sis] artifacts synced to {sync.destination} "
+              f"({', '.join(result.uploaded) or 'nothing to sync'})", flush=True)
+
+
 def _install_signal_handlers(stop: threading.Event) -> None:
     def _handler(signum: int, frame: Any) -> None:
         stop.set()
 
-    for sig in (signal.SIGINT, signal.SIGTERM):
+    # SIGHUP is a terminal that went away: closing a tmux pane, or an SSM
+    # session that ends with no tmux under it (OMNI-139). Left at its default it
+    # kills the process on the spot, with no final sync and no stop summary; as
+    # a graceful stop the cycle in flight finishes and the dataset is uploaded.
+    sigs = [signal.SIGINT, signal.SIGTERM]
+    if hasattr(signal, "SIGHUP"):
+        sigs.append(signal.SIGHUP)
+    for sig in sigs:
         try:
             signal.signal(sig, _handler)
         except ValueError:
@@ -355,8 +388,17 @@ def serve(
     watch_merges: bool = True,
     canary_backend: str | None = None,
     converged_after: int | None = None,
+    artifacts: Callable[[], ArtifactSync | None] | None = None,
+    artifact_sync_every: int | None = None,
 ) -> list[dict[str, Any]]:
     """Run the loop against a live actor org, with graceful SIGINT/SIGTERM stop.
+
+    The run's episodic log, audit and console log (``runtime/loop.log``, when
+    the runbook tees one) go to ``adapters.artifacts_bucket`` every
+    ``artifact_sync_every`` (default ``loop.artifact_sync_every``) cycles and
+    when the loop stops for any reason, a crash included (OMNI-140, OMNI-139). *artifacts*
+    builds the sync (default: from the configuration); one that returns None
+    syncs nothing. A failed sync warns and never stops the loop.
 
     ``converged_after`` (default: ``loop.converged_after``) neutral cycles in a
     row stop the loop: the target has converged (OMNI-138). A WARNING page, not
@@ -388,6 +430,9 @@ def serve(
 
     after = (converged_after if converged_after is not None
              else int(config.config().loop.converged_after))
+    sync_every = (artifact_sync_every if artifact_sync_every is not None
+                  else int(config.config().loop.artifact_sync_every))
+    sync = (artifacts or artifact_sync.from_config)()
     ceo = handles["CEO"]
     self_model = handles["SelfModel"]
     workspace = handles["Workspace"]
@@ -449,6 +494,8 @@ def serve(
                                canary_backend=canary_backend)
         print(org.cycle_summary(result), flush=True)  # OMNI-123: every cycle says why
         statuses.append(str(result.get("status")))
+        if artifact_sync.due(len(statuses), sync_every):
+            sync_artifacts(sync, workspace, final=False)
         if converged(statuses, after):
             target = result.get("contract") or "the target"
             converged_note[0] = (f"{target} has converged ({max(1, after)} cycle(s) in a "
@@ -465,24 +512,36 @@ def serve(
 
             org.page(workspace, episodic.get_episodic_store(), Severity.CRITICAL, *alert)
 
-    results = run_loop(poll, run_cycle, interval_s=interval_s,
-                       max_cycles=max_cycles, stop_event=stop, on_stop=on_stop)
-    econ = ray.get(ceo.economics.remote())
-    if converged_note[0] is not None:
-        # A human decides what to optimise next; the loop is not broken, so
-        # WARNING rather than the CRITICAL a breaker trip pages (OMNI-138).
-        from sis.ports import Severity
+    try:
+        results = run_loop(poll, run_cycle, interval_s=interval_s,
+                           max_cycles=max_cycles, stop_event=stop, on_stop=on_stop)
+        econ = ray.get(ceo.economics.remote())
+        if converged_note[0] is not None:
+            # A human decides what to optimise next; the loop is not broken, so
+            # WARNING rather than the CRITICAL a breaker trip pages (OMNI-138).
+            from sis.ports import Severity
 
-        org.page(workspace, episodic.get_episodic_store(), Severity.WARNING,
-                 f"loop stopped: {converged_note[0]}",
-                 f"{converged_note[0]}. Spent ${float(econ['spent_usd']):.4f} of "
-                 f"${float(econ['budget_usd']):.2f}. Nothing to reset: choose another "
-                 "contract (--contract) or add a target, then start the loop again.")
-    print(stop_summary(
-        stopped_by[0] if stopped_by else None, len(results),
-        max_cycles=max_cycles, interrupted=stop.is_set(),
-        trip_reason=ray.get(ceo.state_snapshot.remote()).get("trip_reason"),
-        spent_usd=float(econ["spent_usd"]), budget_usd=float(econ["budget_usd"]),
-        converged_note=converged_note[0],
-    ), flush=True)
+            org.page(workspace, episodic.get_episodic_store(), Severity.WARNING,
+                     f"loop stopped: {converged_note[0]}",
+                     f"{converged_note[0]}. Spent ${float(econ['spent_usd']):.4f} of "
+                     f"${float(econ['budget_usd']):.2f}. Nothing to reset: choose another "
+                     "contract (--contract) or add a target, then start the loop again.")
+        print(stop_summary(
+            stopped_by[0] if stopped_by else None, len(results),
+            max_cycles=max_cycles, interrupted=stop.is_set(),
+            trip_reason=ray.get(ceo.state_snapshot.remote()).get("trip_reason"),
+            spent_usd=float(econ["spent_usd"]), budget_usd=float(econ["budget_usd"]),
+            converged_note=converged_note[0],
+        ), flush=True)
+    except Exception as exc:
+        # One line for the console log: Python prints the traceback itself only
+        # when the process exits, after the sync below has uploaded the log.
+        print(f"[loop] crashed: {type(exc).__name__}: {' '.join(str(exc).split())[:200]}",
+              file=sys.stderr, flush=True)
+        raise
+    finally:
+        # Every way out, an exception included: the log is the point of the run.
+        # After the stop summary, so the console log the runbook tees to
+        # runtime/loop.log (OMNI-139) is uploaded with its last line in it.
+        sync_artifacts(sync, workspace, final=True)
     return results

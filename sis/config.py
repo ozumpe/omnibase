@@ -258,6 +258,14 @@ SCHEMA: tuple[Key, ...] = (
         "SIS_NOTIFY_SNS_TOPIC_ARN",
         "SNS topic that pages the operator. Unset: pages are only recorded in "
         "memory, and a real-adapter run warns that nobody will be paged."),
+    # Where the run's dataset goes when the loop stops (OMNI-140). Forbidden for
+    # the same reason as the pager: it decides where the audit trail lands.
+    Key("adapters", "artifacts_bucket", ConfigTier.FORBIDDEN, Kind.OPT_STR, None,
+        "SIS_ARTIFACTS_BUCKET",
+        "S3 bucket that receives the episodic log, the operator audit and the "
+        "console log under runs/<start time>/, while the loop runs and when it "
+        "stops. Unset: nothing is synced and nothing fails; the box's user_data "
+        "sets it."),
 
     # --- proposer: who writes the candidate, and with what model. ------------
     # Strict rather than forbidden: switching proposer changes *who* writes the
@@ -296,6 +304,11 @@ SCHEMA: tuple[Key, ...] = (
         "Neutral cycles in a row (no change, inconclusive, no gain) after which "
         "the loop stops: the target has converged. Not a breaker trip; nothing "
         "to reset (OMNI-138)."),
+    Key("loop", "artifact_sync_every", ConfigTier.SOFT, Kind.INT, 1,
+        "SIS_LOOP_ARTIFACT_SYNC_EVERY",
+        "Cycles between syncs of the run's episodic log, audit and console log to "
+        "adapters.artifacts_bucket; a killed process or a replaced box loses at "
+        "most this many. 0 syncs only when the loop stops (OMNI-140)."),
 
     # --- contracts: which target a cycle optimises. --------------------------
     Key("contracts", "default", ConfigTier.SOFT, Kind.OPT_STR, None,
@@ -710,6 +723,7 @@ class AdaptersConfig:
     aws_secret_id: str | None
     http_timeout_seconds: float
     notify_sns_topic_arn: str | None
+    artifacts_bucket: str | None
 
 
 @dataclass(frozen=True)
@@ -730,6 +744,7 @@ class LoopConfig:
     max_cycles: int | None
     feature_max_steps: int
     converged_after: int
+    artifact_sync_every: int
 
 
 @dataclass(frozen=True)
