@@ -643,3 +643,58 @@ def test_open_prs_raises_when_github_cannot_answer() -> None:
     http.get = lambda url, params=None: _Down({})  # type: ignore[method-assign]
     with pytest.raises(requests.HTTPError):
         gh.open_prs()
+
+
+# --- unproposed_branches: a half-built feature is found on GitHub (OMNI-135) ---
+
+
+def _routes(http: Any, pages: list[list[dict[str, Any]]],
+            refs: list[str], compares: dict[str, dict[str, Any]]) -> None:
+    def _get(url: str, params: Any = None) -> _Resp:
+        http.calls.append(("GET", url, params))
+        if "/git/matching-refs/heads/" in url:
+            return _Resp([{"ref": f"refs/heads/{r}"} for r in refs])  # type: ignore[arg-type]
+        if url.endswith("/pulls"):
+            page = int(params["page"])
+            return _Resp(pages[page - 1] if page <= len(pages) else [])  # type: ignore[arg-type]
+        return _Resp(compares[url.rsplit("...", 1)[1]])
+
+    http.get = _get
+
+
+def test_unproposed_branches_leave_out_every_branch_a_pr_was_opened_from() -> None:
+    gh, http = _github()
+    _routes(http, pages=[[{"head": {"ref": "feature/tes-1"}},     # merged, closed or open:
+                          {"head": {"ref": "feature/tes-2"}}]],   # a human has it
+            refs=["feature/tes-1", "feature/tes-2", "feature/tes-3"],
+            compares={"feature/tes-3": {"behind_by": 2, "commits": [
+                {"commit": {"message": "Step 1: optimise sort (TES-3)"}}]}})
+
+    (state,) = gh.unproposed_branches("feature/")
+
+    assert (state.name, state.behind_by, state.messages) == (
+        "feature/tes-3", 2, ["Step 1: optimise sort (TES-3)"])
+    urls = [url for _, url, _ in http.calls]
+    assert urls[0].endswith("/repos/o/r/git/matching-refs/heads/feature/")
+    assert urls[-1].endswith("/repos/o/r/compare/main...feature/tes-3")
+    assert sum("/compare/" in u for u in urls) == 1, "a compare per proposed branch is waste"
+    ((_, _, params),) = [c for c in http.calls if c[1].endswith("/pulls")]
+    assert params == {"state": "all", "per_page": 100, "page": 1}
+
+
+def test_unproposed_branches_raise_rather_than_read_part_of_the_prs() -> None:
+    # A PR on an unread page could be the one a human closed: carrying on its
+    # branch would resume a declined feature. So no answer, not a partial one.
+    gh, http = _github()
+    full_page = [{"head": {"ref": f"feature/old-{i}"}} for i in range(100)]
+    _routes(http, pages=[full_page] * (GitHubVersionControl._MAX_PR_PAGES + 1),
+            refs=["feature/tes-3"], compares={})
+    with pytest.raises(RuntimeError, match="cannot tell which branches were proposed"):
+        gh.unproposed_branches("feature/")
+
+
+def test_unproposed_branches_ask_nothing_more_when_there_are_none() -> None:
+    gh, http = _github()
+    _routes(http, pages=[], refs=[], compares={})
+    assert gh.unproposed_branches("feature/") == []
+    assert len(http.calls) == 1

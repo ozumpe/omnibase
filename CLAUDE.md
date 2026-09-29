@@ -654,9 +654,9 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   **Phase 0 is built:** `sis/sandbox_worker.py` (OMNI-129) serves a candidate
   hot from the sandbox. It is tested in both sandbox modes, including that a
   docker candidate cannot reach the network, Ray or the host's environment.
-- 924 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
+- 941 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
   Ray-Serve-integration tests run separately, see Operational quick reference
-  above; 986 total, recounted 2026-09-29 — corrected 2026-09-26, a multi-dimension review found the
+  above; 1003 total, recounted 2026-09-29 — corrected 2026-09-26, a multi-dimension review found the
   previously-documented 616/678 stale); `ruff`/`mypy --strict`/`pytest` clean;
   CI green; `feature → develop → main` enforced by both the client-side
   pre-push hook and active server-side rulesets.
@@ -734,8 +734,8 @@ Two traps L5 surfaced, both worth knowing before writing similar code:
 
 **Next — the milestone plan is in Jira ([`OMNI`](https://olafzumpe.atlassian.net/browse/OMNI)),
 not here.** Check the board for current status rather than trusting this list.
-**Last reconciled against a live query on 2026-09-29** (136 issues, OMNI-1
-through OMNI-136; 78 Done, 1 In Progress, 57 To Do — most of the growth since 2026-09-26 is
+**Last reconciled against a live query on 2026-09-29** (141 issues, OMNI-1
+through OMNI-141; 81 Done, 1 In Progress, 59 To Do — most of the growth since 2026-09-26 is
 the KNOWN_ISSUES backfill, see "Known issues" above):
 
 1. ~~**[OMNI-1](https://olafzumpe.atlassian.net/browse/OMNI-1) — L5 target
@@ -887,9 +887,20 @@ the KNOWN_ISSUES backfill, see "Known issues" above):
         its description;
       - the prompt carries the earlier attempts;
       - the test suite runs one-step features (`conftest.py`).
-      Feature state is in memory only; persisting it, holds per contract, and
-      one Jira story per feature rather than per step are deferred to the
-      hardening cycle (OMNI-135).
+      **OMNI-135 (hardening)**, two of its three parts built:
+      - one plan per feature: the spec page, epic and story are written when a
+        feature starts and reused until its PR opens (`CTO.open_plan`). The
+        fourth AWS run filed 22 TES issues for six cycles;
+      - a restart carries on a half-built feature. Each step's commit carries
+        trailers (`feature.step_message`): the contract, the plan's ids and the
+        timings. A restarted process finds the branch on GitHub
+        (`VersionControl.unproposed_branches`), a branch no PR was ever opened
+        from, and rebuilds the feature from its commits. It skips any branch
+        the base has moved past, or that has a commit that is not a loop step.
+        The VCS is the source of truth here, as for open PRs (OMNI-136): a new
+        release replaces the box (OMNI-137).
+      - Not built: holds per contract. The single green slot still holds every
+        contract, which matters only once two contracts run at the same time.
     - Olaf's `testrun` preparation: a `develop` branch and a re-seeded naive
       `sum_of_divisors`. Then v0.3.0 and **AWS run #3**.
     - Then OMNI-48 (the canary onto the worker), OMNI-133 (`develop`

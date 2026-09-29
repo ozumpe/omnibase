@@ -7,16 +7,21 @@ PR to the base branch (``develop``). It is finished after ``N`` accepted steps
 
 The state is a plain dict, so it can cross Ray actor boundaries:
 ``{"branch", "story", "steps": [...], "attempts": [...]}``.
+
+Every step's commit carries the plan it belongs to and its timings as
+trailers (:func:`step_message`), so a feature a process left half built can be
+rebuilt from its branch alone (:func:`resumable_feature`, OMNI-135).
 """
 
 from __future__ import annotations
 
+import math
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from sis import episodic
-from sis.ports import PullRequest
+from sis.ports import BranchState, PullRequest
 
 # How many earlier attempts a proposer is shown. Enough to stop it repeating
 # itself (the second AWS run resubmitted byte-identical code, OMNI-127), few
@@ -24,12 +29,12 @@ from sis.ports import PullRequest
 MAX_NOTES = 5
 
 
-_BRANCH_PREFIX = "feature/"
+BRANCH_PREFIX = "feature/"
 
 
 def feature_branch(story_id: str) -> str:
     """A feature's branch is named after the story of its first step."""
-    return f"{_BRANCH_PREFIX}{story_id.lower()}"
+    return f"{BRANCH_PREFIX}{story_id.lower()}"
 
 
 def awaiting_decision(prs: Iterable[PullRequest]) -> list[PullRequest]:
@@ -42,7 +47,7 @@ def awaiting_decision(prs: Iterable[PullRequest]) -> list[PullRequest]:
     makes the loop wait, while a missed agent PR is what opened #14 beside
     #13 on ``testrun``.
     """
-    return [pr for pr in prs if pr.branch.startswith(_BRANCH_PREFIX)]
+    return [pr for pr in prs if pr.branch.startswith(BRANCH_PREFIX)]
 
 
 _TITLE = re.compile(r"Optimise (?P<contract>[\w-]+): \d+ steps? \(")
@@ -106,6 +111,96 @@ def with_note(feature: dict[str, Any], note: str) -> dict[str, Any]:
     """*feature* remembering *note* (the last :data:`MAX_NOTES` only)."""
     notes = [*feature["attempts"], " ".join(note.split())[:300]]
     return {**feature, "attempts": notes[-MAX_NOTES:]}
+
+
+_TRAILER = re.compile(r"^(Sis-[A-Za-z-]+): (\S+)[ \t]*$", re.MULTILINE)
+_ID = re.compile(r"[\w.-]{1,64}")
+
+
+def step_message(contract_name: str, plan: Mapping[str, Any], step: int,
+                 baseline_s: float, candidate_s: float | None) -> str:
+    """The commit message of a feature's step: a subject, then trailers (OMNI-135).
+
+    The trailers are what :func:`parse_step` reads back after a restart: the
+    contract, the plan the step worked under, and its timings for the PR's
+    evidence table.
+    """
+    story = plan["feature_story_id"]
+    return "\n".join([
+        f"Step {step}: optimise {contract_name} ({story})",
+        "",
+        f"Sis-Contract: {contract_name}",
+        f"Sis-Story: {story}",
+        f"Sis-Spec: {plan['spec_id']}",
+        f"Sis-Epic: {plan['epic_id']}",
+        f"Sis-Baseline-S: {baseline_s!r}",
+        f"Sis-Candidate-S: {'none' if candidate_s is None else repr(candidate_s)}",
+    ])
+
+
+def _seconds(text: str) -> float | None:
+    try:
+        value = float(text)
+    except ValueError:
+        return None
+    return value if math.isfinite(value) and value >= 0 else None
+
+
+def parse_step(message: str) -> dict[str, Any] | None:
+    """A step commit's trailers (see :func:`step_message`), or None. Pure.
+
+    None for anything else, including a commit a human pushed to the branch:
+    a commit message is text anyone with push access writes, so every field
+    is checked, and a malformed one means "not a loop step".
+    """
+    trailers = dict(_TRAILER.findall(message))
+    ids = [trailers.get(k, "") for k in ("Sis-Contract", "Sis-Story", "Sis-Spec", "Sis-Epic")]
+    if not all(_ID.fullmatch(i) for i in ids):
+        return None
+    baseline = _seconds(trailers.get("Sis-Baseline-S", ""))
+    raw_candidate = trailers.get("Sis-Candidate-S", "")
+    candidate = None if raw_candidate == "none" else _seconds(raw_candidate)
+    if baseline is None or (candidate is None and raw_candidate != "none"):
+        return None
+    contract_name, story, spec, epic = ids
+    return {"contract": contract_name, "story": story, "spec": spec, "epic": epic,
+            "baseline_s": baseline, "candidate_s": candidate}
+
+
+def resumable_feature(
+    contract_name: str, branches: Iterable[BranchState]
+) -> dict[str, Any] | None:
+    """The unfinished feature *contract_name* should carry on with, or None. Pure.
+
+    Returns ``{"feature": ..., "plan": ...}``, rebuilt from the branch's
+    commits (OMNI-135). A branch qualifies only if every commit on it is one
+    of this contract's steps under one plan, and the base has not moved since
+    it forked: those steps were measured against a base that is no longer
+    there. Of several, the one with the most steps wins, then the name, so
+    the choice does not depend on listing order.
+    """
+    found: list[tuple[int, str, list[dict[str, Any]]]] = []
+    for branch in branches:
+        if branch.behind_by or not branch.name.startswith(BRANCH_PREFIX):
+            continue
+        parsed = [parse_step(m) for m in branch.messages]
+        steps = [s for s in parsed if s is not None]
+        if not steps or len(steps) != len(parsed):
+            continue
+        if {(s["contract"], s["story"], s["spec"], s["epic"]) for s in steps} != {
+                (contract_name, steps[0]["story"], steps[0]["spec"], steps[0]["epic"])}:
+            continue
+        found.append((len(steps), branch.name, steps))
+    if not found:
+        return None
+    _, name, steps = max(found, key=lambda f: (f[0], f[1]))
+    first = steps[0]
+    feature = new_feature(name, first["story"])
+    for s in steps:
+        feature = with_step(feature, s["story"], s["baseline_s"], s["candidate_s"])
+    plan = {"spec_id": first["spec"], "epic_id": first["epic"],
+            "feature_story_id": first["story"]}
+    return {"feature": feature, "plan": plan}
 
 
 def pr_title(contract_name: str, feature: dict[str, Any]) -> str:

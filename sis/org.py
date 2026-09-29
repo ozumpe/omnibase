@@ -554,17 +554,26 @@ def run_cycle(
              "runs until the budget (brakes.budget_usd) is raised.")
         return _record({"status": "budget_denied"})
 
-    # 2. Intake: a non-technical user drops a proposal into the proposal space.
-    proposal = ray.get(ws.create_page.remote(
-        space_keys()["proposal"], proposal_title, proposal_body, None, ["proposal"]))
+    # 2–4 happen once per feature (OMNI-135): a step of a feature in progress
+    # works under the plan its first step made, so a feature files one spec,
+    # one epic and one story rather than one of each per cycle.
+    plan = ray.get(cto.open_plan.remote(contract_name))
+    if plan is None:
+        # 2. Intake: a non-technical user drops a proposal into the proposal space.
+        proposal = ray.get(ws.create_page.remote(
+            space_keys()["proposal"], proposal_title, proposal_body, None, ["proposal"]))
 
-    # 3. Spec & design (PM + Designer).
-    spec_id = ray.get(pm.refine_proposal.remote(proposal.id))
-    ray.get(designer.outline.remote(spec_id))
+        # 3. Spec & design (PM + Designer).
+        spec_id = ray.get(pm.refine_proposal.remote(proposal.id))
+        ray.get(designer.outline.remote(spec_id))
 
-    # 4. Plan (CTO → Jira epic + stories).
-    plan = ray.get(cto.plan.remote(spec_id))
-    story_id = plan["feature_story_id"]
+        # 4. Plan (CTO → Jira epic + stories).
+        plan = ray.get(cto.plan.remote(spec_id, contract_name))
+    elif plan.get("resumed"):
+        print(f"[sis] carrying on {plan['resumed']} ({plan['steps']} step(s) committed), "
+              "left unfinished by an earlier run", file=sys.stderr)
+    spec_id = str(plan["spec_id"])
+    story_id = str(plan["feature_story_id"])
 
     # 5. Implement (SWE → validated change on a feature branch + PR).
     impl = ray.get(swe.implement.remote(story_id, contract_name))

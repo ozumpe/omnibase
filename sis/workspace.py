@@ -28,6 +28,7 @@ from sis.adapters import (
 )
 from sis.ports import (
     Branch,
+    BranchState,
     Cloud,
     DeployRecord,
     DocumentStore,
@@ -164,6 +165,9 @@ class Workspace:
 
     def open_prs(self) -> list[PullRequest]:
         return self.vcs.open_prs()
+
+    def unproposed_branches(self, prefix: str) -> list[BranchState]:
+        return self.vcs.unproposed_branches(prefix)
 
     def live_target_source(self, path: str) -> str:
         return self.vcs.live_target_source(path)
