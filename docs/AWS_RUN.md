@@ -91,7 +91,8 @@ It must end with `PASS`.
 ### 1. Stand up the box (laptop)
 
 The release tag in `var.repo_ref` must already exist on GitHub, because
-`user_data` clones it.
+`user_data` clones it. A box applied before its tag exists is stuck; see
+[Troubleshooting](#troubleshooting).
 
 ```bash
 tofu -chdir=infra/aws init      # first time on this machine only
@@ -361,6 +362,19 @@ carries on (OMNI-126, OMNI-136).
 **`[sis] HOLDING: could not list open PRs (...)`.** GitHub did not answer, or
 the token lacks **Pull requests: read**. The loop starts nothing until it can
 check, rather than risk proposing beside an open PR; it retries every tick.
+
+**The bootstrap log ends with `fatal: Remote branch vX.Y.Z not found in upstream
+origin`.** `apply` ran before the release tag was pushed, so `user_data` could
+not clone it. The box will never recover by itself: `user_data` runs on first
+boot only, and a plain `apply` finds nothing to change. Push the tag
+([step 1](#1-stand-up-the-box-laptop)), then replace the instance:
+```bash
+tofu -chdir=infra/aws apply -replace=aws_instance.sis
+```
+The same command replaces any box whose bootstrap failed part-way. It loses
+`runtime/`, so if the box ran a cycle first, sync it
+([step 5d](#5-the-run-itself-box)) before replacing it: run #5's first cycle
+was lost that way.
 
 **`destroy` stops with `BucketNotEmpty`.** Expected; see
 [step 7](#7-finish-laptop).
@@ -659,3 +673,19 @@ second operator, a second node.
   Fixed in `v0.3.2` (OMNI-138): no gain from `develop` is neutral, and
   convergence is its own polite stop. Artifacts in
   `s3://sis-first-run-artifacts-696644743351/runs/20260929-0450/`.
+- **2026-09-29 — run #5, on `v0.3.2`, contracts `sort` and `sum_of_divisors`**
+  (reset to naive). `apply` ran before the `v0.3.2` tag was pushed, so the
+  first box could not clone it and was replaced by hand (`-replace`). Then the
+  fixes of run #4 held. `sort` had converged: three attempts, all `no_gain`
+  (ratios 0.968, 1.025, 0.976), then "sort has converged" and a WARNING page.
+  `sum_of_divisors` took two steps (245 µs → 2 µs → 1 µs); a third attempt found
+  no further gain and opened testrun #16 (20:22 UTC). A human merged it at
+  20:26, the loop started its next cycle 43 s later, and the second feature
+  converged the same way. No bug filed, breaker untouched, two WARNING pages
+  (both arrived), $0.2849 of $1.00, with spend carried across the two
+  processes. One plan per feature (OMNI-135): 9 TES issues for 9 cycles,
+  where run #4 filed 22 for 6. The one loss: an earlier cycle (TES-118 to 121,
+  20:04 UTC, rejected for a correctness mismatch) ran on a box that was then
+  replaced before its log was synced, so only its TES bug survives
+  (OMNI-140). Artifacts in
+  `s3://sis-first-run-artifacts-696644743351/runs/20260929-2028/`.
