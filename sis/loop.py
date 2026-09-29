@@ -137,7 +137,7 @@ def stop_summary(
     elif converged_note:
         why = converged_note
     elif interrupted:
-        why = "interrupted (Ctrl-C / SIGTERM)"
+        why = "interrupted (Ctrl-C, SIGTERM or a closed terminal)"
     elif max_cycles is not None and cycles_run >= max_cycles:
         why = f"reached loop.max_cycles ({max_cycles})"
     else:
@@ -362,7 +362,14 @@ def _install_signal_handlers(stop: threading.Event) -> None:
     def _handler(signum: int, frame: Any) -> None:
         stop.set()
 
-    for sig in (signal.SIGINT, signal.SIGTERM):
+    # SIGHUP is a terminal that went away: closing a tmux pane, or an SSM
+    # session that ends with no tmux under it (OMNI-139). Left at its default it
+    # kills the process on the spot, with no final sync and no stop summary; as
+    # a graceful stop the cycle in flight finishes and the dataset is uploaded.
+    sigs = [signal.SIGINT, signal.SIGTERM]
+    if hasattr(signal, "SIGHUP"):
+        sigs.append(signal.SIGHUP)
+    for sig in sigs:
         try:
             signal.signal(sig, _handler)
         except ValueError:
@@ -386,9 +393,10 @@ def serve(
 ) -> list[dict[str, Any]]:
     """Run the loop against a live actor org, with graceful SIGINT/SIGTERM stop.
 
-    The run's episodic log and audit go to ``adapters.artifacts_bucket`` every
+    The run's episodic log, audit and console log (``runtime/loop.log``, when
+    the runbook tees one) go to ``adapters.artifacts_bucket`` every
     ``artifact_sync_every`` (default ``loop.artifact_sync_every``) cycles and
-    when the loop stops for any reason, a crash included (OMNI-140). *artifacts*
+    when the loop stops for any reason, a crash included (OMNI-140, OMNI-139). *artifacts*
     builds the sync (default: from the configuration); one that returns None
     syncs nothing. A failed sync warns and never stops the loop.
 
@@ -518,14 +526,22 @@ def serve(
                      f"{converged_note[0]}. Spent ${float(econ['spent_usd']):.4f} of "
                      f"${float(econ['budget_usd']):.2f}. Nothing to reset: choose another "
                      "contract (--contract) or add a target, then start the loop again.")
+        print(stop_summary(
+            stopped_by[0] if stopped_by else None, len(results),
+            max_cycles=max_cycles, interrupted=stop.is_set(),
+            trip_reason=ray.get(ceo.state_snapshot.remote()).get("trip_reason"),
+            spent_usd=float(econ["spent_usd"]), budget_usd=float(econ["budget_usd"]),
+            converged_note=converged_note[0],
+        ), flush=True)
+    except Exception as exc:
+        # One line for the console log: Python prints the traceback itself only
+        # when the process exits, after the sync below has uploaded the log.
+        print(f"[loop] crashed: {type(exc).__name__}: {' '.join(str(exc).split())[:200]}",
+              file=sys.stderr, flush=True)
+        raise
     finally:
         # Every way out, an exception included: the log is the point of the run.
+        # After the stop summary, so the console log the runbook tees to
+        # runtime/loop.log (OMNI-139) is uploaded with its last line in it.
         sync_artifacts(sync, workspace, final=True)
-    print(stop_summary(
-        stopped_by[0] if stopped_by else None, len(results),
-        max_cycles=max_cycles, interrupted=stop.is_set(),
-        trip_reason=ray.get(ceo.state_snapshot.remote()).get("trip_reason"),
-        spent_usd=float(econ["spent_usd"]), budget_usd=float(econ["budget_usd"]),
-        converged_note=converged_note[0],
-    ), flush=True)
     return results

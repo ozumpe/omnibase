@@ -443,13 +443,20 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   the fourth AWS run's finished `sum_of_divisors` filed three bugs and
   tripped the breaker.
   **The run's dataset syncs itself** (OMNI-140, `sis/artifact_sync.py`):
-  `loop.serve` uploads the episodic log, its state and the operator audit to
+  `loop.serve` uploads the episodic log, its state, the operator audit and the
+  console log (`runtime/loop.log`, which the runbook tees, OMNI-139) to
   `adapters.artifacts_bucket` (`runs/<start time>/`, the box's
   `SIS_ARTIFACTS_BUCKET`) every `loop.artifact_sync_every` cycles (default 1)
   and once more when it stops for any reason, a crash included. A failed
   sync warns and never stops the loop. Before, a box replaced ahead of a hand
   sync took its log: run #3's, and the first cycle of run #5. Only `--loop`
   syncs; a single `main.py` run still needs the runbook's command.
+  **The loop outlives its SSM session** (OMNI-139): the runbook runs step 5
+  inside tmux (`tmux new-session -A -s sis`, installed by the bootstrap) and
+  tees the console to `runtime/loop.log` (`python -u … | tee -i -a`). A closed
+  terminal (SIGHUP) is now a graceful stop like SIGTERM: the cycle in flight
+  finishes and the dataset syncs. A crash leaves a `[loop] crashed:` line in
+  the log. Unverified on EC2: whether an SSM-agent restart takes tmux with it.
 - **`DevOps.canary()` can judge a candidate against real traffic**
   (`canary_backend="serve"`, OMNI-14; `--canary serve` / `SIS_CANARY=serve`;
   RUNBOOK Level 0e) — `sis.loadgen` fills the window itself (nothing external
@@ -667,9 +674,9 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   **Phase 0 is built:** `sis/sandbox_worker.py` (OMNI-129) serves a candidate
   hot from the sandbox. It is tested in both sandbox modes, including that a
   docker candidate cannot reach the network, Ray or the host's environment.
-- 962 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
+- 967 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
   Ray-Serve-integration tests run separately, see Operational quick reference
-  above; 1024 total, recounted 2026-09-29 — corrected 2026-09-26, a multi-dimension review found the
+  above; 1029 total, recounted 2026-09-29 — corrected 2026-09-26, a multi-dimension review found the
   previously-documented 616/678 stale); `ruff`/`mypy --strict`/`pytest` clean;
   CI green; `feature → develop → main` enforced by both the client-side
   pre-push hook and active server-side rulesets.
@@ -748,7 +755,7 @@ Two traps L5 surfaced, both worth knowing before writing similar code:
 **Next — the milestone plan is in Jira ([`OMNI`](https://olafzumpe.atlassian.net/browse/OMNI)),
 not here.** Check the board for current status rather than trusting this list.
 **Last reconciled against a live query on 2026-09-29** (142 issues, OMNI-1
-through OMNI-142; 82 Done, 1 In Progress, 59 To Do — most of the growth since 2026-09-26 is
+through OMNI-142; 83 Done, 1 In Progress, 58 To Do — most of the growth since 2026-09-26 is
 the KNOWN_ISSUES backfill, see "Known issues" above):
 
 1. ~~**[OMNI-1](https://olafzumpe.atlassian.net/browse/OMNI-1) — L5 target

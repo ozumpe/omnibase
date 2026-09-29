@@ -92,9 +92,9 @@ adapters:
   # real-adapter run warns that nobody will be paged.
   # env: SIS_NOTIFY_SNS_TOPIC_ARN   flag: --adapters-notify-sns-topic-arn
   forbidden_notify_sns_topic_arn: null
-  # S3 bucket that receives the episodic log and the operator audit under runs/<start
-  # time>/, while the loop runs and when it stops. Unset: nothing is synced and nothing
-  # fails; the box's user_data sets it.
+  # S3 bucket that receives the episodic log, the operator audit and the console log
+  # under runs/<start time>/, while the loop runs and when it stops. Unset: nothing is
+  # synced and nothing fails; the box's user_data sets it.
   # env: SIS_ARTIFACTS_BUCKET   flag: --adapters-artifacts-bucket
   forbidden_artifacts_bucket: null
 
@@ -131,7 +131,7 @@ loop:
   # stops: the target has converged. Not a breaker trip; nothing to reset (OMNI-138).
   # env: SIS_LOOP_CONVERGED_AFTER   flag: --loop-converged-after
   soft_converged_after: 3
-  # Cycles between syncs of the run's episodic log and audit to
+  # Cycles between syncs of the run's episodic log, audit and console log to
   # adapters.artifacts_bucket; a killed process or a replaced box loses at most this
   # many. 0 syncs only when the loop stops (OMNI-140).
   # env: SIS_LOOP_ARTIFACT_SYNC_EVERY   flag: --loop-artifact-sync-every

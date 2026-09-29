@@ -179,7 +179,39 @@ tail -f /var/log/sis-bootstrap.log
 
 ### 5. The run itself (box)
 
-All of it as `ubuntu`, in `~/omnibase`, in one shell.
+All of it as `ubuntu`, in `~/omnibase`, in one shell, **and that shell lives in
+tmux** (OMNI-139; a box built after `v0.3.2`, see the note below):
+
+```bash
+tmux new-session -A -s sis
+```
+
+An SSM session ends when the laptop sleeps, the network drops, or it sits idle
+(20 minutes by default), and it takes its shell, and whatever runs in that
+shell's foreground, with it. tmux keeps the shell on the box instead.
+
+- **Detach** with Ctrl-b, then d. The loop keeps running.
+- **Reattach**, from a new session ([step 4](#4-open-a-session-laptop--box)),
+  after `sudo -iu ubuntu`, with the same command. `-A` attaches to `sis` if it
+  exists and starts it if not, so there is only ever one.
+- **Scroll back** with Ctrl-b, then `[` (arrow keys), and leave with `q`. While
+  a pane is scrolled back, tmux takes Ctrl-C for itself, and it stays scrolled
+  back across a detach: press `q` before you press Ctrl-C to stop the loop.
+
+What this does not survive: the instance stopping or rebooting, and possibly
+the SSM agent restarting itself (unverified). If the loop is gone, start it
+again. A feature in progress is carried on from its branch (OMNI-135). What the
+loop had recorded is in S3 only if it had synced: on a box that runs `v0.3.2`
+or earlier, sync by hand ([step 5d](#5-the-run-itself-box)) before anything
+replaces the box.
+
+A box built from `v0.3.2` or earlier has no tmux. Install it from the
+`ssm-user` session, before `sudo -iu ubuntu`:
+
+```bash
+sudo apt-get -o DPkg::Lock::Timeout=600 update
+sudo apt-get -o DPkg::Lock::Timeout=600 install -y tmux
+```
 
 **a. Set the environment.** Export everything **before** the first
 `poetry run`: the role actors are detached Ray processes that snapshot the
@@ -213,8 +245,16 @@ poetry run python scripts/check_connections.py --deep
 **c. Run the loop, and watch it.**
 
 ```bash
-poetry run python main.py --contract sum_of_divisors --loop --loop-max-cycles 10
+poetry run python -u main.py --contract sum_of_divisors --loop --loop-max-cycles 10 \
+  2>&1 | tee -i -a runtime/loop.log
 ```
+
+`tee` keeps the console output on disk, where a new session can follow it
+without attaching (`tail -f ~/omnibase/runtime/loop.log`) and, from the release
+after `v0.3.2`, where the loop's syncs upload it (on `v0.3.2` the by-hand sync
+in [step 5d](#5-the-run-itself-box) does). `-u` sends each line as it is printed, because a pipe,
+unlike a terminal, is buffered. `-i` makes tee ignore Ctrl-C, so that Ctrl-C
+stops the loop and tee still writes what the loop prints on its way out.
 
 What to expect:
 
@@ -246,7 +286,8 @@ What to expect:
   tripped the circuit breaker.
 
 **d. The dataset keeps itself** (OMNI-140; not in `v0.3.2`). The loop uploads
-the episodic log, its state and the operator audit to
+the episodic log, its state, the operator audit and the console log
+(`runtime/loop.log`, from step c) to
 `s3://<bucket>/runs/<start time>/` after every cycle
 (`loop.artifact_sync_every`), and once more when it stops for any reason:
 converged, breaker, `--loop-max-cycles`, Ctrl-C, or a crash. It ends with
@@ -259,7 +300,8 @@ syncs), or after a process was killed:
 
 ```bash
 aws s3 sync runtime/ "s3://$ARTIFACTS_BUCKET/runs/$(date +%Y%m%d-%H%M)/" \
-  --exclude "*" --include "episodic*" --include "operator_audit*"
+  --exclude "*" --include "episodic*" --include "operator_audit*" \
+  --include "loop*.log"
 ```
 
 ### 6. While it runs (box, a second session)
@@ -277,8 +319,11 @@ poetry run python -m sis.admin reset-breaker --reason "<why>"   # spend is NOT r
 ```
 
 Every change is appended to `runtime/operator_audit.jsonl`, which step 5d
-syncs. `pause` idles the loop without exiting; to stop it outright, press
-Ctrl-C in the loop's session (it finishes the cycle in flight).
+syncs. `pause` idles the loop without exiting; to stop it outright, reattach
+(`tmux new-session -A -s sis`), press `q` if the pane is scrolled back, then
+Ctrl-C, and wait for `[loop] stopped` (the loop finishes the cycle in flight
+first). Closing the tmux session or its pane also stops the loop, the same way,
+from the release after `v0.3.2`; on `v0.3.2` it kills it on the spot.
 
 **The operator console** stays bound to loopback on the box and is reached
 over port forwarding:
@@ -574,7 +619,8 @@ checkout to sync):
 
 ```bash
 aws s3 sync ~/omnibase/runtime/ "s3://$ARTIFACTS_BUCKET/runs/$(date +%Y%m%d-%H%M)/" \
-  --exclude "*" --include "episodic*" --include "operator_audit*"
+  --exclude "*" --include "episodic*" --include "operator_audit*" \
+  --include "loop*.log"
 ```
 
 `operator_audit.jsonl` rides along because it records which config key a human
@@ -595,7 +641,7 @@ reserved and would make the next `apply` fail.
 `/var/log/sis-bootstrap.log`. It also writes `/etc/profile.d/sis-run.sh`,
 which exports the pager topic and the artifacts bucket for every login shell.
 The script itself lives in the repo, versioned and reviewable rather than
-embedded in Terraform. It installs docker and the AWS CLI, Python 3.14 via
+embedded in Terraform. It installs docker, tmux and the AWS CLI, Python 3.14 via
 `uv` (standard CPython, **not** free-threaded — Ray has no `cp314t` wheels;
 `uv` because 24.04's apt doesn't carry 3.14), Poetry, and
 `poetry install --with real --with llm --with ui` (`ui` because the operator

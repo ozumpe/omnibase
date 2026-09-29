@@ -27,10 +27,12 @@ from typing import Any, Protocol
 from sis.paths import RUNTIME_DIR
 
 # What a run leaves that cannot be re-created: the log, its latest-wins state
-# (brakes, the pending PR, the code version) and the operator audit. Text files
-# only. A DuckDB file (``episodic.duckdb``) is a live database that may be
-# mid-write, so a copy of it could not be trusted; the box uses ``jsonl``.
-SYNCED_GLOBS = ("episodic*.jsonl", "episodic_state.json", "operator_audit*.jsonl")
+# (brakes, the pending PR, the code version), the operator audit and the
+# console output the runbook tees to ``runtime/loop.log`` (OMNI-139). Text
+# files only. A DuckDB file (``episodic.duckdb``) is a live database that may
+# be mid-write, so a copy of it could not be trusted; the box uses ``jsonl``.
+SYNCED_GLOBS = ("episodic*.jsonl", "episodic_state.json", "operator_audit*.jsonl",
+                "loop*.log")
 
 # A slow or unreachable bucket costs the loop a few seconds, not a stall.
 CONNECT_TIMEOUT_S = 5
