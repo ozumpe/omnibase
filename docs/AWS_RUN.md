@@ -22,7 +22,7 @@ This document has four parts:
 
 | | |
 |---|---|
-| Code | release tag **`v0.3.0`** (`var.repo_ref`), never a branch — see [Which code runs](#which-code-runs) |
+| Code | release tag **`v0.3.1`** (`var.repo_ref`), never a branch — see [Which code runs](#which-code-runs) |
 | Box | one `m7i.xlarge`, `us-east-1`, **no inbound ports**; shell via SSM only |
 | Contract | `sum_of_divisors`, re-seeded naive on `ozumpe/testrun`'s `develop` |
 | Where artifacts land | Jira `TES`, GitHub `ozumpe/testrun` (PRs against `develop`) |
@@ -219,7 +219,7 @@ What to expect:
 - It also holds while **any** PR from a `feature/` branch is open against
   `develop`, including one opened by an earlier process or box: it prints
   `[sis] HOLDING: PR <n> is open …` and waits for each in turn (OMNI-136,
-  after `v0.3.0`). On `v0.3.0` itself, a rebuilt box does not know about an
+  in `v0.3.1`). On `v0.3.0`, a rebuilt box does not know about an
   open PR and opens a second one beside it: merge or close the loop's PRs
   before `tofu destroy`.
 - Keep this one process running: a feature in progress lives in memory, so a
@@ -278,7 +278,7 @@ aws ec2 stop-instances --region us-east-1 \
 
 When the experiment is over, tear it down. On `v0.3.0`, first merge or close
 the loop's open PRs on `ozumpe/testrun`: the next box does not know about them
-(M26; fixed after `v0.3.0` by OMNI-136, which waits for them instead).
+(M26; fixed in `v0.3.1` by OMNI-136, which waits for them instead).
 
 ```bash
 tofu -chdir=infra/aws destroy
@@ -399,7 +399,7 @@ human, one box: a remote state backend is ceremony this doesn't need yet.
 
 ### Which code runs
 
-The box runs the **release tag** in `var.repo_ref` — `v0.3.0` by default
+The box runs the **release tag** in `var.repo_ref` — `v0.3.1` by default
 (OMNI-63). A tag, not `develop`: a run's results are only worth something if
 they name the code that produced them, and a branch names whatever it pointed
 at when the box booted. `tofu plan` refuses a branch unless
@@ -622,6 +622,6 @@ second operator, a second node.
   09-29 the box was **rebuilt** (02:26 UTC); the new one knew nothing of #13,
   started a fresh feature from `develop`, and opened #14 (02:53 UTC, two
   steps) — the same file from the same base, so the two conflict (M26). The
-  pending PR had lived in a file on the old box. Fixed after `v0.3.0`
+  pending PR had lived in a file on the old box. Fixed in `v0.3.1`
   (OMNI-136): before every cycle, the loop asks GitHub which of its PRs are
   still open.
