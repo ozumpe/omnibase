@@ -75,6 +75,19 @@ def ends_feature(reason: str | None) -> bool:
     return episodic.neutral_status(reason) is not None or reason.startswith("no improvement")
 
 
+def finds_no_gain(feature: dict[str, Any] | None, reason: str | None) -> bool:
+    """Whether a rejected step says the *base* cannot be beaten (OMNI-138). Pure.
+
+    With no feature in progress, a step starts from the base branch's head; a
+    verdict that would end a feature (:func:`ends_feature`) then means the
+    target has converged. That is not a failure of the loop, and filing a bug
+    and counting it toward the breaker is how a finished ``sum_of_divisors``
+    tripped the breaker in the fourth AWS run. Inside a feature the same
+    verdict ends the feature instead, and its PR opens.
+    """
+    return feature is None and ends_feature(reason)
+
+
 def is_full(feature: dict[str, Any], max_steps: int) -> bool:
     return len(feature["steps"]) >= max(1, max_steps)
 

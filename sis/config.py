@@ -291,6 +291,11 @@ SCHEMA: tuple[Key, ...] = (
         "Accepted steps a feature branch collects before its one PR to the base "
         "branch opens; a step that finds no further gain ends the feature sooner "
         "(OMNI-130)."),
+    Key("loop", "converged_after", ConfigTier.SOFT, Kind.INT, 3,
+        "SIS_LOOP_CONVERGED_AFTER",
+        "Neutral cycles in a row (no change, inconclusive, no gain) after which "
+        "the loop stops: the target has converged. Not a breaker trip; nothing "
+        "to reset (OMNI-138)."),
 
     # --- contracts: which target a cycle optimises. --------------------------
     Key("contracts", "default", ConfigTier.SOFT, Kind.OPT_STR, None,
@@ -724,6 +729,7 @@ class LoopConfig:
     interval_seconds: float
     max_cycles: int | None
     feature_max_steps: int
+    converged_after: int
 
 
 @dataclass(frozen=True)

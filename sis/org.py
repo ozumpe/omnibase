@@ -361,6 +361,21 @@ def bootstrap() -> dict[str, Any]:
     return handles
 
 
+def neutral_cycle_status(impl: Mapping[str, Any]) -> str | None:
+    """The neutral status an implementation outcome is recorded under, or None. Pure.
+
+    Neutral means spend recorded, no bug filed, no breaker count: a verdict
+    that says nothing against the loop. The gate decides for "no change" and
+    "inconclusive" (``episodic.neutral_status``); the SWE decides for "no
+    gain", because the same "no improvement" reason is neutral only when no
+    feature is in progress (OMNI-138).
+    """
+    if impl.get("passed"):
+        return None
+    return episodic.neutral_status(impl.get("reason")) or (
+        episodic.NO_GAIN if impl.get("no_gain") else None)
+
+
 def cycle_summary(result: Mapping[str, Any]) -> str:
     """One console line: what a cycle did, why, and what it cost. Pure (OMNI-123).
 
@@ -563,7 +578,9 @@ def run_cycle(
     # An inconclusive benchmark (OMNI-41) is benign the same way: the gate could
     # not tell the candidate from the margin, which says nothing against the
     # candidate. It keeps its own status so the log never calls it "no change".
-    neutral_status = None if impl["passed"] else episodic.neutral_status(impl.get("reason"))
+    # So is a new feature that finds no further gain (OMNI-138): the target has
+    # converged. loop.serve stops after loop.converged_after of these in a row.
+    neutral_status = neutral_cycle_status(impl)
     if neutral_status:
         trip = ray.get(ceo.record_neutral.remote(cost_usd=cost_usd))
         breaker_bug_id = _breaker_alarm(trip)

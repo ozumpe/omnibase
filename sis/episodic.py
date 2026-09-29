@@ -47,6 +47,18 @@ NEUTRAL_OUTCOMES: dict[str, str] = {
 }
 
 
+# A new feature's first step that finds no further gain (OMNI-138): nothing
+# beats the base branch's head, so the target has converged. Its reason is an
+# ordinary "no improvement", which is neutral only there — inside a feature the
+# same verdict ends the feature, and at QA it stays a rejection — so it is not
+# a NEUTRAL_OUTCOMES gate: the SWE says which case it is.
+NO_GAIN = "no_gain"
+
+# Every neutral cycle status. Each is also evidence that the target has
+# converged: loop.converged_after of them in a row stops the loop (OMNI-138).
+NEUTRAL_STATUSES = frozenset({*NEUTRAL_OUTCOMES.values(), NO_GAIN})
+
+
 def neutral_status(reason: str | None) -> str | None:
     """The neutral cycle status a rejection reason maps to, or ``None``. Pure.
 
@@ -63,7 +75,7 @@ class EpisodicEvent:
     cycle_id: str
     ts: str
     # outcome: verified_awaiting_human_merge | rolled_back | qa_rejected |
-    #          no_change | inconclusive (both neutral: NEUTRAL_OUTCOMES) |
+    #          no_change | inconclusive | no_gain (neutral: NEUTRAL_STATUSES) |
     #          budget_denied | circuit_breaker_open | paused (sis.admin) | ...
     outcome: str
     proposer: str = "stub"
@@ -465,7 +477,7 @@ def event_from_cycle_result(
     reason = result.get("reason")
     gauntlet_passed = (
         True if status in ACCEPTED_OUTCOMES
-        else False if status == "rolled_back" or status in NEUTRAL_OUTCOMES.values()
+        else False if status == "rolled_back" or status in NEUTRAL_STATUSES
         else None
     )
     return EpisodicEvent(

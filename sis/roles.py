@@ -643,7 +643,9 @@ class SWE(Role):
                 ray.get(self._sm.set_feature.remote(spec.name, feature))
             return {"passed": False, "reason": report.reason, "pr_id": None,
                     "cost_usd": cost_usd, "candidate_sha": candidate_sha,
-                    "contract": spec.name}
+                    "contract": spec.name,
+                    # Nothing beats the base: the target has converged (OMNI-138).
+                    "no_gain": feature_mod.finds_no_gain(feature, report.reason)}
 
         # Change-authorization policy: the loop may only write paths its tier
         # permits. The target is SOFT (allowed once checks pass); a mis-pointed
