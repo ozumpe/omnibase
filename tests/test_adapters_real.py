@@ -678,7 +678,7 @@ def test_unproposed_branches_leave_out_every_branch_a_pr_was_opened_from() -> No
     assert urls[0].endswith("/repos/o/r/git/matching-refs/heads/feature/")
     assert urls[-1].endswith("/repos/o/r/compare/main...feature/tes-3")
     assert sum("/compare/" in u for u in urls) == 1, "a compare per proposed branch is waste"
-    ((_, _, params),) = [c for c in http.calls if c[1].endswith("/pulls")]
+    ((_, _, params),) = (c for c in http.calls if c[1].endswith("/pulls"))
     assert params == {"state": "all", "per_page": 100, "page": 1}
 
 
