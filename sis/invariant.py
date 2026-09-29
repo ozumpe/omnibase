@@ -198,8 +198,13 @@ def build_script(
     plan: list[dict[str, Any]],
     examples: int,
     seed: int,
+    nonce: str = "",
 ) -> str:
     """Build the in-sandbox invariant script.
+
+    *nonce* is a per-run token the script prints after the verdict (``OK
+    <nonce>``); the gate believes a zero exit only when it sees it last (M8).
+    Empty prints a bare ``OK``, for tests that build the script by hand.
 
     Pure string building, so what the script checks — and in what order — is
     testable without standing up a sandbox.
@@ -210,6 +215,7 @@ def build_script(
     the roman round-trip law was one of the checks a hostile ``__eq__`` defeated
     (OMNI-46, H4).
     """
+    verdict = f"OK {nonce}" if nonce else "OK"
     return textwrap.dedent(
         f"""\
         import sys, copy, json, inspect, importlib.util
@@ -247,6 +253,7 @@ def build_script(
             canon.wrap_exports(cand, {exports!r})
         except canon.NotPlainError as exc:
             _not_plain("plain output", exc)
+        canon.guard_exports(cand, {exports!r})   # M11: the candidate's own exception is a violation
         entry_fn = getattr(cand, {entry!r})
 
         def _resolve(name):
@@ -295,6 +302,8 @@ def build_script(
                         f"{{inv['name']}}: output is not a plain value for args={{args!r}} "
                         f"({{exc}})"
                     ) from None
+                except canon.CandidateRaised as exc:
+                    raise AssertionError(f"{{inv['name']}}: {{exc}} for args={{args!r}}") from None
                 assert held, f"{{inv['name']}} does not hold for args={{args!r}}"
 
             try:
@@ -315,7 +324,7 @@ def build_script(
                 }}))
                 sys.exit({EXIT_VIOLATED})
 
-        print("OK")
+        print({verdict!r})
         """
     )
 

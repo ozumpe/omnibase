@@ -125,6 +125,55 @@ def wrap_exports(module: Any, names: Iterable[str]) -> None:
             )
 
 
+class CandidateRaised(AssertionError):
+    """The candidate's own call raised: a counted violation, never a harness fault.
+
+    An ``AssertionError`` subclass so that Hypothesis can shrink to a minimal
+    counterexample and the invariant gate's seed still rides in the reason.
+    """
+
+
+def guard_exports(module: Any, names: Iterable[str]) -> None:
+    """Turn an exception raised by the candidate's call into :class:`CandidateRaised`.
+
+    For the two gates whose scripts call the candidate on inputs the acceptance
+    tests never covered (invariant, backtest). Before, an ``IndexError`` there
+    ended the gate's script with an unmapped exit code, which the gate reported
+    as ``harness: ... crashed``: an operator debugged a healthy sandbox, and the
+    reject-by-gate analytics under-counted (KNOWN_ISSUES M11, OMNI-37's rule
+    applied to two gates it did not reach).
+
+    Applied **after** :func:`wrap_exports` and not folded into it: the
+    acceptance tests legitimately expect a candidate to raise
+    (``pytest.raises(ValueError)``), and the differential gate compares raised
+    exceptions against the reference. :class:`NotPlainError` passes through, for
+    it is reported on its own path; ``SystemExit`` is caught too, since a
+    candidate that calls ``sys.exit(0)`` mid-call would otherwise end the script
+    with a success code and no verdict (M8). ``os._exit`` cannot be caught from
+    inside the process, which is what OMNI-45's worker split is for.
+    """
+    for name in names:
+        original = getattr(module, name, None)
+        if callable(original):
+            setattr(module, name, _guarding(original, name))
+
+
+def _guarding(fn: Callable[..., Any], name: str) -> Callable[..., Any]:
+    def call(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return fn(*args, **kwargs)
+        except NotPlainError:
+            raise
+        except (Exception, SystemExit) as exc:
+            detail = " ".join(str(exc).split())[:200]
+            raise CandidateRaised(
+                f"the candidate's {name}() raised {type(exc).__name__}"
+                + (f": {detail}" if detail else "")
+            ) from None
+
+    return call
+
+
 def _canonicalising(fn: Callable[..., Any]) -> Callable[..., Any]:
     def call(*args: Any, **kwargs: Any) -> Any:
         return canonical(fn(*args, **kwargs))

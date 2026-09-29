@@ -77,6 +77,24 @@ ROMAN_EVADES_ACCEPTANCE = ROMAN_OK.replace(
 )
 
 
+# Correct on everything the spec enumerates, and raising on a band none of it
+# reaches. A law that generates inputs finds it (KNOWN_ISSUES M11, reproduced
+# 2026-09-26): the candidate's own exception used to end the invariant script
+# with an unmapped exit code, reported as "harness: ... crashed".
+ROMAN_RAISES_OUTSIDE_ACCEPTANCE = ROMAN_OK.replace(
+    "    out: list[str] = []\n",
+    '    if 2000 <= value < 3000:\n        raise IndexError("no numeral table past 1999")\n'
+    "    out: list[str] = []\n",
+)
+# The same band, ending the process with a success code instead (M8's shape,
+# at call time).
+ROMAN_EXITS_OUTSIDE_ACCEPTANCE = ROMAN_OK.replace(
+    "    out: list[str] = []\n",
+    "    if 2000 <= value < 3000:\n        raise SystemExit(0)\n"
+    "    out: list[str] = []\n",
+)
+
+
 def _shared() -> types.ModuleType:
     spec = importlib.util.spec_from_file_location("invariants", INVARIANTS_PATH)
     assert spec is not None and spec.loader is not None
@@ -354,3 +372,29 @@ def test_the_candidate_gets_a_copy_of_the_args_the_law_judges() -> None:
         shared_path="/s/inv.py", oracle_path=None, entry="f", plan=[], examples=10, seed=1,
     )
     assert "entry_fn(*copy.deepcopy(args))" in script
+
+
+# --- M11: a candidate's own exception is the candidate's failure ---------
+
+
+def test_a_candidate_that_raises_outside_the_acceptance_range_fails_the_invariant_gate() -> None:
+    result = gauntlet.validate(ROMAN_RAISES_OUTSIDE_ACCEPTANCE, contract=ROMAN, seed=7)
+    assert not result.passed
+    assert not result.reason.startswith("harness"), result.reason
+    assert gate_from_reason(result.reason) == "invariant"
+    assert "IndexError" in result.reason and "to_roman" in result.reason
+    assert "seed=7" in result.reason, "the seed is the reproduction handle"
+
+
+def test_the_counterexample_is_shrunk_to_the_edge_of_the_band() -> None:
+    result = gauntlet.validate(ROMAN_RAISES_OUTSIDE_ACCEPTANCE, contract=ROMAN, seed=7)
+    assert "args=(2000,)" in result.reason
+
+
+def test_a_candidate_that_exits_mid_call_does_not_read_as_a_pass() -> None:
+    # sys.exit(0) inside the call would end the script with success and no
+    # verdict; the gate has to count it as the candidate's failure.
+    result = gauntlet.validate(ROMAN_EXITS_OUTSIDE_ACCEPTANCE, contract=ROMAN, seed=7)
+    assert not result.passed
+    assert gate_from_reason(result.reason) == "invariant", result.reason
+    assert "SystemExit" in result.reason

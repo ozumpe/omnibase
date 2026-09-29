@@ -39,11 +39,14 @@ the candidate passes all gates.
 """
 
 import ast
+import hashlib
 import json
 import math
 import os
 import pathlib
 import random
+import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -137,6 +140,13 @@ def _sandbox_env(home: str, pythonpath: str) -> dict[str, str]:
     env["TMPDIR"] = home
     env["PYTHONPATH"] = pythonpath  # so the injected sitecustomize.py loads
     env["PYTHONHASHSEED"] = "0"
+    # A .pyc under a directory on sys.path is code the next import may load
+    # without reading its source (an unchecked hash-based one is trusted as is),
+    # so nothing in the sandbox writes one (OMNI-45, M9).
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    # Hypothesis keeps a cache under ./.hypothesis even with its example database
+    # off; the working directory is the exam, so it goes to the scratch instead.
+    env["HYPOTHESIS_STORAGE_DIRECTORY"] = os.path.join(home, ".hypothesis")
     return env
 
 
@@ -168,6 +178,14 @@ def _docker_args(tmpdir: str, env: dict[str, str], image: str, name: str) -> lis
     ``--security-opt no-new-privileges``, ``--read-only`` rootfs, and only the
     temp dir bind-mounted. No host credentials or filesystem are visible.
 
+    **The exam directory is read-only** whenever the sandbox has a scratch
+    directory of its own, i.e. ``env["HOME"]`` is not *tmpdir* (OMNI-45, M9):
+    the oracle, baseline, tests and the candidate's own file are then mounted
+    ``:ro``, and only the scratch (``HOME``/``TMPDIR``, mypy's cache) is writable,
+    so a candidate cannot rewrite what a later gate trusts. Callers that pass
+    ``HOME == tmpdir`` (the contract author's discrimination check, the sandbox
+    worker) keep the single read-write mount.
+
     ``--name`` lets the timeout handler kill the container by name (SIGKILL to
     the ``docker run`` client does not stop the container). ``--memory`` /
     ``--cpus`` bound a runaway candidate's resource use (override via
@@ -185,7 +203,7 @@ def _docker_args(tmpdir: str, env: dict[str, str], image: str, name: str) -> lis
         "--pids-limit", "256",
         "--memory", str(config.get("sandbox.memory")),
         "--cpus", str(config.get("sandbox.cpus")),
-        "-v", f"{tmpdir}:{tmpdir}:rw",
+        *_mounts(tmpdir, env.get("HOME")),
         "-w", tmpdir,
     ]
     for key, value in env.items():
@@ -193,6 +211,13 @@ def _docker_args(tmpdir: str, env: dict[str, str], image: str, name: str) -> lis
             args += ["-e", f"{key}={value}"]
     args.append(image)
     return args
+
+
+def _mounts(tmpdir: str, scratch: str | None) -> list[str]:
+    """``docker run -v`` arguments: exam dir read-only beside a separate scratch, or one rw dir."""
+    if scratch and scratch != tmpdir:
+        return ["-v", f"{tmpdir}:{tmpdir}:ro", "-v", f"{scratch}:{scratch}:rw"]
+    return ["-v", f"{tmpdir}:{tmpdir}:rw"]
 
 
 def _container_user() -> str:
@@ -298,6 +323,46 @@ class Result:
     seed: int | None = None
 
 
+def _digest(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _ended_without_verdict(stdout: str, nonce: str) -> bool:
+    """True unless the script printed its verdict token (KNOWN_ISSUES M8).
+
+    A zero exit code says the process ended, not that it reached a verdict:
+    ``os._exit(0)`` at import ends every gate's script with 0 before a single
+    assertion runs. So the harness generates a token per run, the script prints
+    it after the last check, and a zero exit is believed only with that line in
+    the output. Anywhere in it, not last: a candidate may print at exit, and a
+    candidate that ended the process early cannot have printed the token.
+
+    This stops a candidate that ends the process, by accident or on purpose,
+    without knowing the token. It does **not** stop one that finds the token: the
+    script and the candidate share a process, so anything the script knows the
+    candidate can read (H2, which OMNI-45's worker split closes).
+    """
+    token = f"OK {nonce}"
+    return not any(line.strip() == token for line in stdout.splitlines())
+
+
+# pytest's own closing line: "10 passed in 0.05s", "3 passed, 1 warning in 0.4s".
+_PYTEST_PASSED = re.compile(r"^\d+ passed\b.* in [\d.]+s\b")
+_PYTEST_BROKEN = re.compile(r"\b\d+ (failed|error|errors)\b")
+
+
+def _pytest_passed(stdout: str) -> bool:
+    """Whether pytest's own summary says tests ran and none failed (M8).
+
+    Any line, not the last: a candidate may print at exit, after pytest is done.
+    A run that ended without a summary at all (``os._exit(0)`` while the test
+    module imported the candidate) has none.
+    """
+    lines = [line.strip() for line in stdout.splitlines()]
+    return (any(_PYTEST_PASSED.match(line) for line in lines)
+            and not any(_PYTEST_BROKEN.search(line) for line in lines))
+
+
 @dataclass
 class _GateContext:
     """Everything a gate may need, assembled once by :func:`validate`.
@@ -327,6 +392,55 @@ class _GateContext:
     seed: int = DEFAULT_SEED
     # Filled in by the differential+benchmark gate; reported on success.
     candidate_latency: float | None = None
+    # The sandbox's own writable directory (HOME/TMPDIR, tool caches), kept
+    # apart from ``tmp`` and off ``sys.path`` (OMNI-45, M9). None for a hand-built
+    # context, which keeps the old single directory.
+    scratch: pathlib.Path | None = None
+    # Every file the host put in ``tmp`` for the sandbox to trust, with its
+    # sha256. What is in ``tmp`` after a gate must be exactly this.
+    trusted: dict[str, str] = field(default_factory=dict)
+
+    def put(self, rel: str, text: str) -> pathlib.Path:
+        """Write a file the sandbox will trust, and remember what it must still say."""
+        path = self.tmp / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        self.trusted[rel] = _digest(text.encode("utf-8"))
+        return path
+
+    def tampering(self) -> str | None:
+        """What a gate left different in ``tmp`` from what the host put there, or None.
+
+        Modified, added or removed files, symlinks and special files all count.
+        An added file matters as much as a changed one: ``tmp`` is on
+        ``sys.path``, so a planted ``json.py`` or ``hypothesis.py`` would be
+        imported by the next gate in place of the real module (M9). A context
+        that recorded nothing (a hand-built one) checks nothing.
+        """
+        if not self.trusted:
+            return None
+        changed: list[str] = []
+        added: list[str] = []
+        for path in sorted(self.tmp.rglob("*")):
+            if path.is_dir() and not path.is_symlink():
+                continue
+            rel = path.relative_to(self.tmp).as_posix()
+            expected = self.trusted.get(rel)
+            if expected is None:
+                added.append(rel)
+                continue
+            try:
+                intact = (path.is_file() and not path.is_symlink()
+                          and _digest(path.read_bytes()) == expected)
+            except OSError:
+                intact = False
+            if not intact:
+                changed.append(rel)
+        removed = sorted(rel for rel in self.trusted if not (self.tmp / rel).exists())
+        parts = [f"{label}: {', '.join(names[:5])}"
+                 for label, names in (("modified", changed), ("added", added),
+                                      ("removed", removed)) if names]
+        return "; ".join(parts) or None
 
 
 def ensure_sandbox_allows_proposer() -> None:
@@ -410,21 +524,21 @@ def ensure_canary_allows_proposer(canary_backend: str | None = None) -> None:
         raise RuntimeError(problem)
 
 
-def _install_canonical(tmp: pathlib.Path) -> pathlib.Path:
+def _install_canonical(ctx: _GateContext) -> pathlib.Path:
     """Copy :mod:`sis.canonical` into the mount and return the copy's path.
 
     What every comparing gate reduces candidate output to before ``==``
     (OMNI-46, H4). Copied like the oracle, so docker mode needs nothing from the
     host — and rewritten by each gate that uses it rather than once per
     validation, so a candidate that overwrote it while an earlier gate ran does
-    not get to keep the change. That is not isolation (KNOWN_ISSUES M9): a gate
-    still shares its process with the candidate it is judging.
+    not get to keep the change, and recorded in the context's registry so that a
+    change made *during* a gate is caught as tampering (M9). A gate still shares
+    its process with the candidate it is judging (H2).
     """
-    module = tmp / f"{canonical.SANDBOX_MODULE}.py"
-    module.write_text(
-        pathlib.Path(canonical.__file__).read_text(encoding="utf-8"), encoding="utf-8"
+    return ctx.put(
+        f"{canonical.SANDBOX_MODULE}.py",
+        pathlib.Path(canonical.__file__).read_text(encoding="utf-8"),
     )
-    return module
 
 
 def _gate_invariant(ctx: _GateContext) -> Result | None:
@@ -452,13 +566,13 @@ def _gate_invariant(ctx: _GateContext) -> Result | None:
             reason=f"harness: shared invariants missing at {INVARIANTS_PATH} "
                    "— the invariant gate cannot run",
         )
-    shared_mod = ctx.tmp / "invariants.py"
-    shared_mod.write_text(shared_src.read_text(encoding="utf-8"), encoding="utf-8")
+    shared_mod = ctx.put("invariants.py", shared_src.read_text(encoding="utf-8"))
 
     seed = ctx.seed
+    nonce = secrets.token_hex(8)
     script = invariant_script(
         candidate_path=str(ctx.candidate),
-        canonical_path=str(_install_canonical(ctx.tmp)),
+        canonical_path=str(_install_canonical(ctx)),
         exports=list(spec.public_api),
         shared_path=str(shared_mod),
         oracle_path=str(ctx.oracle) if ctx.oracle is not None else None,
@@ -466,6 +580,7 @@ def _gate_invariant(ctx: _GateContext) -> Result | None:
         plan=[invariant_plan_entry(inv) for inv in spec.invariants],
         examples=spec.invariant_examples,
         seed=seed,
+        nonce=nonce,
     )
     result = _run([_PY, "-c", script], ctx.tmpdir, ctx.env)
     if timed_out := _timed_out(result, "invariant"):
@@ -511,6 +626,14 @@ def _gate_invariant(ctx: _GateContext) -> Result | None:
             reason="harness: the invariant script crashed",
             errors=result.stderr.splitlines(),
         )
+    if _ended_without_verdict(result.stdout, nonce):
+        return Result(
+            passed=False,
+            reason=f"invariant violated in sandbox (seed={seed}): the candidate ended the "
+                   "process before the laws finished, so there is no verdict",
+            errors=result.stdout.splitlines(),
+            seed=seed,
+        )
     return None
 
 
@@ -538,7 +661,7 @@ def _gate_backtest(ctx: _GateContext) -> Result | None:
     candidate's fault. Same reason the missing-oracle and missing-tests checks
     fail loudly rather than falling through.
     """
-    spec, tmp, tmpdir, env = ctx.contract, ctx.tmp, ctx.tmpdir, ctx.env
+    spec, tmpdir, env = ctx.contract, ctx.tmpdir, ctx.env
     candidate, oracle_mod = ctx.candidate, ctx.oracle
     if not spec.backtests:
         return None
@@ -550,11 +673,8 @@ def _gate_backtest(ctx: _GateContext) -> Result | None:
             reason=f"harness: shared comparators missing at {COMPARATORS_PATH} "
                    "— the backtest gate cannot run",
         )
-    comparators_mod = tmp / "comparators.py"
-    comparators_mod.write_text(comparators_src.read_text(encoding="utf-8"), encoding="utf-8")
+    comparators_mod = ctx.put("comparators.py", comparators_src.read_text(encoding="utf-8"))
 
-    fixtures_dir = tmp / "fixtures"
-    fixtures_dir.mkdir(exist_ok=True)
     plan: list[dict[str, object]] = []
     for index, bt in enumerate(spec.backtests):
         fixture_src = PROJECT_ROOT / bt.fixture
@@ -578,21 +698,23 @@ def _gate_backtest(ctx: _GateContext) -> Result | None:
             )
         # Indexed filenames, not bt.name: a name is human-authored and may
         # contain a path separator or a character the filesystem dislikes.
-        fixture_dst = fixtures_dir / f"{index}_fixture.json"
-        expect_dst = fixtures_dir / f"{index}_expect.json"
-        fixture_dst.write_text(fixture_src.read_text(encoding="utf-8"), encoding="utf-8")
-        expect_dst.write_text(expect_src.read_text(encoding="utf-8"), encoding="utf-8")
+        fixture_dst = ctx.put(
+            f"fixtures/{index}_fixture.json", fixture_src.read_text(encoding="utf-8"))
+        expect_dst = ctx.put(
+            f"fixtures/{index}_expect.json", expect_src.read_text(encoding="utf-8"))
         plan.append(plan_entry(bt, fixture_path=fixture_dst, expect_path=expect_dst))
 
+    nonce = secrets.token_hex(8)
     script = build_script(
         candidate_path=str(candidate),
-        canonical_path=str(_install_canonical(tmp)),
+        canonical_path=str(_install_canonical(ctx)),
         comparators_path=str(comparators_mod),
         # A Class-2 contract need not ship an oracle at all; when it does, its
         # comparators take precedence over the shared library.
         oracle_path=str(oracle_mod) if oracle_mod is not None else None,
         entry=spec.entry,
         plan=plan,
+        nonce=nonce,
     )
     result = _run([_PY, "-c", script], tmpdir, env)
     if timed_out := _timed_out(result, "backtest"):
@@ -629,6 +751,13 @@ def _gate_backtest(ctx: _GateContext) -> Result | None:
             passed=False,
             reason="harness: the backtest script crashed",
             errors=result.stderr.splitlines(),
+        )
+    if _ended_without_verdict(result.stdout, nonce):
+        return Result(
+            passed=False,
+            reason="backtest failed: candidate did not reproduce recorded history — it ended "
+                   "the process before the replay finished, so there is no verdict",
+            errors=result.stdout.splitlines(),
         )
     return None
 
@@ -707,7 +836,9 @@ def probe_sandbox(tmpdir: str, env: dict[str, str]) -> str | None:
     probe_dir.mkdir(exist_ok=True)
     (probe_dir / "probe_in.txt").write_text(_PROBE_TOKEN, encoding="utf-8")
     (probe_dir / "sis_probe_mod.py").write_text(f"TOKEN = {_PROBE_TOKEN!r}\n", encoding="utf-8")
-    out = probe_dir / "probe_out.txt"
+    # Written where the sandbox can write: the scratch, when it has one, since the
+    # exam directory is read-only in docker mode (M9).
+    out = pathlib.Path(env.get("HOME", tmpdir)) / "probe_out.txt"
     script = textwrap.dedent(
         f"""\
         import sys
@@ -797,7 +928,11 @@ def _gate_noop(ctx: _GateContext) -> Result | None:
 
 def _gate_mypy(ctx: _GateContext) -> Result | None:
     """Static types. Generated code must be fully annotated — see DESIGN.md §5."""
-    result = _run([_PY, "-m", "mypy", "--strict", str(ctx.candidate)], ctx.tmpdir, ctx.env)
+    cache = pathlib.Path(ctx.env.get("HOME", ctx.tmpdir)) / ".mypy_cache"
+    result = _run(
+        [_PY, "-m", "mypy", "--strict", "--cache-dir", str(cache), str(ctx.candidate)],
+        ctx.tmpdir, ctx.env,
+    )
     if timed_out := _timed_out(result, "mypy"):
         return timed_out
     if result.returncode != 0:
@@ -831,6 +966,7 @@ def _gate_interface(ctx: _GateContext) -> Result | None:
     """
     spec = ctx.contract
     needs_seed = spec.determinism is Determinism.STOCHASTIC
+    nonce = secrets.token_hex(8)
     script = textwrap.dedent(
         f"""\
         import sys, inspect, importlib.util
@@ -856,6 +992,7 @@ def _gate_interface(ctx: _GateContext) -> Result | None:
             if "seed" not in params:
                 print("NOSEED", {spec.entry!r})
                 sys.exit(5)
+        print("OK", {nonce!r})
         """
     )
     result = _run([_PY, "-c", script], ctx.tmpdir, ctx.env)
@@ -886,6 +1023,12 @@ def _gate_interface(ctx: _GateContext) -> Result | None:
             passed=False,
             reason="interface: candidate could not be imported",
             errors=result.stderr.splitlines(),
+        )
+    if _ended_without_verdict(result.stdout, nonce):
+        return Result(
+            passed=False,
+            reason="interface: candidate ended the process while it was being imported, "
+                   "so the check produced no verdict",
         )
     return None
 
@@ -921,24 +1064,18 @@ def _gate_acceptance(ctx: _GateContext) -> Result | None:
                    "— the acceptance gate cannot run",
         )
     tests_dst = ctx.tmp / "tests"
-    tests_dst.mkdir(exist_ok=True)
-    (tests_dst / "__init__.py").write_text("", encoding="utf-8")
-    (tests_dst / "test_target.py").write_text(
-        tests_src.read_text(encoding="utf-8"), encoding="utf-8"
-    )
+    ctx.put("tests/__init__.py", "")
+    ctx.put("tests/test_target.py", tests_src.read_text(encoding="utf-8"))
     # Loaded by pytest before the test module imports `target`, so every
     # assertion compares plain values rather than whatever `__eq__` the
     # candidate's return type defines (OMNI-46, H4).
-    _install_canonical(ctx.tmp)
-    (tests_dst / "conftest.py").write_text(
-        _ACCEPTANCE_CONFTEST.format(
-            module=canonical.SANDBOX_MODULE, names=tuple(spec.public_api)
-        ),
-        encoding="utf-8",
-    )
+    _install_canonical(ctx)
+    ctx.put("tests/conftest.py", _ACCEPTANCE_CONFTEST.format(
+        module=canonical.SANDBOX_MODULE, names=tuple(spec.public_api)))
 
     result = _run(
-        [_PY, "-m", "pytest", str(tests_dst), "-q", "--tb=short"], ctx.tmpdir, ctx.env
+        [_PY, "-m", "pytest", str(tests_dst), "-q", "--tb=short", "-p", "no:cacheprovider"],
+        ctx.tmpdir, ctx.env
     )
     if timed_out := _timed_out(result, "acceptance"):
         return timed_out
@@ -946,6 +1083,13 @@ def _gate_acceptance(ctx: _GateContext) -> Result | None:
         return Result(
             passed=False,
             reason="acceptance tests failed",
+            errors=result.stdout.splitlines() + result.stderr.splitlines(),
+        )
+    if not _pytest_passed(result.stdout):
+        return Result(
+            passed=False,
+            reason="acceptance tests failed: pytest ended without reporting that the tests "
+                   "passed, so the candidate is not believed",
             errors=result.stdout.splitlines() + result.stderr.splitlines(),
         )
     return None
@@ -1103,7 +1247,7 @@ def _gate_differential_benchmark(ctx: _GateContext) -> Result | None:
     # convention the invariant gate uses, and for the same reason: without the
     # seed a surprising measurement cannot be re-run.
     bench_seed = ctx.seed
-    canonical_path = str(_install_canonical(ctx.tmp))
+    canonical_path = str(_install_canonical(ctx))
     script = textwrap.dedent(
         f"""\
         import os, sys, time, copy, random, importlib.util
@@ -1501,25 +1645,30 @@ def validate(
             else pathlib.Path(spec.target_file).read_text(encoding="utf-8")
         )
 
-    # Everything lives under the temp dir so the sandbox is self-contained
-    # (in docker mode only this dir is mounted — nothing reaches the host).
-    with tempfile.TemporaryDirectory() as tmpdir:
+    # Two directories, so the sandbox is self-contained (in docker mode only
+    # these are mounted — nothing reaches the host): the exam, which holds every
+    # file a gate trusts and is on sys.path, and a scratch the sandbox may write
+    # to. The exam is read-only in docker, and in both modes it is checked after
+    # every gate against what the host put there (OMNI-45, M9).
+    with tempfile.TemporaryDirectory() as tmpdir, tempfile.TemporaryDirectory() as scratchdir:
         tmp = pathlib.Path(tmpdir)
-        candidate = tmp / "target.py"
-        candidate.write_text(code_str, encoding="utf-8")
+        ctx = _GateContext(
+            contract=spec, code_str=code_str, tmp=tmp, tmpdir=tmpdir,
+            env=_sandbox_env(home=scratchdir, pythonpath=tmpdir), candidate=tmp / "target.py",
+            baseline_code=baseline_code, seed=run_seed, scratch=pathlib.Path(scratchdir),
+        )
+        ctx.put("target.py", code_str)
 
         # sitecustomize.py runs at interpreter startup in every gate that has
         # tmp on PYTHONPATH, installing the network guard before any candidate
         # code runs. In docker mode --network none enforces this in the kernel
         # too; the guard stays as defence in depth.
-        (tmp / "sitecustomize.py").write_text(_NETWORK_GUARD, encoding="utf-8")
+        ctx.put("sitecustomize.py", _NETWORK_GUARD)
 
-        baseline_mod: pathlib.Path | None = None
         if baseline_code is not None:
             # Copied into the sandbox and loaded from the mount, never from an
             # external host path.
-            baseline_mod = tmp / "baseline.py"
-            baseline_mod.write_text(baseline_code, encoding="utf-8")
+            ctx.baseline = ctx.put("baseline.py", baseline_code)
 
         # The contract's oracle: reference implementation, benchmark inputs and
         # random-input generator. It is *code* and has to run beside the
@@ -1527,25 +1676,24 @@ def validate(
         # into a script as literals (which is what tied the whole gauntlet to
         # one target — L5). Optional: a Class-2 contract may declare none, and
         # the gate that requires one says so itself.
-        oracle_mod: pathlib.Path | None = None
         oracle_path = spec.oracle_path
         if oracle_path is not None:
             oracle_src = pathlib.Path(PROJECT_ROOT / oracle_path)
             if oracle_src.exists():
-                oracle_mod = tmp / "oracle.py"
-                oracle_mod.write_text(
-                    oracle_src.read_text(encoding="utf-8"), encoding="utf-8"
-                )
-
-        ctx = _GateContext(
-            contract=spec, code_str=code_str, tmp=tmp, tmpdir=tmpdir,
-            env=_sandbox_env(home=tmpdir, pythonpath=tmpdir), candidate=candidate,
-            baseline_code=baseline_code, baseline=baseline_mod, oracle=oracle_mod,
-            seed=run_seed,
-        )
+                ctx.oracle = ctx.put("oracle.py", oracle_src.read_text(encoding="utf-8"))
 
         for gate_name in profile:
-            if failure := _GATES[gate_name](ctx):
+            failure = _GATES[gate_name](ctx)
+            # Before anything is concluded from the gate: a gate that ran beside
+            # a candidate which rewrote the exam has not judged it. Checked when
+            # the gate passed too, since a pass is exactly what tampering buys.
+            if changed := ctx.tampering():
+                return Result(
+                    passed=False,
+                    reason=f"tampered: the candidate changed the exam files while the "
+                           f"{gate_name.value} gate ran ({changed})",
+                )
+            if failure:
                 return _attribute(failure, gate_name, ctx)
 
         return Result(

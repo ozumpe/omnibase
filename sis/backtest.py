@@ -203,8 +203,13 @@ def build_script(
     oracle_path: str | None,
     entry: str,
     plan: list[dict[str, Any]],
+    nonce: str = "",
 ) -> str:
     """Build the in-sandbox backtest script.
+
+    *nonce* is a per-run token printed after the verdict (``OK <nonce>``); the
+    gate believes a zero exit only when it sees it last (M8). Empty prints a
+    bare ``OK``, for tests that build the script by hand.
 
     *plan* is one dict per backtest with sandbox-local ``fixture``/``expect``
     paths plus ``name``/``compare``/``tolerance``. Pure string building, so the
@@ -220,6 +225,7 @@ def build_script(
     that does ``actual == expected`` would otherwise run the candidate's own
     ``__eq__`` (OMNI-46, H4).
     """
+    verdict = f"OK {nonce}" if nonce else "OK"
     return textwrap.dedent(
         f"""\
         import sys, json, importlib.util
@@ -240,6 +246,10 @@ def build_script(
         if not callable(entry_fn):
             print("NOENTRY", {entry!r})
             sys.exit({EXIT_NO_ENTRY})
+        # M11: an exception in the candidate's own call is a failed backtest, not a
+        # harness fault. The fixtures may lie outside what the acceptance tests cover.
+        canon.guard_exports(cand, [{entry!r}])
+        entry_fn = getattr(cand, {entry!r})
 
         for bt in {plan!r}:
             try:
@@ -264,6 +274,8 @@ def build_script(
                 actual = canon.canonical(entry_fn(*args))
             except canon.NotPlainError as exc:
                 ok, detail = False, f"output is not a plain builtin value ({{exc}})"
+            except canon.CandidateRaised as exc:
+                ok, detail = False, str(exc)
             else:
                 ok, detail = compare(actual, expected, bt["tolerance"])
             if not ok:
@@ -275,7 +287,7 @@ def build_script(
                 }}))
                 sys.exit({EXIT_MISMATCH})
 
-        print("OK")
+        print({verdict!r})
         """
     )
 

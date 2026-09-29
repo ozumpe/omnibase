@@ -527,3 +527,207 @@ def test_a_candidate_cannot_slow_the_baseline_through_a_shared_batch(
     # test_correct_but_not_faster_is_rejected makes. First written as "no
     # improvement" only, and flaked under the full suite at 0.80 [0.52, 1.23].
     assert result.reason.startswith(("no improvement", "benchmark inconclusive")), result.reason
+
+
+# --- M8, M9: a candidate that touches the exam, or ends the process (OMNI-45) ---
+#
+# Each attack is run in both sandboxes. In the subprocess sandbox the candidate
+# can write to the exam directory and the harness must notice; in docker the
+# directory is mounted read-only and the write cannot happen, so the candidate
+# is judged on its merits (these ones are wrong or no faster, and fail there).
+
+import functools  # noqa: E402
+import os  # noqa: E402
+import shutil  # noqa: E402
+import subprocess  # noqa: E402
+from collections.abc import Iterator  # noqa: E402
+from typing import Any  # noqa: E402
+
+from sis import config  # noqa: E402
+from sis.episodic import gate_from_reason  # noqa: E402
+
+
+@functools.cache
+def _docker_ready() -> bool:
+    if shutil.which("docker") is None:
+        return False
+    image = str(config.get("sandbox.image"))
+    return subprocess.run(["docker", "image", "inspect", image],
+                          capture_output=True).returncode == 0
+
+
+@pytest.fixture(params=["subprocess", "docker"])
+def sandbox(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+    if request.param == "docker" and not _docker_ready():
+        pytest.skip("docker or the sis-gauntlet image is not available")
+    monkeypatch.setenv("SIS_SANDBOX", request.param)
+    config.reset_config_cache()
+    yield str(request.param)
+    config.reset_config_cache()
+
+
+_WRONG_ABOVE_9000 = '''
+def sum_of_divisors(n: int) -> int:
+    if n > 9000:
+        return 0
+    return sum(i for i in range(1, n + 1) if n % i == 0)
+
+
+def benchmark(n: int = 10_000, repetitions: int = 5) -> float:
+    return 1.0
+'''
+
+_REWRITES_THE_ORACLE = '''
+import pathlib
+
+
+def _tamper() -> None:
+    here = pathlib.Path(__file__).resolve().parent
+    try:
+        (here / "oracle.py").write_text("BENCH_INPUTS = [(1,)]\\n")
+    except OSError:
+        pass
+
+
+_tamper()
+''' + _WRONG_ABOVE_9000
+
+_PLANTS_A_MODULE = '''
+import pathlib
+
+
+def _plant() -> None:
+    try:
+        (pathlib.Path(__file__).resolve().parent / "json.py").write_text("raise SystemExit(0)\\n")
+    except OSError:
+        pass
+
+
+_plant()
+''' + _WRONG_ABOVE_9000
+
+
+def test_a_candidate_that_rewrites_the_oracle_cannot_pass(sandbox: str) -> None:
+    # KNOWN_ISSUES M9, reproduced 2026-09-26: the exam files were writable by the
+    # candidate the first gate ran, and every later gate read them.
+    result = _validate(_REWRITES_THE_ORACLE)
+    assert not result.passed, result.reason
+    if sandbox == "subprocess":
+        assert result.reason.startswith("tampered:"), result.reason
+        assert "modified: oracle.py" in result.reason
+        assert gate_from_reason(result.reason) == "tampering"
+
+
+def test_a_candidate_that_plants_a_module_beside_the_exam_cannot_pass(sandbox: str) -> None:
+    # The exam directory is on sys.path, so a planted json.py would be imported
+    # by the next gate in place of the standard library's.
+    result = _validate(_PLANTS_A_MODULE)
+    assert not result.passed, result.reason
+    if sandbox == "subprocess":
+        assert result.reason.startswith("tampered:"), result.reason
+        assert "added: json.py" in result.reason
+
+
+_EXITS_AT_IMPORT = '''
+import os
+
+os._exit(0)
+'''
+
+_EXITS_ONLY_UNDER_PYTEST = '''
+import os
+import sys
+
+if "pytest" in sys.modules:
+    os._exit(0)
+''' + _WRONG_ABOVE_9000
+
+
+def test_a_candidate_that_ends_the_process_at_import_is_not_believed(sandbox: str) -> None:
+    # KNOWN_ISSUES M8: exit code 0 was the whole verdict of every non-benchmark
+    # gate. Reproduced against roman; the default contract had the same shape.
+    for contract in (None, ROMAN):
+        result = (gauntlet.validate(_EXITS_AT_IMPORT, _BASELINE) if contract is None
+                  else gauntlet.validate(_EXITS_AT_IMPORT, contract=contract))
+        assert not result.passed, (contract, result.reason)
+        assert result.reason.startswith("interface:"), result.reason
+        assert "no verdict" in result.reason
+
+
+def test_a_candidate_that_ends_the_process_only_under_pytest_is_not_believed(
+    sandbox: str,
+) -> None:
+    result = _validate(_EXITS_ONLY_UNDER_PYTEST)
+    assert not result.passed
+    assert result.reason.startswith("acceptance tests failed"), result.reason
+    assert "without reporting that the tests passed" in result.reason
+
+
+# --- the pieces those rely on ---
+
+
+def _ctx(tmp_path: pathlib.Path) -> gauntlet._GateContext:
+    return gauntlet._GateContext(
+        contract=ROMAN, code_str="", tmp=tmp_path, tmpdir=str(tmp_path), env={},
+        candidate=tmp_path / "target.py",
+    )
+
+
+def test_an_untouched_exam_reports_no_tampering(tmp_path: pathlib.Path) -> None:
+    ctx = _ctx(tmp_path)
+    ctx.put("oracle.py", "X = 1\n")
+    ctx.put("tests/test_target.py", "def test_a(): ...\n")
+    assert ctx.tampering() is None
+
+
+def test_a_context_that_recorded_nothing_checks_nothing(tmp_path: pathlib.Path) -> None:
+    (tmp_path / "anything.py").write_text("x = 1\n")
+    assert _ctx(tmp_path).tampering() is None
+
+
+@pytest.mark.parametrize(("attack", "expected"), [
+    (lambda root: (root / "oracle.py").write_text("X = 2\n"), "modified: oracle.py"),
+    (lambda root: (root / "json.py").write_text("x = 1\n"), "added: json.py"),
+    (lambda root: (root / "oracle.py").unlink(), "removed: oracle.py"),
+    (lambda root: (root / "tests" / "extra.py").write_text("x = 1\n"), "added: tests/extra.py"),
+    (lambda root: ((root / "oracle.py").unlink(), (root / "oracle.py").symlink_to("/etc/hosts")),
+     "modified: oracle.py"),
+    (lambda root: os.mkfifo(root / "pipe"), "added: pipe"),
+], ids=["modified", "added", "removed", "added-in-subdir", "symlink", "fifo"])
+def test_every_way_of_changing_the_exam_is_noticed(
+    tmp_path: pathlib.Path, attack: Any, expected: str
+) -> None:
+    ctx = _ctx(tmp_path)
+    ctx.put("oracle.py", "X = 1\n")
+    ctx.put("tests/test_target.py", "def test_a(): ...\n")
+    attack(tmp_path)
+    assert expected in (ctx.tampering() or "")
+
+
+def test_rewriting_a_file_the_host_re_installs_is_still_recorded(tmp_path: pathlib.Path) -> None:
+    # sis.canonical is written again by each gate that uses it. The second put is
+    # the host's, so it updates the record rather than tripping the check.
+    ctx = _ctx(tmp_path)
+    ctx.put("_sis_canonical.py", "A = 1\n")
+    ctx.put("_sis_canonical.py", "A = 1\n")
+    assert ctx.tampering() is None
+    (tmp_path / "_sis_canonical.py").write_text("A = 2\n")
+    assert "modified: _sis_canonical.py" in (ctx.tampering() or "")
+
+
+def test_a_zero_exit_needs_the_token_the_script_prints() -> None:
+    assert not gauntlet._ended_without_verdict("noise\nOK abc123\n", "abc123")
+    assert not gauntlet._ended_without_verdict("OK abc123\nprinted at exit\n", "abc123")
+    assert gauntlet._ended_without_verdict("", "abc123")
+    assert gauntlet._ended_without_verdict("OK\n", "abc123")          # not this run's token
+    assert gauntlet._ended_without_verdict("OK abc1234\n", "abc123")  # whole line, not a prefix
+
+
+def test_only_pytests_own_summary_counts_as_passing() -> None:
+    assert gauntlet._pytest_passed("..........\n10 passed in 0.05s\n")
+    assert gauntlet._pytest_passed("3 passed, 1 warning in 0.4s\nprinted at exit\n")
+    assert not gauntlet._pytest_passed("")
+    assert not gauntlet._pytest_passed("..........\n")                      # ended early
+    assert not gauntlet._pytest_passed("1 failed, 9 passed in 0.1s\n")
+    assert not gauntlet._pytest_passed("9 passed, 1 error in 0.1s\n")
+    assert not gauntlet._pytest_passed("all 10 passed\n")                   # not pytest's line

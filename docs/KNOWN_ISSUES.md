@@ -35,7 +35,7 @@ reference with no link target below.
 >
 > | ID | Jira |
 > |---|---|
-> | H2, M8, M9, M11 | [OMNI-45](https://olafzumpe.atlassian.net/browse/OMNI-45) (epic [OMNI-43](https://olafzumpe.atlassian.net/browse/OMNI-43)) |
+> | H2, M8, M9, M11 | [OMNI-45](https://olafzumpe.atlassian.net/browse/OMNI-45) (epic [OMNI-43](https://olafzumpe.atlassian.net/browse/OMNI-43)) — M9 and M11 **fixed**, M8 partly (slice 1, 2026-09-29) |
 > | H4 | [OMNI-46](https://olafzumpe.atlassian.net/browse/OMNI-46) (epic OMNI-43) — **fixed** |
 > | M10 | [OMNI-47](https://olafzumpe.atlassian.net/browse/OMNI-47) (epic OMNI-43) — **fixed** |
 > | H3 | [OMNI-48](https://olafzumpe.atlassian.net/browse/OMNI-48) (epic [OMNI-44](https://olafzumpe.atlassian.net/browse/OMNI-44)) |
@@ -85,6 +85,9 @@ reference with no link target below.
   shares a process with the clock or the verdict channel. Pinned by the
   strict-xfail `test_a_candidate_cannot_forge_the_verdict_through_the_harness_itself`,
   which flips to a failure the day this is fixed.
+  Slice 1 of OMNI-45 (M9, M11, part of M8, 2026-09-29) protects the exam files
+  and requires a verdict token; it does not move the candidate out of the
+  gate's process, so H2 is unchanged.
 
 - [OMNI-48] **H3 — A Serve-canary candidate runs as a full Ray control-plane worker, not
   in any sandbox** *(found 2026-09-26 by a multi-dimension review; confirmed by
@@ -115,57 +118,30 @@ reference with no link target below.
 
 ## Medium
 
-- [OMNI-45] **M8 — Every non-benchmark gate accepts exit code 0 as a pass, with no
-  positive verdict token** *(found 2026-09-26; reproduced)* — `_gate_interface`,
-  `_gate_acceptance`, `_gate_invariant` and `_gate_backtest` only check
-  `returncode != 0`. A Class-2 candidate that calls `os._exit(0)` at import
-  ends each gate's subprocess with code 0 before any assertion runs.
-  Reproduced against `roman`: `to_roman`/`from_roman` return wrong values and
-  the module calls `os._exit(0)`; `validate()` returns `"all gates passed"`.
-  **Not reachable through the loop today** — `roman`/Class-2 contracts aren't
-  in `DEFAULT_CONTRACTS` (`sis/contract.py` says wiring them in is its own
-  change) — so this is latent, not live, but it must close before that wiring
-  lands. Fix: require a positive, host-verified completion signal per gate
-  (e.g. pytest `--junitxml` with the expected test count and zero failures; a
-  per-run nonce for interface/invariant/backtest), never a bare exit code.
-
-- [OMNI-45] **M9 — The per-validation temp directory is shared, writable, and reused
-  across every gate, so a candidate can rewrite the exam files later gates
-  trust** *(found 2026-09-26; reproduced)* — `validate()` writes `oracle.py`,
-  `baseline.py` and `sitecustomize.py` once, then hands the same directory
-  (on `PYTHONPATH`, mounted `:rw` in docker, owned by the host user in both
-  sandbox modes) to every gate. The candidate runs first, in the interface
-  gate, and can overwrite those files before the differential, benchmark,
-  invariant and backtest gates read them. Reproduced against
-  `sum_of_divisors`: a candidate using the naive (wrong-above-9000) algorithm
-  appends matching wrong behaviour to `oracle.py` and a `sleep`-padded wrapper
-  to `baseline.py` at import; `validate()` returns `"all gates passed"`
-  reporting a fabricated 45µs. **Distinct from H2** — nothing here touches the
-  harness process, only files on disk, so H2's proposed worker-process fix
-  would not close it by itself. Fix: mount trusted files read-only (docker
-  `:ro`; `chmod 0444` in subprocess mode) in a directory separate from the
-  candidate's own writable scratch space, which should sit off `sys.path`
-  ahead of stdlib; verify a hash of every trusted file before each gate.
-
-- [OMNI-45] **M11 — A candidate's own exception inside the invariant or backtest gate is
-  filed as a harness/sandbox fault, not a candidate failure** *(found
-  2026-09-26 by a completeness critic; reproduced)* — `sis/invariant.py`'s
-  property wrapper catches only `AssertionError` around the candidate's call;
-  `sis/backtest.py` catches nothing at all around it. Any other exception
-  (e.g. an `IndexError` on an input the acceptance tests don't cover) makes
-  the gate script exit non-zero for a reason that isn't the counted
-  violation, and `_gate_invariant`/`_gate_backtest` map any other non-zero
-  exit to `"harness: ... crashed"` — precisely the misattribution **OMNI-37**
-  exists to prevent, in two gates it didn't reach. Reproduced against
-  `roman`: a candidate whose `to_roman` raises `IndexError` for
-  `2000 <= value < 3000` (outside the acceptance range) gets
-  `"harness: the invariant script crashed"`, and
-  `episodic.gate_from_reason` records `"harness"` — an operator would debug a
-  healthy sandbox, and reject-by-gate analytics under-count invariant
-  failures. Fix: wrap only the candidate's own call inside each gate script
-  and turn any exception into a counted violation (e.g. re-raise as an
-  `AssertionError` naming the candidate's exception, so Hypothesis can shrink
-  it and the seed still rides in the reason).
+- [OMNI-45] **M8 — Every non-benchmark gate accepted exit code 0 as a pass, with no
+  positive verdict token** *(found 2026-09-26; reproduced; **partly fixed
+  2026-09-29**, see below)* — `_gate_interface`, `_gate_acceptance`,
+  `_gate_invariant` and `_gate_backtest` only checked `returncode != 0`. A
+  Class-2 candidate that calls `os._exit(0)` at import ended each gate's
+  subprocess with code 0 before any assertion ran. Reproduced against `roman`:
+  `to_roman`/`from_roman` returned wrong values and the module called
+  `os._exit(0)`; `validate()` returned `"all gates passed"`. Latent for Class 2
+  (not in `DEFAULT_CONTRACTS`), live for the default contract's interface and
+  acceptance gates.
+  **Fixed so far (OMNI-45, slice 1):** every gate now needs evidence of a
+  verdict. The interface, invariant and backtest scripts print a per-run token
+  after their last check, and the harness believes a zero exit only with that
+  line in the output (`gauntlet._ended_without_verdict`); the acceptance gate
+  needs pytest's own `N passed in Xs` summary (`_pytest_passed`). `os._exit(0)`
+  at import, and a candidate that exits only when pytest has imported it, now
+  fail with "…ended the process… no verdict", on both contract classes and in
+  both sandboxes. A candidate that calls `sys.exit(0)` mid-call in the
+  invariant or backtest gate is a counted failure too (see M11).
+  **Still open:** the token lives in the process the candidate shares, so a
+  candidate that finds it (the script's globals, the call stack) can print it
+  and exit. That is the same reach as **H2**, and the same fix closes both:
+  the gate's verdict is written by a harness process the candidate never
+  shares, over a pipe the host reads.
 
 - [OMNI-52] **M12 — A `soft_` operator config edit can rewrite `forbidden_` keys through
   unescaped YAML rendering** *(found 2026-09-26; reproduced end to end
@@ -653,6 +629,54 @@ any long-lived cluster exists.
   front.
 
 ## Resolved
+
+- [OMNI-45] **M11 — A candidate's own exception inside the invariant or backtest
+  gate was filed as a harness fault** *(found 2026-09-26 by a completeness
+  critic; reproduced)*. The invariant gate's property wrapper caught only
+  `AssertionError` around the candidate's call, and the backtest gate caught
+  nothing. Any other exception (an `IndexError` on an input the acceptance tests
+  do not cover) ended the script with an unmapped exit code, which the gate
+  reported as `harness: … crashed`. Reproduced against `roman`: `to_roman`
+  raising for `2000 <= value < 3000` got `harness: the invariant script
+  crashed`, recorded as gate `harness`: an operator debugging a healthy
+  sandbox, and invariant failures the analytics never counted. Found while
+  fixing it: a candidate that called `sys.exit(0)` in that band ended the script
+  with success and no verdict, and a wrong `roman` **passed every gate**.
+  **Fixed 2026-09-29 (OMNI-45, slice 1):** `canonical.guard_exports` turns an
+  exception raised by the candidate's own export, or a `SystemExit`, into
+  `CandidateRaised`, an `AssertionError`. It is applied after `wrap_exports` and
+  only in the invariant and backtest scripts, since acceptance tests legitimately
+  expect a candidate to raise. Hypothesis shrinks the counterexample (`args=(2000,)`)
+  and the seed rides in the reason; the backtest reports a failed replay. Pinned
+  in `tests/test_invariant.py` and `tests/test_backtest.py`, each shown to fail
+  with the fix reverted.
+
+- [OMNI-45] **M9 — The per-validation temp directory was shared, writable, and
+  reused across every gate, so a candidate could rewrite the exam files later
+  gates trust** *(found 2026-09-26; reproduced)*. `validate()` wrote `oracle.py`,
+  `baseline.py` and `sitecustomize.py` once and handed the same directory (on
+  `PYTHONPATH`, mounted `:rw` in docker) to every gate, the first of which ran
+  the candidate. Reproduced against `sum_of_divisors`: a wrong-above-9000
+  candidate appended matching wrong behaviour to `oracle.py` and a `sleep`-padded
+  wrapper to `baseline.py` at import, and `validate()` returned `"all gates
+  passed"` reporting a fabricated 45µs. Distinct from H2: nothing here touches the
+  harness process.
+  **Fixed 2026-09-29 (OMNI-45, slice 1):** (1) the exam (candidate, oracle,
+  baseline, tests, `sitecustomize`, the canonicaliser, comparators, fixtures) and
+  the sandbox's scratch (`HOME`/`TMPDIR`, the mypy and Hypothesis caches) are
+  separate directories, the scratch off `sys.path`. Docker mounts the exam `:ro`
+  and the scratch `:rw`, enforced by the kernel and pinned by a test that tries
+  to write both. (2) In both modes every trusted file goes through
+  `_GateContext.put`, which records its sha256, and after every gate, passed or
+  failed, `tampering()` compares the directory with that record: modified,
+  added (a planted `json.py` would shadow the standard library, since the exam is
+  on `sys.path`), removed, symlinked and special files all count. A difference
+  rejects the candidate as `tampered: …` (episodic gate `tampering`) before any
+  other conclusion. (3) `PYTHONDONTWRITEBYTECODE=1`: no `.pyc` appears beside
+  trusted code. **Residual:** in the subprocess sandbox (soft, and refused for a
+  real proposer) a candidate can change a file and put it back within one gate
+  run, which docker rules out. And a candidate that shares a process with a gate
+  can still forge that gate's verdict: H2.
 
 - [OMNI-138] **M27 — A converged target files bug tickets and trips the
   circuit breaker** *(found 2026-09-29 in the fourth AWS run, OMNI-29,

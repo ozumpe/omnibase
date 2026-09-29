@@ -127,6 +127,24 @@ internal target before it models anything external.
     candidate that emptied a shared list "agreed" with the reference, and one
     that grew it slowed the baseline (M10). Neither stops a candidate that
     tampers with the harness in its own process — that is OMNI-45.
+  - **The exam is the candidate's to read, not to write** (OMNI-45 slice 1,
+    M9/M8/M11). The candidate, oracle, baseline, tests, canonicaliser and
+    fixtures live in one directory, the sandbox's `HOME`/`TMPDIR`/tool caches in
+    another, off `sys.path`; docker mounts the first `:ro`. In both sandboxes
+    every trusted file goes through `_GateContext.put`, which records its
+    sha256, and after **every** gate — passed or failed — `tampering()`
+    compares the directory with that record (modified, added, removed,
+    symlinked or special files). A difference rejects the candidate as
+    `tampered:` (episodic gate `tampering`) before anything else is concluded:
+    the exam is on `sys.path`, so a planted `json.py` would shadow the standard
+    library. A zero exit is no verdict: the interface, invariant and backtest
+    scripts print a per-run token that the harness must see, and the acceptance
+    gate needs pytest's own `N passed` line (`gauntlet._ended_without_verdict`).
+    A candidate's own exception (or `sys.exit`) inside the invariant or backtest
+    gate is a counted violation (`canonical.guard_exports`), never
+    `harness: … crashed`. **What this is not:** the token and the gate script
+    still share a process with the candidate, so one that finds the token can
+    forge a pass. That is H2, and only the worker-process split closes it.
   - Every gate ends in a human PR. Generated code MUST be fully typed. What
     counts as correct/better is per-target — see `sis/contract.py`.
 - **Change-authorization policy (`sis/policy.py`) — what the loop may rewrite:**
@@ -678,9 +696,9 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   **Phase 0 is built:** `sis/sandbox_worker.py` (OMNI-129) serves a candidate
   hot from the sandbox. It is tested in both sandbox modes, including that a
   docker candidate cannot reach the network, Ray or the host's environment.
-- 967 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
+- 996 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
   Ray-Serve-integration tests run separately, see Operational quick reference
-  above; 1029 total, recounted 2026-09-29 — corrected 2026-09-26, a multi-dimension review found the
+  above; 1058 total, recounted 2026-09-29 — corrected 2026-09-26, a multi-dimension review found the
   previously-documented 616/678 stale); `ruff`/`mypy --strict`/`pytest` clean;
   CI green; `feature → develop → main` enforced by both the client-side
   pre-push hook and active server-side rulesets.
@@ -714,17 +732,20 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
 **Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L
 severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
 the IDs in commits/PRs. **Open after a 2026-09-26 multi-dimension review with
-adversarial verification: H2–H3, M8–M9, M11–M14, M16–M17, M20–M23,
+adversarial verification: H2–H3, M8 (partly fixed), M12–M14, M16–M17, M20–M23,
 L15–L20, L22, L25–L43; plus L46 from the second AWS run and L48–L50
 from the fifth (OMNI-143–145)** (M7 is won't-fix for now; H4, M10, M15, M19, L21, L23
 and L24 fixed 2026-09-26, OMNI-46/47/51/49/61/62; H5, H6, M24 and L44, found
 in the first AWS run, and L45, found releasing it, fixed 2026-09-27,
 OMNI-121–125; M18 and M25, the second run's duplicate PR, fixed the same day,
 OMNI-57/126; M26, the third run's conflicting second PR, and M27, the fourth run's
-breaker trip on a converged target, fixed 2026-09-29, OMNI-136/138). The headline, before
+breaker trip on a converged target, fixed 2026-09-29, OMNI-136/138; M9 and M11 fixed
+the same day, OMNI-45 slice 1). The headline, before
 trusting any gauntlet verdict: **the gate scripts judge a candidate inside its
-own process**. A candidate can rewrite the exam files later gates read (M9) or
-exit 0 with no verdict (M8). One redesign closes these and H2 (epic
+own process**. The exam files are now protected (M9) and a zero exit is no
+longer a verdict (M8, partly), but a candidate that shares the process can
+still forge the verdict token or the benchmark's output (H2, and what is left
+of M8). One redesign closes them, the worker-process split (OMNI-45, epic
 [OMNI-43](https://olafzumpe.atlassian.net/browse/OMNI-43)). Separately, the
 Serve canary runs candidate code as a full Ray worker in the control-plane
 cluster, before human review (H3, epic
@@ -759,8 +780,8 @@ Two traps L5 surfaced, both worth knowing before writing similar code:
 
 **Next — the milestone plan is in Jira ([`OMNI`](https://olafzumpe.atlassian.net/browse/OMNI)),
 not here.** Check the board for current status rather than trusting this list.
-**Last reconciled against a live query on 2026-09-29** (142 issues, OMNI-1
-through OMNI-142; 84 Done, 0 In Progress, 58 To Do — most of the growth since 2026-09-26 is
+**Last reconciled against a live query on 2026-09-29** (145 issues, OMNI-1
+through OMNI-145; 84 Done, 1 In Progress, 60 To Do — most of the growth since 2026-09-26 is
 the KNOWN_ISSUES backfill, see "Known issues" above):
 
 1. ~~**[OMNI-1](https://olafzumpe.atlassian.net/browse/OMNI-1) — L5 target
