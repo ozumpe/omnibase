@@ -106,8 +106,8 @@ local state. If `init` times out or `apply` wants to create the bucket, see
 
 **Moving a running box to a new release** is the same `apply`, run from a
 checkout where `var.repo_ref` names the new tag. It **replaces the instance**:
-everything under `runtime/` goes with the old box, so sync it first
-([step 5d](#5-the-run-itself-box)). The secret and the pager subscription
+everything under `runtime/` goes with the old box, so make sure it has synced
+first ([step 5d](#5-the-run-itself-box)). The secret and the pager subscription
 stay, so steps 2 and 3 are not needed again. The new box re-reads from GitHub
 which of the loop's PRs are still open, and waits for them (OMNI-136).
 
@@ -196,8 +196,10 @@ export ANTHROPIC_API_KEY=$(aws secretsmanager get-secret-value \
   | jq -r .anthropic.api_key)
 ```
 
-`SIS_NOTIFY_SNS_TOPIC_ARN` and `ARTIFACTS_BUCKET` are already set in this
-login shell by `/etc/profile.d/sis-run.sh`, which `user_data` writes.
+`SIS_NOTIFY_SNS_TOPIC_ARN`, `SIS_ARTIFACTS_BUCKET` (the loop's own copy of the
+bucket, OMNI-140) and `ARTIFACTS_BUCKET` (for the commands below) are already
+set in this login shell by `/etc/profile.d/sis-run.sh`, which `user_data`
+writes.
 
 **b. Prove the wiring before spending anything.** The `Pager` line must show a
 ✓; it fails until [step 3](#3-confirm-the-pager-laptop--dont-click-the-link)
@@ -243,7 +245,17 @@ What to expect:
   (OMNI-138). Before that fix, the same situation filed a bug per attempt and
   tripped the circuit breaker.
 
-**d. Keep the dataset.** When the loop has stopped:
+**d. The dataset keeps itself** (OMNI-140; not in `v0.3.2`). The loop uploads
+the episodic log, its state and the operator audit to
+`s3://<bucket>/runs/<start time>/` after every cycle
+(`loop.artifact_sync_every`), and once more when it stops for any reason:
+converged, breaker, `--loop-max-cycles`, Ctrl-C, or a crash. It ends with
+`[sis] artifacts synced to s3://… (episodic.jsonl, …)`. A killed process or a
+replaced box loses at most the cycle in flight. A slow or failing bucket prints
+`[sis] WARNING: artifacts not synced …` and the loop carries on.
+
+By hand, for `v0.3.2` and earlier, for a single `main.py` run (only `--loop`
+syncs), or after a process was killed:
 
 ```bash
 aws s3 sync runtime/ "s3://$ARTIFACTS_BUCKET/runs/$(date +%Y%m%d-%H%M)/" \
@@ -555,8 +567,10 @@ and no spend record.
 
 The most durable thing a run produces is the episodic log, "the dataset the
 system learns from" (CLAUDE.md). The instance is disposable; the log is not.
-Step 5d syncs it at the end of a run; at the end of any session, as `ubuntu`
-(`ssm-user` has no checkout to sync):
+From the release after `v0.3.2` the loop syncs it itself (step 5d): every
+cycle, and when it stops. Until then, and for anything that is not `--loop`,
+sync by hand at the end of any session, as `ubuntu` (`ssm-user` has no
+checkout to sync):
 
 ```bash
 aws s3 sync ~/omnibase/runtime/ "s3://$ARTIFACTS_BUCKET/runs/$(date +%Y%m%d-%H%M)/" \

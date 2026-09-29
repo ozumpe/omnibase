@@ -178,6 +178,7 @@ resource "aws_instance" "sis" {
     chown -R ubuntu:ubuntu /home/ubuntu/omnibase
     echo 'export SIS_NOTIFY_SNS_TOPIC_ARN=${aws_sns_topic.alerts.arn}' > /etc/profile.d/sis-run.sh
     echo 'export ARTIFACTS_BUCKET=${aws_s3_bucket.artifacts.bucket}' >> /etc/profile.d/sis-run.sh
+    echo 'export SIS_ARTIFACTS_BUCKET=${aws_s3_bucket.artifacts.bucket}' >> /etc/profile.d/sis-run.sh
     bash /home/ubuntu/omnibase/scripts/aws_bootstrap.sh
   EOT
 
