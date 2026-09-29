@@ -22,7 +22,7 @@ This document has four parts:
 
 | | |
 |---|---|
-| Code | release tag **`v0.3.1`** (`var.repo_ref`), never a branch — see [Which code runs](#which-code-runs) |
+| Code | release tag **`v0.3.2`** (`var.repo_ref`), never a branch — see [Which code runs](#which-code-runs) |
 | Box | one `m7i.xlarge`, `us-east-1`, **no inbound ports**; shell via SSM only |
 | Contract | `sum_of_divisors`, re-seeded naive on `ozumpe/testrun`'s `develop` |
 | Where artifacts land | Jira `TES`, GitHub `ozumpe/testrun` (PRs against `develop`) |
@@ -232,9 +232,9 @@ What to expect:
 - A feature's steps share one Confluence spec, one epic and one story in
   `TES`, however many cycles it takes (OMNI-135).
 - A restart, or a new box, carries on a feature in progress from its branch:
-  `[sis] carrying on feature/tes-… (2 step(s) committed) …` (OMNI-135). On
-  `v0.3.1` and earlier, keep one process running: the feature lives in memory
-  there, and a restart starts a new one beside the old branch.
+  `[sis] carrying on feature/tes-… (2 step(s) committed) …` (OMNI-135, in
+  `v0.3.2`). On `v0.3.1` and earlier, keep one process running: the feature
+  lives in memory there, and a restart starts a new one beside the old branch.
 - When the target has **converged** — `loop.converged_after` (default 3)
   attempts in a row find nothing to improve — the loop stops itself:
   `[loop] stopped …: <contract> has converged`, and a WARNING page. Nothing
@@ -416,7 +416,7 @@ human, one box: a remote state backend is ceremony this doesn't need yet.
 
 ### Which code runs
 
-The box runs the **release tag** in `var.repo_ref` — `v0.3.1` by default
+The box runs the **release tag** in `var.repo_ref` — `v0.3.2` by default
 (OMNI-63). A tag, not `develop`: a run's results are only worth something if
 they name the code that produced them, and a branch names whatever it pointed
 at when the box booted. `tofu plan` refuses a branch unless
@@ -656,6 +656,6 @@ second operator, a second node.
   found no further gain (ratios 0.933, 3.24, 0.949 against the 0.90 margin),
   each filed a bug, and the third tripped the breaker — a CRITICAL page for a
   loop that was not broken (M27). $0.27 of $1.00 spent; the pager worked.
-  Fixed after `v0.3.1` (OMNI-138): no gain from `develop` is neutral, and
+  Fixed in `v0.3.2` (OMNI-138): no gain from `develop` is neutral, and
   convergence is its own polite stop. Artifacts in
   `s3://sis-first-run-artifacts-696644743351/runs/20260929-0450/`.

@@ -328,11 +328,16 @@ internal target before it models anything external.
   live runs — don't put planning there.
 
 ## Current status — where to pick up
-Released through **v0.3.1** (2026-09-29): v0.3.0 plus OMNI-136, the fix from
-the third AWS run (the loop asks GitHub which of its PRs are still open before
-every cycle, so a rebuilt box no longer opens a second, conflicting PR), and
-the restructured runbook with a working rehearsal (OMNI-29). Before that,
-**v0.3.0** (2026-09-27): staged delivery's phases 0 and 1
+Released through **v0.3.2** (2026-09-29): v0.3.1 plus the fixes from the
+fourth AWS run. OMNI-138: a converged target stops the loop politely instead
+of tripping the breaker. OMNI-135: a feature is planned once (one spec, epic
+and story, not one per cycle), and a restart or a new box carries on a
+half-built feature from its branch. OMNI-137 rides along: a new release tag
+now builds a new box. Before that, **v0.3.1** (2026-09-29): v0.3.0 plus
+OMNI-136, the fix from the third AWS run (the loop asks GitHub which of its
+PRs are still open before every cycle, so a rebuilt box no longer opens a
+second, conflicting PR), and the restructured runbook with a working
+rehearsal (OMNI-29). Before that, **v0.3.0** (2026-09-27): staged delivery's phases 0 and 1
 (OMNI-129 sandbox worker, OMNI-130 feature branches), plus OMNI-126/57 (the
 hold survives a restart; a declined PR releases it). Before that, **v0.2.1**
 (2026-09-27): v0.2.0 plus the fixes from the first
@@ -734,8 +739,8 @@ Two traps L5 surfaced, both worth knowing before writing similar code:
 
 **Next — the milestone plan is in Jira ([`OMNI`](https://olafzumpe.atlassian.net/browse/OMNI)),
 not here.** Check the board for current status rather than trusting this list.
-**Last reconciled against a live query on 2026-09-29** (141 issues, OMNI-1
-through OMNI-141; 81 Done, 1 In Progress, 59 To Do — most of the growth since 2026-09-26 is
+**Last reconciled against a live query on 2026-09-29** (142 issues, OMNI-1
+through OMNI-142; 82 Done, 0 In Progress, 60 To Do — most of the growth since 2026-09-26 is
 the KNOWN_ISSUES backfill, see "Known issues" above):
 
 1. ~~**[OMNI-1](https://olafzumpe.atlassian.net/browse/OMNI-1) — L5 target
@@ -815,7 +820,7 @@ the KNOWN_ISSUES backfill, see "Known issues" above):
    instance lifecycle: `user_data` racing Ubuntu's `unattended-upgrades` for
    the dpkg lock, and SSM sessions landing as `ssm-user` rather than `ubuntu`
    (every runbook step now starts with `sudo -iu ubuntu`). The box clones
-   the release tag in `var.repo_ref` (`v0.3.1`; a branch needs
+   the release tag in `var.repo_ref` (`v0.3.2`; a branch needs
    `allow_branch_ref = true`, OMNI-63) and every run records the commit it
    ran; run day uses `--contract sort`. **Rehearsed
    2026-09-23** on a local Ubuntu 24.04 box (`scripts/rehearse_aws_run.sh`),
@@ -887,7 +892,7 @@ the KNOWN_ISSUES backfill, see "Known issues" above):
         its description;
       - the prompt carries the earlier attempts;
       - the test suite runs one-step features (`conftest.py`).
-      **OMNI-135 (hardening)**, two of its three parts built:
+      **OMNI-135 (hardening, Done 2026-09-29)**, two of its three parts, in `v0.3.2`:
       - one plan per feature: the spec page, epic and story are written when a
         feature starts and reused until its PR opens (`CTO.open_plan`). The
         fourth AWS run filed 22 TES issues for six cycles;
@@ -899,8 +904,10 @@ the KNOWN_ISSUES backfill, see "Known issues" above):
         the base has moved past, or that has a commit that is not a loop step.
         The VCS is the source of truth here, as for open PRs (OMNI-136): a new
         release replaces the box (OMNI-137).
-      - Not built: holds per contract. The single green slot still holds every
-        contract, which matters only once two contracts run at the same time.
+      - Not built, split out as
+        [OMNI-142](https://olafzumpe.atlassian.net/browse/OMNI-142) (Low):
+        holds per contract. The single green slot still holds every contract,
+        which matters only once two contracts run at the same time.
     - Olaf's `testrun` preparation: a `develop` branch and a re-seeded naive
       `sum_of_divisors`. Then v0.3.0 and **AWS run #3**.
     - Then OMNI-48 (the canary onto the worker), OMNI-133 (`develop`
