@@ -162,6 +162,9 @@ class Workspace:
     def get_pr(self, pr_id: str, path: str | None) -> PullRequest:
         return self.vcs.get_pr(pr_id, path=path)
 
+    def open_prs(self) -> list[PullRequest]:
+        return self.vcs.open_prs()
+
     def live_target_source(self, path: str) -> str:
         return self.vcs.live_target_source(path)
 

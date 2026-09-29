@@ -472,6 +472,19 @@ class GitHubVersionControl:
             closed=data.get("state") == "closed",  # merged or declined (OMNI-57)
         )
 
+    def open_prs(self) -> list[PullRequest]:
+        # One page of 100: more open PRs than that against one base is a
+        # backlog no hold can fix, and the oldest — the one a hold adopts — is
+        # on the first page. Any HTTP failure raises: the caller must treat "we
+        # could not ask" as "something may be open" (OMNI-136), never as "none".
+        listing = self._http.get(self._api("/pulls"), params={
+            "state": "open", "base": self._s.default_base,
+            "sort": "created", "direction": "asc", "per_page": 100})
+        listing.raise_for_status()
+        return [PullRequest(id=str(p["number"]), branch=str(p["head"]["ref"]),
+                            title=str(p.get("title", "")))
+                for p in cast("list[dict[str, Any]]", listing.json())]
+
     def write_file(self, branch: str, path: str, content: str, message: str) -> None:
         # _put_file refuses anything that is not a SOFT target, and main.
         if branch == "main":

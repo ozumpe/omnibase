@@ -34,6 +34,9 @@ def canary(handles):  # type: ignore[no-untyped-def]
     yield pr
     ray.get(sm.set_slot.remote("green", None))
     ray.get(sm.set_pending_pr.remote(None))
+    # Decided, as a human would: an agent PR left open now holds every later
+    # test's loop, which is exactly the point of OMNI-136.
+    _mark_closed(handles, pr.id)
 
 
 def _deployment(handles):  # type: ignore[no-untyped-def]
@@ -317,6 +320,75 @@ def test_a_pr_declined_offline_is_released_and_logged(handles, tmp_path, monkeyp
     declined = [e for e in store.events() if e.outcome == "human_declined"]
     assert [(e.pr_id, e.contract) for e in declined] == [(pr_id, result["contract"])]
     assert not store.load_state(org.PENDING_PR_KEY)
+
+
+# --- the VCS knows what is open, whatever this process remembers (OMNI-136) ----
+
+
+def _open_agent_pr(handles, story: str) -> str:  # type: ignore[no-untyped-def]
+    """A loop PR open on the VCS that this process holds nothing for.
+
+    How a rebuilt box sees the last box's PR, and how a feature PR that QA did
+    not approve is left: open, with no hold anywhere.
+    """
+    ws = handles["Workspace"]
+    branch = ray.get(ws.create_branch.remote(f"feature/{story}", "develop")).name
+    title = f"Optimise sum_of_divisors: 1 step ({story.upper()})"
+    return str(ray.get(ws.open_pr.remote(branch, title, "code", "runtime/target.py")).id)
+
+
+def test_a_rebuilt_box_waits_for_a_pr_it_never_saw(handles, capsys) -> None:  # type: ignore[no-untyped-def]
+    # AWS run #3, replayed: #13 open on testrun, nothing remembered, nothing
+    # held. Before OMNI-136 the loop started a fresh feature and opened #14.
+    pr_id = _open_agent_pr(handles, "tes-77")
+    assert loop.pending_merge(_deployment(handles)) is None
+
+    assert not _consulted(handles), "the loop proposed beside an open PR"
+    assert f"[sis] HOLDING: PR {pr_id} is open" in capsys.readouterr().out
+    assert loop.pending_merge(_deployment(handles)) == pr_id
+
+    _mark_closed(handles, pr_id)
+    assert _consulted(handles), "the loop stayed held after the PR was closed"
+
+
+def test_the_loop_waits_until_every_open_pr_is_decided(handles) -> None:  # type: ignore[no-untyped-def]
+    first, second = _open_agent_pr(handles, "tes-80"), _open_agent_pr(handles, "tes-83")
+
+    assert not _consulted(handles)
+    assert loop.pending_merge(_deployment(handles)) == first      # the oldest first
+
+    _mark_merged(handles, first)
+    assert not _consulted(handles), "the loop proposed while another PR was still open"
+    assert loop.pending_merge(_deployment(handles)) == second
+
+    _mark_closed(handles, second)
+    assert _consulted(handles)
+
+
+def test_a_pr_outside_the_loops_namespace_does_not_hold(handles) -> None:  # type: ignore[no-untyped-def]
+    ws = handles["Workspace"]
+    branch = ray.get(ws.create_branch.remote("docs/readme", "develop")).name
+    pr = ray.get(ws.open_pr.remote(branch, "Fix README", "text", "README.md"))
+    try:
+        assert _consulted(handles), "a human's non-feature PR held the loop"
+    finally:
+        _mark_closed(handles, pr.id)
+
+
+def test_a_single_run_starts_no_cycle_beside_an_open_pr(handles, capsys) -> None:  # type: ignore[no-untyped-def]
+    import main
+
+    pr_id = _open_agent_pr(handles, "tes-90")
+    before = len(ray.get(handles["SelfModel"].provenance.remote()))
+    try:
+        main.run_org_cycle()
+        out = capsys.readouterr().out
+        assert "no cycle started" in out and f"PR {pr_id}" in out
+        kinds = [e["kind"] for e in ray.get(handles["SelfModel"].provenance.remote())[before:]]
+        assert "story" not in kinds, "a cycle ran beside the open PR"
+    finally:
+        _mark_closed(handles, pr_id)
+        _forget_in_memory(handles)
 
 
 def _durable(monkeypatch, tmp_path):  # type: ignore[no-untyped-def]

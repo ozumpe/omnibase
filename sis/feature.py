@@ -11,9 +11,12 @@ The state is a plain dict, so it can cross Ray actor boundaries:
 
 from __future__ import annotations
 
+import re
+from collections.abc import Iterable
 from typing import Any
 
 from sis import episodic
+from sis.ports import PullRequest
 
 # How many earlier attempts a proposer is shown. Enough to stop it repeating
 # itself (the second AWS run resubmitted byte-identical code, OMNI-127), few
@@ -21,9 +24,39 @@ from sis import episodic
 MAX_NOTES = 5
 
 
+_BRANCH_PREFIX = "feature/"
+
+
 def feature_branch(story_id: str) -> str:
     """A feature's branch is named after the story of its first step."""
-    return f"feature/{story_id.lower()}"
+    return f"{_BRANCH_PREFIX}{story_id.lower()}"
+
+
+def awaiting_decision(prs: Iterable[PullRequest]) -> list[PullRequest]:
+    """The open PRs that are the loop's own, in the order given (OMNI-136).
+
+    One of these is a human decision the loop must wait for, whichever
+    process or box opened it. Matched on the branch namespace the loop has
+    always used (``feature/<story>``, before and after OMNI-130). Erring
+    towards holding is the safe side: a human's PR from a ``feature/`` branch
+    makes the loop wait, while a missed agent PR is what opened #14 beside
+    #13 on ``testrun``.
+    """
+    return [pr for pr in prs if pr.branch.startswith(_BRANCH_PREFIX)]
+
+
+_TITLE = re.compile(r"Optimise (?P<contract>[\w-]+): \d+ steps? \(")
+
+
+def contract_from_title(title: str, known: Iterable[str]) -> str | None:
+    """The contract a feature PR's title names (see :func:`pr_title`), if *known*.
+
+    Only a registered name comes back: a title is text a human can edit, and
+    an unknown name would only be a lookup that finds nothing later.
+    """
+    match = _TITLE.match(title)
+    name = match.group("contract") if match else None
+    return name if name in set(known) else None
 
 
 def new_feature(branch: str, story_id: str) -> dict[str, Any]:

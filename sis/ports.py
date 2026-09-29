@@ -177,6 +177,16 @@ class VersionControl(Protocol):
         """
         ...
 
+    def open_prs(self) -> list[PullRequest]:
+        """Every PR still open against the base branch, oldest first; status only.
+
+        The pending human decisions, as the version-control system itself knows
+        them (OMNI-136). A process's memory of the PR it waits on dies with its
+        box; the PR does not. No artifacts: callers only need to know what is
+        still open, and fetching a file per PR would cost a call each.
+        """
+        ...
+
     def write_file(self, branch: str, path: str, content: str, message: str) -> None:
         """Commit *content* to *path* on *branch*, an agent-owned feature branch.
 
