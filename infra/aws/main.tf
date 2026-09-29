@@ -181,6 +181,14 @@ resource "aws_instance" "sis" {
     bash /home/ubuntu/omnibase/scripts/aws_bootstrap.sh
   EOT
 
+  # A new repo_ref (every release bumps its default) must build a new box from
+  # the new tag. Without this, a changed user_data only stops and starts the
+  # same instance; cloud-init runs user_data on first boot only, so the box came
+  # back on the old tag, its loop killed, and `apply` reported success
+  # (OMNI-137). Replacing it loses runtime/ — sync the artifacts first
+  # (docs/AWS_RUN.md, step 5d); open PRs are re-read from GitHub (OMNI-136).
+  user_data_replace_on_change = true
+
   tags = { Name = var.name_prefix }
 
   lifecycle {

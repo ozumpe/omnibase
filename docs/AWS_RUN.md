@@ -103,6 +103,13 @@ bucket is not among them, because it survives the destroy and stays in the
 local state. If `init` times out or `apply` wants to create the bucket, see
 [Troubleshooting](#troubleshooting).
 
+**Moving a running box to a new release** is the same `apply`, run from a
+checkout where `var.repo_ref` names the new tag. It **replaces the instance**:
+everything under `runtime/` goes with the old box, so sync it first
+([step 5d](#5-the-run-itself-box)). The secret and the pager subscription
+stay, so steps 2 and 3 are not needed again. The new box re-reads from GitHub
+which of the loop's PRs are still open, and waits for them (OMNI-136).
+
 ### 2. Upload the secret (laptop)
 
 Builds the secret from `secrets.local.yml` + `$ANTHROPIC_API_KEY` and uploads
@@ -407,6 +414,12 @@ at when the box booted. `tofu plan` refuses a branch unless
 provenance (`[sis] running ...` on startup, the SelfModel's `code` record,
 `code_version` in the episodic state) name the exact commit, with `-dirty` if
 the tree was edited on the box.
+
+A new `repo_ref` builds a **new** box (`user_data_replace_on_change`,
+OMNI-137). `repo_ref` appears only in `user_data`, and cloud-init runs
+`user_data` on an instance's first boot only. Without the setting, a changed
+tag merely stopped and started the same instance: it came back on the old tag,
+its loop killed, while `apply` reported success.
 
 Run #2 used the `sort` contract. Run #3 uses `sum_of_divisors`, re-seeded
 naive on `testrun`'s `develop`, because in July it improved in four steps, and
