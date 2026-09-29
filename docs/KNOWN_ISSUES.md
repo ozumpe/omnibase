@@ -625,6 +625,20 @@ any long-lived cluster exists.
 
 ## Resolved
 
+- [OMNI-137] **L47** — `tofu apply` with a new release tag stopped and started
+  the box instead of installing the tag *(found 2026-09-29 working out how to
+  get `v0.3.1` onto the run box; confirmed from the provider's behaviour, and
+  by a plan that now shows the setting)*. `repo_ref`, whose default moves with
+  every release, appears only in `user_data`. The instance had no
+  `user_data_replace_on_change`. With the AWS provider ≥ 5, a changed
+  `user_data` stops and starts the same instance, and cloud-init runs
+  `user_data` on first boot only. So the box came back on the old tag, its
+  loop killed, while `apply` reported success.
+  **Fixed 2026-09-29:** `user_data_replace_on_change = true`, so a new tag
+  builds a new box (pinned by `tests/test_release_ref.py`). The runbook says to
+  sync `runtime/` first, since it goes with the old box. Needs no release:
+  `tofu` runs from the operator's checkout.
+
 - [OMNI-136] **M26 — A replaced box forgets the PR awaiting review, so the loop
   opens a second, conflicting PR** *(found 2026-09-29 in the third AWS run,
   OMNI-29, `v0.3.0`; confirmed from the run's own artifacts)*. `testrun` #13
@@ -1266,3 +1280,4 @@ any long-lived cluster exists.
 [OMNI-126]: https://olafzumpe.atlassian.net/browse/OMNI-126
 [OMNI-127]: https://olafzumpe.atlassian.net/browse/OMNI-127
 [OMNI-136]: https://olafzumpe.atlassian.net/browse/OMNI-136
+[OMNI-137]: https://olafzumpe.atlassian.net/browse/OMNI-137
