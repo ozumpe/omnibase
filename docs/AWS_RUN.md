@@ -24,11 +24,11 @@ This document has four parts:
 |---|---|
 | Code | release tag **`v0.3.3`** (`var.repo_ref`), never a branch — see [Which code runs](#which-code-runs) |
 | Box | one `m7i.xlarge`, `us-east-1`, **no inbound ports**; shell via SSM only |
-| Contract | `sum_of_divisors`, re-seeded naive on `ozumpe/testrun`'s `develop` |
+| Contract | one with room left: `sort` and `sum_of_divisors` have both converged, so re-seed a naive one on `ozumpe/testrun`'s `develop` first ([Before every run](#before-every-run-a-target-with-room-left)) |
 | Where artifacts land | Jira `TES`, GitHub `ozumpe/testrun` (PRs against `develop`) |
 | Spend brakes | `SIS_BUDGET_USD=1.00` in the loop; an AWS Budget alarm (default $25/month) on the account |
 | Cost | about $0.20 an hour while the instance runs |
-| Latest | run #3 (staged delivery), 2026-09-28/29 — see [History](#history) |
+| Latest | run #5 (`v0.3.2`, both contracts converged), 2026-09-29 — see [History](#history) |
 
 ---
 
@@ -39,7 +39,8 @@ Each step says where it runs: **laptop** (the repo root on your machine) or
 
 ### Before the first run (one time)
 
-Already done if you have run this before; skip to [Before run #3](#before-run-3-one-time).
+Already done if you have run this before; skip to
+[Before every run](#before-every-run-a-target-with-room-left).
 
 1. **Credentials** (laptop), three of them:
    - Atlassian API token (id.atlassian.com → Security → API tokens) →
@@ -66,21 +67,37 @@ Already done if you have run this before; skip to [Before run #3](#before-run-3-
    echo 'alert_email = "olaf.zumpe@gmail.com"' > infra/aws/terraform.tfvars
    ```
 
-### Before run #3 (one time)
+### Before every run: a target with room left
 
-Prepare `ozumpe/testrun` for staged delivery:
+**Once**, prepare `ozumpe/testrun` for staged delivery (done):
 
-- create a `develop` branch from `main`;
-- put the naive `sum_of_divisors` back in `runtime/target.py` on `develop`
-  (both targets there have already converged);
-- set `github.default_base: develop` in `secrets.local.yml`, so the loop forks
+- a `develop` branch, created from `main`;
+- `github.default_base: develop` in `secrets.local.yml`, so the loop forks
   features from `develop` and opens their PRs against it.
+
+**Every run.** A target that has converged stops the loop after
+`loop.converged_after` (default 3) attempts, and merging a run's PR is what
+converges it: after run #5, `develop` holds the optimised `sort` and
+`sum_of_divisors`. Put the naive baselines back, from this repo's own
+`runtime/` (they are the committed baselines), with no loop PR open:
+
+```bash
+git clone git@github.com:ozumpe/testrun.git ../testrun     # first time only
+cd ../testrun && git switch develop && git pull
+cp ../omnibase/runtime/target.py runtime/target.py            # naive sum_of_divisors
+cp ../omnibase/runtime/sort_target.py runtime/sort_target.py  # naive sort
+git commit -am "Re-seed the naive targets" && git push origin develop
+```
+
+Then run the contract you re-seeded (`--contract sum_of_divisors` or
+`--contract sort`) in [step 5c](#5-the-run-itself-box).
 
 ### 0. Rehearse, if the box changed (laptop, optional)
 
 If you have changed `scripts/aws_bootstrap.sh`, `Dockerfile.gauntlet` or
 `sis/gauntlet.py` since the last rehearsal, run the whole box locally first.
-It needs Docker only, no AWS, and takes about two minutes:
+It needs Docker only, no AWS, and takes about five minutes (a cold Docker
+volume adds a few more):
 
 ```bash
 scripts/rehearse_aws_run.sh
@@ -252,9 +269,10 @@ poetry run python -u main.py --contract sum_of_divisors --loop --loop-max-cycles
 `tee` keeps the console output on disk, where a new session can follow it
 without attaching (`tail -f ~/omnibase/runtime/loop.log`) and, from `v0.3.3`,
 where the loop's syncs upload it (before that, the by-hand sync in
-[step 5d](#5-the-run-itself-box) does). `-u` sends each line as it is printed, because a pipe,
-unlike a terminal, is buffered. `-i` makes tee ignore Ctrl-C, so that Ctrl-C
-stops the loop and tee still writes what the loop prints on its way out.
+[step 5d](#5-the-run-itself-box) does). `-u` sends each line as it is
+printed, because a pipe, unlike a terminal, is buffered. `-i` makes tee ignore
+Ctrl-C, so that Ctrl-C stops the loop and tee still writes what the loop
+prints on its way out.
 
 What to expect:
 
@@ -268,10 +286,7 @@ What to expect:
   feature starts from `develop` afterwards. Take your time.
 - It also holds while **any** PR from a `feature/` branch is open against
   `develop`, including one opened by an earlier process or box: it prints
-  `[sis] HOLDING: PR <n> is open …` and waits for each in turn (OMNI-136,
-  in `v0.3.1`). On `v0.3.0`, a rebuilt box does not know about an
-  open PR and opens a second one beside it: merge or close the loop's PRs
-  before `tofu destroy`.
+  `[sis] HOLDING: PR <n> is open …` and waits for each in turn (OMNI-136).
 - A feature's steps share one Confluence spec, one epic and one story in
   `TES`, however many cycles it takes (OMNI-135).
 - A restart, or a new box, carries on a feature in progress from its branch:
@@ -343,17 +358,22 @@ the console without it ([why](#the-operator-console-and-its-auth)).
 
 ### 7. Finish (laptop)
 
-Between runs, **stop** the instance. A stopped instance costs only its disk
-(~$3/month) and restarts with everything installed:
+Between runs, **stop** the instance, once the loop has finished or been
+stopped: stopping ends the tmux session, and the loop with it. A stopped
+instance costs only its disk (~$3/month), keeps `runtime/`, and restarts with
+everything installed; start the loop again in a new tmux session
+([step 5](#5-the-run-itself-box)). A new release needs a new box, not a
+restart ([step 1](#1-stand-up-the-box-laptop)).
 
 ```bash
 aws ec2 stop-instances --region us-east-1 \
   --instance-ids "$(tofu -chdir=infra/aws output -raw instance_id)"
 ```
 
-When the experiment is over, tear it down. On `v0.3.0`, first merge or close
-the loop's open PRs on `ozumpe/testrun`: the next box does not know about them
-(M26; fixed in `v0.3.1` by OMNI-136, which waits for them instead).
+When the experiment is over, tear it down. The box takes `runtime/` with it,
+so check that the loop's last sync ran ([step 5d](#5-the-run-itself-box)). Any
+PR the loop left open on `ozumpe/testrun` is waited for by the next box
+(OMNI-136).
 
 ```bash
 tofu -chdir=infra/aws destroy
@@ -502,10 +522,13 @@ OMNI-137). `repo_ref` appears only in `user_data`, and cloud-init runs
 tag merely stopped and started the same instance: it came back on the old tag,
 its loop killed, while `apply` reported success.
 
-Run #2 used the `sort` contract. Run #3 uses `sum_of_divisors`, re-seeded
-naive on `testrun`'s `develop`, because in July it improved in four steps, and
-a feature needs room for several. `--contract` sets `contracts.default` before
-bootstrap, so the role actors see it.
+A run needs a contract with room left: a feature takes several steps, and a
+converged target stops the loop after `loop.converged_after` attempts
+(OMNI-138). A naive `sum_of_divisors` improved in four steps in July and in two
+in run #5; a naive `sort` converged at once in run #5, having been optimised
+earlier. Re-seed before each run ([Before every
+run](#before-every-run-a-target-with-room-left)). `--contract` sets
+`contracts.default` before bootstrap, so the role actors see it.
 
 ### Access: no inbound ports, at all
 
@@ -651,8 +674,9 @@ console runs on the box), and it builds `sis-gauntlet:latest` from
 `scripts/rehearse_aws_run.sh` runs `user_data` and the bootstrap on a local
 Ubuntu 24.04 container, then the run's commands as `ubuntu` through a login
 shell, with the docker sandbox on a real Linux daemon: a full stub-proposer
-cycle must pass every gate (`[cycle] feature_step`), and the console must
-answer.
+cycle must pass every gate (`[cycle] feature_step`), a loop started in tmux
+must outlive its killed client and stop cleanly on Ctrl-C (OMNI-139), and the
+console must answer.
 Its header lists the few ways the container deliberately differs from EC2.
 
 ### Deliberately not in this milestone
