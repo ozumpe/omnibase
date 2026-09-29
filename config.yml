@@ -122,6 +122,10 @@ loop:
   # a step that finds no further gain ends the feature sooner (OMNI-130).
   # env: SIS_FEATURE_MAX_STEPS   flag: --loop-feature-max-steps
   soft_feature_max_steps: 3
+  # Neutral cycles in a row (no change, inconclusive, no gain) after which the loop
+  # stops: the target has converged. Not a breaker trip; nothing to reset (OMNI-138).
+  # env: SIS_LOOP_CONVERGED_AFTER   flag: --loop-converged-after
+  soft_converged_after: 3
 
 contracts:
   # Default contract name; --contract still overrides it per cycle.

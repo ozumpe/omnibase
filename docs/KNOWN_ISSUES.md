@@ -625,6 +625,25 @@ any long-lived cluster exists.
 
 ## Resolved
 
+- [OMNI-138] **M27 — A converged target files bug tickets and trips the
+  circuit breaker** *(found 2026-09-29 in the fourth AWS run, OMNI-29,
+  `v0.3.1`; confirmed from the run's TES trail)*. After testrun #15 merged,
+  `sum_of_divisors` had nothing left to give (~1 µs per call). The next three
+  attempts were each rejected as "no improvement" (ratios 0.933, 3.24, 0.949
+  against 0.90). Each filed a bug (TES-102, -106, -110) and counted as a
+  consecutive failure, and the third tripped the breaker (TES-111), paging
+  CRITICAL for a loop that was not broken. Inside a feature the same verdict
+  already *ends* the feature; only on the first step of a new one did it take
+  the failure path, and only "no change" and "inconclusive" were neutral.
+  **Fixed 2026-09-29:** the SWE flags a first step that cannot beat the base
+  (`feature.finds_no_gain`), and `org.neutral_cycle_status` records it as the
+  neutral `no_gain`: spend recorded, no bug, no breaker count. Because neutral
+  cycles cost no breaker count, convergence is its own stop:
+  `loop.converged_after` (default 3) neutral cycles in a row end `loop.serve`
+  with "*contract* has converged" and a WARNING page — nothing to reset. QA's
+  re-measurement is unchanged (a QA-stage "no improvement" is still
+  `qa_rejected`), and any other failure still counts toward the breaker.
+
 - [OMNI-137] **L47** — `tofu apply` with a new release tag stopped and started
   the box instead of installing the tag *(found 2026-09-29 working out how to
   get `v0.3.1` onto the run box; confirmed from the provider's behaviour, and
@@ -1281,3 +1300,4 @@ any long-lived cluster exists.
 [OMNI-127]: https://olafzumpe.atlassian.net/browse/OMNI-127
 [OMNI-136]: https://olafzumpe.atlassian.net/browse/OMNI-136
 [OMNI-137]: https://olafzumpe.atlassian.net/browse/OMNI-137
+[OMNI-138]: https://olafzumpe.atlassian.net/browse/OMNI-138

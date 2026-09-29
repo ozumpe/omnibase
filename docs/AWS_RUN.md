@@ -231,6 +231,12 @@ What to expect:
   before `tofu destroy`.
 - Keep this one process running: a feature in progress lives in memory, so a
   restart starts a new one.
+- When the target has **converged** — `loop.converged_after` (default 3)
+  attempts in a row find nothing to improve — the loop stops itself:
+  `[loop] stopped …: <contract> has converged`, and a WARNING page. Nothing
+  is broken and there is nothing to reset; choose another contract or target
+  (OMNI-138). Before that fix, the same situation filed a bug per attempt and
+  tripped the circuit breaker.
 
 **d. Keep the dataset.** When the loop has stopped:
 
@@ -638,3 +644,14 @@ second operator, a second node.
   pending PR had lived in a file on the old box. Fixed in `v0.3.1`
   (OMNI-136): before every cycle, the loop asks GitHub which of its PRs are
   still open.
+- **2026-09-29 — run #4, on `v0.3.1`, contract `sum_of_divisors`**, on a
+  fresh box after #13 and #14 were closed by hand. Staged delivery worked end
+  to end: three accepted steps on one branch, one PR (testrun #15), the loop
+  held, a human merged it, and the loop continued from `develop`. Then
+  `sum_of_divisors` had converged (~1 µs per call): three attempts in a row
+  found no further gain (ratios 0.933, 3.24, 0.949 against the 0.90 margin),
+  each filed a bug, and the third tripped the breaker — a CRITICAL page for a
+  loop that was not broken (M27). $0.27 of $1.00 spent; the pager worked.
+  Fixed after `v0.3.1` (OMNI-138): no gain from `develop` is neutral, and
+  convergence is its own polite stop. Artifacts in
+  `s3://sis-first-run-artifacts-696644743351/runs/20260929-0450/`.

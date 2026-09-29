@@ -75,3 +75,31 @@ def test_a_feature_branch_holds_its_own_file() -> None:
     assert vcs.read_file("feature/tes-1", "runtime/target.py") == "v2"
     with pytest.raises(RequiresHumanApproval):
         vcs.write_file("main", "runtime/target.py", "x", "never")
+
+
+# --- no further gain from the base is neutral (OMNI-138) --------------------------
+
+_NO_IMPROVEMENT = "no improvement: candidate ~0.000001s vs baseline 0.000001s per call"
+
+
+def test_no_gain_from_the_base_means_the_target_converged() -> None:
+    assert feature.finds_no_gain(None, _NO_IMPROVEMENT)
+    assert feature.finds_no_gain(None, "no change: candidate is identical to the baseline")
+    # Inside a feature the same verdict ends the feature instead (its PR opens).
+    assert not feature.finds_no_gain(feature.new_feature("feature/x", "TES-1"), _NO_IMPROVEMENT)
+    # A real failure is never "no gain".
+    assert not feature.finds_no_gain(None, "correctness mismatch (candidate disagrees)")
+    assert not feature.finds_no_gain(None, None)
+
+
+def test_only_the_swe_can_make_no_improvement_neutral() -> None:
+    from sis import org
+
+    assert org.neutral_cycle_status(
+        {"passed": False, "reason": _NO_IMPROVEMENT, "no_gain": True}) == "no_gain"
+    # The same reason without the SWE's say-so (e.g. QA's re-run) stays a failure.
+    assert org.neutral_cycle_status({"passed": False, "reason": _NO_IMPROVEMENT}) is None
+    # The gate's own neutral verdicts keep their names.
+    assert org.neutral_cycle_status(
+        {"passed": False, "reason": "no change: identical", "no_gain": True}) == "no_change"
+    assert org.neutral_cycle_status({"passed": True, "no_gain": True}) is None
