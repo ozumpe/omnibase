@@ -63,7 +63,7 @@ Already done if you have run this before; skip to [Before run #3](#before-run-3-
    ```
 4. **Set the alert address** (laptop). The file is gitignored:
    ```bash
-   echo 'alert_email = "you@example.com"' > infra/aws/terraform.tfvars
+   echo 'alert_email = "olaf.zumpe@gmail.com"' > infra/aws/terraform.tfvars
    ```
 
 ### Before run #3 (one time)
@@ -541,7 +541,8 @@ console runs on the box), and it builds `sis-gauntlet:latest` from
 `scripts/rehearse_aws_run.sh` runs `user_data` and the bootstrap on a local
 Ubuntu 24.04 container, then the run's commands as `ubuntu` through a login
 shell, with the docker sandbox on a real Linux daemon: a full stub-proposer
-cycle must reach `verified_awaiting_human_merge`, and the console must answer.
+cycle must pass every gate (`[cycle] feature_step`), and the console must
+answer.
 Its header lists the few ways the container deliberately differs from EC2.
 
 ### Deliberately not in this milestone
