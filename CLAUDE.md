@@ -110,6 +110,18 @@ internal target before it models anything external.
     interface → acceptance → invariant gate → backtest gate → SLO gate. No
     no-op (nothing to be identical to) and no differential/benchmark (no
     reference exists, and "faster" isn't what makes a feature correct).
+    **The loop builds one** (OMNI-147; `--contract roman`, the only one
+    shipped). The feature is done at its first step that passes every gate:
+    that step is committed and the PR (`Build <contract>: 1 step`) opens at
+    once. Rejected attempts are notes on the feature even before it has a
+    branch, so the next prompt carries every reason. The prompt is built
+    from the spec (`proposer._build_prompt`): the public API, the acceptance
+    tests, and the laws with the module that defines them; held-out backtest
+    fixtures are never shown. A feature already built is judged again at the
+    next cycle: passing, it is the neutral `no_gain` ("already built"), so
+    the loop's convergence stop ends the run; failing (its spec changed), the
+    reason starts a rebuild. No timings anywhere, and `--canary serve` is
+    refused for a Class-2 contract.
   - **SLO gate** (`sis/slo.py`, OMNI-24): an optional latency *budget* from
     the spec (`FeatureContract.slo = DomainSLO(...)`), explicitly **not** a
     correctness gate — it runs last, only on an already-correct candidate, and
@@ -438,7 +450,9 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   full loop on the same engine: `runtime/target.py` (`sum_of_divisors`) and
   `runtime/sort_target.py` (`sort_numbers`). Select with
   `--contract <name>` / `run_cycle(contract_name=...)`. A third target is a new
-  `specs/` directory plus a registry entry, not an engine change.
+  `specs/` directory plus a registry entry, not an engine change. A third
+  contract, `roman`, is a feature (Class 2), which the loop builds rather than
+  optimises (OMNI-147, see Hard rules).
 - **The sort is served over HTTP behind Ray Serve** (`sis/serving.py`, OMNI-11):
   blue and green run simultaneously with *different source* (`/sort`,
   `/sort-green`), each response carrying its own `version`/`slot`. Stateless by
@@ -520,7 +534,8 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   legacy in-memory recording — and a zero-setup `main.py` — stay the default.
 - **Class 2 (feature construction) shipped — the engine verifies two kinds of
   target now, not one** (OMNI-3 epic, closed 2026-08-11 except two low/parked
-  items). `Contract.gate_profile()` (`sis/contract.py`) is what lets a
+  items). Since OMNI-147 (2026-09-29) the loop builds one too: `--contract
+  roman` (see Hard rules). `Contract.gate_profile()` (`sis/contract.py`) is what lets a
   `FeatureContract` and an `OptimizationContract` flow through one
   `gauntlet.validate()` with different gate stacks — see Hard rules above.
   Landed as five stories:
@@ -725,9 +740,9 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   **Phase 0 is built:** `sis/sandbox_worker.py` (OMNI-129) serves a candidate
   hot from the sandbox. It is tested in both sandbox modes, including that a
   docker candidate cannot reach the network, Ray or the host's environment.
-- 1021 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
+- 1032 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
   Ray-Serve-integration tests run separately, see Operational quick reference
-  above; 1083 total, recounted 2026-09-29 — corrected 2026-09-26, a multi-dimension review found the
+  above; 1094 total, recounted 2026-09-29 — corrected 2026-09-26, a multi-dimension review found the
   previously-documented 616/678 stale); `ruff`/`mypy --strict`/`pytest` clean;
   CI green; `feature → develop → main` enforced by both the client-side
   pre-push hook and active server-side rulesets.

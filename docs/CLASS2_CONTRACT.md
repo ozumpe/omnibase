@@ -156,6 +156,32 @@ examples, because **random inputs must still conserve cargo** and **history must
 still be reproduced**. The source of truth changes — from a frozen slow function to
 **domain invariants + historical ground truth** — but the spirit is identical.
 
+## In the loop (OMNI-147)
+
+`sis.contract.REGISTERED_CONTRACTS` holds both classes, so `--contract roman`
+runs the whole loop on a feature. Where Class 1 *optimises*, the SWE *builds*:
+
+- **Done means every gate passes.** A feature ends at its first passing step:
+  that step is committed to the feature branch and its one PR opens at once
+  (`Build roman: 1 step`). There is no "more steps for more speed".
+- **Rejections carry forward.** A failed attempt is a note on the feature even
+  before the feature has a branch, so the next prompt carries every earlier
+  reason ("acceptance tests failed", an invariant's shrunk counterexample).
+- **The prompt is the spec** (`proposer._build_prompt`, its own system prompt):
+  the public API, the acceptance tests and the laws, with the module that
+  defines them. The recorded history the backtest gate replays is held out and
+  never shown; only how many episodes there are is said.
+- **Built is converged.** A cycle for a feature already on the base branch
+  judges it again. Passing, the cycle is the neutral `no_gain` ("already
+  built"), and `loop.converged_after` of those stop the loop (OMNI-138).
+  Failing, because its spec changed, the reason is the first note of a rebuild.
+- **No timings.** Steps record a baseline of 0 and no candidate time; the PR
+  body lists the attempts instead of a timing table. Only the in-memory canary
+  runs: `--canary serve` is refused, since there is nothing to compare.
+
+The stub proposer builds `roman` from `runtime/candidates/roman.py`, so the
+loop runs offline.
+
 ## Worked example — the supply-route planner
 
 Feature `plan(demand, suppliers, routes) -> Plan`:

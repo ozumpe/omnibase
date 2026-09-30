@@ -92,6 +92,12 @@ git commit -am "Re-seed the naive targets" && git push origin develop
 Then run the contract you re-seeded (`--contract sum_of_divisors` or
 `--contract sort`) in [step 5c](#5-the-run-itself-box).
 
+**Or build a feature** (Class 2, from the release that carries OMNI-147):
+`--contract roman` writes `runtime/roman.py` from its spec and needs no
+re-seed, only that `develop` has no `runtime/roman.py` yet. Once its PR is
+merged, the next cycles find it built and the loop stops by itself. Leave
+`canary.backend` unset: the Serve canary is refused for a feature.
+
 ### 0. Rehearse, if the box changed (laptop, optional)
 
 If you have changed `scripts/aws_bootstrap.sh`, `Dockerfile.gauntlet` or

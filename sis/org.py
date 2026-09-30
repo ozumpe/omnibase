@@ -26,7 +26,7 @@ from typing import Any
 import ray
 
 from sis import config, episodic, gauntlet, llm
-from sis.contract import DEFAULT_CONTRACTS
+from sis.contract import REGISTERED_CONTRACTS, FeatureContract
 from sis.ports import Severity
 from sis.roles import (
     CEO,
@@ -336,7 +336,7 @@ def bootstrap() -> dict[str, Any]:
 
     # Register what each target is judged by. Idempotent, keyed by target path,
     # so a detached SelfModel surviving a restart just re-learns the same map.
-    for contract in DEFAULT_CONTRACTS:
+    for contract in REGISTERED_CONTRACTS:
         ray.get(self_model.register_contract.remote(contract))
 
     # Name the code this run executes (OMNI-63): the provenance graph and the
@@ -452,8 +452,8 @@ def run_cycle(
 ) -> dict[str, Any]:
     """Run one full intake→spec→epic→story→implement→review→canary cycle.
 
-    *contract_name* selects which registered target to optimise (see
-    ``sis.contract.DEFAULT_CONTRACTS``); None keeps the bootstrap target.
+    *contract_name* selects which registered target to optimise or build (see
+    ``sis.contract.REGISTERED_CONTRACTS``); None keeps the bootstrap target.
     Passed to BOTH the SWE and QA so they judge the candidate against the
     same oracle — and passed explicitly rather than via ``SIS_CONTRACT``
     because the role actors are separate processes that cannot see an env
@@ -477,6 +477,16 @@ def run_cycle(
 
     ws = handles["Workspace"]
     sm = handles["SelfModel"]
+    # The Serve canary judges a candidate's latency against a reference, and a
+    # Class-2 feature has neither (OMNI-147): refused before any spend.
+    if (canary_backend or config.get("canary.backend")) == "serve":
+        named = contract_name or config.get("contracts.default")
+        if isinstance(ray.get(sm.contract_by_name.remote(named)) if named else None,
+                      FeatureContract):
+            raise RuntimeError(
+                f"canary.backend='serve' cannot judge contract {named!r}: it is a feature "
+                "(Class 2), with no reference or benchmark to compare. Leave canary.backend "
+                "unset (the in-memory canary) for it.")
     ceo, pm, cto, designer, swe, qa, devops = (
         handles["CEO"], handles["PM"], handles["CTO"],
         handles["Designer"], handles["SWE"], handles["QA"], handles["DevOps"],
