@@ -356,6 +356,25 @@ reference with no link target below.
   faster, so it is the one neutral outcome that is not evidence of
   convergence. Fix: count only `no_gain`/`no_change` toward convergence, and
   consider one bounded re-measurement with a fresh seed before discarding.
+- [OMNI-148] **L51** — A Class-2 feature is proposed as "Speed up the
+  <target> target" *(found 2026-09-30 in AWS run #6, `v0.3.5`, contract
+  `roman`)*. `main.py` names every intake proposal that way whatever the
+  contract's class, so `roman`'s Confluence spec (13860868) and its Jira epic
+  and story (TES-143, TES-145) say "Speed up"; only the PR says "Build roman".
+  Fix: take the proposal's title and body from the contract.
+- [OMNI-149] **L52** — A built feature's convergence check files a new plan and
+  leaves its story In Progress *(found 2026-09-30, AWS run #6)*. After testrun
+  #19 opened and its plan was cleared, the next cycle planned a new feature (a
+  proposal and a spec page, epic TES-146, stories TES-147/148) before the SWE
+  found `runtime/roman.py` already built. TES-148 stays In Progress, because
+  the "already built" return does not move it. Class 1 differs: its `no_gain`
+  is a failed run, which moves the story to TBD. Fix: check "already built"
+  before planning (it costs nothing), and close a story a `no_gain` leaves.
+- [OMNI-150] **L53** — The episodic log names a model for cycles that made no
+  model call *(found 2026-09-30, AWS run #6)*. `run_cycle` stamps every event
+  with the configured model, so the three "already built" cycles record
+  `claude-opus-4-8` at $0. Fix: record the model only for a cycle that called
+  the proposer.
 
 ## Resolved (Low)
 
@@ -1398,3 +1417,6 @@ any long-lived cluster exists.
 [OMNI-143]: https://olafzumpe.atlassian.net/browse/OMNI-143
 [OMNI-144]: https://olafzumpe.atlassian.net/browse/OMNI-144
 [OMNI-145]: https://olafzumpe.atlassian.net/browse/OMNI-145
+[OMNI-148]: https://olafzumpe.atlassian.net/browse/OMNI-148
+[OMNI-149]: https://olafzumpe.atlassian.net/browse/OMNI-149
+[OMNI-150]: https://olafzumpe.atlassian.net/browse/OMNI-150
