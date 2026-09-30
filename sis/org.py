@@ -416,6 +416,27 @@ def cycle_summary(result: Mapping[str, Any]) -> str:
     return f"[cycle] {status}: {detail}" + (f" ({'; '.join(money)})" if money else "")
 
 
+def rejection_bug(
+    story_id: str, reason: str | None, *, pr_id: str | None = None
+) -> tuple[str | None, str]:
+    """The reject gate of a rejected cycle, and the summary its bug is filed under. Pure.
+
+    One rule for the SWE's rejection and QA's (*pr_id* given), so neither
+    loses what the other keeps (OMNI-56, M17): the gauntlet's reason, the gate
+    the CEO weighs, and a harness fault filed as what it is (OMNI-37): the
+    sandbox broke, the candidate was never judged.
+    """
+    gate = episodic.gate_from_reason(reason)
+    where = f"QA of {story_id} (PR {pr_id})" if pr_id else story_id
+    if gate == "harness":
+        headline = f"Infrastructure fault (sandbox) during {where} — the candidate was not judged"
+    elif pr_id:
+        headline = f"QA rejected {story_id} (PR {pr_id})"
+    else:
+        headline = f"Cycle failed for {story_id}"
+    return gate, f"{headline}: {reason}" if reason else headline
+
+
 def cycle_outcome(approved: bool, canary: dict[str, Any] | None) -> tuple[str, bool, str | None]:
     """Fold QA's verdict and (if one ran) the canary's into one cycle outcome.
 
@@ -611,19 +632,13 @@ def run_cycle(
                         "provenance": ray.get(sm.provenance.remote())}, cost_usd)
 
     if not impl["passed"]:
-        gate = episodic.gate_from_reason(impl.get("reason"))
+        gate, summary = rejection_bug(story_id, impl.get("reason"))
         # The gate is passed so the CEO can weigh a correct-but-over-budget
         # rejection (``slo``, OMNI-24) below a wrong one.
         trip = ray.get(ceo.report_outcome.remote(
             success=False, cost_usd=cost_usd, reject_gate=gate))
         # Failures become artifacts (ACTORS.md: DevOps files bug/defect Jiras).
-        # A harness fault is filed as what it is (OMNI-37): the sandbox broke,
-        # the candidate was never judged, and the fix is in the infrastructure.
-        headline = (
-            f"Infrastructure fault (sandbox) during {story_id} — the candidate was not judged"
-            if gate == "harness" else f"Cycle failed for {story_id}"
-        )
-        bug_id = ray.get(devops.file_bug.remote(f"{headline}: {impl['reason']}"))
+        bug_id = ray.get(devops.file_bug.remote(summary))
         if gate == "harness":
             # A broken sandbox fails every cycle after this one too, and nothing
             # a proposer does will fix it — worth a person now, not after the
@@ -685,14 +700,21 @@ def run_cycle(
     status, success, canary_reason = cycle_outcome(approved, canary)
 
     # 8. PM acceptance + CEO records the outcome + spend (drives the brakes).
+    # A rejection keeps its reason and gate, as at the SWE stage (OMNI-56).
+    reason = (canary_reason if status == "canary_rejected"
+              else qa_reason if status == "qa_rejected" else None)
     ray.get(pm.accept.remote(spec_id, satisfied=success))
-    trip = ray.get(ceo.report_outcome.remote(success=success, cost_usd=cost_usd))
+    trip = ray.get(ceo.report_outcome.remote(
+        success=success, cost_usd=cost_usd, reject_gate=episodic.gate_from_reason(reason)))
     if status == "canary_rejected":
         bug_id = ray.get(devops.file_bug.remote(
             f"Live canary rejected {story_id} (PR {impl['pr_id']}): {canary_reason}"))
     elif status == "qa_rejected":
-        bug_id = ray.get(devops.file_bug.remote(
-            f"QA rejected {story_id} (PR {impl['pr_id']})"))
+        qa_gate, summary = rejection_bug(story_id, qa_reason, pr_id=impl["pr_id"])
+        bug_id = ray.get(devops.file_bug.remote(summary))
+        if qa_gate == "harness":
+            page(ws, store, Severity.WARNING, f"sandbox broken during QA of {story_id}",
+                 f"The candidate was not judged: {qa_reason}\nFiled as {bug_id}.")
     else:
         bug_id = None
     breaker_bug_id = _breaker_alarm(trip)
@@ -703,7 +725,7 @@ def run_cycle(
         # extraction (result.get("reason")) with zero new plumbing there —
         # CanaryVerdict.reason (evaluate_canary) is a distinct failure family
         # from the offline gauntlet's, so gate_from_reason grows matching names.
-        "reason": canary_reason if status == "canary_rejected" else None,
+        "reason": reason,
         "bug_id": bug_id,
         "breaker_bug_id": breaker_bug_id,
         "spec_id": spec_id,

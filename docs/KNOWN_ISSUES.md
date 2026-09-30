@@ -46,14 +46,14 @@ reference with no link target below.
 > | M13 | [OMNI-53](https://olafzumpe.atlassian.net/browse/OMNI-53) |
 > | M14 | [OMNI-54](https://olafzumpe.atlassian.net/browse/OMNI-54) |
 > | M16 (and L30) | [OMNI-55](https://olafzumpe.atlassian.net/browse/OMNI-55) |
-> | M17 | [OMNI-56](https://olafzumpe.atlassian.net/browse/OMNI-56) — partly done by #108 (QA returns its reason; neutral verdicts routed) |
+> | M17 | [OMNI-56](https://olafzumpe.atlassian.net/browse/OMNI-56) — **fixed** (2026-09-29) |
 > | M18 | [OMNI-57](https://olafzumpe.atlassian.net/browse/OMNI-57) — **fixed** (with OMNI-126) |
 > | M22 | [OMNI-58](https://olafzumpe.atlassian.net/browse/OMNI-58) — blocked by OMNI-51 |
 > | M23 | [OMNI-59](https://olafzumpe.atlassian.net/browse/OMNI-59) |
 > | L21, L23 | [OMNI-61](https://olafzumpe.atlassian.net/browse/OMNI-61) (brake state fails closed; `sis.admin`) — **fixed** |
 > | L24 | [OMNI-62](https://olafzumpe.atlassian.net/browse/OMNI-62) (Notifier port) — **fixed** |
 > | M7 | [OMNI-88] — **won't fix** for now (label `wont-fix`); see the Won't fix section |
-> | L15–L20, L22, L25–L29, L31–L38, L40–L43 | one ticket each, [OMNI-64]–[OMNI-87], on each entry below. Each is linked (Relates) in Jira to the ticket it should ship with. |
+> | L15–L20, L22, L25–L29, L31–L38, L40–L43 | one ticket each, [OMNI-64]–[OMNI-87], on each entry below (L15 and L33 **fixed** 2026-09-29). Each is linked (Relates) in Jira to the ticket it should ship with. |
 > | L30 | [OMNI-55], with M16 |
 > | L39 | [OMNI-42] |
 
@@ -158,14 +158,6 @@ reference with no link target below.
   recorded, breaker-counted `error` outcome — and, if a canary was live,
   retires it — instead of an unhandled exception.
 
-- [OMNI-56] **M17 — A QA-stage rejection drops the gauntlet's reject reason** *(found
-  2026-09-26; confirmed by reading the code)* — when QA's own re-run of the
-  gauntlet rejects a candidate, the episodic record loses `reject_gate`, the
-  `slo` failure-weight discount, and the OMNI-37 harness/candidate
-  distinction that the SWE-stage rejection path already carries. Fix: thread
-  the gauntlet `Result` through QA's rejection path the same way `SWE.
-  implement`'s does.
-
 - [OMNI-50] **M20 — The live canary's p95/p99 gate is close to a coin flip for targets
   where dispatch overhead dominates compute** *(found 2026-09-26; simulated
   through the real `evaluate_canary`)* — Gate 4 compares nearest-rank p95/p99
@@ -219,11 +211,6 @@ reference with no link target below.
 
 ## Low
 
-- [OMNI-64] **L15** — `validate()` can be made to raise instead of returning a
-  `Result` (a gate script crash that escapes the harness's own exception
-  handling), losing the episodic record, the breaker increment, and the
-  accounted spend for that cycle. Fix: wrap `validate()`'s gate dispatch in a
-  catch-all that returns a `harness:` `Result` instead of propagating.
 - [OMNI-65] **L16** — The OMNI-37 sandbox self-check (`probe_sandbox`) loads
   `sitecustomize.py` from the same writable directory a failing candidate can
   also write to (see M9), so a candidate that wants its own rejection blamed
@@ -280,11 +267,6 @@ reference with no link target below.
   in-memory path when `retire_canary` is called without a `pr_id`, or after a
   DevOps restart — leaving Serve's green attached, or "promoting" only in
   bookkeeping with nothing changing online. Fix: make the fallback loud.
-- [OMNI-78] **L33** — `AnthropicClient.complete` never checks `stop_reason`; output
-  truncated by `max_tokens` (8000, shared with adaptive thinking at
-  `effort=high`) is silently treated as complete, and any resulting gate
-  failure is blamed on the candidate. Fix: check `stop_reason`; retry or fail
-  loudly on `max_tokens`.
 - [OMNI-79] **L34** — The real GitHub adapter's `_get_file` treats any error
   (including a transient 5xx) the same as "file absent" and silently falls
   back to the stale local baseline. Fix: distinguish 404 from other errors;
@@ -377,6 +359,23 @@ reference with no link target below.
 
 ## Resolved (Low)
 
+- [OMNI-64] **L15** — `validate()` can be made to raise instead of returning a
+  `Result` (a gate script crash that escapes the harness's own exception
+  handling), losing the episodic record, the breaker increment, and the
+  accounted spend for that cycle. Fix: wrap `validate()`'s gate dispatch in a
+  catch-all that returns a `harness:` `Result` instead of propagating.
+  **Fixed 2026-09-29 (OMNI-64, with OMNI-147):** an exception from a gate is
+  returned as `harness: the <gate> gate raised (...)`, with its traceback in
+  `errors`, so the cycle keeps its record, spend and breaker count.
+- [OMNI-78] **L33** — `AnthropicClient.complete` never checks `stop_reason`; output
+  truncated by `max_tokens` (8000, shared with adaptive thinking at
+  `effort=high`) is silently treated as complete, and any resulting gate
+  failure is blamed on the candidate. Fix: check `stop_reason`; retry or fail
+  loudly on `max_tokens`.
+  **Fixed 2026-09-29 (OMNI-78, with OMNI-147):** `LLMResponse.truncated` is
+  set from `stop_reason`, and the proposer raises `ProposalCutOff` instead of
+  extracting the fragment. The cycle fails as the proposer's (`proposer: ...`,
+  gate `proposer`), its spend recorded; no candidate is judged or blamed.
 - [OMNI-1] **L5 — The gauntlet is hardwired to `sum_of_divisors`.** **RESOLVED
   2026-08-06** (OMNI-1: OMNI-4/5/6/7). Nothing in `sis/` knows any target by
   name. Four changes, in order:
@@ -574,6 +573,19 @@ any long-lived cluster exists.
   front.
 
 ## Resolved
+
+- [OMNI-56] **M17 — A QA-stage rejection drops the gauntlet's reject reason** *(found
+  2026-09-26; confirmed by reading the code)* — when QA's own re-run of the
+  gauntlet rejects a candidate, the episodic record loses `reject_gate`, the
+  `slo` failure-weight discount, and the OMNI-37 harness/candidate
+  distinction that the SWE-stage rejection path already carries. Fix: thread
+  the gauntlet `Result` through QA's rejection path the same way `SWE.
+  implement`'s does.
+  **Fixed 2026-09-29 (OMNI-56, with OMNI-147):** #108 had QA return its
+  reason; now the cycle keeps it. A QA rejection's reason reaches the result and
+  the episodic record, the CEO gets its gate (so an `slo` rejection is weighed
+  as one), and its bug is filed with the reason, as a harness fault when it is
+  one, with a page (`org.rejection_bug`, shared with the SWE stage's path).
 
 - [OMNI-45] **H2 — The benchmark verdict could be forged from inside the measured
   process** *(found 2026-09-26 by a statistics-lens review of the merged
