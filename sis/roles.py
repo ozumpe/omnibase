@@ -236,6 +236,11 @@ def _version_for(pr: PullRequest) -> str:
     return f"{pr.branch}@{pr.id}"
 
 
+def _sha(source: str) -> str:
+    """The short hash a candidate is recorded under."""
+    return hashlib.sha256(source.encode("utf-8")).hexdigest()[:12]
+
+
 def pr_resolution(pr: PullRequest) -> Literal["hold", "promote", "release"]:
     """What a pending PR's state means for the canary it holds. Pure.
 
@@ -259,7 +264,7 @@ class Role:
         self._ws = get_workspace()
         ray.get(self._sm.register.remote(name, role, parent))
 
-    def _contract(self, name: str | None = None) -> contract.OptimizationContract:
+    def _contract(self, name: str | None = None) -> contract.Contract:
         """Which target this cycle optimises, and what judges it.
 
         Shared by the SWE (which proposes) and QA (which re-runs the gauntlet):
@@ -287,7 +292,7 @@ class Role:
         """
         wanted = name or config.get("contracts.default")
         if wanted:
-            named: contract.OptimizationContract | None = ray.get(
+            named: contract.Contract | None = ray.get(
                 self._sm.contract_by_name.remote(wanted))
             if named is None:
                 known = [c.name for c in ray.get(self._sm.contracts.remote())]
@@ -295,7 +300,7 @@ class Role:
                 raise ValueError(
                     f"{source}={wanted!r} is not a registered contract; known: {known}")
             return named
-        registered: contract.OptimizationContract | None = ray.get(
+        registered: contract.Contract | None = ray.get(
             self._sm.contract_for.remote(_TARGET_REL))
         return registered or contract.default_contract()
 
@@ -653,41 +658,86 @@ class SWE(Role):
         # branch's head instead: the steps build on each other there, and the
         # base branch sees them only when a human merges the finished feature.
         max_steps = int(config.get("loop.feature_max_steps"))
+        # A Class-2 contract is *built* (OMNI-147): no timings, and the feature is
+        # done at its first step that passes every gate.
+        building = isinstance(spec, contract.FeatureContract)
         feature: dict[str, Any] | None = ray.get(self._sm.feature.remote(spec.name))
         # The plan this step works under (CTO.plan). Its ids ride on the step's
         # commit, so a restart can rebuild the feature from the branch (OMNI-135).
         plan: dict[str, Any] = ray.get(self._sm.plan.remote(spec.name)) or {
             "feature_story_id": story_id, "spec_id": "unplanned", "epic_id": "unplanned"}
+        # A feature being built can have attempts but no branch yet: its branch
+        # is made by its first passing step.
         head = (ray.get(self._ws.read_file.remote(feature["branch"], spec.target_path))
-                if feature else "")
-        if feature and not head:
+                if feature and feature["steps"] else "")
+        if feature and feature["steps"] and not head:
             feature = None  # the branch lost its file: start a fresh feature
+        if building and feature and head:
+            # A built feature ends at its first step, so a step without a PR is
+            # one a stopped process committed (OMNI-135): open its PR now.
+            return self._finish_feature(
+                story_id, spec, feature, head, 0.0, _sha(head), "all gates passed")
         if head:
             current_source, origin = head, "feature_branch"
         else:
             merged_source = ray.get(self._ws.live_target_source.remote(spec.target_path))
-            origin = "merged_base" if merged_source else "local_file"
             # Fall back to the *contract's* target, not a hardcoded path — otherwise
             # a cycle for any contract but the bootstrap one silently optimises
-            # runtime/target.py while being judged against a different oracle.
-            current_source = merged_source or pathlib.Path(
-                spec.target_file).read_text(encoding="utf-8")
+            # runtime/target.py while being judged against a different oracle. A
+            # feature not built yet has neither (OMNI-147).
+            local = pathlib.Path(spec.target_file)
+            current_source = merged_source or (
+                local.read_text(encoding="utf-8") if local.exists() else "")
+            origin = ("merged_base" if merged_source
+                      else "local_file" if current_source else "none")
         ray.get(self._ws.emit.remote("target.source", story_id=story_id, origin=origin))
+        if building and feature is None and current_source:
+            # A feature already built: judged again, since its spec may have
+            # changed. Passing, there is nothing to build, which is the target
+            # converging (OMNI-138); failing, its reason starts the rebuild.
+            standing = gauntlet.validate(current_source, contract=spec)
+            if standing.passed:
+                return {"passed": False, "no_gain": True, "pr_id": None,
+                        "cost_usd": 0.0, "candidate_sha": _sha(current_source),
+                        "contract": spec.name,
+                        "reason": f"already built: {spec.target_path} passes every gate"}
+            feature = feature_mod.with_note(
+                feature_mod.new_feature(feature_mod.feature_branch(story_id), story_id),
+                f"the current module fails: {standing.reason}")
         # sandboxed, not in-process
-        baseline = gauntlet.measure_baseline(current_source, contract=spec)
-        candidate = proposer.propose(current_source, baseline, contract=spec,
-                                     history=feature["attempts"] if feature else ())
-        candidate_sha = hashlib.sha256(candidate.encode("utf-8")).hexdigest()[:12]
+        baseline = (gauntlet.measure_baseline(current_source, contract=spec)
+                    if isinstance(spec, contract.OptimizationContract) else 0.0)
+        try:
+            candidate = proposer.propose(current_source, baseline, contract=spec,
+                                         history=feature["attempts"] if feature else ())
+        except proposer.ProposalCutOff as exc:
+            # Nothing to judge, and not the candidate's doing: a failed cycle
+            # the log names as the proposer's, its spend kept (L33, OMNI-78).
+            reason = f"proposer: {exc}"
+            ray.get(self._ws.transition.remote(story_id, IssueStatus.TBD, reason))
+            ray.get(self._sm.record.remote("outcome", story_id, passed=False, reason=reason))
+            return {"passed": False, "reason": reason, "pr_id": None,
+                    "cost_usd": proposer.last_cost_usd(), "candidate_sha": None,
+                    "contract": spec.name}
+        candidate_sha = _sha(candidate)
         cost_usd = proposer.last_cost_usd()  # 0.0 for the stub; real $ for Claude
         # Benchmark the candidate against the source the cycle is based on (the
         # merged target), not the stale local file — see KNOWN_ISSUES.md H1.
         report = gauntlet.validate(
-            candidate, baseline, baseline_source=current_source, contract=spec)
+            candidate, baseline, baseline_source=current_source or None, contract=spec)
 
         if not report.passed:
             ray.get(self._ws.transition.remote(
                 story_id, IssueStatus.TBD, f"Gauntlet failed: {report.reason}"))
             ray.get(self._sm.record.remote("outcome", story_id, passed=False, reason=report.reason))
+            if building and feature is None:
+                # The reasons a feature's attempts failed are what its next
+                # prompt needs most, and it has no branch until one passes.
+                feature = feature_mod.new_feature(
+                    feature_mod.feature_branch(story_id), story_id)
+                started = None
+            else:
+                started = feature
             if feature is not None:
                 feature = feature_mod.with_note(feature, f"rejected: {report.reason}")
                 if feature["steps"] and feature_mod.ends_feature(report.reason):
@@ -701,7 +751,7 @@ class SWE(Role):
                     "cost_usd": cost_usd, "candidate_sha": candidate_sha,
                     "contract": spec.name,
                     # Nothing beats the base: the target has converged (OMNI-138).
-                    "no_gain": feature_mod.finds_no_gain(feature, report.reason)}
+                    "no_gain": feature_mod.finds_no_gain(started, report.reason)}
 
         # Change-authorization policy: the loop may only write paths its tier
         # permits. The target is SOFT (allowed once checks pass); a mis-pointed
@@ -725,16 +775,21 @@ class SWE(Role):
         # A passing step is committed to the feature branch, forked (for the
         # first step) from the same base the merged target was read from, not
         # a hardcoded "main" — see KNOWN_ISSUES.md M4. No PR yet (OMNI-130).
-        if feature is None:
-            feature = feature_mod.new_feature(feature_mod.feature_branch(story_id), story_id)
+        if feature is None or not feature["steps"]:
+            feature = feature or feature_mod.new_feature(
+                feature_mod.feature_branch(story_id), story_id)
             ray.get(self._ws.create_branch.remote(feature["branch"], version_control_base()))
             ray.get(self._sm.record.remote("branch", feature["branch"], story=story_id))
         step = len(feature["steps"]) + 1
         ray.get(self._ws.write_file.remote(
             feature["branch"], spec.target_path, candidate,
-            feature_mod.step_message(spec.name, plan, step, baseline, report.latency_seconds)))
+            feature_mod.step_message(spec.name, plan, step, baseline, report.latency_seconds,
+                                     building=building)))
         feature = feature_mod.with_step(feature, story_id, baseline, report.latency_seconds)
         ray.get(self._sm.record.remote("commit", feature["branch"], story=story_id, step=step))
+        if building:
+            return self._finish_feature(story_id, spec, feature, candidate, cost_usd,
+                                        candidate_sha, "all gates passed")
         if feature_mod.is_full(feature, max_steps):
             return self._finish_feature(story_id, spec, feature, candidate, cost_usd,
                                         candidate_sha, f"{step} of {max_steps} steps")
@@ -749,7 +804,7 @@ class SWE(Role):
                 "candidate_sha": candidate_sha, "contract": spec.name}
 
     def _finish_feature(
-        self, story_id: str, spec: contract.OptimizationContract, feature: dict[str, Any],
+        self, story_id: str, spec: contract.Contract, feature: dict[str, Any],
         head: str, cost_usd: float, candidate_sha: str, finished_because: str,
     ) -> dict[str, Any]:
         """Open the feature's one PR, for its head, and hand it to review.
@@ -757,9 +812,11 @@ class SWE(Role):
         The PR's head never moves after this (the next feature gets a new
         branch), so a human merges exactly the steps the PR shows.
         """
+        building = isinstance(spec, contract.FeatureContract)
         pr = ray.get(self._ws.open_pr.remote(
-            feature["branch"], feature_mod.pr_title(spec.name, feature), head,
-            spec.target_path, feature_mod.pr_body(spec.name, feature, finished_because)))
+            feature["branch"], feature_mod.pr_title(spec.name, feature, building=building),
+            head, spec.target_path,
+            feature_mod.pr_body(spec.name, feature, finished_because, building=building)))
         ray.get(self._ws.transition.remote(
             story_id, IssueStatus.READY_FOR_REVIEW, f"Feature PR {pr.id} ready"))
         # The canary needs this PR's contract later (oracle, entry point,
@@ -813,8 +870,10 @@ class QA(Role):
             # candidate against a different target's oracle and rejects a
             # perfectly good diff.
             merged = ray.get(self._ws.live_target_source.remote(spec.target_path))
-            baseline_source = merged or pathlib.Path(
-                spec.target_file).read_text(encoding="utf-8")
+            local = pathlib.Path(spec.target_file)
+            # A feature not built yet has no baseline, and needs none (OMNI-147).
+            baseline_source = merged or (
+                local.read_text(encoding="utf-8") if local.exists() else None)
             report = gauntlet.validate(
                 pr.artifact, 0.0, baseline_source=baseline_source, contract=spec)
             ok = report.passed
@@ -952,7 +1011,7 @@ class DevOps(Role):
         # cluster restart.
         self._pr_backend: dict[str, str] = {}
 
-    def _cloud_for(self, spec: contract.OptimizationContract) -> Any:
+    def _cloud_for(self, spec: contract.Contract) -> Any:
         """The ``ServeCloud`` for *spec*, built and served on first use.
 
         Cached per contract name: a second construction would call
@@ -961,6 +1020,9 @@ class DevOps(Role):
         already initialised — this runs inside a live Ray actor — so only
         Serve needs an explicit, idempotent start.
         """
+        if not isinstance(spec, contract.OptimizationContract):
+            raise TypeError(f"the Serve canary needs a reference and a benchmark, which "
+                            f"contract {spec.name!r} (Class 2) does not have")
         if spec.name not in self._serve_clouds:
             from ray import serve
 
@@ -973,7 +1035,7 @@ class DevOps(Role):
         return self._serve_clouds[spec.name]
 
     def canary(
-        self, pr_id: str, candidate_latency: float, canary_backend: str | None = None
+        self, pr_id: str, candidate_latency: float | None, canary_backend: str | None = None
     ) -> dict[str, Any]:
         # candidate_latency was measured inside the gauntlet sandbox by the SWE
         # step. On the legacy backend the candidate is NEVER executed here
@@ -994,10 +1056,14 @@ class DevOps(Role):
         self._pr_backend[pr_id] = "serve" if backend == "serve" else "legacy"
 
         if backend == "serve":
+            if candidate_latency is None:  # run_cycle refuses this before any spend
+                raise RuntimeError("the Serve canary compares latencies, and a built "
+                                   "feature (Class 2) has none")
             return self._canary_live(pr, version, candidate_latency)
 
-        record = ray.get(self._ws.deploy_canary.remote(
-            version, {"latency_seconds": candidate_latency}))
+        # A built feature (Class 2) has no latency to record (OMNI-147).
+        metrics = {} if candidate_latency is None else {"latency_seconds": candidate_latency}
+        record = ray.get(self._ws.deploy_canary.remote(version, metrics))
         ray.get(self._sm.set_slot.remote("green", version))
         # Remember which PR would release this canary, so the merge watcher has
         # an exact id rather than one parsed back out of the version string.
@@ -1202,7 +1268,7 @@ class DevOps(Role):
         if not waiting:
             return None
         pr = waiting[0]
-        known = [c.name for c in contract.DEFAULT_CONTRACTS]
+        known = [c.name for c in contract.REGISTERED_CONTRACTS]
         outcome = self.adopt_pending(
             pr.id, _version_for(pr), feature_mod.contract_from_title(pr.title, known))
         return {**outcome, "open": [p.id for p in waiting]}
@@ -1238,12 +1304,12 @@ class DevOps(Role):
         default contract covers a PR opened some other way (tests, a manual
         call), which is what the old hardcoded path meant anyway.
         """
-        spec: contract.OptimizationContract | None = ray.get(
+        spec: contract.Contract | None = ray.get(
             self._sm.contract_for_pr.remote(pr_id))
         return (spec or contract.default_contract()).target_path
 
-    def _contract_for_live_pr(self, pr_id: str) -> contract.OptimizationContract:
-        spec: contract.OptimizationContract | None = ray.get(
+    def _contract_for_live_pr(self, pr_id: str) -> contract.Contract:
+        spec: contract.Contract | None = ray.get(
             self._sm.contract_for_pr.remote(pr_id))
         if spec is None:  # pragma: no cover - canary() would not set backend="serve" otherwise
             raise RuntimeError(

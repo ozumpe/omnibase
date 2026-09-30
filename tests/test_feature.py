@@ -181,3 +181,30 @@ def test_of_several_the_longest_feature_wins_whatever_the_listing_order() -> Non
     for order in ([short, long], [long, short]):
         found = feature.resumable_feature("sort", order)
         assert found is not None and found["feature"]["branch"] == "feature/tes-101"
+
+
+# --- a built feature (Class 2, OMNI-147) ---
+
+
+def test_a_built_features_pr_says_built_and_shows_its_attempts() -> None:
+    f = feature.new_feature("feature/story-9", "STORY-9")
+    f = feature.with_note(f, "the current module fails: acceptance tests failed")
+    f = feature.with_note(f, "rejected: invariant violated in sandbox (seed=3): round_trip")
+    f = feature.with_step(f, "STORY-9", 0.0, None)
+    title = feature.pr_title("roman", f, building=True)
+    assert title == "Build roman: 1 step (STORY-9)"
+    assert feature.contract_from_title(title, ["roman"]) == "roman"
+    body = feature.pr_body("roman", f, "all gates passed", building=True)
+    assert "built from its spec" in body and "Finished because: all gates passed." in body
+    assert "- the current module fails: acceptance tests failed" in body
+    assert "- rejected: invariant violated in sandbox (seed=3): round_trip" in body
+    assert "step 1 accepted" not in body
+    assert "| Baseline |" not in body, "a built feature has no timings"
+
+
+def test_a_built_features_step_reads_back() -> None:
+    plan = {"feature_story_id": "STORY-9", "spec_id": "SPEC-1", "epic_id": "EPIC-1"}
+    message = feature.step_message("roman", plan, 1, 0.0, None, building=True)
+    assert message.startswith("Step 1: build roman (STORY-9)")
+    step = feature.parse_step(message)
+    assert step is not None and step["contract"] == "roman" and step["candidate_s"] is None

@@ -3,7 +3,10 @@
 Pure. A feature is the unit a human reviews: several steps, each a candidate
 that passed the gauntlet and was committed to an agent-owned branch, then one
 PR to the base branch (``develop``). It is finished after ``N`` accepted steps
-(``loop.feature_max_steps``), or sooner, when a step finds no further gain.
+(``loop.feature_max_steps``), or sooner, when a step finds no further gain. A
+Class-2 feature (OMNI-147) is *built* rather than optimised: it is finished by
+its first step, the first candidate that passes every gate, and the attempts
+before it are notes the next prompt sees.
 
 The state is a plain dict, so it can cross Ray actor boundaries:
 ``{"branch", "story", "steps": [...], "attempts": [...]}``.
@@ -50,7 +53,7 @@ def awaiting_decision(prs: Iterable[PullRequest]) -> list[PullRequest]:
     return [pr for pr in prs if pr.branch.startswith(BRANCH_PREFIX)]
 
 
-_TITLE = re.compile(r"Optimise (?P<contract>[\w-]+): \d+ steps? \(")
+_TITLE = re.compile(r"(?:Optimise|Build) (?P<contract>[\w-]+): \d+ steps? \(")
 
 
 def contract_from_title(title: str, known: Iterable[str]) -> str | None:
@@ -118,16 +121,18 @@ _ID = re.compile(r"[\w.-]{1,64}")
 
 
 def step_message(contract_name: str, plan: Mapping[str, Any], step: int,
-                 baseline_s: float, candidate_s: float | None) -> str:
+                 baseline_s: float, candidate_s: float | None, *,
+                 building: bool = False) -> str:
     """The commit message of a feature's step: a subject, then trailers (OMNI-135).
 
     The trailers are what :func:`parse_step` reads back after a restart: the
     contract, the plan the step worked under, and its timings for the PR's
-    evidence table.
+    evidence table. A built feature (*building*) has no timings: its step
+    records a baseline of 0 and no candidate time.
     """
     story = plan["feature_story_id"]
     return "\n".join([
-        f"Step {step}: optimise {contract_name} ({story})",
+        f"Step {step}: {'build' if building else 'optimise'} {contract_name} ({story})",
         "",
         f"Sis-Contract: {contract_name}",
         f"Sis-Story: {story}",
@@ -203,13 +208,33 @@ def resumable_feature(
     return {"feature": feature, "plan": plan}
 
 
-def pr_title(contract_name: str, feature: dict[str, Any]) -> str:
+def pr_title(contract_name: str, feature: dict[str, Any], *, building: bool = False) -> str:
     n = len(feature["steps"])
-    return f"Optimise {contract_name}: {n} step{'s' if n != 1 else ''} ({feature['story']})"
+    verb = "Build" if building else "Optimise"
+    return f"{verb} {contract_name}: {n} step{'s' if n != 1 else ''} ({feature['story']})"
 
 
-def pr_body(contract_name: str, feature: dict[str, Any], finished_because: str) -> str:
-    """The evidence a reviewer reads: every step, and why the feature stopped."""
+def pr_body(contract_name: str, feature: dict[str, Any], finished_because: str, *,
+            building: bool = False) -> str:
+    """The evidence a reviewer reads: every step, and why the feature stopped.
+
+    A built feature has no timings to show, so its body says which gates passed
+    and what the attempts before it were rejected for.
+    """
+    if building:
+        earlier = [n for n in feature["attempts"] if not n.startswith("step ")]
+        return "\n".join([
+            f"Feature for contract `{contract_name}`, built from its spec (OMNI-147). "
+            "The module passed every gate the contract names: types, the public API, "
+            "the acceptance tests, the domain laws on generated inputs, and any "
+            "recorded history.",
+            "",
+            *([f"Attempts before it ({len(earlier)} shown, most recent last):", "",
+               *(f"- {n}" for n in earlier), ""] if earlier else []),
+            f"Finished because: {finished_because}.",
+            "",
+            "Automated proposal. Human review and merge required.",
+        ])
     rows = [
         f"| {i} | {s['story']} | {s['baseline_s']:.6f}s | "
         + (f"{s['candidate_s']:.6f}s |" if s["candidate_s"] is not None else "– |")

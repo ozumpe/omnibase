@@ -55,6 +55,7 @@ import sys
 import tempfile
 import textwrap
 import time
+import traceback
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -1809,7 +1810,16 @@ def validate(
                 ctx.oracle = ctx.put("oracle.py", oracle_src.read_text(encoding="utf-8"))
 
         for gate_name in profile:
-            failure = _GATES[gate_name](ctx)
+            try:
+                failure = _GATES[gate_name](ctx)
+            except Exception as exc:  # noqa: BLE001 - reported, never propagated (L15)
+                # The gate's own code raised: a harness fault, not a verdict on
+                # the candidate. Returned rather than raised, so the cycle keeps
+                # its episodic record, its spend and its breaker count (OMNI-64).
+                detail = " ".join(f"{type(exc).__name__}: {exc}".split())[:300]
+                return Result(passed=False,
+                              reason=f"harness: the {gate_name.value} gate raised ({detail})",
+                              errors=traceback.format_exc().splitlines())
             # Before anything is concluded from the gate: a gate that ran beside
             # a candidate which rewrote the exam has not judged it. Checked when
             # the gate passed too, since a pass is exactly what tampering buys.

@@ -110,6 +110,18 @@ internal target before it models anything external.
     interface → acceptance → invariant gate → backtest gate → SLO gate. No
     no-op (nothing to be identical to) and no differential/benchmark (no
     reference exists, and "faster" isn't what makes a feature correct).
+    **The loop builds one** (OMNI-147; `--contract roman`, the only one
+    shipped). The feature is done at its first step that passes every gate:
+    that step is committed and the PR (`Build <contract>: 1 step`) opens at
+    once. Rejected attempts are notes on the feature even before it has a
+    branch, so the next prompt carries every reason. The prompt is built
+    from the spec (`proposer._build_prompt`): the public API, the acceptance
+    tests, and the laws with the module that defines them; held-out backtest
+    fixtures are never shown. A feature already built is judged again at the
+    next cycle: passing, it is the neutral `no_gain` ("already built"), so
+    the loop's convergence stop ends the run; failing (its spec changed), the
+    reason starts a rebuild. No timings anywhere, and `--canary serve` is
+    refused for a Class-2 contract.
   - **SLO gate** (`sis/slo.py`, OMNI-24): an optional latency *budget* from
     the spec (`FeatureContract.slo = DomainSLO(...)`), explicitly **not** a
     correctness gate — it runs last, only on an already-correct candidate, and
@@ -438,7 +450,9 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   full loop on the same engine: `runtime/target.py` (`sum_of_divisors`) and
   `runtime/sort_target.py` (`sort_numbers`). Select with
   `--contract <name>` / `run_cycle(contract_name=...)`. A third target is a new
-  `specs/` directory plus a registry entry, not an engine change.
+  `specs/` directory plus a registry entry, not an engine change. A third
+  contract, `roman`, is a feature (Class 2), which the loop builds rather than
+  optimises (OMNI-147, see Hard rules).
 - **The sort is served over HTTP behind Ray Serve** (`sis/serving.py`, OMNI-11):
   blue and green run simultaneously with *different source* (`/sort`,
   `/sort-green`), each response carrying its own `version`/`slot`. Stateless by
@@ -520,7 +534,8 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   legacy in-memory recording — and a zero-setup `main.py` — stay the default.
 - **Class 2 (feature construction) shipped — the engine verifies two kinds of
   target now, not one** (OMNI-3 epic, closed 2026-08-11 except two low/parked
-  items). `Contract.gate_profile()` (`sis/contract.py`) is what lets a
+  items). Since OMNI-147 (2026-09-29) the loop builds one too: `--contract
+  roman` (see Hard rules). `Contract.gate_profile()` (`sis/contract.py`) is what lets a
   `FeatureContract` and an `OptimizationContract` flow through one
   `gauntlet.validate()` with different gate stacks — see Hard rules above.
   Landed as five stories:
@@ -725,9 +740,9 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   **Phase 0 is built:** `sis/sandbox_worker.py` (OMNI-129) serves a candidate
   hot from the sandbox. It is tested in both sandbox modes, including that a
   docker candidate cannot reach the network, Ray or the host's environment.
-- 1021 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
+- 1037 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
   Ray-Serve-integration tests run separately, see Operational quick reference
-  above; 1083 total, recounted 2026-09-29 — corrected 2026-09-26, a multi-dimension review found the
+  above; 1099 total, recounted 2026-09-29 — corrected 2026-09-26, a multi-dimension review found the
   previously-documented 616/678 stale); `ruff`/`mypy --strict`/`pytest` clean;
   CI green; `feature → develop → main` enforced by both the client-side
   pre-push hook and active server-side rulesets.
@@ -761,15 +776,16 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
 **Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L
 severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
 the IDs in commits/PRs. **Open after a 2026-09-26 multi-dimension review with
-adversarial verification: H3, M12–M14, M16–M17, M20–M23,
-L15–L20, L22, L25–L43; plus L46 from the second AWS run and L48–L50
+adversarial verification: H3, M12–M14, M16, M20–M23,
+L16–L20, L22, L25–L32, L34–L43; plus L46 from the second AWS run and L48–L50
 from the fifth (OMNI-143–145)** (M7 is won't-fix for now; H4, M10, M15, M19, L21, L23
 and L24 fixed 2026-09-26, OMNI-46/47/51/49/61/62; H5, H6, M24 and L44, found
 in the first AWS run, and L45, found releasing it, fixed 2026-09-27,
 OMNI-121–125; M18 and M25, the second run's duplicate PR, fixed the same day,
 OMNI-57/126; M26, the third run's conflicting second PR, and M27, the fourth run's
 breaker trip on a converged target, fixed 2026-09-29, OMNI-136/138; H2, M8, M9
-and M11 fixed the same day, OMNI-45/146). The headline, before trusting any
+and M11 fixed the same day, OMNI-45/146, and M17, L15 and L33 with OMNI-147,
+OMNI-56/64/78). The headline, before trusting any
 gauntlet verdict: every gate but SLO now judges its candidate from outside the
 candidate's process (H2, M8), and the exam files are protected (M9). **The SLO
 gate still runs its candidate in-process** (L42,
