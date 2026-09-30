@@ -53,3 +53,24 @@ def test_proposer_uses_the_configured_client(monkeypatch) -> None:  # type: igno
     assert proposer.last_cost_usd() == 0.02
     assert proposer.last_model() == "fake-model-1"
     assert "CURRENT SOURCE" in fake.calls[0][1]              # source went into the prompt
+
+
+def test_the_anthropic_client_says_when_the_answer_was_cut_off(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # L33 (OMNI-78): stop_reason "max_tokens" means the text is not the whole answer.
+    import sys
+    from types import SimpleNamespace
+
+    def fake_create(**kwargs):  # type: ignore[no-untyped-def]
+        return SimpleNamespace(
+            content=[SimpleNamespace(type="text", text="def f(")],
+            usage=SimpleNamespace(input_tokens=10, output_tokens=8000,
+                                  cache_creation_input_tokens=0, cache_read_input_tokens=0),
+            stop_reason=kwargs["_stop"],
+        )
+
+    for stop, cut in (("max_tokens", True), ("end_turn", False)):
+        fake = SimpleNamespace(Anthropic=lambda stop=stop: SimpleNamespace(
+            messages=SimpleNamespace(create=lambda **kw: fake_create(**kw, _stop=stop))))
+        monkeypatch.setitem(sys.modules, "anthropic", fake)
+        response = llm.AnthropicClient().complete(system="s", user="u", max_tokens=8000)
+        assert response.truncated is cut, stop

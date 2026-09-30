@@ -22,7 +22,7 @@ This document has four parts:
 
 | | |
 |---|---|
-| Code | release tag **`v0.3.4`** (`var.repo_ref`), never a branch — see [Which code runs](#which-code-runs) |
+| Code | release tag **`v0.3.5`** (`var.repo_ref`), never a branch — see [Which code runs](#which-code-runs) |
 | Box | one `m7i.xlarge`, `us-east-1`, **no inbound ports**; shell via SSM only |
 | Contract | one with room left: `sort` and `sum_of_divisors` have both converged, so re-seed a naive one on `ozumpe/testrun`'s `develop` first ([Before every run](#before-every-run-a-target-with-room-left)) |
 | Where artifacts land | Jira `TES`, GitHub `ozumpe/testrun` (PRs against `develop`) |
@@ -91,6 +91,12 @@ git commit -am "Re-seed the naive targets" && git push origin develop
 
 Then run the contract you re-seeded (`--contract sum_of_divisors` or
 `--contract sort`) in [step 5c](#5-the-run-itself-box).
+
+**Or build a feature** (Class 2, from `v0.3.5`, OMNI-147):
+`--contract roman` writes `runtime/roman.py` from its spec and needs no
+re-seed, only that `develop` has no `runtime/roman.py` yet. Once its PR is
+merged, the next cycles find it built and the loop stops by itself. Leave
+`canary.backend` unset: the Serve canary is refused for a feature.
 
 ### 0. Rehearse, if the box changed (laptop, optional)
 
@@ -507,7 +513,7 @@ human, one box: a remote state backend is ceremony this doesn't need yet.
 
 ### Which code runs
 
-The box runs the **release tag** in `var.repo_ref` — `v0.3.4` by default
+The box runs the **release tag** in `var.repo_ref` — `v0.3.5` by default
 (OMNI-63). A tag, not `develop`: a run's results are only worth something if
 they name the code that produced them, and a branch names whatever it pointed
 at when the box booted. `tofu plan` refuses a branch unless

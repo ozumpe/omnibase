@@ -24,11 +24,12 @@ membership would ask it.
 The gauntlet copies this file into the sandbox as a standalone module
 (:data:`SANDBOX_MODULE`), which is why it imports nothing from ``sis``.
 
-What it does not do: stop a candidate that tampers with the *harness* — patches
-this module or the gate script from inside the process it shares with them
-(KNOWN_ISSUES M8/M9). The benchmark gate no longer needs this module: its
-candidate answers from a worker of its own, over JSON (OMNI-45).
-It defends against a hostile value, not a hostile process.
+What it does not do: stop a candidate that tampers with the *harness* from
+inside a process it shares with it. None does any more: since OMNI-45 and
+OMNI-146 every gate that calls the candidate calls a worker of its own over
+JSON, so what reaches this module is plain already, and it is the rule's second
+line (the SLO gate excepted, L42). It defends against a hostile value, not a
+hostile process.
 """
 
 from __future__ import annotations
@@ -151,7 +152,9 @@ def guard_exports(module: Any, names: Iterable[str]) -> None:
     it is reported on its own path; ``SystemExit`` is caught too, since a
     candidate that calls ``sys.exit(0)`` mid-call would otherwise end the script
     with a success code and no verdict (M8). ``os._exit`` cannot be caught from
-    inside the process, which is what OMNI-45's worker split is for.
+    inside the process, which is what the worker split is for (OMNI-45,
+    OMNI-146); behind it, this turns a failure the worker reports into the same
+    counted violation.
     """
     for name in names:
         original = getattr(module, name, None)

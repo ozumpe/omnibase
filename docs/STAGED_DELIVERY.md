@@ -119,8 +119,8 @@ Desktop; measure it before relying on either number.
 
 - The Serve canary still runs green as a Ray worker until OMNI-48 moves it
   here, so `--canary serve` stays refused for a real proposer (OMNI-49).
-- The gates still judge a candidate inside its own process until OMNI-45 moves
-  them here (H2, M8, M9, M11).
+- The SLO gate still judges a candidate inside its own process. Every other
+  gate that runs the candidate calls it here (OMNI-45, OMNI-146: H2, M8).
 - State is not handed over on a swap. Stateful targets (the omnitrack twin's
   actors) come later, and D2's decision to externalise state makes that
   tractable.

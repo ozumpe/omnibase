@@ -486,3 +486,22 @@ def test_a_docker_sandbox_cannot_write_the_exam_but_can_write_its_scratch(
     assert "WROTE" not in result.stdout and "SCRATCH OK" in result.stdout
     assert (exam / "oracle.py").read_text() == "X = 1\n" and not (exam / "planted.py").exists()
     assert (scratch / "ok.txt").read_text() == "ok"
+
+
+def test_a_gate_that_raises_is_a_harness_verdict_not_a_crash(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # KNOWN_ISSUES L15 (OMNI-64): an exception escaping a gate used to escape
+    # validate() too, and the cycle lost its episodic record, spend and breaker
+    # count. It is the harness's fault, reported as such.
+    from sis.contract import GateName
+    from sis.episodic import gate_from_reason
+
+    def broken(ctx):  # type: ignore[no-untyped-def]
+        raise OSError("disk full")
+
+    monkeypatch.setitem(gauntlet._GATES, GateName.MYPY, broken)
+    source = OPTIMISED_CANDIDATE_PATH.read_text(encoding="utf-8")
+    result = gauntlet.validate(source, 0.05)
+    assert not result.passed
+    assert result.reason == "harness: the mypy gate raised (OSError: disk full)", result.reason
+    assert gate_from_reason(result.reason) == "harness"
+    assert any("OSError" in line for line in result.errors)

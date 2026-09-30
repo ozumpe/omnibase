@@ -146,8 +146,18 @@ class Contract(Protocol):
         ...
 
     @property
+    def target_path(self) -> str:
+        """Repo-relative path to the module the implementer writes."""
+        ...
+
+    @property
     def target_file(self) -> str:
         """Absolute path to the module the implementer writes."""
+        ...
+
+    @property
+    def stub_candidate_path(self) -> str | None:
+        """Repo-relative module the stub proposer returns, or None if it has none."""
         ...
 
     @property
@@ -419,6 +429,9 @@ class FeatureContract:
     # shipped contract today — skips the gate entirely. A workload-form SLO
     # resolves its function in ``oracle_path``, so it needs one.
     slo: DomainSLO | None = None
+    # What the stub proposer returns (OMNI-147): a hand-written implementation,
+    # so the loop can build the feature offline. None means a real proposer only.
+    stub_candidate_path: str | None = None
 
     def __post_init__(self) -> None:
         if self.slo is not None and self.slo.workload is not None and self.oracle_path is None:
@@ -450,6 +463,11 @@ class FeatureContract:
             GateName.BACKTEST,
             GateName.SLO,
         )
+
+    @property
+    def target_path(self) -> str:
+        """``entry_module``, under the name the loop reads for every contract."""
+        return self.entry_module
 
     @property
     def target_file(self) -> str:
@@ -512,6 +530,7 @@ ROMAN = FeatureContract(
     # Strategies and domain laws only — no reference implementation. See the
     # module docstring for why a Class-2 "oracle" is a different thing.
     oracle_path="specs/roman/oracle.py",
+    stub_candidate_path="runtime/candidates/roman.py",
     invariants=(
         # The law that makes this a good first Class-2 target: checkable without
         # knowing what the right numeral is, so it catches a candidate that is
@@ -524,13 +543,16 @@ ROMAN = FeatureContract(
     ),
 )
 
-# Kept separate from DEFAULT_CONTRACTS, which the SelfModel registers and types
-# as optimisation contracts. Merging the two would push a Class-2 shape through
-# the contract registry, the ``--contract`` selector and the proposer prompt —
-# all of which assume a reference oracle and a benchmark. Wiring feature
-# contracts through the loop is its own change; this ticket delivers the
-# gauntlet profile they run under.
+# Kept apart from DEFAULT_CONTRACTS, which are the served (Class-1) targets:
+# the Serve canary, the load generator and ``serve_cloud`` need a reference
+# oracle and a benchmark, and a feature has neither.
 FEATURE_CONTRACTS: tuple[FeatureContract, ...] = (ROMAN,)
+
+# Every contract the loop can run (OMNI-147): what ``bootstrap`` registers and
+# ``--contract`` selects from. The SWE builds a feature where it optimises a
+# target, the proposer writes from the spec, and the feature is done when every
+# gate passes (see ``sis.roles.SWE.implement``).
+REGISTERED_CONTRACTS: tuple[Contract, ...] = (*DEFAULT_CONTRACTS, *FEATURE_CONTRACTS)
 
 
 def default_contract() -> OptimizationContract:

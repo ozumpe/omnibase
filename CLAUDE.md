@@ -110,6 +110,18 @@ internal target before it models anything external.
     interface → acceptance → invariant gate → backtest gate → SLO gate. No
     no-op (nothing to be identical to) and no differential/benchmark (no
     reference exists, and "faster" isn't what makes a feature correct).
+    **The loop builds one** (OMNI-147; `--contract roman`, the only one
+    shipped). The feature is done at its first step that passes every gate:
+    that step is committed and the PR (`Build <contract>: 1 step`) opens at
+    once. Rejected attempts are notes on the feature even before it has a
+    branch, so the next prompt carries every reason. The prompt is built
+    from the spec (`proposer._build_prompt`): the public API, the acceptance
+    tests, and the laws with the module that defines them; held-out backtest
+    fixtures are never shown. A feature already built is judged again at the
+    next cycle: passing, it is the neutral `no_gain` ("already built"), so
+    the loop's convergence stop ends the run; failing (its spec changed), the
+    reason starts a rebuild. No timings anywhere, and `--canary serve` is
+    refused for a Class-2 contract.
   - **SLO gate** (`sis/slo.py`, OMNI-24): an optional latency *budget* from
     the spec (`FeatureContract.slo = DomainSLO(...)`), explicitly **not** a
     correctness gate — it runs last, only on an already-correct candidate, and
@@ -136,7 +148,8 @@ internal target before it models anything external.
     `copy.deepcopy` of the input, made outside any timed window, because a
     candidate that emptied a shared list "agreed" with the reference, and one
     that grew it slowed the baseline (M10). Neither stops a candidate that
-    tampers with the harness in its own process — that is OMNI-45.
+    tampers with the harness in its own process — that took OMNI-45 and
+    OMNI-146.
   - **The exam is the candidate's to read, not to write** (OMNI-45 slice 1,
     M9/M8/M11). The candidate, oracle, baseline, tests, canonicaliser and
     fixtures live in one directory, the sandbox's `HOME`/`TMPDIR`/tool caches in
@@ -152,11 +165,23 @@ internal target before it models anything external.
     gate needs pytest's own `N passed` line (`gauntlet._ended_without_verdict`).
     A candidate's own exception (or `sys.exit`) inside the invariant or backtest
     gate is a counted violation (`canonical.guard_exports`), never
-    `harness: … crashed`. **What this is not:** in the interface, acceptance,
-    invariant and backtest gates the token and the gate script still share a
-    process with the candidate, so one that finds the token can forge a pass
-    (M8's remainder, OMNI-146). The benchmark gate has no such token: its candidate runs
-    in a worker (see Class 1 above).
+    `harness: … crashed`.
+  - **No gate shares a process with the candidate it judges, except SLO**
+    (OMNI-146, M8). The acceptance, invariant and backtest gates run their
+    trusted code (pytest, Hypothesis, the backtest replay) on the host in a
+    harness process under the exam (`gauntlet._run_harness`), where `target`
+    is a stand-in (`sandbox_worker.install_proxy`) that sends each call to the
+    candidate's own `SandboxWorker` and returns the JSON-decoded answer. The
+    interface gate asks a worker what the candidate exports. So the token, the
+    pytest summary and the exit code come from a process the candidate never
+    runs in. The stand-in keeps what an in-process call would show: an
+    exception arrives as the nearest builtin in its hierarchy, a changed
+    argument list is mirrored back, and a `SystemExit` is a plain failure. Only
+    JSON crosses (a returned tuple becomes a list; an argument JSON cannot carry
+    is `NotWireable`, the exam's fault). The acceptance tests' own
+    `target.<name>` references are served too (`_names_the_tests_use`). **The
+    SLO gate** still runs its candidate in-process; no shipped contract declares
+    an SLO yet (L42, OMNI-86).
   - Every gate ends in a human PR. Generated code MUST be fully typed. What
     counts as correct/better is per-target — see `sis/contract.py`.
 - **Change-authorization policy (`sis/policy.py`) — what the loop may rewrite:**
@@ -358,8 +383,12 @@ internal target before it models anything external.
   live runs — don't put planning there.
 
 ## Current status — where to pick up
-Released through **v0.3.4** (2026-09-29): v0.3.3 plus OMNI-45, gate
-integrity. The Class-1 benchmark times its candidate from outside the
+Released through **v0.3.5** (2026-09-29): v0.3.4 plus the two blockers before
+omnitrack Phase A. OMNI-146: the interface, acceptance, invariant and backtest
+gates judge the candidate from outside its process too (M8). OMNI-147: the loop
+builds a Class-2 feature from its spec (`--contract roman`). With them, OMNI-56,
+OMNI-64 and OMNI-78 (M17, L15, L33). Before that, **v0.3.4** (2026-09-29): v0.3.3
+plus OMNI-45, gate integrity. The Class-1 benchmark times its candidate from outside the
 candidate's process (H2), the exam files are protected (M9), a zero exit is no
 longer a verdict (M8 partly, the rest is OMNI-146), and a candidate's own
 exception counts against it (M11). Before that, **v0.3.3** (2026-09-29): v0.3.2
@@ -425,7 +454,9 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   full loop on the same engine: `runtime/target.py` (`sum_of_divisors`) and
   `runtime/sort_target.py` (`sort_numbers`). Select with
   `--contract <name>` / `run_cycle(contract_name=...)`. A third target is a new
-  `specs/` directory plus a registry entry, not an engine change.
+  `specs/` directory plus a registry entry, not an engine change. A third
+  contract, `roman`, is a feature (Class 2), which the loop builds rather than
+  optimises (OMNI-147, see Hard rules).
 - **The sort is served over HTTP behind Ray Serve** (`sis/serving.py`, OMNI-11):
   blue and green run simultaneously with *different source* (`/sort`,
   `/sort-green`), each response carrying its own `version`/`slot`. Stateless by
@@ -507,7 +538,8 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   legacy in-memory recording — and a zero-setup `main.py` — stay the default.
 - **Class 2 (feature construction) shipped — the engine verifies two kinds of
   target now, not one** (OMNI-3 epic, closed 2026-08-11 except two low/parked
-  items). `Contract.gate_profile()` (`sis/contract.py`) is what lets a
+  items). Since OMNI-147 (2026-09-29) the loop builds one too: `--contract
+  roman` (see Hard rules). `Contract.gate_profile()` (`sis/contract.py`) is what lets a
   `FeatureContract` and an `OptimizationContract` flow through one
   `gauntlet.validate()` with different gate stacks — see Hard rules above.
   Landed as five stories:
@@ -712,9 +744,9 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   **Phase 0 is built:** `sis/sandbox_worker.py` (OMNI-129) serves a candidate
   hot from the sandbox. It is tested in both sandbox modes, including that a
   docker candidate cannot reach the network, Ray or the host's environment.
-- 1003 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
+- 1037 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
   Ray-Serve-integration tests run separately, see Operational quick reference
-  above; 1065 total, recounted 2026-09-29 — corrected 2026-09-26, a multi-dimension review found the
+  above; 1099 total, recounted 2026-09-29 — corrected 2026-09-26, a multi-dimension review found the
   previously-documented 616/678 stale); `ruff`/`mypy --strict`/`pytest` clean;
   CI green; `feature → develop → main` enforced by both the client-side
   pre-push hook and active server-side rulesets.
@@ -748,22 +780,21 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
 **Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L
 severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
 the IDs in commits/PRs. **Open after a 2026-09-26 multi-dimension review with
-adversarial verification: H3, M8 (partly fixed), M12–M14, M16–M17, M20–M23,
-L15–L20, L22, L25–L43; plus L46 from the second AWS run and L48–L50
+adversarial verification: H3, M12–M14, M16, M20–M23,
+L16–L20, L22, L25–L32, L34–L43; plus L46 from the second AWS run and L48–L50
 from the fifth (OMNI-143–145)** (M7 is won't-fix for now; H4, M10, M15, M19, L21, L23
 and L24 fixed 2026-09-26, OMNI-46/47/51/49/61/62; H5, H6, M24 and L44, found
 in the first AWS run, and L45, found releasing it, fixed 2026-09-27,
 OMNI-121–125; M18 and M25, the second run's duplicate PR, fixed the same day,
 OMNI-57/126; M26, the third run's conflicting second PR, and M27, the fourth run's
-breaker trip on a converged target, fixed 2026-09-29, OMNI-136/138; H2, M9 and M11
-fixed the same day, OMNI-45). The headline, before trusting any gauntlet
-verdict: the Class-1 benchmark now judges its candidate from outside the
-candidate's process (H2), and the exam files are protected (M9). **The
-interface, acceptance, invariant and backtest gates still run their script in
-the candidate's process**: a zero exit is no longer a verdict, but a candidate
-that finds the per-run token can print it (M8's remainder,
-[OMNI-146](https://olafzumpe.atlassian.net/browse/OMNI-146), epic
-[OMNI-43](https://olafzumpe.atlassian.net/browse/OMNI-43)). Separately, the
+breaker trip on a converged target, fixed 2026-09-29, OMNI-136/138; H2, M8, M9
+and M11 fixed the same day, OMNI-45/146, and M17, L15 and L33 with OMNI-147,
+OMNI-56/64/78). The headline, before trusting any
+gauntlet verdict: every gate but SLO now judges its candidate from outside the
+candidate's process (H2, M8), and the exam files are protected (M9). **The SLO
+gate still runs its candidate in-process** (L42,
+[OMNI-86](https://olafzumpe.atlassian.net/browse/OMNI-86); no shipped contract
+declares an SLO yet). Separately, the
 Serve canary runs candidate code as a full Ray worker in the control-plane
 cluster, before human review (H3, epic
 [OMNI-44](https://olafzumpe.atlassian.net/browse/OMNI-44)) — so the loop
@@ -797,8 +828,8 @@ Two traps L5 surfaced, both worth knowing before writing similar code:
 
 **Next — the milestone plan is in Jira ([`OMNI`](https://olafzumpe.atlassian.net/browse/OMNI)),
 not here.** Check the board for current status rather than trusting this list.
-**Last reconciled against a live query on 2026-09-29** (146 issues, OMNI-1
-through OMNI-146; 85 Done, 0 In Progress, 61 To Do — most of the growth since 2026-09-26 is
+**Last reconciled against a live query on 2026-09-29** (147 issues, OMNI-1
+through OMNI-147; 90 Done, 0 In Progress, 57 To Do — most of the growth since 2026-09-26 is
 the KNOWN_ISSUES backfill, see "Known issues" above):
 
 1. ~~**[OMNI-1](https://olafzumpe.atlassian.net/browse/OMNI-1) — L5 target
@@ -878,7 +909,7 @@ the KNOWN_ISSUES backfill, see "Known issues" above):
    instance lifecycle: `user_data` racing Ubuntu's `unattended-upgrades` for
    the dpkg lock, and SSM sessions landing as `ssm-user` rather than `ubuntu`
    (every runbook step now starts with `sudo -iu ubuntu`). The box clones
-   the release tag in `var.repo_ref` (`v0.3.4`; a branch needs
+   the release tag in `var.repo_ref` (`v0.3.5`; a branch needs
    `allow_branch_ref = true`, OMNI-63) and every run records the commit it
    ran; run day uses `--contract sort`. **Rehearsed
    2026-09-23** on a local Ubuntu 24.04 box (`scripts/rehearse_aws_run.sh`),
@@ -990,9 +1021,10 @@ Also on the board, outside the numbered epics:
 Filed 2026-09-26 from the multi-dimension review, all `To Do`. KNOWN_ISSUES
 has the defect write-ups and the ID → ticket table:
 - **[OMNI-43](https://olafzumpe.atlassian.net/browse/OMNI-43) (epic, High) —
-  gate integrity.** OMNI-45 worker-process isolation (H2/M8/M9/M11), OMNI-46
-  canonicalise output before comparing (H4), OMNI-47 deep-copy shared
-  arguments (M10). The highest-value engineering item on the board.
+  gate integrity.** OMNI-45 worker-process isolation (H2/M8/M9/M11) and its
+  second half OMNI-146 (M8), OMNI-46 canonicalise output before comparing
+  (H4), OMNI-47 deep-copy shared arguments (M10). All done 2026-09-29; what is
+  left is the SLO gate's in-process timing (L42, OMNI-86).
 - **[OMNI-44](https://olafzumpe.atlassian.net/browse/OMNI-44) (epic, High) —
   Serve-canary isolation.** OMNI-48 green not a Ray worker (H3), OMNI-49
   refuse `--canary serve` with a real proposer until then (M19, done), OMNI-50

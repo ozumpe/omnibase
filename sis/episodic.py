@@ -374,6 +374,10 @@ def gate_from_reason(reason: str | None) -> str | None:
     # failed pytest, and the analytics blame the wrong side.
     if r.startswith("harness:"):
         return "harness"
+    # The proposer produced nothing to judge: its answer stopped at the token
+    # limit (L33). Neither the candidate's gate nor the sandbox's.
+    if r.startswith("proposer:"):
+        return "proposer"
     # A candidate that changed the exam files a later gate trusts (OMNI-45, M9).
     # Its own name: it is the candidate's doing, never the sandbox's, and it is
     # worth counting separately from a wrong answer.

@@ -405,7 +405,11 @@ def from_roman(numeral: str) -> int:
 def test_a_return_type_with_its_own_equality_is_rejected() -> None:
     result = _validate(_LIAR_SUM)
     assert not result.passed, result.reason
-    assert "NotPlainError" in "\n".join(result.errors), result.errors
+    # Since OMNI-146 the acceptance tests call the candidate in a worker of its
+    # own, so what they compare is the plain int that crossed the pipe: the
+    # liar's __eq__ never runs, and its real answer, 0, fails the first case.
+    assert result.reason.startswith("acceptance tests failed"), result.reason
+    assert any("assert 0 == 1" in e for e in result.errors), result.errors
 
 
 def test_the_same_trick_is_rejected_on_a_feature_contract() -> None:
@@ -459,7 +463,9 @@ def test_the_invariant_gate_itself_refuses_a_liar(tmp_path: pathlib.Path) -> Non
     result = gauntlet._gate_invariant(_gate_ctx(tmp_path, ROMAN, _LIAR_ROMAN))
     assert result is not None and not result.passed
     assert result.reason.startswith("invariant violated in sandbox"), result.reason
-    assert "not a plain value" in result.reason
+    # The law is judged on the plain value that crossed the pipe (OMNI-146), so
+    # the always-equal int is just the wrong number it wraps.
+    assert "round_trip does not hold" in result.reason
 
 
 # --- M10: candidate and reference sharing one input object (OMNI-47) --------
@@ -529,10 +535,11 @@ def test_a_candidate_cannot_slow_the_baseline_through_a_shared_batch(
 
 # --- M8, M9: a candidate that touches the exam, or ends the process (OMNI-45) ---
 #
-# Each attack is run in both sandboxes. In the subprocess sandbox the candidate
-# can write to the exam directory and the harness must notice; in docker the
-# directory is mounted read-only and the write cannot happen, so the candidate
-# is judged on its merits (these ones are wrong or no faster, and fail there).
+# Each attack is run in both sandboxes. Since OMNI-146 no gate imports the
+# candidate beside the exam or the code that judges it: it runs only in
+# workers of its own. So these attacks miss, and the candidate is judged on its
+# merits (these ones are wrong, and fail there). The tamper check stays behind
+# them, for the soft sandbox, where a candidate could still look for the exam.
 
 import functools  # noqa: E402
 import os  # noqa: E402
@@ -608,12 +615,12 @@ _plant()
 def test_a_candidate_that_rewrites_the_oracle_cannot_pass(sandbox: str) -> None:
     # KNOWN_ISSUES M9, reproduced 2026-09-26: the exam files were writable by the
     # candidate the first gate ran, and every later gate read them.
+    # Since OMNI-146 no gate runs the candidate beside the exam: it is imported
+    # only in workers of its own, so "the directory I was loaded from" is the
+    # worker's, and the attack misses. The candidate is still wrong above 9000.
     result = _validate(_REWRITES_THE_ORACLE)
     assert not result.passed, result.reason
-    if sandbox == "subprocess":
-        assert result.reason.startswith("tampered:"), result.reason
-        assert "modified: oracle.py" in result.reason
-        assert gate_from_reason(result.reason) == "tampering"
+    assert result.reason.startswith("correctness mismatch"), result.reason
 
 
 def test_a_candidate_that_plants_a_module_beside_the_exam_cannot_pass(sandbox: str) -> None:
@@ -621,9 +628,7 @@ def test_a_candidate_that_plants_a_module_beside_the_exam_cannot_pass(sandbox: s
     # by the next gate in place of the standard library's.
     result = _validate(_PLANTS_A_MODULE)
     assert not result.passed, result.reason
-    if sandbox == "subprocess":
-        assert result.reason.startswith("tampered:"), result.reason
-        assert "added: json.py" in result.reason
+    assert result.reason.startswith("correctness mismatch"), result.reason  # see above
 
 
 _EXITS_AT_IMPORT = '''
@@ -644,21 +649,149 @@ if "pytest" in sys.modules:
 def test_a_candidate_that_ends_the_process_at_import_is_not_believed(sandbox: str) -> None:
     # KNOWN_ISSUES M8: exit code 0 was the whole verdict of every non-benchmark
     # gate. Reproduced against roman; the default contract had the same shape.
+    # Since OMNI-146 it ends only its own worker, before the handshake.
     for contract in (None, ROMAN):
         result = (gauntlet.validate(_EXITS_AT_IMPORT, _BASELINE) if contract is None
                   else gauntlet.validate(_EXITS_AT_IMPORT, contract=contract))
         assert not result.passed, (contract, result.reason)
-        assert result.reason.startswith("interface:"), result.reason
-        assert "no verdict" in result.reason
+        assert result.reason == "interface: candidate could not be imported", result.reason
 
 
 def test_a_candidate_that_ends_the_process_only_under_pytest_is_not_believed(
     sandbox: str,
 ) -> None:
+    # Since OMNI-146 pytest never runs in the candidate's process, so this
+    # candidate never sees it and simply answers; above 9000, wrongly.
     result = _validate(_EXITS_ONLY_UNDER_PYTEST)
     assert not result.passed
-    assert result.reason.startswith("acceptance tests failed"), result.reason
-    assert "without reporting that the tests passed" in result.reason
+    assert result.reason.startswith("correctness mismatch"), result.reason
+
+
+# --- M8's remainder: a candidate that forges a gate's verdict (OMNI-146) ---
+#
+# Before OMNI-146 the interface, acceptance, invariant and backtest scripts ran
+# in the candidate's process: their per-run token was a constant in the calling
+# frames, and pytest's summary was a line anyone could print. This candidate
+# prints whatever verdict it can find and ends the process; without one in
+# sight it answers, wrongly. Against the old gates it passed every one of them.
+
+_FORGES_THE_VERDICT = '''
+import os
+import re
+import stat
+import sys
+from types import FrameType
+
+
+def _forge() -> None:
+    found = False
+    frame: FrameType | None = sys._getframe()
+    while frame is not None:
+        for const in frame.f_code.co_consts:
+            if isinstance(const, str):
+                match = re.fullmatch(r"(?:OK )?([0-9a-f]{16})", const)
+                if match:
+                    print(f"OK {match.group(1)}", flush=True)
+                    found = True
+        frame = frame.f_back
+    if "pytest" in sys.modules:
+        # pytest captures fd 1 while it collects; its saved copy of the real
+        # stdout is another pipe among the open descriptors.
+        for fd in range(1, 64):
+            try:
+                if stat.S_ISFIFO(os.fstat(fd).st_mode):
+                    os.write(fd, b"12 passed in 0.01s\\n")
+            except OSError:
+                pass
+        found = True
+    if found:
+        os._exit(0)
+
+
+_forge()
+'''
+
+_FORGING_ROMAN = _FORGES_THE_VERDICT + '''
+
+def to_roman(n: int) -> str:
+    return "X"
+
+
+def from_roman(s: str) -> int:
+    return 10
+'''
+
+_FORGING_SUM = _FORGES_THE_VERDICT + '''
+
+def sum_of_divisors(n: int) -> int:
+    return 0
+'''
+
+
+def test_a_forger_without_the_contracts_exports_fails_the_interface_gate(
+    tmp_path: pathlib.Path, sandbox: str,
+) -> None:
+    source = _FORGES_THE_VERDICT + "\n\ndef to_roman(n: int) -> str:\n    return 'X'\n"
+    result = gauntlet._gate_interface(_gate_ctx(tmp_path, ROMAN, source))
+    assert result is not None and not result.passed
+    assert result.reason.startswith("interface: candidate does not export 'from_roman'"), \
+        result.reason
+
+
+def test_a_forger_fails_the_acceptance_gate(tmp_path: pathlib.Path, sandbox: str) -> None:
+    result = gauntlet._gate_acceptance(_gate_ctx(tmp_path, ROMAN, _FORGING_ROMAN))
+    assert result is not None and not result.passed
+    assert result.reason == "acceptance tests failed", result.reason
+
+
+def test_a_forger_fails_the_invariant_gate(tmp_path: pathlib.Path, sandbox: str) -> None:
+    result = gauntlet._gate_invariant(_gate_ctx(tmp_path, ROMAN, _FORGING_ROMAN))
+    assert result is not None and not result.passed
+    assert result.reason.startswith("invariant violated in sandbox"), result.reason
+    assert gate_from_reason(result.reason) == "invariant"
+
+
+def test_a_forger_fails_the_backtest_gate(tmp_path: pathlib.Path, sandbox: str) -> None:
+    import json
+    from dataclasses import replace
+
+    from sis.backtest import FIXTURE_SCHEMA, Backtest
+
+    fixture, expect = tmp_path / "six.json", tmp_path / "six_expect.json"
+    fixture.write_text(json.dumps({"schema": FIXTURE_SCHEMA, "args": [6]}), encoding="utf-8")
+    expect.write_text(json.dumps({"schema": FIXTURE_SCHEMA, "value": 12}), encoding="utf-8")
+    spec = replace(gauntlet.default_contract(), backtests=(
+        Backtest(name="six", fixture=str(fixture), expect=str(expect), compare="exact"),))
+    exam = tmp_path / "exam"
+    exam.mkdir()
+    result = gauntlet._gate_backtest(_gate_ctx(exam, spec, _FORGING_SUM))
+    assert result is not None and not result.passed
+    assert result.reason.startswith("backtest failed"), result.reason
+    assert "expected 12, got 0" in result.reason
+
+
+def test_a_forger_is_rejected_by_the_whole_gauntlet(sandbox: str) -> None:
+    result = gauntlet.validate(_FORGING_ROMAN, contract=ROMAN)
+    assert not result.passed
+    assert result.reason == "acceptance tests failed", result.reason
+
+
+# The stand-in shows the tests what an in-process call would have: sort's
+# acceptance tests check the caller's list is left alone, and a candidate that
+# sorts in place must still fail that test when its list is a copy in a worker.
+_SORTS_IN_PLACE = '''
+def sort_numbers(numbers: list[int]) -> list[int]:
+    numbers.sort()
+    return numbers
+'''
+
+
+def test_a_candidate_that_changes_its_input_still_fails_the_test_that_forbids_it(
+    tmp_path: pathlib.Path, sandbox: str,
+) -> None:
+    result = gauntlet._gate_acceptance(_gate_ctx(tmp_path, SORT, _SORTS_IN_PLACE))
+    assert result is not None and not result.passed
+    assert any("test_does_not_mutate_its_input" in e for e in result.errors), result.errors
 
 
 # --- the pieces those rely on ---
@@ -854,4 +987,6 @@ def test_the_benchmark_runs_the_candidate_in_a_worker_of_its_own(monkeypatch) ->
     fast = (PROJECT_ROOT / str(spec.stub_candidate_path)).read_text(encoding="utf-8")
     result = gauntlet.validate(fast, _BASELINE, baseline_source=baseline)
     assert result.passed, result.reason
-    assert started == [fast, baseline]
+    # The interface gate's worker, then the benchmark's two. The acceptance
+    # gate's worker starts in its harness process (OMNI-146), unseen here.
+    assert started == [fast, fast, baseline]

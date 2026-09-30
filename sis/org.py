@@ -26,7 +26,7 @@ from typing import Any
 import ray
 
 from sis import config, episodic, gauntlet, llm
-from sis.contract import DEFAULT_CONTRACTS
+from sis.contract import REGISTERED_CONTRACTS, FeatureContract
 from sis.ports import Severity
 from sis.roles import (
     CEO,
@@ -336,7 +336,7 @@ def bootstrap() -> dict[str, Any]:
 
     # Register what each target is judged by. Idempotent, keyed by target path,
     # so a detached SelfModel surviving a restart just re-learns the same map.
-    for contract in DEFAULT_CONTRACTS:
+    for contract in REGISTERED_CONTRACTS:
         ray.get(self_model.register_contract.remote(contract))
 
     # Name the code this run executes (OMNI-63): the provenance graph and the
@@ -416,6 +416,27 @@ def cycle_summary(result: Mapping[str, Any]) -> str:
     return f"[cycle] {status}: {detail}" + (f" ({'; '.join(money)})" if money else "")
 
 
+def rejection_bug(
+    story_id: str, reason: str | None, *, pr_id: str | None = None
+) -> tuple[str | None, str]:
+    """The reject gate of a rejected cycle, and the summary its bug is filed under. Pure.
+
+    One rule for the SWE's rejection and QA's (*pr_id* given), so neither
+    loses what the other keeps (OMNI-56, M17): the gauntlet's reason, the gate
+    the CEO weighs, and a harness fault filed as what it is (OMNI-37): the
+    sandbox broke, the candidate was never judged.
+    """
+    gate = episodic.gate_from_reason(reason)
+    where = f"QA of {story_id} (PR {pr_id})" if pr_id else story_id
+    if gate == "harness":
+        headline = f"Infrastructure fault (sandbox) during {where} — the candidate was not judged"
+    elif pr_id:
+        headline = f"QA rejected {story_id} (PR {pr_id})"
+    else:
+        headline = f"Cycle failed for {story_id}"
+    return gate, f"{headline}: {reason}" if reason else headline
+
+
 def cycle_outcome(approved: bool, canary: dict[str, Any] | None) -> tuple[str, bool, str | None]:
     """Fold QA's verdict and (if one ran) the canary's into one cycle outcome.
 
@@ -452,8 +473,8 @@ def run_cycle(
 ) -> dict[str, Any]:
     """Run one full intake→spec→epic→story→implement→review→canary cycle.
 
-    *contract_name* selects which registered target to optimise (see
-    ``sis.contract.DEFAULT_CONTRACTS``); None keeps the bootstrap target.
+    *contract_name* selects which registered target to optimise or build (see
+    ``sis.contract.REGISTERED_CONTRACTS``); None keeps the bootstrap target.
     Passed to BOTH the SWE and QA so they judge the candidate against the
     same oracle — and passed explicitly rather than via ``SIS_CONTRACT``
     because the role actors are separate processes that cannot see an env
@@ -477,6 +498,16 @@ def run_cycle(
 
     ws = handles["Workspace"]
     sm = handles["SelfModel"]
+    # The Serve canary judges a candidate's latency against a reference, and a
+    # Class-2 feature has neither (OMNI-147): refused before any spend.
+    if (canary_backend or config.get("canary.backend")) == "serve":
+        named = contract_name or config.get("contracts.default")
+        if isinstance(ray.get(sm.contract_by_name.remote(named)) if named else None,
+                      FeatureContract):
+            raise RuntimeError(
+                f"canary.backend='serve' cannot judge contract {named!r}: it is a feature "
+                "(Class 2), with no reference or benchmark to compare. Leave canary.backend "
+                "unset (the in-memory canary) for it.")
     ceo, pm, cto, designer, swe, qa, devops = (
         handles["CEO"], handles["PM"], handles["CTO"],
         handles["Designer"], handles["SWE"], handles["QA"], handles["DevOps"],
@@ -601,19 +632,13 @@ def run_cycle(
                         "provenance": ray.get(sm.provenance.remote())}, cost_usd)
 
     if not impl["passed"]:
-        gate = episodic.gate_from_reason(impl.get("reason"))
+        gate, summary = rejection_bug(story_id, impl.get("reason"))
         # The gate is passed so the CEO can weigh a correct-but-over-budget
         # rejection (``slo``, OMNI-24) below a wrong one.
         trip = ray.get(ceo.report_outcome.remote(
             success=False, cost_usd=cost_usd, reject_gate=gate))
         # Failures become artifacts (ACTORS.md: DevOps files bug/defect Jiras).
-        # A harness fault is filed as what it is (OMNI-37): the sandbox broke,
-        # the candidate was never judged, and the fix is in the infrastructure.
-        headline = (
-            f"Infrastructure fault (sandbox) during {story_id} — the candidate was not judged"
-            if gate == "harness" else f"Cycle failed for {story_id}"
-        )
-        bug_id = ray.get(devops.file_bug.remote(f"{headline}: {impl['reason']}"))
+        bug_id = ray.get(devops.file_bug.remote(summary))
         if gate == "harness":
             # A broken sandbox fails every cycle after this one too, and nothing
             # a proposer does will fix it — worth a person now, not after the
@@ -675,14 +700,21 @@ def run_cycle(
     status, success, canary_reason = cycle_outcome(approved, canary)
 
     # 8. PM acceptance + CEO records the outcome + spend (drives the brakes).
+    # A rejection keeps its reason and gate, as at the SWE stage (OMNI-56).
+    reason = (canary_reason if status == "canary_rejected"
+              else qa_reason if status == "qa_rejected" else None)
     ray.get(pm.accept.remote(spec_id, satisfied=success))
-    trip = ray.get(ceo.report_outcome.remote(success=success, cost_usd=cost_usd))
+    trip = ray.get(ceo.report_outcome.remote(
+        success=success, cost_usd=cost_usd, reject_gate=episodic.gate_from_reason(reason)))
     if status == "canary_rejected":
         bug_id = ray.get(devops.file_bug.remote(
             f"Live canary rejected {story_id} (PR {impl['pr_id']}): {canary_reason}"))
     elif status == "qa_rejected":
-        bug_id = ray.get(devops.file_bug.remote(
-            f"QA rejected {story_id} (PR {impl['pr_id']})"))
+        qa_gate, summary = rejection_bug(story_id, qa_reason, pr_id=impl["pr_id"])
+        bug_id = ray.get(devops.file_bug.remote(summary))
+        if qa_gate == "harness":
+            page(ws, store, Severity.WARNING, f"sandbox broken during QA of {story_id}",
+                 f"The candidate was not judged: {qa_reason}\nFiled as {bug_id}.")
     else:
         bug_id = None
     breaker_bug_id = _breaker_alarm(trip)
@@ -693,7 +725,7 @@ def run_cycle(
         # extraction (result.get("reason")) with zero new plumbing there —
         # CanaryVerdict.reason (evaluate_canary) is a distinct failure family
         # from the offline gauntlet's, so gate_from_reason grows matching names.
-        "reason": canary_reason if status == "canary_rejected" else None,
+        "reason": reason,
         "bug_id": bug_id,
         "breaker_bug_id": breaker_bug_id,
         "spec_id": spec_id,

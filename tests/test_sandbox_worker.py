@@ -238,3 +238,94 @@ def test_a_version_that_does_not_load_never_replaces_a_working_one() -> None:
 def test_an_empty_slot_answers_nothing() -> None:
     with pytest.raises(WorkerDied, match="nothing is deployed"):
         HotSlot("f").call([[]])
+
+
+# --- several exports, and the stand-in module the gates import (OMNI-146) ---
+
+_ROMANISH = '''
+class RomanError(ValueError):
+    pass
+
+
+def to_roman(n: int, *, strict: bool = False) -> str:
+    if n <= 0:
+        raise RomanError(f"no numeral for {n}")
+    return "I" * n if not strict else "X"
+
+
+def from_roman(s: str) -> int:
+    return len(s)
+
+
+def shuffle_in_place(xs: list[int]) -> None:
+    xs.reverse()
+
+
+def leave(code: int) -> None:
+    raise SystemExit(code)
+
+
+VERSION = "1"
+'''
+
+
+def test_a_worker_serves_every_export_it_was_asked_for(mode: str) -> None:
+    worker = SandboxWorker(_ROMANISH, "to_roman", exports=["from_roman"],
+                           optional=["VERSION", "absent"]).start()
+    try:
+        assert set(worker.exports) == {"to_roman", "from_roman", "VERSION"}
+        assert worker.exports["to_roman"].callable
+        assert worker.exports["to_roman"].params == ("n", "strict")
+        assert not worker.exports["VERSION"].callable
+        assert _one(worker, 3) == "III"
+        (back,) = worker.call([["III"]], fn="from_roman").results
+        assert back.value == 3
+        (kw,) = worker.call([[2]], kwargs=[{"strict": True}]).results
+        assert kw.value == "X"
+    finally:
+        worker.close()
+
+
+def test_a_missing_export_is_named_when_the_worker_does_not_start(mode: str) -> None:
+    with pytest.raises(WorkerStartError) as info:
+        SandboxWorker(_ROMANISH, "to_roman", exports=["to_arabic"]).start()
+    assert info.value.missing == ("to_arabic",)
+    assert not info.value.harness
+
+
+def test_the_proxy_behaves_like_the_candidates_own_module(mode: str, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from sis.sandbox_worker import CandidateFailed, NotWireable, install_proxy
+
+    source = tmp_path / "candidate.py"
+    source.write_text(_ROMANISH, encoding="utf-8")
+    module: dict[str, object] = {}
+    worker = install_proxy(
+        module, source_path=str(source), entry="to_roman",
+        exports=["from_roman", "shuffle_in_place", "leave"], optional=["absent"],
+        worker_name="sis-test-proxy", call_timeout_s=10.0,
+    )
+    try:
+        assert "absent" not in module
+        to_roman = module["to_roman"]
+        assert callable(to_roman)
+        assert to_roman(2) == "II"
+        assert to_roman(2, strict=True) == "X"
+        # The nearest builtin in the exception's own hierarchy, message kept.
+        with pytest.raises(ValueError, match="no numeral for 0"):
+            to_roman(0)
+        # A change to an argument list shows in the caller's copy.
+        numbers = [1, 2, 3]
+        shuffle = module["shuffle_in_place"]
+        assert callable(shuffle)
+        shuffle(numbers)
+        assert numbers == [3, 2, 1]
+        # The candidate's SystemExit must not end the process that judges it.
+        leave = module["leave"]
+        assert callable(leave)
+        with pytest.raises(CandidateFailed, match="SystemExit"):
+            leave(0)
+        # An argument JSON cannot carry is the exam's problem, not the candidate's.
+        with pytest.raises(NotWireable):
+            to_roman({1, 2})
+    finally:
+        worker.close()

@@ -104,3 +104,78 @@ def test_extract_code_strips_fences() -> None:
 def test_extract_code_without_fences() -> None:
     plain = "def f(x: int) -> int:\n    return x"
     assert proposer._extract_code(plain) == "def f(x: int) -> int:\n    return x\n"
+
+
+# --- building a feature from its spec (Class 2, OMNI-147) ---
+
+
+def test_the_stub_builds_roman_from_its_own_candidate() -> None:
+    from sis.contract import ROMAN
+    from sis.paths import PROJECT_ROOT
+
+    assert proposer.propose("", 0.0, contract=ROMAN) == (
+        PROJECT_ROOT / "runtime/candidates/roman.py").read_text(encoding="utf-8")
+
+
+def test_the_build_prompt_is_the_spec_and_nothing_held_out() -> None:
+    from sis.backtest import Backtest
+    from sis.contract import ROMAN
+
+    spec = replace(ROMAN, backtests=(
+        Backtest(name="recorded", fixture="specs/roman/secret.json",
+                 expect="specs/roman/secret_expect.json"),))
+    prompt = proposer._build_prompt("", spec, ["rejected: acceptance tests failed"])
+    assert "to_roman, from_roman" in prompt and "runtime/roman.py" in prompt
+    assert "def test_to_roman_produces_the_canonical_numeral" in prompt  # the tests
+    assert "round_trip: `round_trip` must hold" in prompt                 # the laws
+    assert "def in_range_values" in prompt                                # their module
+    assert "1 recorded episode(s), held out and not shown" in prompt
+    assert "secret" not in prompt, "a held-out fixture must never reach the prompt"
+    assert "write it from scratch" in prompt
+    assert "'rejected: acceptance tests failed'" in prompt
+    assert "fix what each reason names" in prompt
+    assert "no further gain" not in prompt
+
+
+def test_the_build_prompt_carries_the_module_that_fails() -> None:
+    from sis.contract import ROMAN
+
+    prompt = proposer._build_prompt("def to_roman(n: int) -> str: ...\n", ROMAN)
+    assert "which fails a gate (fix it)" in prompt and "def to_roman(n: int)" in prompt
+
+
+def test_a_feature_is_built_with_its_own_system_prompt(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from sis.contract import ROMAN
+
+    monkeypatch.setenv("SIS_PROPOSER", "claude")
+    seen: dict[str, str] = {}
+
+    def fake(system: str, user: str) -> str:
+        seen.update(system=system, user=user)
+        return "def to_roman(n: int) -> str:\n    return ''\n"
+
+    monkeypatch.setattr(proposer, "_complete", fake)
+    proposer.propose("", 0.0, contract=ROMAN)
+    assert seen["system"] == proposer._BUILD_SYSTEM_PROMPT
+    assert "optimise" not in seen["system"].lower()
+
+
+def test_an_answer_cut_off_at_the_token_limit_is_not_judged(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # KNOWN_ISSUES L33 (OMNI-78): a truncated answer was extracted and judged,
+    # and the gate that failed it blamed the candidate.
+    from sis import llm
+    from sis.episodic import gate_from_reason
+
+    class _CutOff:
+        model = "m"
+
+        def complete(self, *, system: str, user: str, max_tokens: int) -> llm.LLMResponse:
+            return llm.LLMResponse(text="def sum_of_div", cost_usd=0.25, model="m",
+                                   truncated=True)
+
+    monkeypatch.setenv("SIS_PROPOSER", "claude")
+    monkeypatch.setattr(llm, "get_llm_client", lambda *a, **k: _CutOff())
+    with pytest.raises(proposer.ProposalCutOff, match="token limit"):
+        proposer.propose("def sum_of_divisors(n: int) -> int: ...", 0.001)
+    assert proposer.last_cost_usd() == 0.25, "the call's cost still counts"
+    assert gate_from_reason("proposer: the m answer stopped at the token limit") == "proposer"

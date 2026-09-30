@@ -205,11 +205,14 @@ def build_script(
     plan: list[dict[str, Any]],
     nonce: str = "",
 ) -> str:
-    """Build the in-sandbox backtest script.
+    """Build the backtest script, which the gate runs in its harness process.
 
-    *nonce* is a per-run token printed after the verdict (``OK <nonce>``); the
-    gate believes a zero exit only when it sees it last (M8). Empty prints a
-    bare ``OK``, for tests that build the script by hand.
+    *candidate_path* is the stand-in module the gate writes, whose exports call
+    the candidate in a worker of its own (OMNI-146), so the script and the
+    candidate never share a process. *nonce* is a per-run token printed after
+    the verdict (``OK <nonce>``); the gate believes a zero exit only with that
+    line in the output (M8). Empty prints a bare ``OK``, for tests that build
+    the script by hand.
 
     *plan* is one dict per backtest with sandbox-local ``fixture``/``expect``
     paths plus ``name``/``compare``/``tolerance``. Pure string building, so the

@@ -23,7 +23,7 @@ from typing import Any
 
 import ray
 
-from sis.contract import OptimizationContract
+from sis.contract import Contract
 
 SELF_MODEL_NAME = "SelfModel"
 
@@ -54,7 +54,7 @@ class SelfModel:
         self._provenance: list[ProvenanceEvent] = []
         self._slots: dict[str, str | None] = {"blue": None, "green": None}  # slot → version
         self._live_version: str | None = None
-        self._contracts: dict[str, OptimizationContract] = {}  # target_path → contract
+        self._contracts: dict[str, Contract] = {}  # target_path → contract
         self._pr_contracts: dict[str, str] = {}  # pr_id → contract name
         # The PR whose merge would release the current canary. Tracked here
         # rather than parsed back out of the green version string: the version
@@ -125,19 +125,19 @@ class SelfModel:
     # target is *judged by* belongs with it rather than in an env var, and it is
     # the same lookup the canary needs to fetch a PR's contract later
     # (docs/SERVE_CANARY.md step 10).
-    def register_contract(self, contract: OptimizationContract) -> None:
+    def register_contract(self, contract: Contract) -> None:
         self._contracts[contract.target_path] = contract
 
-    def contract_for(self, target_path: str) -> OptimizationContract | None:
+    def contract_for(self, target_path: str) -> Contract | None:
         """The contract governing *target_path*, or None if it has none."""
         return self._contracts.get(target_path)
 
-    def contract_by_name(self, name: str) -> OptimizationContract | None:
+    def contract_by_name(self, name: str) -> Contract | None:
         """The contract called *name*, or None. How a cycle selects which
         target to optimise (``SIS_CONTRACT``) when there is more than one."""
         return next((c for c in self._contracts.values() if c.name == name), None)
 
-    def contracts(self) -> list[OptimizationContract]:
+    def contracts(self) -> list[Contract]:
         return list(self._contracts.values())
 
     def set_pr_contract(self, pr_id: str, contract_name: str) -> None:
@@ -154,7 +154,7 @@ class SelfModel:
         """
         self._pr_contracts[pr_id] = contract_name
 
-    def contract_for_pr(self, pr_id: str) -> OptimizationContract | None:
+    def contract_for_pr(self, pr_id: str) -> Contract | None:
         """The contract governing *pr_id*'s candidate, or None if unknown."""
         name = self._pr_contracts.get(pr_id)
         return self.contract_by_name(name) if name else None
