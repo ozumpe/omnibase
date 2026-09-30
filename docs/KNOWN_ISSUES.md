@@ -35,7 +35,7 @@ reference with no link target below.
 >
 > | ID | Jira |
 > |---|---|
-> | H2, M8, M9, M11 | [OMNI-45](https://olafzumpe.atlassian.net/browse/OMNI-45) (epic [OMNI-43](https://olafzumpe.atlassian.net/browse/OMNI-43)) — H2, M9 and M11 **fixed**, M8 partly (2026-09-29) |
+> | H2, M8, M9, M11 | [OMNI-45](https://olafzumpe.atlassian.net/browse/OMNI-45) (epic [OMNI-43](https://olafzumpe.atlassian.net/browse/OMNI-43)) — H2, M9 and M11 **fixed**, M8 partly (2026-09-29); M8's remainder is [OMNI-146](https://olafzumpe.atlassian.net/browse/OMNI-146) |
 > | H4 | [OMNI-46](https://olafzumpe.atlassian.net/browse/OMNI-46) (epic OMNI-43) — **fixed** |
 > | M10 | [OMNI-47](https://olafzumpe.atlassian.net/browse/OMNI-47) (epic OMNI-43) — **fixed** |
 > | H3 | [OMNI-48](https://olafzumpe.atlassian.net/browse/OMNI-48) (epic [OMNI-44](https://olafzumpe.atlassian.net/browse/OMNI-44)) |
@@ -107,7 +107,8 @@ reference with no link target below.
   fail with "…ended the process… no verdict", on both contract classes and in
   both sandboxes. A candidate that calls `sys.exit(0)` mid-call in the
   invariant or backtest gate is a counted failure too (see M11).
-  **Still open:** in these four gates the token lives in the process the
+  **Still open** ([OMNI-146](https://olafzumpe.atlassian.net/browse/OMNI-146)):
+  in these four gates the token lives in the process the
   candidate shares, so a candidate that finds it (the script's globals, the
   call stack) can print it and exit. The benchmark gate no longer has that
   reach (H2, fixed: its candidate answers from a worker of its own). Closing it

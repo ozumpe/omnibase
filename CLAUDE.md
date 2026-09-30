@@ -155,7 +155,7 @@ internal target before it models anything external.
     `harness: … crashed`. **What this is not:** in the interface, acceptance,
     invariant and backtest gates the token and the gate script still share a
     process with the candidate, so one that finds the token can forge a pass
-    (M8's remainder). The benchmark gate has no such token: its candidate runs
+    (M8's remainder, OMNI-146). The benchmark gate has no such token: its candidate runs
     in a worker (see Class 1 above).
   - Every gate ends in a human PR. Generated code MUST be fully typed. What
     counts as correct/better is per-target — see `sis/contract.py`.
@@ -757,7 +757,8 @@ verdict: the Class-1 benchmark now judges its candidate from outside the
 candidate's process (H2), and the exam files are protected (M9). **The
 interface, acceptance, invariant and backtest gates still run their script in
 the candidate's process**: a zero exit is no longer a verdict, but a candidate
-that finds the per-run token can print it (M8's remainder, epic
+that finds the per-run token can print it (M8's remainder,
+[OMNI-146](https://olafzumpe.atlassian.net/browse/OMNI-146), epic
 [OMNI-43](https://olafzumpe.atlassian.net/browse/OMNI-43)). Separately, the
 Serve canary runs candidate code as a full Ray worker in the control-plane
 cluster, before human review (H3, epic
