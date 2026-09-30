@@ -351,8 +351,8 @@ What to expect, Class 2 (`roman`, OMNI-147):
   further steps.
 - The loop then **holds** until you merge or close the PR, as for Class 1.
 - After the merge, the next cycles judge the merged `runtime/roman.py` again.
-  Each is `[cycle] no_gain: … already built: runtime/roman.py passes every
-  gate`, with no LLM call and no spend. After `loop.converged_after` (default
+  Each is `[cycle] no_gain: built: already built: runtime/roman.py passes
+  every gate`, with no LLM call and no spend. After `loop.converged_after` (default
   3) of them, the loop stops: `roman has converged`, with a WARNING page.
 - A closed (declined) PR releases the hold; the next cycle builds again from
   scratch.

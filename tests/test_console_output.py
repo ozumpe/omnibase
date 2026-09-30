@@ -96,3 +96,11 @@ def test_every_other_way_the_loop_ends_is_named() -> None:
     assert "interrupted" in _stop(None, 1, interrupted=True)
     assert "reached loop.max_cycles (3)" in _stop(None, 3)
     assert "no further work" in _stop(None, 1)
+
+
+def test_an_already_built_feature_names_its_gate() -> None:
+    # OMNI-147's "already built" printed as "gate unknown" in v0.3.5.
+    line = _summary(status="no_gain",
+                    reason="already built: runtime/roman.py passes every gate")
+    assert line == ("[cycle] no_gain: built: already built: "
+                    "runtime/roman.py passes every gate")
