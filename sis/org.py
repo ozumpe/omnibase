@@ -25,7 +25,7 @@ from typing import Any
 
 import ray
 
-from sis import config, episodic, gauntlet, llm
+from sis import config, episodic, gauntlet
 from sis.contract import REGISTERED_CONTRACTS, FeatureContract
 from sis.ports import Severity
 from sis.roles import (
@@ -514,9 +514,6 @@ def run_cycle(
     )
 
     proposer = str(config.get("proposer.backend"))
-    # The model recorded in the episodic log = whichever provider/model is
-    # configured (sis.llm), not a hardcoded vendor. None for the stub.
-    model = llm.configured_model() if proposer != "stub" else None
     store = episodic.get_episodic_store()
 
     # The contract this cycle runs against, as far as it is known yet: the
@@ -524,9 +521,14 @@ def run_cycle(
     # it on every result, so the episodic log says which target a cycle was
     # about — the first AWS run's log could not.
     known_contract: dict[str, str | None] = {"name": contract_name}
+    called: dict[str, str | None] = {"model": None}
 
     def _record(res: dict[str, Any], cost: float = 0.0) -> dict[str, Any]:
         res.setdefault("contract", known_contract["name"])
+        # The model this cycle called, as the SWE reports it; None when none was
+        # (the stub, a pause, an already-built feature). Not the configured one,
+        # which the log used to stamp on every cycle (L53, OMNI-150).
+        res.setdefault("model", called["model"])
         # What the cycle cost and where spend stands, on every result — the
         # console line (cycle_summary, OMNI-123) reports both for every exit.
         res.setdefault("cost_usd", cost)
@@ -535,7 +537,7 @@ def run_cycle(
         # break a cycle. The driver is the single writer (keeps DuckDB happy).
         try:
             store.append(episodic.event_from_cycle_result(
-                res, cost_usd=cost, proposer=proposer, model=model))
+                res, cost_usd=cost, proposer=proposer, model=res["model"]))
         except Exception:  # noqa: BLE001
             pass
         try:
@@ -585,6 +587,18 @@ def run_cycle(
              "runs until the budget (brakes.budget_usd) is raised.")
         return _record({"status": "budget_denied"})
 
+    # A Class-2 feature already built has nothing to plan (OMNI-149, L52): the
+    # check costs nothing, so it comes before any page or issue is filed.
+    built = ray.get(swe.already_built.remote(contract_name))
+    if built is not None:
+        known_contract["name"] = built["contract"]
+        trip = ray.get(ceo.record_neutral.remote(cost_usd=0.0))
+        return _record({"status": episodic.NO_GAIN, "reason": built["reason"],
+                        "candidate_sha": built["candidate_sha"],
+                        "breaker_bug_id": _breaker_alarm(trip),
+                        "economics": ray.get(ceo.economics.remote()),
+                        "provenance": ray.get(sm.provenance.remote())})
+
     # 2–4 happen once per feature (OMNI-135): a step of a feature in progress
     # works under the plan its first step made, so a feature files one spec,
     # one epic and one story rather than one of each per cycle.
@@ -610,6 +624,7 @@ def run_cycle(
     impl = ray.get(swe.implement.remote(story_id, contract_name))
     cost_usd = float(impl.get("cost_usd", 0.0))
     known_contract["name"] = impl.get("contract", contract_name)
+    called["model"] = impl.get("model")
 
     # A "no change" outcome — the candidate is identical to the current baseline
     # — is not a failure: the loop correctly found nothing to improve. Record

@@ -60,6 +60,8 @@ def handles(request):  # type: ignore[no-untyped-def]
     impl, status = request.param
     h = org.bootstrap()
     h["SWE"] = SimpleNamespace(
+        # A Class-1 target is never "already built" (OMNI-149).
+        already_built=SimpleNamespace(remote=lambda contract_name=None: ray.put(None)),
         implement=SimpleNamespace(
             remote=lambda story_id, contract_name=None: ray.put(impl)))
     h["_expected_status"] = status

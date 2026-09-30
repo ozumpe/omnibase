@@ -28,7 +28,7 @@ This document has four parts:
 | Where artifacts land | Jira `TES`, GitHub `ozumpe/testrun` (PRs against `develop`) |
 | Spend brakes | `SIS_BUDGET_USD=1.00` in the loop; an AWS Budget alarm (default $25/month) on the account |
 | Cost | about $0.20 an hour while the instance runs |
-| Latest | run #5 (`v0.3.2`, both contracts converged), 2026-09-29 — see [History](#history) |
+| Latest | run #6 (`v0.3.5`, `roman` built at the first attempt), 2026-09-30 — see [History](#history) |
 
 ---
 
@@ -352,7 +352,9 @@ What to expect, Class 2 (`roman`, OMNI-147):
 - The loop then **holds** until you merge or close the PR, as for Class 1.
 - After the merge, the next cycles judge the merged `runtime/roman.py` again.
   Each is `[cycle] no_gain: built: already built: runtime/roman.py passes
-  every gate`, with no LLM call and no spend. After `loop.converged_after` (default
+  every gate`, with no LLM call and no spend. From the release after
+  `v0.3.5` these cycles also file no Confluence page or Jira issue (OMNI-149);
+  on `v0.3.5` the first of them files a plan whose story stays In Progress. After `loop.converged_after` (default
   3) of them, the loop stops: `roman has converged`, with a WARNING page.
 - A closed (declined) PR releases the hold; the next cycle builds again from
   scratch.
@@ -830,3 +832,15 @@ second operator, a second node.
   replaced before its log was synced, so only its TES bug survives
   (OMNI-140). Artifacts in
   `s3://sis-first-run-artifacts-696644743351/runs/20260929-2028/`.
+- **2026-09-30 — run #6, on `v0.3.5`, contract `roman`**: the first Class-2
+  run (OMNI-147). `claude-opus-4-8` built `runtime/roman.py` at its first
+  attempt: every gate passed in the docker sandbox, and testrun #19 ("Build
+  roman: 1 step") opened at 18:19 UTC for $0.0353. A human merged it at 18:22.
+  The next three cycles found it "already built" ($0, no model call), and the
+  loop stopped as converged with a WARNING page. No bug filed, breaker
+  untouched, $0.0353 of $1.00. Three findings, L51–L53 (OMNI-148 to 150): the
+  intake still says "Speed up", the convergence check filed a second plan and
+  left TES-148 In Progress, and the log names a model for cycles without a
+  call. Artifacts in
+  `s3://sis-first-run-artifacts-696644743351/runs/20260930-1818/`
+  (`-1825` is its by-hand copy, L48).
