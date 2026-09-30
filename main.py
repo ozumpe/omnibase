@@ -47,8 +47,14 @@ def _proposal(contract_name: str | None) -> tuple[str, str]:
 
     It used to say "divisor-sum" whatever the contract, so a `sort` run on the
     real tenant filed Confluence and Jira artifacts about the wrong function.
+    A feature (Class 2) is built, not sped up (L51, OMNI-148).
     """
-    target = contract_name or "sum_of_divisors"
+    target = contract_name or contract.default_contract().name
+    spec = next((c for c in contract.REGISTERED_CONTRACTS if c.name == target), None)
+    if isinstance(spec, contract.FeatureContract):
+        return (f"Build the {target} feature",
+                f"Build the {target} feature from its specification: the public API, "
+                "the acceptance tests and the laws its contract names.")
     return (f"Speed up the {target} target",
             f"The {target} target is too slow under load. "
             "Please make it faster without changing results.")
