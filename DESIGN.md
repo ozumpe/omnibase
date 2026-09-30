@@ -124,8 +124,10 @@ cheapest, safest checks first:
    regression.
 5. **Sandboxed run** — execute the candidate in an isolated Ray task with its own
    `runtime_env`, ideally inside a locked-down container: **no network egress, no
-   credential mounts.** Steps 3 and 4 run *inside* this sandbox so an infinite loop
-   or malicious diff is contained. A candidate served *hot* (a canary, a feature
+   credential mounts.** In steps 3 and 4 the candidate runs *inside* this sandbox
+   so an infinite loop or malicious diff is contained, and the tests, the clock
+   and the verdict that judge it stay outside, in a process it never runs in
+   (OMNI-45, OMNI-146). A candidate served *hot* (a canary, a feature
    under test) runs in the same sandbox through the sandbox worker,
    `sis/sandbox_worker.py`: a long-lived process reached over stdin/stdout, so it
    needs no network (OMNI-129, `docs/STAGED_DELIVERY.md`).

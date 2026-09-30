@@ -35,7 +35,7 @@ reference with no link target below.
 >
 > | ID | Jira |
 > |---|---|
-> | H2, M8, M9, M11 | [OMNI-45](https://olafzumpe.atlassian.net/browse/OMNI-45) (epic [OMNI-43](https://olafzumpe.atlassian.net/browse/OMNI-43)) — H2, M9 and M11 **fixed**, M8 partly (2026-09-29); M8's remainder is [OMNI-146](https://olafzumpe.atlassian.net/browse/OMNI-146) |
+> | H2, M8, M9, M11 | [OMNI-45](https://olafzumpe.atlassian.net/browse/OMNI-45) (epic [OMNI-43](https://olafzumpe.atlassian.net/browse/OMNI-43)) — **fixed** (2026-09-29); M8's second half was [OMNI-146](https://olafzumpe.atlassian.net/browse/OMNI-146) |
 > | H4 | [OMNI-46](https://olafzumpe.atlassian.net/browse/OMNI-46) (epic OMNI-43) — **fixed** |
 > | M10 | [OMNI-47](https://olafzumpe.atlassian.net/browse/OMNI-47) (epic OMNI-43) — **fixed** |
 > | H3 | [OMNI-48](https://olafzumpe.atlassian.net/browse/OMNI-48) (epic [OMNI-44](https://olafzumpe.atlassian.net/browse/OMNI-44)) |
@@ -87,34 +87,6 @@ reference with no link target below.
   stays open, and so does the refusal.
 
 ## Medium
-
-- [OMNI-45] **M8 — Every non-benchmark gate accepted exit code 0 as a pass, with no
-  positive verdict token** *(found 2026-09-26; reproduced; **partly fixed
-  2026-09-29**, see below)* — `_gate_interface`, `_gate_acceptance`,
-  `_gate_invariant` and `_gate_backtest` only checked `returncode != 0`. A
-  Class-2 candidate that calls `os._exit(0)` at import ended each gate's
-  subprocess with code 0 before any assertion ran. Reproduced against `roman`:
-  `to_roman`/`from_roman` returned wrong values and the module called
-  `os._exit(0)`; `validate()` returned `"all gates passed"`. Latent for Class 2
-  (not in `DEFAULT_CONTRACTS`), live for the default contract's interface and
-  acceptance gates.
-  **Fixed so far (OMNI-45, slice 1):** every gate now needs evidence of a
-  verdict. The interface, invariant and backtest scripts print a per-run token
-  after their last check, and the harness believes a zero exit only with that
-  line in the output (`gauntlet._ended_without_verdict`); the acceptance gate
-  needs pytest's own `N passed in Xs` summary (`_pytest_passed`). `os._exit(0)`
-  at import, and a candidate that exits only when pytest has imported it, now
-  fail with "…ended the process… no verdict", on both contract classes and in
-  both sandboxes. A candidate that calls `sys.exit(0)` mid-call in the
-  invariant or backtest gate is a counted failure too (see M11).
-  **Still open** ([OMNI-146](https://olafzumpe.atlassian.net/browse/OMNI-146)):
-  in these four gates the token lives in the process the
-  candidate shares, so a candidate that finds it (the script's globals, the
-  call stack) can print it and exit. The benchmark gate no longer has that
-  reach (H2, fixed: its candidate answers from a worker of its own). Closing it
-  here means the same split for scripts that call the candidate themselves
-  (pytest's acceptance tests, Hypothesis's laws, the backtest replay), which is
-  a larger change than the benchmark's.
 
 - [OMNI-52] **M12 — A `soft_` operator config edit can rewrite `forbidden_` keys through
   unescaped YAML rendering** *(found 2026-09-26; reproduced end to end
@@ -633,7 +605,58 @@ any long-lived cluster exists.
   improvements are resolved poorly. The candidate's worker can still contend
   for CPU while the baseline's batch runs (bounded by docker's `--cpus`; the
   subprocess sandbox, refused for a real proposer, allows more). The SLO gate
-  (OMNI-24) still times its candidate in-process.
+  (OMNI-24) still times its candidate in-process. The batch is sized against
+  the median of ten empty round trips, not the fastest: under load the fastest
+  let one slow exchange end the sizing at one call, where the pipe's cost hid a
+  200x gain (OMNI-141).
+
+- [OMNI-45] **M8 — Every non-benchmark gate accepted exit code 0 as a pass, with no
+  positive verdict token** *(found 2026-09-26; reproduced; fixed 2026-09-29,
+  OMNI-45 slice 1 and OMNI-146)* — `_gate_interface`, `_gate_acceptance`,
+  `_gate_invariant` and `_gate_backtest` only checked `returncode != 0`. A
+  Class-2 candidate that calls `os._exit(0)` at import ended each gate's
+  subprocess with code 0 before any assertion ran. Reproduced against `roman`:
+  `to_roman`/`from_roman` returned wrong values and the module called
+  `os._exit(0)`; `validate()` returned `"all gates passed"`.
+  **Fixed in two steps.** OMNI-45 slice 1 required evidence of a verdict: a
+  per-run token the interface, invariant and backtest scripts print, and
+  pytest's own `N passed` summary (`gauntlet._ended_without_verdict`,
+  `_pytest_passed`). That stopped a candidate that ended the process without
+  knowing the token, not one that looked for it: the token was a constant in
+  the frames that imported the candidate, and pytest's saved stdout an open
+  pipe. Reproduced 2026-09-29: a `roman` answering `"X"` to everything, which
+  printed the token it found (or `12 passed` on pytest's saved stdout) and
+  exited, got `"all gates passed"`.
+  **OMNI-146** took the four gates out of the candidate's process. Their trusted
+  code (pytest, Hypothesis, the backtest replay) runs on the host in a harness
+  process, where `target` is a stand-in (`sandbox_worker.install_proxy`) that
+  sends each call to the candidate's own `SandboxWorker` in the configured
+  sandbox and returns the JSON-decoded answer. The interface gate asks a worker
+  what the candidate exports. The token, pytest's summary and the exit code
+  are now written by a process the candidate never runs in. What an in-process
+  call would have shown still shows:
+  - a raised exception arrives as the nearest builtin in its own hierarchy, so
+    `pytest.raises(ValueError)` holds for a `ValueError` subclass;
+  - a changed argument list is mirrored into the caller's copy, so sort's
+    "does not mutate its input" test still means something;
+  - a `SystemExit` is an ordinary failure, not the end of the judge.
+
+  Regression tests in `tests/test_adversarial.py` cover that forger against
+  each of the four gates and the whole gauntlet, in both sandboxes. Each was
+  shown to fail against the previous gates. A further test pins the in-place
+  sort.
+  **Costs and limits:**
+  - One worker start per gate, about a second in docker.
+  - Only plain JSON crosses. A returned tuple arrives as a list. An argument
+    JSON cannot carry is refused as the exam's fault (`NotWireable`), not the
+    candidate's.
+  - The interface gate's report (callable, parameter names) is the candidate's
+    own account. A candidate that claims a `seed` it lacks passes that gate
+    and fails the first call that passes one.
+  - The harness runs trusted code on the host, like the benchmark's oracle.
+  - **The SLO gate** (OMNI-24) is now the only gate that runs the candidate
+    in its script's process; no shipped contract declares an SLO yet. See L42
+    (OMNI-86).
 
 - [OMNI-45] **M11 — A candidate's own exception inside the invariant or backtest
   gate was filed as a harness fault** *(found 2026-09-26 by a completeness
@@ -680,9 +703,9 @@ any long-lived cluster exists.
   other conclusion. (3) `PYTHONDONTWRITEBYTECODE=1`: no `.pyc` appears beside
   trusted code. **Residual:** in the subprocess sandbox (soft, and refused for a
   real proposer) a candidate can change a file and put it back within one gate
-  run, which docker rules out. And a candidate that shares a process with a gate
-  can still forge that gate's verdict: M8's remainder (the benchmark gate no
-  longer shares one: H2, fixed).
+  run, which docker rules out. Since OMNI-146 only the SLO gate still runs the
+  candidate beside the exam; every other gate imports it only in a worker with
+  a directory of its own (M8).
 
 - [OMNI-138] **M27 — A converged target files bug tickets and trips the
   circuit breaker** *(found 2026-09-29 in the fourth AWS run, OMNI-29,

@@ -200,10 +200,13 @@ def build_script(
     seed: int,
     nonce: str = "",
 ) -> str:
-    """Build the in-sandbox invariant script.
+    """Build the invariant script, which the gate runs in its harness process.
 
-    *nonce* is a per-run token the script prints after the verdict (``OK
-    <nonce>``); the gate believes a zero exit only when it sees it last (M8).
+    *candidate_path* is the stand-in module the gate writes, whose exports call
+    the candidate in a worker of its own (OMNI-146), so the script and the
+    candidate never share a process. *nonce* is a per-run token the script
+    prints after the verdict (``OK <nonce>``); the gate believes a zero exit
+    only with that line in the output (M8).
     Empty prints a bare ``OK``, for tests that build the script by hand.
 
     Pure string building, so what the script checks — and in what order — is
