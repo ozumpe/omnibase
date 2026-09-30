@@ -698,3 +698,53 @@ def test_unproposed_branches_ask_nothing_more_when_there_are_none() -> None:
     _routes(http, pages=[], refs=[], compares={})
     assert gh.unproposed_branches("feature/") == []
     assert len(http.calls) == 1
+
+
+class _Status(_Resp):
+    """A response whose raise_for_status behaves like requests' for 4xx/5xx."""
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise RuntimeError(f"{self.status_code} error")
+
+
+def _reads(monkeypatch: pytest.MonkeyPatch, *codes: int) -> tuple[GitHubVersionControl, list[int]]:
+    gh, http = _github()
+    seen: list[int] = []
+    queue = list(codes)
+
+    def get(url: str, params: Any = None) -> _Resp:
+        code = queue.pop(0) if queue else codes[-1]
+        seen.append(code)
+        content = base64.b64encode(b"MERGED").decode() if code == 200 else ""
+        return _Status({"content": content}, status_code=code)
+
+    http.get = get  # type: ignore[method-assign]
+    monkeypatch.setattr("sis.adapters_real.time.sleep", lambda s: None)
+    return gh, seen
+
+
+def test_only_a_404_means_the_file_is_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    # L34 (OMNI-79): any failure used to read as "absent", which for a Class-2
+    # feature means "not built yet", so a transient 5xx would rebuild it.
+    gh, seen = _reads(monkeypatch, 404)
+    assert gh.live_target_source("runtime/roman.py") == "" and seen == [404]
+
+
+def test_a_transient_5xx_is_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    gh, seen = _reads(monkeypatch, 502, 503, 200)
+    assert gh.live_target_source("runtime/roman.py") == "MERGED"
+    assert seen == [502, 503, 200]
+
+
+def test_a_lasting_5xx_or_any_other_failure_is_raised_not_read_as_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gh, seen = _reads(monkeypatch, 502)
+    with pytest.raises(RuntimeError, match="502"):
+        gh.live_target_source("runtime/roman.py")
+    assert seen == [502, 502, 502], "three tries, then it fails loudly"
+    gh, seen = _reads(monkeypatch, 403)
+    with pytest.raises(RuntimeError, match="403"):
+        gh.read_file("feature/x", "runtime/roman.py")
+    assert seen == [403], "not a 5xx: no retry"

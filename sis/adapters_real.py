@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import base64
 import re
+import time
 from typing import TYPE_CHECKING, Any, cast
 
 from sis import config
@@ -538,12 +539,27 @@ class GitHubVersionControl:
         """*path* as merged on the live base branch ("" if absent)."""
         return self._get_file(self._s.default_base, path)
 
+    # Tries before a 5xx is raised (L34): enough to ride out a transient one.
+    _READ_ATTEMPTS = 3
+
     def _get_file(self, ref: str, path: str) -> str:
-        """Fetch and decode a file's content at *ref* ("" if absent)."""
+        """Fetch and decode a file's content at *ref* ("" if absent).
+
+        Only a 404 means absent (L34, OMNI-79). Any failure used to read as "",
+        which for a Class-2 feature means "not built yet": a transient 5xx would
+        have paid to rebuild a merged feature and opened a second PR for it. A
+        5xx is retried; it and any other failure then raise, so the cycle fails
+        loudly instead of acting on a file it could not read.
+        """
         resp = self._http.get(self._api(f"/contents/{path}"), params={"ref": ref})
-        if resp.status_code != 200:
+        for attempt in range(1, self._READ_ATTEMPTS):
+            if resp.status_code < 500:
+                break
+            time.sleep(attempt)
+            resp = self._http.get(self._api(f"/contents/{path}"), params={"ref": ref})
+        if resp.status_code == 404:
             return ""
-        content = str(resp.json().get("content", ""))
+        content = str(_json(resp).get("content", ""))
         # GitHub base64-encodes with embedded newlines; b64decode ignores them.
         return base64.b64decode(content).decode("utf-8") if content else ""
 

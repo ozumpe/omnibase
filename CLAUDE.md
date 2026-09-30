@@ -118,8 +118,9 @@ internal target before it models anything external.
     from the spec (`proposer._build_prompt`): the public API, the acceptance
     tests, and the laws with the module that defines them; held-out backtest
     fixtures are never shown. A feature already built is judged again at the
-    next cycle: passing, it is the neutral `no_gain` ("already built"), so
-    the loop's convergence stop ends the run; failing (its spec changed), the
+    next cycle, before anything is planned (OMNI-149): passing, it is the
+    neutral `no_gain` ("already built"), filing nothing, so the loop's
+    convergence stop ends the run; failing (its spec changed), the
     reason starts a rebuild. No timings anywhere, and `--canary serve` is
     refused for a Class-2 contract.
   - **SLO gate** (`sis/slo.py`, OMNI-24): an optional latency *budget* from
@@ -383,7 +384,12 @@ internal target before it models anything external.
   live runs — don't put planning there.
 
 ## Current status — where to pick up
-Released through **v0.3.5** (2026-09-29): v0.3.4 plus the two blockers before
+Released through **v0.3.6** (2026-09-30): v0.3.5 plus the fixes from the sixth
+AWS run, the first Class-2 run (`roman`, built at the first attempt).
+OMNI-149: a built feature's convergence check comes before planning, so it
+files nothing. OMNI-148: a feature's intake says "Build". OMNI-150: the log
+names only a model that was called. OMNI-79: a GitHub read fails loudly unless
+the file is truly absent. Before that, **v0.3.5** (2026-09-29): v0.3.4 plus the two blockers before
 omnitrack Phase A. OMNI-146: the interface, acceptance, invariant and backtest
 gates judge the candidate from outside its process too (M8). OMNI-147: the loop
 builds a Class-2 feature from its spec (`--contract roman`). With them, OMNI-56,
@@ -744,9 +750,9 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   **Phase 0 is built:** `sis/sandbox_worker.py` (OMNI-129) serves a candidate
   hot from the sandbox. It is tested in both sandbox modes, including that a
   docker candidate cannot reach the network, Ray or the host's environment.
-- 1037 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
+- 1043 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
   Ray-Serve-integration tests run separately, see Operational quick reference
-  above; 1099 total, recounted 2026-09-29 — corrected 2026-09-26, a multi-dimension review found the
+  above; 1105 total, recounted 2026-09-30 — corrected 2026-09-26, a multi-dimension review found the
   previously-documented 616/678 stale); `ruff`/`mypy --strict`/`pytest` clean;
   CI green; `feature → develop → main` enforced by both the client-side
   pre-push hook and active server-side rulesets.
@@ -781,7 +787,7 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
 severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
 the IDs in commits/PRs. **Open after a 2026-09-26 multi-dimension review with
 adversarial verification: H3, M12–M14, M16, M20–M23,
-L16–L20, L22, L25–L32, L34–L43; plus L46 from the second AWS run and L48–L50
+L16–L20, L22, L25–L32, L35–L43; plus L46 from the second AWS run and L48–L50
 from the fifth (OMNI-143–145)** (M7 is won't-fix for now; H4, M10, M15, M19, L21, L23
 and L24 fixed 2026-09-26, OMNI-46/47/51/49/61/62; H5, H6, M24 and L44, found
 in the first AWS run, and L45, found releasing it, fixed 2026-09-27,
@@ -789,7 +795,8 @@ OMNI-121–125; M18 and M25, the second run's duplicate PR, fixed the same day,
 OMNI-57/126; M26, the third run's conflicting second PR, and M27, the fourth run's
 breaker trip on a converged target, fixed 2026-09-29, OMNI-136/138; H2, M8, M9
 and M11 fixed the same day, OMNI-45/146, and M17, L15 and L33 with OMNI-147,
-OMNI-56/64/78). The headline, before trusting any
+OMNI-56/64/78; L34 and L51–L53, the last three from the sixth run, fixed
+2026-09-30, OMNI-79/148–150). The headline, before trusting any
 gauntlet verdict: every gate but SLO now judges its candidate from outside the
 candidate's process (H2, M8), and the exam files are protected (M9). **The SLO
 gate still runs its candidate in-process** (L42,
@@ -828,8 +835,8 @@ Two traps L5 surfaced, both worth knowing before writing similar code:
 
 **Next — the milestone plan is in Jira ([`OMNI`](https://olafzumpe.atlassian.net/browse/OMNI)),
 not here.** Check the board for current status rather than trusting this list.
-**Last reconciled against a live query on 2026-09-29** (147 issues, OMNI-1
-through OMNI-147; 90 Done, 0 In Progress, 57 To Do — most of the growth since 2026-09-26 is
+**Last reconciled against a live query on 2026-09-30** (150 issues, OMNI-1
+through OMNI-150; 94 Done, 0 In Progress, 56 To Do — most of the growth since 2026-09-26 is
 the KNOWN_ISSUES backfill, see "Known issues" above):
 
 1. ~~**[OMNI-1](https://olafzumpe.atlassian.net/browse/OMNI-1) — L5 target
@@ -909,7 +916,7 @@ the KNOWN_ISSUES backfill, see "Known issues" above):
    instance lifecycle: `user_data` racing Ubuntu's `unattended-upgrades` for
    the dpkg lock, and SSM sessions landing as `ssm-user` rather than `ubuntu`
    (every runbook step now starts with `sudo -iu ubuntu`). The box clones
-   the release tag in `var.repo_ref` (`v0.3.5`; a branch needs
+   the release tag in `var.repo_ref` (`v0.3.6`; a branch needs
    `allow_branch_ref = true`, OMNI-63) and every run records the commit it
    ran; run day uses `--contract sort`. **Rehearsed
    2026-09-23** on a local Ubuntu 24.04 box (`scripts/rehearse_aws_run.sh`),

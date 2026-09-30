@@ -378,6 +378,11 @@ def gate_from_reason(reason: str | None) -> str | None:
     # limit (L33). Neither the candidate's gate nor the sandbox's.
     if r.startswith("proposer:"):
         return "proposer"
+    # A Class-2 feature already on the base branch that still passes every gate
+    # (OMNI-147): nothing to build, the target converging. Neutral because the
+    # SWE says so (no_gain), as for "no improvement" on a new Class-1 feature.
+    if r.startswith("already built"):
+        return "built"
     # A candidate that changed the exam files a later gate trusts (OMNI-45, M9).
     # Its own name: it is the candidate's doing, never the sandbox's, and it is
     # worth counting separately from a wrong answer.

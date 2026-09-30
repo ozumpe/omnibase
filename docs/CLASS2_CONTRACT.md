@@ -172,7 +172,8 @@ runs the whole loop on a feature. Where Class 1 *optimises*, the SWE *builds*:
   defines them. The recorded history the backtest gate replays is held out and
   never shown; only how many episodes there are is said.
 - **Built is converged.** A cycle for a feature already on the base branch
-  judges it again. Passing, the cycle is the neutral `no_gain` ("already
+  judges it again, before anything is planned, so it files nothing
+  (OMNI-149). Passing, the cycle is the neutral `no_gain` ("already
   built"), and `loop.converged_after` of those stop the loop (OMNI-138).
   Failing, because its spec changed, the reason is the first note of a rebuild.
 - **No timings.** Steps record a baseline of 0 and no candidate time; the PR

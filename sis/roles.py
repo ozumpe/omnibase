@@ -241,6 +241,13 @@ def _sha(source: str) -> str:
     return hashlib.sha256(source.encode("utf-8")).hexdigest()[:12]
 
 
+def _built(spec: contract.Contract, source: str) -> dict[str, Any]:
+    """The SWE's result for a feature already built: neutral, no model called."""
+    return {"passed": False, "no_gain": True, "pr_id": None, "cost_usd": 0.0,
+            "candidate_sha": _sha(source), "contract": spec.name, "model": None,
+            "reason": f"already built: {spec.target_path} passes every gate"}
+
+
 def pr_resolution(pr: PullRequest) -> Literal["hold", "promote", "release"]:
     """What a pending PR's state means for the canary it holds. Pure.
 
@@ -638,6 +645,39 @@ class SWE(Role):
     def __init__(self) -> None:
         super().__init__("SWE", "SWE", parent="CTO")
 
+    def _base_source(self, spec: contract.Contract) -> tuple[str, str]:
+        """The target as merged on the base branch, else the local file, and which.
+
+        Falls back to the *contract's* target, not a hardcoded path: otherwise a
+        cycle for any contract but the bootstrap one silently optimises
+        runtime/target.py while being judged against a different oracle. A
+        feature not built yet has neither (OMNI-147): ``("", "none")``.
+        """
+        merged = ray.get(self._ws.live_target_source.remote(spec.target_path))
+        local = pathlib.Path(spec.target_file)
+        source = merged or (local.read_text(encoding="utf-8") if local.exists() else "")
+        return source, ("merged_base" if merged else "local_file" if source else "none")
+
+    def already_built(self, contract_name: str | None = None) -> dict[str, Any] | None:
+        """A Class-2 feature with nothing to build: the neutral result, else None.
+
+        Asked before a cycle plans anything (OMNI-149, L52). Run #6's first
+        convergence check filed a proposal, a spec, an epic and two stories for
+        a feature already merged, and left the story In Progress. The check
+        costs nothing (the gauntlet on the merged module), so unlike a Class-1
+        attempt it needs no plan. None while a feature is in progress or
+        planned, or for a Class-1 contract.
+        """
+        spec = self._contract(contract_name)
+        if (not isinstance(spec, contract.FeatureContract)
+                or ray.get(self._sm.feature.remote(spec.name)) is not None
+                or ray.get(self._sm.plan.remote(spec.name)) is not None):
+            return None
+        source, _ = self._base_source(spec)
+        if not source or not gauntlet.validate(source, contract=spec).passed:
+            return None
+        return _built(spec, source)
+
     def implement(self, story_id: str, contract_name: str | None = None) -> dict[str, Any]:
         # What this target is judged by — reference, inputs, margin. Resolved
         # FIRST, before any artifact is touched: a bad contract name is a
@@ -680,16 +720,7 @@ class SWE(Role):
         if head:
             current_source, origin = head, "feature_branch"
         else:
-            merged_source = ray.get(self._ws.live_target_source.remote(spec.target_path))
-            # Fall back to the *contract's* target, not a hardcoded path — otherwise
-            # a cycle for any contract but the bootstrap one silently optimises
-            # runtime/target.py while being judged against a different oracle. A
-            # feature not built yet has neither (OMNI-147).
-            local = pathlib.Path(spec.target_file)
-            current_source = merged_source or (
-                local.read_text(encoding="utf-8") if local.exists() else "")
-            origin = ("merged_base" if merged_source
-                      else "local_file" if current_source else "none")
+            current_source, origin = self._base_source(spec)
         ray.get(self._ws.emit.remote("target.source", story_id=story_id, origin=origin))
         if building and feature is None and current_source:
             # A feature already built: judged again, since its spec may have
@@ -697,10 +728,13 @@ class SWE(Role):
             # converging (OMNI-138); failing, its reason starts the rebuild.
             standing = gauntlet.validate(current_source, contract=spec)
             if standing.passed:
-                return {"passed": False, "no_gain": True, "pr_id": None,
-                        "cost_usd": 0.0, "candidate_sha": _sha(current_source),
-                        "contract": spec.name,
-                        "reason": f"already built: {spec.target_path} passes every gate"}
+                # Usually caught before planning (already_built); a plan made
+                # anyway is closed, not left In Progress (OMNI-149).
+                built = _built(spec, current_source)
+                ray.get(self._ws.transition.remote(
+                    story_id, IssueStatus.DONE, f"Nothing to build: {built['reason']}"))
+                ray.get(self._sm.set_plan.remote(spec.name, None))
+                return built
             feature = feature_mod.with_note(
                 feature_mod.new_feature(feature_mod.feature_branch(story_id), story_id),
                 f"the current module fails: {standing.reason}")
@@ -718,7 +752,10 @@ class SWE(Role):
             ray.get(self._sm.record.remote("outcome", story_id, passed=False, reason=reason))
             return {"passed": False, "reason": reason, "pr_id": None,
                     "cost_usd": proposer.last_cost_usd(), "candidate_sha": None,
-                    "contract": spec.name}
+                    "contract": spec.name, "model": proposer.last_model()}
+        # The model this cycle called, None for the stub: what the episodic log
+        # records, rather than whatever is configured (L53, OMNI-150).
+        model = proposer.last_model()
         candidate_sha = _sha(candidate)
         cost_usd = proposer.last_cost_usd()  # 0.0 for the stub; real $ for Claude
         # Benchmark the candidate against the source the cycle is based on (the
@@ -745,11 +782,11 @@ class SWE(Role):
                     # its PR carries the head, not this rejected candidate.
                     return self._finish_feature(
                         story_id, spec, feature, current_source, cost_usd, candidate_sha,
-                        f"no further gain ({report.reason})")
+                        f"no further gain ({report.reason})", model=model)
                 ray.get(self._sm.set_feature.remote(spec.name, feature))
             return {"passed": False, "reason": report.reason, "pr_id": None,
                     "cost_usd": cost_usd, "candidate_sha": candidate_sha,
-                    "contract": spec.name,
+                    "contract": spec.name, "model": model,
                     # Nothing beats the base: the target has converged (OMNI-138).
                     "no_gain": feature_mod.finds_no_gain(started, report.reason)}
 
@@ -770,7 +807,7 @@ class SWE(Role):
                 "outcome", story_id, passed=False, reason=f"policy: {decision.reason}"))
             return {"passed": False, "reason": f"policy: {decision.reason}",
                     "pr_id": None, "cost_usd": cost_usd, "candidate_sha": candidate_sha,
-                    "contract": spec.name}
+                    "contract": spec.name, "model": model}
 
         # A passing step is committed to the feature branch, forked (for the
         # first step) from the same base the merged target was read from, not
@@ -789,10 +826,11 @@ class SWE(Role):
         ray.get(self._sm.record.remote("commit", feature["branch"], story=story_id, step=step))
         if building:
             return self._finish_feature(story_id, spec, feature, candidate, cost_usd,
-                                        candidate_sha, "all gates passed")
+                                        candidate_sha, "all gates passed", model=model)
         if feature_mod.is_full(feature, max_steps):
             return self._finish_feature(story_id, spec, feature, candidate, cost_usd,
-                                        candidate_sha, f"{step} of {max_steps} steps")
+                                        candidate_sha, f"{step} of {max_steps} steps",
+                                        model=model)
         ray.get(self._sm.set_feature.remote(spec.name, feature))
         # The story is the feature's, not the step's (OMNI-135): it stays in
         # progress until the feature's PR opens.
@@ -801,11 +839,12 @@ class SWE(Role):
         return {"passed": True, "feature_step": True, "step": step, "pr_id": None,
                 "branch": feature["branch"], "baseline": baseline,
                 "candidate_latency": report.latency_seconds, "cost_usd": cost_usd,
-                "candidate_sha": candidate_sha, "contract": spec.name}
+                "candidate_sha": candidate_sha, "contract": spec.name, "model": model}
 
     def _finish_feature(
         self, story_id: str, spec: contract.Contract, feature: dict[str, Any],
         head: str, cost_usd: float, candidate_sha: str, finished_because: str,
+        *, model: str | None = None,
     ) -> dict[str, Any]:
         """Open the feature's one PR, for its head, and hand it to review.
 
@@ -833,7 +872,7 @@ class SWE(Role):
                 "steps": len(feature["steps"]), "finished_because": finished_because,
                 "baseline": first["baseline_s"], "candidate_latency": last["candidate_s"],
                 "cost_usd": cost_usd, "candidate_sha": candidate_sha,
-                "contract": spec.name}
+                "contract": spec.name, "model": model}
 
 
 @ray.remote

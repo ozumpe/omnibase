@@ -160,7 +160,10 @@ else
   check "Ctrl-C from a new session stops the loop cleanly, and the log says why" no "no '[loop] stopped … interrupted' line — tail of runtime/loop.log:"
   tail -15 runtime/loop.log 2>/dev/null | sed 's/^/      /'
 fi
-tmux capture-pane -p -S - -t sis 2>/dev/null | grep -q '^\[loop\] stopped' \
+# The pane shows the Ctrl-C the terminal echoed, "^C", with no newline after it,
+# so the stop line can start with it: "^C[loop] stopped …" when nothing else was
+# printed in between. The log file, which tee writes, has no echo.
+tmux capture-pane -p -S - -t sis 2>/dev/null | grep -qE '^(\^C)?\[loop\] stopped' \
   && check "the output is still in the tmux pane" ok \
   || check "the output is still in the tmux pane" no "tmux session or output missing"
 tmux kill-session -t sis 2>/dev/null || true
