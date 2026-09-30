@@ -209,6 +209,18 @@ reference with no link target below.
   autouse fixture, with an explicit opt-in fixture for the handful of tests
   that intentionally want a real backend.
 
+- [OMNI-151] **M28 — A second loop can start on the same box, and the two do not
+  share the spend cap** *(found 2026-09-30 in AWS run #7, `v0.3.6`)*. A
+  `sum_of_divisors` loop started with `nohup` inside tmux survived the attempt
+  to stop it, and a `roman` loop started beside it. Each process bootstraps
+  its own Ray cluster and CEO, whose brakes are restored from the shared
+  `runtime/episodic_state.json`. So each enforces the whole budget alone, and
+  the persisted spend is last-writer-wins: it says $0.2910 where $0.3192 was
+  spent. Both append to the same episodic log and console log. After the merge
+  of #21, both started a cycle within 30 s; only the VCS hold (OMNI-136) keeps
+  such loops from opening competing PRs. Fix: one loop per box, an exclusive
+  `flock` on a lock file in `runtime/`, refused with the holder's PID.
+
 ## Low
 
 - [OMNI-65] **L16** — The OMNI-37 sandbox self-check (`probe_sandbox`) loads
@@ -1431,3 +1443,4 @@ any long-lived cluster exists.
 [OMNI-148]: https://olafzumpe.atlassian.net/browse/OMNI-148
 [OMNI-149]: https://olafzumpe.atlassian.net/browse/OMNI-149
 [OMNI-150]: https://olafzumpe.atlassian.net/browse/OMNI-150
+[OMNI-151]: https://olafzumpe.atlassian.net/browse/OMNI-151

@@ -786,7 +786,7 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
 **Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L
 severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
 the IDs in commits/PRs. **Open after a 2026-09-26 multi-dimension review with
-adversarial verification: H3, M12–M14, M16, M20–M23,
+adversarial verification: H3, M12–M14, M16, M20–M23, M28 (from the seventh AWS run, OMNI-151),
 L16–L20, L22, L25–L32, L35–L43; plus L46 from the second AWS run and L48–L50
 from the fifth (OMNI-143–145)** (M7 is won't-fix for now; H4, M10, M15, M19, L21, L23
 and L24 fixed 2026-09-26, OMNI-46/47/51/49/61/62; H5, H6, M24 and L44, found
