@@ -352,7 +352,9 @@ What to expect, Class 2 (`roman`, OMNI-147):
 - The loop then **holds** until you merge or close the PR, as for Class 1.
 - After the merge, the next cycles judge the merged `runtime/roman.py` again.
   Each is `[cycle] no_gain: built: already built: runtime/roman.py passes
-  every gate`, with no LLM call and no spend. After `loop.converged_after` (default
+  every gate`, with no LLM call and no spend. From the release after
+  `v0.3.5` these cycles also file no Confluence page or Jira issue (OMNI-149);
+  on `v0.3.5` the first of them files a plan whose story stays In Progress. After `loop.converged_after` (default
   3) of them, the loop stops: `roman has converged`, with a WARNING page.
 - A closed (declined) PR releases the hold; the next cycle builds again from
   scratch.

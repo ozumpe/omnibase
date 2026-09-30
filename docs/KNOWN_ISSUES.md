@@ -267,10 +267,7 @@ reference with no link target below.
   in-memory path when `retire_canary` is called without a `pr_id`, or after a
   DevOps restart — leaving Serve's green attached, or "promoting" only in
   bookkeeping with nothing changing online. Fix: make the fallback loud.
-- [OMNI-79] **L34** — The real GitHub adapter's `_get_file` treats any error
-  (including a transient 5xx) the same as "file absent" and silently falls
-  back to the stale local baseline. Fix: distinguish 404 from other errors;
-  let a real error retry or fail the cycle loudly.
+
 - [OMNI-80] **L35** — `ConfluenceDocumentStore.create_page` overwrites any existing
   page with the same title, including a human-authored one, without
   approval. Fix: require the destructive-Confluence-action approval gate
@@ -356,12 +353,24 @@ reference with no link target below.
   faster, so it is the one neutral outcome that is not evidence of
   convergence. Fix: count only `no_gain`/`no_change` toward convergence, and
   consider one bounded re-measurement with a fresh seed before discarding.
+
+## Resolved (Low)
+
+- [OMNI-79] **L34** — The real GitHub adapter's `_get_file` treats any error
+  (including a transient 5xx) the same as "file absent" and silently falls
+  back to the stale local baseline. Fix: distinguish 404 from other errors;
+  let a real error retry or fail the cycle loudly.
+  **Fixed 2026-09-30 (OMNI-79, with the run #6 fixes):** only a 404 reads as
+  absent. A 5xx is retried twice, then raised with any other failure, so the
+  cycle fails loudly instead of rebuilding a feature it could not read.
 - [OMNI-148] **L51** — A Class-2 feature is proposed as "Speed up the
   <target> target" *(found 2026-09-30 in AWS run #6, `v0.3.5`, contract
   `roman`)*. `main.py` names every intake proposal that way whatever the
   contract's class, so `roman`'s Confluence spec (13860868) and its Jira epic
   and story (TES-143, TES-145) say "Speed up"; only the PR says "Build roman".
   Fix: take the proposal's title and body from the contract.
+  **Fixed 2026-09-30 (OMNI-148):** `main._proposal` names a feature "Build the
+  <name> feature", from its spec; Class 1 keeps "Speed up".
 - [OMNI-149] **L52** — A built feature's convergence check files a new plan and
   leaves its story In Progress *(found 2026-09-30, AWS run #6)*. After testrun
   #19 opened and its plan was cleared, the next cycle planned a new feature (a
@@ -370,14 +379,16 @@ reference with no link target below.
   the "already built" return does not move it. Class 1 differs: its `no_gain`
   is a failed run, which moves the story to TBD. Fix: check "already built"
   before planning (it costs nothing), and close a story a `no_gain` leaves.
+  **Fixed 2026-09-30 (OMNI-149):** `SWE.already_built` is asked before
+  `run_cycle` plans anything, so the check files nothing. A plan made anyway is
+  closed: its story goes to Done with the reason, and the plan is cleared.
 - [OMNI-150] **L53** — The episodic log names a model for cycles that made no
   model call *(found 2026-09-30, AWS run #6)*. `run_cycle` stamps every event
   with the configured model, so the three "already built" cycles record
   `claude-opus-4-8` at $0. Fix: record the model only for a cycle that called
   the proposer.
-
-## Resolved (Low)
-
+  **Fixed 2026-09-30 (OMNI-150):** the SWE reports the model it called
+  (`proposer.last_model()`), and only that is recorded; None when none was.
 - [OMNI-64] **L15** — `validate()` can be made to raise instead of returning a
   `Result` (a gate script crash that escapes the harness's own exception
   handling), losing the episodic record, the breaker increment, and the

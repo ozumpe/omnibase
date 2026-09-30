@@ -100,14 +100,44 @@ def test_a_rejected_attempt_is_remembered_for_the_next_one(
     assert len(ray.get(sm.feature.remote(name))["attempts"]) == 2
 
 
+def _filed(ws: Any) -> int:
+    return sum(1 for e in ray.get(ws.events.remote())
+               if e.get("event") in ("issue.created", "page.created"))
+
+
 def test_a_feature_already_built_is_the_target_converging(
     handles: dict[str, Any], workdir: pathlib.Path,
 ) -> None:
     name = _register(handles, workdir, "roman_built", built=_STUB)
+    ws = handles["Workspace"]
+    before = _filed(ws)
     result = org.run_cycle(handles, "Roman numerals", "As specified.", contract_name=name)
     assert result["status"] == "no_gain", result.get("reason")
     assert result["reason"].startswith("already built:")
     assert result["cost_usd"] == 0.0, "nothing was proposed"
+    # OMNI-149 (L52): checked before planning, so nothing is filed for it.
+    assert _filed(ws) == before, "a built feature's check filed pages or issues"
+    assert ray.get(handles["SelfModel"].plan.remote(name)) is None
+    # OMNI-150 (L53): no model was called, so none is recorded.
+    assert result["model"] is None
+
+
+def test_a_plan_made_for_a_built_feature_is_closed_not_left_in_progress(
+    handles: dict[str, Any], workdir: pathlib.Path,
+) -> None:
+    # A plan can exist before the check sees the feature built (one made by
+    # an earlier run, say). Its story is closed and the plan cleared (L52).
+    from sis.ports import IssueStatus, IssueType
+
+    name = _register(handles, workdir, "roman_planned", built=_STUB)
+    ws, sm = handles["Workspace"], handles["SelfModel"]
+    story = ray.get(ws.create_issue.remote(IssueType.STORY, "Implement: roman", None))
+    ray.get(sm.set_plan.remote(name, {"spec_id": "SPEC-9", "epic_id": "EPIC-9",
+                                      "feature_story_id": str(story.id)}))
+    result = org.run_cycle(handles, "Roman numerals", "As specified.", contract_name=name)
+    assert result["status"] == "no_gain" and result["story_id"] == str(story.id)
+    assert ray.get(ws.get_issue.remote(str(story.id))).status == IssueStatus.DONE
+    assert ray.get(sm.plan.remote(name)) is None
 
 
 def test_a_built_feature_that_now_fails_its_spec_is_rebuilt(
