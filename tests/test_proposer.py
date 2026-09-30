@@ -158,3 +158,24 @@ def test_a_feature_is_built_with_its_own_system_prompt(monkeypatch) -> None:  # 
     proposer.propose("", 0.0, contract=ROMAN)
     assert seen["system"] == proposer._BUILD_SYSTEM_PROMPT
     assert "optimise" not in seen["system"].lower()
+
+
+def test_an_answer_cut_off_at_the_token_limit_is_not_judged(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # KNOWN_ISSUES L33 (OMNI-78): a truncated answer was extracted and judged,
+    # and the gate that failed it blamed the candidate.
+    from sis import llm
+    from sis.episodic import gate_from_reason
+
+    class _CutOff:
+        model = "m"
+
+        def complete(self, *, system: str, user: str, max_tokens: int) -> llm.LLMResponse:
+            return llm.LLMResponse(text="def sum_of_div", cost_usd=0.25, model="m",
+                                   truncated=True)
+
+    monkeypatch.setenv("SIS_PROPOSER", "claude")
+    monkeypatch.setattr(llm, "get_llm_client", lambda *a, **k: _CutOff())
+    with pytest.raises(proposer.ProposalCutOff, match="token limit"):
+        proposer.propose("def sum_of_divisors(n: int) -> int: ...", 0.001)
+    assert proposer.last_cost_usd() == 0.25, "the call's cost still counts"
+    assert gate_from_reason("proposer: the m answer stopped at the token limit") == "proposer"

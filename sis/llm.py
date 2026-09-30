@@ -27,11 +27,16 @@ DEFAULT_ANTHROPIC_MODEL = "claude-opus-4-8"
 
 @dataclass(frozen=True)
 class LLMResponse:
-    """One completion: the text, the model that produced it, and its $ cost."""
+    """One completion: the text, the model that produced it, and its $ cost.
+
+    ``truncated`` says the answer stopped at the token limit, so it is not the
+    whole answer (L33).
+    """
 
     text: str
     cost_usd: float
     model: str
+    truncated: bool = False
 
 
 class LLMClient(Protocol):
@@ -65,7 +70,8 @@ class AnthropicClient:
         )
         text = "".join(block.text for block in message.content if block.type == "text")
         return LLMResponse(
-            text=text, cost_usd=cost_from_usage(message.usage, self.model), model=self.model)
+            text=text, cost_usd=cost_from_usage(message.usage, self.model), model=self.model,
+            truncated=message.stop_reason == "max_tokens")
 
 
 def _make_anthropic(model: str | None) -> LLMClient:

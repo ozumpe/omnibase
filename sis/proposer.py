@@ -58,6 +58,15 @@ def last_model() -> str | None:
     """Model of the most recent propose() call (None for the stub)."""
     return _last_model
 
+
+class ProposalCutOff(RuntimeError):
+    """The model's answer stopped at the token limit, so there is no whole module.
+
+    Judging the fragment would blame a gate's failure on a candidate nobody
+    wrote (KNOWN_ISSUES L33, OMNI-78). The call's cost is recorded all the same
+    (:func:`last_cost_usd`).
+    """
+
 # Stable, cacheable instructions (the system prompt). Kept byte-frozen — no
 # timestamps, per-request, or per-contract data — so prompt caching reuses it
 # across cycles regardless of which contract is active.
@@ -242,6 +251,10 @@ def _complete(system: str, user_prompt: str) -> str:
     global _last_cost_usd, _last_model
     _last_cost_usd = response.cost_usd
     _last_model = response.model
+    if response.truncated:
+        raise ProposalCutOff(
+            f"the {response.model} answer stopped at the token limit "
+            f"(max_tokens={MAX_TOKENS}), so it was not judged")
     return _extract_code(response.text)
 
 

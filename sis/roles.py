@@ -707,8 +707,18 @@ class SWE(Role):
         # sandboxed, not in-process
         baseline = (gauntlet.measure_baseline(current_source, contract=spec)
                     if isinstance(spec, contract.OptimizationContract) else 0.0)
-        candidate = proposer.propose(current_source, baseline, contract=spec,
-                                     history=feature["attempts"] if feature else ())
+        try:
+            candidate = proposer.propose(current_source, baseline, contract=spec,
+                                         history=feature["attempts"] if feature else ())
+        except proposer.ProposalCutOff as exc:
+            # Nothing to judge, and not the candidate's doing: a failed cycle
+            # the log names as the proposer's, its spend kept (L33, OMNI-78).
+            reason = f"proposer: {exc}"
+            ray.get(self._ws.transition.remote(story_id, IssueStatus.TBD, reason))
+            ray.get(self._sm.record.remote("outcome", story_id, passed=False, reason=reason))
+            return {"passed": False, "reason": reason, "pr_id": None,
+                    "cost_usd": proposer.last_cost_usd(), "candidate_sha": None,
+                    "contract": spec.name}
         candidate_sha = _sha(candidate)
         cost_usd = proposer.last_cost_usd()  # 0.0 for the stub; real $ for Claude
         # Benchmark the candidate against the source the cycle is based on (the
