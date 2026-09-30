@@ -1,6 +1,8 @@
 """Tests for the gauntlet validator."""
 
 import pathlib
+import shutil
+import subprocess
 from dataclasses import replace
 
 import pytest
@@ -401,3 +403,86 @@ def test_size_conditional_sort_cheat_is_caught_by_differential_correctness() -> 
         cheat, 0.0, baseline_source=_SORT_BASELINE, contract=SORT)
     assert not result.passed
     assert "correctness mismatch" in result.reason
+
+
+# --- OMNI-45 (M9): the exam is read-only, the sandbox writes to a scratch ---
+
+
+def test_docker_mounts_the_exam_read_only_beside_a_writable_scratch(ordinary_user: None) -> None:
+    args = gauntlet._docker_args("/t/exam", {"HOME": "/t/scratch"}, "img", "sis-gauntlet-x")
+    joined = " ".join(args)
+    assert "-v /t/exam:/t/exam:ro" in joined
+    assert "-v /t/scratch:/t/scratch:rw" in joined
+    assert "/t/exam:rw" not in joined
+
+
+def test_docker_keeps_one_writable_dir_when_home_is_the_temp_dir(ordinary_user: None) -> None:
+    # The contract author's discrimination check and the sandbox worker pass
+    # HOME == tmpdir; they keep the layout they were built for.
+    joined = " ".join(gauntlet._docker_args("/t", {"HOME": "/t"}, "img", "sis-gauntlet-x"))
+    assert "-v /t:/t:rw" in joined and ":ro" not in joined
+
+
+def test_the_sandbox_writes_no_bytecode_and_keeps_hypothesis_off_the_exam() -> None:
+    env = gauntlet._sandbox_env(home="/scratch", pythonpath="/exam")
+    assert env["PYTHONDONTWRITEBYTECODE"] == "1"
+    assert env["HYPOTHESIS_STORAGE_DIRECTORY"].startswith("/scratch")
+
+
+def test_validate_keeps_the_exam_and_the_scratch_apart(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    seen: dict[str, object] = {}
+
+    def spy(inner, tmpdir, env, **kwargs):  # type: ignore[no-untyped-def]
+        seen.setdefault("tmpdir", tmpdir)
+        seen.setdefault("home", env["HOME"])
+        seen.setdefault("pythonpath", env["PYTHONPATH"])
+        return subprocess.CompletedProcess(inner, 1, "", "")
+
+    monkeypatch.setattr(gauntlet, "_run", spy)
+    gauntlet.validate("def sum_of_divisors(n: int) -> int:\n    return n\n")
+    assert seen["home"] != seen["tmpdir"]
+    assert seen["pythonpath"] == seen["tmpdir"], "only the exam is on sys.path"
+
+
+def test_a_tampered_reason_is_its_own_gate() -> None:
+    from sis.episodic import gate_from_reason
+
+    assert gate_from_reason("tampered: the candidate changed the exam files while the "
+                            "interface gate ran (modified: oracle.py)") == "tampering"
+
+
+@pytest.mark.skipif(shutil.which("docker") is None, reason="needs docker")
+def test_a_docker_sandbox_cannot_write_the_exam_but_can_write_its_scratch(
+    tmp_path: pathlib.Path, monkeypatch,  # type: ignore[no-untyped-def]
+) -> None:
+    from sis import config
+
+    image = str(config.get("sandbox.image"))
+    if subprocess.run(["docker", "image", "inspect", image], capture_output=True).returncode:
+        pytest.skip("the sis-gauntlet image is not built")
+    monkeypatch.setenv("SIS_SANDBOX", "docker")
+    config.reset_config_cache()
+    try:
+        exam, scratch = tmp_path / "exam", tmp_path / "scratch"
+        exam.mkdir()
+        scratch.mkdir()
+        (exam / "oracle.py").write_text("X = 1\n")
+        env = gauntlet._sandbox_env(home=str(scratch), pythonpath=str(exam))
+        script = (
+            "import pathlib\n"
+            f"for name in ({str(exam / 'oracle.py')!r}, {str(exam / 'planted.py')!r}):\n"
+            "    try:\n"
+            "        pathlib.Path(name).write_text('x')\n"
+            "        print('WROTE')\n"
+            "    except OSError as exc:\n"
+            "        print('REFUSED', exc.errno)\n"
+            f"pathlib.Path({str(scratch / 'ok.txt')!r}).write_text('ok')\n"
+            "print('SCRATCH OK')\n"
+        )
+        result = gauntlet._run([gauntlet._PY, "-c", script], str(exam), env)
+    finally:
+        config.reset_config_cache()
+    assert result.stdout.count("REFUSED 30") == 2, result.stdout + result.stderr  # EROFS
+    assert "WROTE" not in result.stdout and "SCRATCH OK" in result.stdout
+    assert (exam / "oracle.py").read_text() == "X = 1\n" and not (exam / "planted.py").exists()
+    assert (scratch / "ok.txt").read_text() == "ok"

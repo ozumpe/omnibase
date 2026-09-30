@@ -374,6 +374,11 @@ def gate_from_reason(reason: str | None) -> str | None:
     # failed pytest, and the analytics blame the wrong side.
     if r.startswith("harness:"):
         return "harness"
+    # A candidate that changed the exam files a later gate trusts (OMNI-45, M9).
+    # Its own name: it is the candidate's doing, never the sandbox's, and it is
+    # worth counting separately from a wrong answer.
+    if r.startswith("tampered:"):
+        return "tampering"
     # The contract's interface gate: the candidate has the wrong shape, which is
     # a distinct failure from "its behaviour is wrong" (CLASS2_CONTRACT.md).
     if r.startswith("interface:"):

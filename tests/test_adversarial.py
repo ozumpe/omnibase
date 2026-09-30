@@ -275,13 +275,12 @@ def test_trivially_wrong_impls_are_rejected(evil: str) -> None:
     assert not result.passed
 
 
-def test_a_candidate_that_breaks_the_clock_is_a_counted_failure_not_neutral() -> None:
-    # KNOWN_ISSUES H2 follow-up: the candidate shares the harness's process, so
-    # it can make every timing zero. That must land as a counted failure, never
-    # as the neutral "inconclusive" (no bug, no breaker) it could previously
-    # steer to. Guarded so it only fires inside the benchmark harness.
+def test_a_candidate_that_breaks_the_clock_breaks_only_its_own() -> None:
+    # KNOWN_ISSUES H2: while the candidate shared the harness's process it could
+    # make every timing zero. Since OMNI-45 the clock that times it is in the
+    # host's process, so patching its own changes nothing: the naive algorithm is
+    # measured as what it is, a counted "no improvement", never neutral.
     code = '''
-import sys
 import time
 
 
@@ -293,29 +292,25 @@ def benchmark(n: int = 10_000, repetitions: int = 5) -> float:
     return 1.0
 
 
-if sys.argv[:1] == ["-c"] and hasattr(sys.modules.get("__main__"), "_out"):
-    setattr(time, "perf_counter", lambda: 0.0)
+setattr(time, "perf_counter", lambda: 0.0)
+setattr(time, "perf_counter_ns", lambda: 0)
 '''
     result = _validate(code)
-    assert not result.passed
-    assert result.reason.startswith(("benchmark unmeasurable", "benchmark output malformed")), (
-        result.reason)
-    assert neutral_status(result.reason) is None
+    assert not result.passed, result.reason
+    # Naive against naive: rejected, or on a machine too loaded to tell it from
+    # the margin, inconclusive (neutral) -- the allowance
+    # test_correct_but_not_faster_is_rejected makes. Never accepted, and never
+    # "unmeasurable", which is what a zeroed clock produced before.
+    assert result.reason.startswith(("no improvement", "benchmark inconclusive")), result.reason
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="KNOWN_ISSUES H2: the candidate runs in the process that measures it, so it "
-           "can write a forged verdict to the harness's own output channel. Remove this "
-           "marker when the candidate is moved into a separate worker process.",
-)
 def test_a_candidate_cannot_forge_the_verdict_through_the_harness_itself() -> None:
-    # Reproduced 2026-09-26 by a statistics-lens review of the merged OMNI-41
-    # gate: the naive algorithm plus this forger passes EVERY gate (reported
-    # latency 1µs) and exits before the differential-correctness loop, so a
-    # wrong candidate would pass too. Strict xfail: this test turning green is
-    # the signal that H2 is fixed — and strict makes that a failure until the
-    # marker is removed, so the pin cannot silently outlive the hole.
+    # KNOWN_ISSUES H2, reproduced 2026-09-26 by a statistics-lens review of the
+    # merged OMNI-41 gate: the naive algorithm plus this forger passed EVERY gate
+    # (reported latency 1µs) and exited before the differential-correctness loop,
+    # so a wrong candidate would have passed too. Strict-xfail until OMNI-45 moved
+    # the candidate into a worker of its own: there is no harness channel in its
+    # process to write to, and the clock that times it is the host's.
     code = '''
 import os
 import sys
@@ -446,6 +441,7 @@ def _gate_ctx(
         contract=spec, code_str=source, tmp=tmp_path, tmpdir=str(tmp_path),
         env=gauntlet._sandbox_env(home=str(tmp_path), pythonpath=str(tmp_path)),
         candidate=candidate, baseline=baseline_mod, oracle=oracle, seed=1,
+        baseline_code=baseline,
     )
 
 
@@ -454,7 +450,9 @@ def test_the_differential_gate_itself_refuses_a_liar(tmp_path: pathlib.Path) -> 
     ctx = _gate_ctx(tmp_path, gauntlet.default_contract(), _LIAR_SUM, baseline=baseline)
     result = gauntlet._gate_differential_benchmark(ctx)
     assert result is not None and not result.passed
-    assert "not a plain builtin value" in result.reason
+    # Since OMNI-45 the answer crosses a pipe as JSON, so the value compared is a
+    # plain int built by the host; the liar's __eq__ never runs (H4 by construction).
+    assert result.reason.startswith("correctness mismatch"), result.reason
 
 
 def test_the_invariant_gate_itself_refuses_a_liar(tmp_path: pathlib.Path) -> None:
@@ -527,3 +525,333 @@ def test_a_candidate_cannot_slow_the_baseline_through_a_shared_batch(
     # test_correct_but_not_faster_is_rejected makes. First written as "no
     # improvement" only, and flaked under the full suite at 0.80 [0.52, 1.23].
     assert result.reason.startswith(("no improvement", "benchmark inconclusive")), result.reason
+
+
+# --- M8, M9: a candidate that touches the exam, or ends the process (OMNI-45) ---
+#
+# Each attack is run in both sandboxes. In the subprocess sandbox the candidate
+# can write to the exam directory and the harness must notice; in docker the
+# directory is mounted read-only and the write cannot happen, so the candidate
+# is judged on its merits (these ones are wrong or no faster, and fail there).
+
+import functools  # noqa: E402
+import os  # noqa: E402
+import shutil  # noqa: E402
+import subprocess  # noqa: E402
+from collections.abc import Iterator  # noqa: E402
+from typing import Any  # noqa: E402
+
+from sis import config  # noqa: E402
+from sis.episodic import gate_from_reason  # noqa: E402
+
+
+@functools.cache
+def _docker_ready() -> bool:
+    if shutil.which("docker") is None:
+        return False
+    image = str(config.get("sandbox.image"))
+    return subprocess.run(["docker", "image", "inspect", image],
+                          capture_output=True).returncode == 0
+
+
+@pytest.fixture(params=["subprocess", "docker"])
+def sandbox(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+    if request.param == "docker" and not _docker_ready():
+        pytest.skip("docker or the sis-gauntlet image is not available")
+    monkeypatch.setenv("SIS_SANDBOX", request.param)
+    config.reset_config_cache()
+    yield str(request.param)
+    config.reset_config_cache()
+
+
+_WRONG_ABOVE_9000 = '''
+def sum_of_divisors(n: int) -> int:
+    if n > 9000:
+        return 0
+    return sum(i for i in range(1, n + 1) if n % i == 0)
+
+
+def benchmark(n: int = 10_000, repetitions: int = 5) -> float:
+    return 1.0
+'''
+
+_REWRITES_THE_ORACLE = '''
+import pathlib
+
+
+def _tamper() -> None:
+    here = pathlib.Path(__file__).resolve().parent
+    try:
+        (here / "oracle.py").write_text("BENCH_INPUTS = [(1,)]\\n")
+    except OSError:
+        pass
+
+
+_tamper()
+''' + _WRONG_ABOVE_9000
+
+_PLANTS_A_MODULE = '''
+import pathlib
+
+
+def _plant() -> None:
+    try:
+        (pathlib.Path(__file__).resolve().parent / "json.py").write_text("raise SystemExit(0)\\n")
+    except OSError:
+        pass
+
+
+_plant()
+''' + _WRONG_ABOVE_9000
+
+
+def test_a_candidate_that_rewrites_the_oracle_cannot_pass(sandbox: str) -> None:
+    # KNOWN_ISSUES M9, reproduced 2026-09-26: the exam files were writable by the
+    # candidate the first gate ran, and every later gate read them.
+    result = _validate(_REWRITES_THE_ORACLE)
+    assert not result.passed, result.reason
+    if sandbox == "subprocess":
+        assert result.reason.startswith("tampered:"), result.reason
+        assert "modified: oracle.py" in result.reason
+        assert gate_from_reason(result.reason) == "tampering"
+
+
+def test_a_candidate_that_plants_a_module_beside_the_exam_cannot_pass(sandbox: str) -> None:
+    # The exam directory is on sys.path, so a planted json.py would be imported
+    # by the next gate in place of the standard library's.
+    result = _validate(_PLANTS_A_MODULE)
+    assert not result.passed, result.reason
+    if sandbox == "subprocess":
+        assert result.reason.startswith("tampered:"), result.reason
+        assert "added: json.py" in result.reason
+
+
+_EXITS_AT_IMPORT = '''
+import os
+
+os._exit(0)
+'''
+
+_EXITS_ONLY_UNDER_PYTEST = '''
+import os
+import sys
+
+if "pytest" in sys.modules:
+    os._exit(0)
+''' + _WRONG_ABOVE_9000
+
+
+def test_a_candidate_that_ends_the_process_at_import_is_not_believed(sandbox: str) -> None:
+    # KNOWN_ISSUES M8: exit code 0 was the whole verdict of every non-benchmark
+    # gate. Reproduced against roman; the default contract had the same shape.
+    for contract in (None, ROMAN):
+        result = (gauntlet.validate(_EXITS_AT_IMPORT, _BASELINE) if contract is None
+                  else gauntlet.validate(_EXITS_AT_IMPORT, contract=contract))
+        assert not result.passed, (contract, result.reason)
+        assert result.reason.startswith("interface:"), result.reason
+        assert "no verdict" in result.reason
+
+
+def test_a_candidate_that_ends_the_process_only_under_pytest_is_not_believed(
+    sandbox: str,
+) -> None:
+    result = _validate(_EXITS_ONLY_UNDER_PYTEST)
+    assert not result.passed
+    assert result.reason.startswith("acceptance tests failed"), result.reason
+    assert "without reporting that the tests passed" in result.reason
+
+
+# --- the pieces those rely on ---
+
+
+def _ctx(tmp_path: pathlib.Path) -> gauntlet._GateContext:
+    return gauntlet._GateContext(
+        contract=ROMAN, code_str="", tmp=tmp_path, tmpdir=str(tmp_path), env={},
+        candidate=tmp_path / "target.py",
+    )
+
+
+def test_an_untouched_exam_reports_no_tampering(tmp_path: pathlib.Path) -> None:
+    ctx = _ctx(tmp_path)
+    ctx.put("oracle.py", "X = 1\n")
+    ctx.put("tests/test_target.py", "def test_a(): ...\n")
+    assert ctx.tampering() is None
+
+
+def test_a_context_that_recorded_nothing_checks_nothing(tmp_path: pathlib.Path) -> None:
+    (tmp_path / "anything.py").write_text("x = 1\n")
+    assert _ctx(tmp_path).tampering() is None
+
+
+@pytest.mark.parametrize(("attack", "expected"), [
+    (lambda root: (root / "oracle.py").write_text("X = 2\n"), "modified: oracle.py"),
+    (lambda root: (root / "json.py").write_text("x = 1\n"), "added: json.py"),
+    (lambda root: (root / "oracle.py").unlink(), "removed: oracle.py"),
+    (lambda root: (root / "tests" / "extra.py").write_text("x = 1\n"), "added: tests/extra.py"),
+    (lambda root: ((root / "oracle.py").unlink(), (root / "oracle.py").symlink_to("/etc/hosts")),
+     "modified: oracle.py"),
+    (lambda root: os.mkfifo(root / "pipe"), "added: pipe"),
+], ids=["modified", "added", "removed", "added-in-subdir", "symlink", "fifo"])
+def test_every_way_of_changing_the_exam_is_noticed(
+    tmp_path: pathlib.Path, attack: Any, expected: str
+) -> None:
+    ctx = _ctx(tmp_path)
+    ctx.put("oracle.py", "X = 1\n")
+    ctx.put("tests/test_target.py", "def test_a(): ...\n")
+    attack(tmp_path)
+    assert expected in (ctx.tampering() or "")
+
+
+def test_rewriting_a_file_the_host_re_installs_is_still_recorded(tmp_path: pathlib.Path) -> None:
+    # sis.canonical is written again by each gate that uses it. The second put is
+    # the host's, so it updates the record rather than tripping the check.
+    ctx = _ctx(tmp_path)
+    ctx.put("_sis_canonical.py", "A = 1\n")
+    ctx.put("_sis_canonical.py", "A = 1\n")
+    assert ctx.tampering() is None
+    (tmp_path / "_sis_canonical.py").write_text("A = 2\n")
+    assert "modified: _sis_canonical.py" in (ctx.tampering() or "")
+
+
+def test_a_zero_exit_needs_the_token_the_script_prints() -> None:
+    assert not gauntlet._ended_without_verdict("noise\nOK abc123\n", "abc123")
+    assert not gauntlet._ended_without_verdict("OK abc123\nprinted at exit\n", "abc123")
+    assert gauntlet._ended_without_verdict("", "abc123")
+    assert gauntlet._ended_without_verdict("OK\n", "abc123")          # not this run's token
+    assert gauntlet._ended_without_verdict("OK abc1234\n", "abc123")  # whole line, not a prefix
+
+
+def test_only_pytests_own_summary_counts_as_passing() -> None:
+    assert gauntlet._pytest_passed("..........\n10 passed in 0.05s\n")
+    assert gauntlet._pytest_passed("3 passed, 1 warning in 0.4s\nprinted at exit\n")
+    assert not gauntlet._pytest_passed("")
+    assert not gauntlet._pytest_passed("..........\n")                      # ended early
+    assert not gauntlet._pytest_passed("1 failed, 9 passed in 0.1s\n")
+    assert not gauntlet._pytest_passed("9 passed, 1 error in 0.1s\n")
+    assert not gauntlet._pytest_passed("all 10 passed\n")                   # not pytest's line
+
+
+# --- H2: the candidate is timed from outside its process (OMNI-45) ---
+#
+# The attacks that remain once the candidate has a worker of its own: telling a
+# timing batch from a correctness batch, answering before it is asked, and
+# killing its own worker. Each runs in both sandboxes.
+
+_FAST_THEN_WRONG = '''
+import math
+
+_calls = 0
+
+
+def sum_of_divisors(n: int) -> int:
+    # Right for the differential loop (300 calls in this worker), then wrong and
+    # instant: a candidate that only needs to be fast while it is being timed.
+    global _calls
+    _calls += 1
+    if _calls > 300:
+        return 1
+    total = 0
+    for i in range(1, math.isqrt(n) + 1):
+        if n % i == 0:
+            total += i
+            if i != n // i:
+                total += n // i
+    return total
+
+
+def benchmark(n: int = 10_000, repetitions: int = 5) -> float:
+    return 1.0
+'''
+
+_ANSWERS_BEFORE_ASKED = '''
+import json
+import os
+
+
+def sum_of_divisors(n: int) -> int:
+    return sum(i for i in range(1, n + 1) if n % i == 0)
+
+
+def benchmark(n: int = 10_000, repetitions: int = 5) -> float:
+    return 1.0
+
+
+# At import, before the worker has said it is ready: a forged handshake and
+# forged replies for the first requests, on every descriptor that might be the
+# channel. It cannot know the inputs, so the best it can send is a guess.
+_forged = json.dumps({"ready": True}) + "\\n" + "".join(
+    json.dumps({"id": i, "results": [{"ok": 1}] * 50}) + "\\n" for i in range(1, 8))
+for _fd in range(1, 32):
+    try:
+        os.write(_fd, _forged.encode())
+    except OSError:
+        pass
+'''
+
+_DIES_WHILE_TIMED = '''
+import math
+import os
+
+_calls = 0
+
+
+def sum_of_divisors(n: int) -> int:
+    global _calls
+    _calls += 1
+    if _calls > 400:
+        os._exit(0)
+    total = 0
+    for i in range(1, math.isqrt(n) + 1):
+        if n % i == 0:
+            total += i
+            if i != n // i:
+                total += n // i
+    return total
+
+
+def benchmark(n: int = 10_000, repetitions: int = 5) -> float:
+    return 1.0
+'''
+
+
+def test_a_candidate_that_is_only_wrong_while_timed_is_caught(sandbox: str) -> None:
+    result = _validate(_FAST_THEN_WRONG)
+    assert not result.passed
+    assert result.reason.startswith("correctness mismatch"), result.reason
+    assert any("while being timed" in e for e in result.errors), result.errors
+
+
+def test_a_candidate_that_answers_before_it_is_asked_cannot_guess_right(sandbox: str) -> None:
+    result = _validate(_ANSWERS_BEFORE_ASKED)
+    assert not result.passed, result.reason
+    assert not result.reason.startswith("harness"), result.reason
+
+
+def test_a_candidate_that_kills_its_worker_mid_benchmark_is_a_counted_failure(
+    sandbox: str,
+) -> None:
+    result = _validate(_DIES_WHILE_TIMED)
+    assert not result.passed
+    assert result.reason.startswith("benchmark: the candidate's worker failed"), result.reason
+    assert neutral_status(result.reason) is None
+
+
+def test_the_benchmark_runs_the_candidate_in_a_worker_of_its_own(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # Pins the shape of the fix: the gate starts a worker for the candidate and
+    # one for the baseline, and runs no script of its own that loads either.
+    from sis import sandbox_worker
+
+    started: list[str] = []
+    real_start = sandbox_worker.SandboxWorker.start
+
+    def spy(self):  # type: ignore[no-untyped-def]
+        started.append(self._source)
+        return real_start(self)
+
+    monkeypatch.setattr(sandbox_worker.SandboxWorker, "start", spy)
+    spec = gauntlet.default_contract()
+    baseline = (PROJECT_ROOT / spec.target_path).read_text(encoding="utf-8")
+    fast = (PROJECT_ROOT / str(spec.stub_candidate_path)).read_text(encoding="utf-8")
+    result = gauntlet.validate(fast, _BASELINE, baseline_source=baseline)
+    assert result.passed, result.reason
+    assert started == [fast, baseline]
