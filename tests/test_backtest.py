@@ -540,3 +540,29 @@ def test_a_comparator_never_sees_a_value_with_its_own_equality(tmp_path: pathlib
     result = gauntlet._gate_backtest(_ctx(tmp_path, spec, candidate_source=liar))
     assert result is not None and not result.passed
     assert "not a plain builtin value" in result.reason
+
+
+def test_a_candidate_that_raises_on_a_recorded_input_fails_the_backtest(
+    tmp_path: pathlib.Path,
+) -> None:
+    # KNOWN_ISSUES M11: the fixtures may lie outside what the acceptance tests
+    # cover, and the candidate's exception there used to surface as
+    # "harness: the backtest script crashed" -- an operator debugging a healthy
+    # sandbox, and a backtest failure the analytics never saw.
+    fixture = _write_fixture(tmp_path / "f.json", [6])
+    expect = _write_expect(tmp_path / "e.json", 12)
+    spec = replace(
+        default_contract(),
+        backtests=(Backtest(name="six", fixture=fixture, expect=expect),),
+    )
+    ctx = _ctx(
+        tmp_path, spec,
+        candidate_source=(
+            "def sum_of_divisors(n: int) -> int:\n    raise IndexError('past the table')\n"
+        ),
+    )
+    result = gauntlet._gate_backtest(ctx)
+    assert result is not None and not result.passed
+    assert not result.reason.startswith("harness"), result.reason
+    assert "did not reproduce recorded history" in result.reason
+    assert "IndexError" in result.reason and "past the table" in result.reason

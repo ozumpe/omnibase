@@ -39,20 +39,25 @@ the candidate passes all gates.
 """
 
 import ast
+import hashlib
 import json
 import math
 import os
 import pathlib
 import random
+import re
+import secrets
 import shutil
 import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any
 
 from sis import canonical, config
 from sis.backtest import (
@@ -137,6 +142,13 @@ def _sandbox_env(home: str, pythonpath: str) -> dict[str, str]:
     env["TMPDIR"] = home
     env["PYTHONPATH"] = pythonpath  # so the injected sitecustomize.py loads
     env["PYTHONHASHSEED"] = "0"
+    # A .pyc under a directory on sys.path is code the next import may load
+    # without reading its source (an unchecked hash-based one is trusted as is),
+    # so nothing in the sandbox writes one (OMNI-45, M9).
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    # Hypothesis keeps a cache under ./.hypothesis even with its example database
+    # off; the working directory is the exam, so it goes to the scratch instead.
+    env["HYPOTHESIS_STORAGE_DIRECTORY"] = os.path.join(home, ".hypothesis")
     return env
 
 
@@ -168,6 +180,14 @@ def _docker_args(tmpdir: str, env: dict[str, str], image: str, name: str) -> lis
     ``--security-opt no-new-privileges``, ``--read-only`` rootfs, and only the
     temp dir bind-mounted. No host credentials or filesystem are visible.
 
+    **The exam directory is read-only** whenever the sandbox has a scratch
+    directory of its own, i.e. ``env["HOME"]`` is not *tmpdir* (OMNI-45, M9):
+    the oracle, baseline, tests and the candidate's own file are then mounted
+    ``:ro``, and only the scratch (``HOME``/``TMPDIR``, mypy's cache) is writable,
+    so a candidate cannot rewrite what a later gate trusts. Callers that pass
+    ``HOME == tmpdir`` (the contract author's discrimination check, the sandbox
+    worker) keep the single read-write mount.
+
     ``--name`` lets the timeout handler kill the container by name (SIGKILL to
     the ``docker run`` client does not stop the container). ``--memory`` /
     ``--cpus`` bound a runaway candidate's resource use (override via
@@ -185,7 +205,7 @@ def _docker_args(tmpdir: str, env: dict[str, str], image: str, name: str) -> lis
         "--pids-limit", "256",
         "--memory", str(config.get("sandbox.memory")),
         "--cpus", str(config.get("sandbox.cpus")),
-        "-v", f"{tmpdir}:{tmpdir}:rw",
+        *_mounts(tmpdir, env.get("HOME")),
         "-w", tmpdir,
     ]
     for key, value in env.items():
@@ -193,6 +213,13 @@ def _docker_args(tmpdir: str, env: dict[str, str], image: str, name: str) -> lis
             args += ["-e", f"{key}={value}"]
     args.append(image)
     return args
+
+
+def _mounts(tmpdir: str, scratch: str | None) -> list[str]:
+    """``docker run -v`` arguments: exam dir read-only beside a separate scratch, or one rw dir."""
+    if scratch and scratch != tmpdir:
+        return ["-v", f"{tmpdir}:{tmpdir}:ro", "-v", f"{scratch}:{scratch}:rw"]
+    return ["-v", f"{tmpdir}:{tmpdir}:rw"]
 
 
 def _container_user() -> str:
@@ -298,6 +325,47 @@ class Result:
     seed: int | None = None
 
 
+def _digest(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _ended_without_verdict(stdout: str, nonce: str) -> bool:
+    """True unless the script printed its verdict token (KNOWN_ISSUES M8).
+
+    A zero exit code says the process ended, not that it reached a verdict:
+    ``os._exit(0)`` at import ends every gate's script with 0 before a single
+    assertion runs. So the harness generates a token per run, the script prints
+    it after the last check, and a zero exit is believed only with that line in
+    the output. Anywhere in it, not last: a candidate may print at exit, and a
+    candidate that ended the process early cannot have printed the token.
+
+    This stops a candidate that ends the process, by accident or on purpose,
+    without knowing the token. It does **not** stop one that finds the token: the
+    script and the candidate share a process, so anything the script knows the
+    candidate can read. The benchmark gate no longer has this problem (its
+    candidate runs in a worker of its own, OMNI-45); these gates still do (M8).
+    """
+    token = f"OK {nonce}"
+    return not any(line.strip() == token for line in stdout.splitlines())
+
+
+# pytest's own closing line: "10 passed in 0.05s", "3 passed, 1 warning in 0.4s".
+_PYTEST_PASSED = re.compile(r"^\d+ passed\b.* in [\d.]+s\b")
+_PYTEST_BROKEN = re.compile(r"\b\d+ (failed|error|errors)\b")
+
+
+def _pytest_passed(stdout: str) -> bool:
+    """Whether pytest's own summary says tests ran and none failed (M8).
+
+    Any line, not the last: a candidate may print at exit, after pytest is done.
+    A run that ended without a summary at all (``os._exit(0)`` while the test
+    module imported the candidate) has none.
+    """
+    lines = [line.strip() for line in stdout.splitlines()]
+    return (any(_PYTEST_PASSED.match(line) for line in lines)
+            and not any(_PYTEST_BROKEN.search(line) for line in lines))
+
+
 @dataclass
 class _GateContext:
     """Everything a gate may need, assembled once by :func:`validate`.
@@ -327,6 +395,58 @@ class _GateContext:
     seed: int = DEFAULT_SEED
     # Filled in by the differential+benchmark gate; reported on success.
     candidate_latency: float | None = None
+    # The sandbox's own writable directory (HOME/TMPDIR, tool caches), kept
+    # apart from ``tmp`` and off ``sys.path`` (OMNI-45, M9). None for a hand-built
+    # context, which keeps the old single directory.
+    scratch: pathlib.Path | None = None
+    # Every file the host put in ``tmp`` for the sandbox to trust, with its
+    # sha256. What is in ``tmp`` after a gate must be exactly this.
+    trusted: dict[str, str] = field(default_factory=dict)
+    # The caller's measure_baseline() number, when it passed one: what the
+    # benchmark reports a candidate's latency against, for display only.
+    baseline_latency: float = 0.0
+
+    def put(self, rel: str, text: str) -> pathlib.Path:
+        """Write a file the sandbox will trust, and remember what it must still say."""
+        path = self.tmp / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        self.trusted[rel] = _digest(text.encode("utf-8"))
+        return path
+
+    def tampering(self) -> str | None:
+        """What a gate left different in ``tmp`` from what the host put there, or None.
+
+        Modified, added or removed files, symlinks and special files all count.
+        An added file matters as much as a changed one: ``tmp`` is on
+        ``sys.path``, so a planted ``json.py`` or ``hypothesis.py`` would be
+        imported by the next gate in place of the real module (M9). A context
+        that recorded nothing (a hand-built one) checks nothing.
+        """
+        if not self.trusted:
+            return None
+        changed: list[str] = []
+        added: list[str] = []
+        for path in sorted(self.tmp.rglob("*")):
+            if path.is_dir() and not path.is_symlink():
+                continue
+            rel = path.relative_to(self.tmp).as_posix()
+            expected = self.trusted.get(rel)
+            if expected is None:
+                added.append(rel)
+                continue
+            try:
+                intact = (path.is_file() and not path.is_symlink()
+                          and _digest(path.read_bytes()) == expected)
+            except OSError:
+                intact = False
+            if not intact:
+                changed.append(rel)
+        removed = sorted(rel for rel in self.trusted if not (self.tmp / rel).exists())
+        parts = [f"{label}: {', '.join(names[:5])}"
+                 for label, names in (("modified", changed), ("added", added),
+                                      ("removed", removed)) if names]
+        return "; ".join(parts) or None
 
 
 def ensure_sandbox_allows_proposer() -> None:
@@ -410,21 +530,22 @@ def ensure_canary_allows_proposer(canary_backend: str | None = None) -> None:
         raise RuntimeError(problem)
 
 
-def _install_canonical(tmp: pathlib.Path) -> pathlib.Path:
+def _install_canonical(ctx: _GateContext) -> pathlib.Path:
     """Copy :mod:`sis.canonical` into the mount and return the copy's path.
 
     What every comparing gate reduces candidate output to before ``==``
     (OMNI-46, H4). Copied like the oracle, so docker mode needs nothing from the
     host — and rewritten by each gate that uses it rather than once per
     validation, so a candidate that overwrote it while an earlier gate ran does
-    not get to keep the change. That is not isolation (KNOWN_ISSUES M9): a gate
-    still shares its process with the candidate it is judging.
+    not get to keep the change, and recorded in the context's registry so that a
+    change made *during* a gate is caught as tampering (M9). The acceptance,
+    invariant and backtest gates still share a process with the candidate they
+    judge (M8's remainder); the benchmark gate does not (OMNI-45).
     """
-    module = tmp / f"{canonical.SANDBOX_MODULE}.py"
-    module.write_text(
-        pathlib.Path(canonical.__file__).read_text(encoding="utf-8"), encoding="utf-8"
+    return ctx.put(
+        f"{canonical.SANDBOX_MODULE}.py",
+        pathlib.Path(canonical.__file__).read_text(encoding="utf-8"),
     )
-    return module
 
 
 def _gate_invariant(ctx: _GateContext) -> Result | None:
@@ -452,13 +573,13 @@ def _gate_invariant(ctx: _GateContext) -> Result | None:
             reason=f"harness: shared invariants missing at {INVARIANTS_PATH} "
                    "— the invariant gate cannot run",
         )
-    shared_mod = ctx.tmp / "invariants.py"
-    shared_mod.write_text(shared_src.read_text(encoding="utf-8"), encoding="utf-8")
+    shared_mod = ctx.put("invariants.py", shared_src.read_text(encoding="utf-8"))
 
     seed = ctx.seed
+    nonce = secrets.token_hex(8)
     script = invariant_script(
         candidate_path=str(ctx.candidate),
-        canonical_path=str(_install_canonical(ctx.tmp)),
+        canonical_path=str(_install_canonical(ctx)),
         exports=list(spec.public_api),
         shared_path=str(shared_mod),
         oracle_path=str(ctx.oracle) if ctx.oracle is not None else None,
@@ -466,6 +587,7 @@ def _gate_invariant(ctx: _GateContext) -> Result | None:
         plan=[invariant_plan_entry(inv) for inv in spec.invariants],
         examples=spec.invariant_examples,
         seed=seed,
+        nonce=nonce,
     )
     result = _run([_PY, "-c", script], ctx.tmpdir, ctx.env)
     if timed_out := _timed_out(result, "invariant"):
@@ -511,6 +633,14 @@ def _gate_invariant(ctx: _GateContext) -> Result | None:
             reason="harness: the invariant script crashed",
             errors=result.stderr.splitlines(),
         )
+    if _ended_without_verdict(result.stdout, nonce):
+        return Result(
+            passed=False,
+            reason=f"invariant violated in sandbox (seed={seed}): the candidate ended the "
+                   "process before the laws finished, so there is no verdict",
+            errors=result.stdout.splitlines(),
+            seed=seed,
+        )
     return None
 
 
@@ -538,7 +668,7 @@ def _gate_backtest(ctx: _GateContext) -> Result | None:
     candidate's fault. Same reason the missing-oracle and missing-tests checks
     fail loudly rather than falling through.
     """
-    spec, tmp, tmpdir, env = ctx.contract, ctx.tmp, ctx.tmpdir, ctx.env
+    spec, tmpdir, env = ctx.contract, ctx.tmpdir, ctx.env
     candidate, oracle_mod = ctx.candidate, ctx.oracle
     if not spec.backtests:
         return None
@@ -550,11 +680,8 @@ def _gate_backtest(ctx: _GateContext) -> Result | None:
             reason=f"harness: shared comparators missing at {COMPARATORS_PATH} "
                    "— the backtest gate cannot run",
         )
-    comparators_mod = tmp / "comparators.py"
-    comparators_mod.write_text(comparators_src.read_text(encoding="utf-8"), encoding="utf-8")
+    comparators_mod = ctx.put("comparators.py", comparators_src.read_text(encoding="utf-8"))
 
-    fixtures_dir = tmp / "fixtures"
-    fixtures_dir.mkdir(exist_ok=True)
     plan: list[dict[str, object]] = []
     for index, bt in enumerate(spec.backtests):
         fixture_src = PROJECT_ROOT / bt.fixture
@@ -578,21 +705,23 @@ def _gate_backtest(ctx: _GateContext) -> Result | None:
             )
         # Indexed filenames, not bt.name: a name is human-authored and may
         # contain a path separator or a character the filesystem dislikes.
-        fixture_dst = fixtures_dir / f"{index}_fixture.json"
-        expect_dst = fixtures_dir / f"{index}_expect.json"
-        fixture_dst.write_text(fixture_src.read_text(encoding="utf-8"), encoding="utf-8")
-        expect_dst.write_text(expect_src.read_text(encoding="utf-8"), encoding="utf-8")
+        fixture_dst = ctx.put(
+            f"fixtures/{index}_fixture.json", fixture_src.read_text(encoding="utf-8"))
+        expect_dst = ctx.put(
+            f"fixtures/{index}_expect.json", expect_src.read_text(encoding="utf-8"))
         plan.append(plan_entry(bt, fixture_path=fixture_dst, expect_path=expect_dst))
 
+    nonce = secrets.token_hex(8)
     script = build_script(
         candidate_path=str(candidate),
-        canonical_path=str(_install_canonical(tmp)),
+        canonical_path=str(_install_canonical(ctx)),
         comparators_path=str(comparators_mod),
         # A Class-2 contract need not ship an oracle at all; when it does, its
         # comparators take precedence over the shared library.
         oracle_path=str(oracle_mod) if oracle_mod is not None else None,
         entry=spec.entry,
         plan=plan,
+        nonce=nonce,
     )
     result = _run([_PY, "-c", script], tmpdir, env)
     if timed_out := _timed_out(result, "backtest"):
@@ -629,6 +758,13 @@ def _gate_backtest(ctx: _GateContext) -> Result | None:
             passed=False,
             reason="harness: the backtest script crashed",
             errors=result.stderr.splitlines(),
+        )
+    if _ended_without_verdict(result.stdout, nonce):
+        return Result(
+            passed=False,
+            reason="backtest failed: candidate did not reproduce recorded history — it ended "
+                   "the process before the replay finished, so there is no verdict",
+            errors=result.stdout.splitlines(),
         )
     return None
 
@@ -707,7 +843,9 @@ def probe_sandbox(tmpdir: str, env: dict[str, str]) -> str | None:
     probe_dir.mkdir(exist_ok=True)
     (probe_dir / "probe_in.txt").write_text(_PROBE_TOKEN, encoding="utf-8")
     (probe_dir / "sis_probe_mod.py").write_text(f"TOKEN = {_PROBE_TOKEN!r}\n", encoding="utf-8")
-    out = probe_dir / "probe_out.txt"
+    # Written where the sandbox can write: the scratch, when it has one, since the
+    # exam directory is read-only in docker mode (M9).
+    out = pathlib.Path(env.get("HOME", tmpdir)) / "probe_out.txt"
     script = textwrap.dedent(
         f"""\
         import sys
@@ -797,7 +935,11 @@ def _gate_noop(ctx: _GateContext) -> Result | None:
 
 def _gate_mypy(ctx: _GateContext) -> Result | None:
     """Static types. Generated code must be fully annotated — see DESIGN.md §5."""
-    result = _run([_PY, "-m", "mypy", "--strict", str(ctx.candidate)], ctx.tmpdir, ctx.env)
+    cache = pathlib.Path(ctx.env.get("HOME", ctx.tmpdir)) / ".mypy_cache"
+    result = _run(
+        [_PY, "-m", "mypy", "--strict", "--cache-dir", str(cache), str(ctx.candidate)],
+        ctx.tmpdir, ctx.env,
+    )
     if timed_out := _timed_out(result, "mypy"):
         return timed_out
     if result.returncode != 0:
@@ -831,6 +973,7 @@ def _gate_interface(ctx: _GateContext) -> Result | None:
     """
     spec = ctx.contract
     needs_seed = spec.determinism is Determinism.STOCHASTIC
+    nonce = secrets.token_hex(8)
     script = textwrap.dedent(
         f"""\
         import sys, inspect, importlib.util
@@ -856,6 +999,7 @@ def _gate_interface(ctx: _GateContext) -> Result | None:
             if "seed" not in params:
                 print("NOSEED", {spec.entry!r})
                 sys.exit(5)
+        print("OK", {nonce!r})
         """
     )
     result = _run([_PY, "-c", script], ctx.tmpdir, ctx.env)
@@ -886,6 +1030,12 @@ def _gate_interface(ctx: _GateContext) -> Result | None:
             passed=False,
             reason="interface: candidate could not be imported",
             errors=result.stderr.splitlines(),
+        )
+    if _ended_without_verdict(result.stdout, nonce):
+        return Result(
+            passed=False,
+            reason="interface: candidate ended the process while it was being imported, "
+                   "so the check produced no verdict",
         )
     return None
 
@@ -921,24 +1071,18 @@ def _gate_acceptance(ctx: _GateContext) -> Result | None:
                    "— the acceptance gate cannot run",
         )
     tests_dst = ctx.tmp / "tests"
-    tests_dst.mkdir(exist_ok=True)
-    (tests_dst / "__init__.py").write_text("", encoding="utf-8")
-    (tests_dst / "test_target.py").write_text(
-        tests_src.read_text(encoding="utf-8"), encoding="utf-8"
-    )
+    ctx.put("tests/__init__.py", "")
+    ctx.put("tests/test_target.py", tests_src.read_text(encoding="utf-8"))
     # Loaded by pytest before the test module imports `target`, so every
     # assertion compares plain values rather than whatever `__eq__` the
     # candidate's return type defines (OMNI-46, H4).
-    _install_canonical(ctx.tmp)
-    (tests_dst / "conftest.py").write_text(
-        _ACCEPTANCE_CONFTEST.format(
-            module=canonical.SANDBOX_MODULE, names=tuple(spec.public_api)
-        ),
-        encoding="utf-8",
-    )
+    _install_canonical(ctx)
+    ctx.put("tests/conftest.py", _ACCEPTANCE_CONFTEST.format(
+        module=canonical.SANDBOX_MODULE, names=tuple(spec.public_api)))
 
     result = _run(
-        [_PY, "-m", "pytest", str(tests_dst), "-q", "--tb=short"], ctx.tmpdir, ctx.env
+        [_PY, "-m", "pytest", str(tests_dst), "-q", "--tb=short", "-p", "no:cacheprovider"],
+        ctx.tmpdir, ctx.env
     )
     if timed_out := _timed_out(result, "acceptance"):
         return timed_out
@@ -946,6 +1090,13 @@ def _gate_acceptance(ctx: _GateContext) -> Result | None:
         return Result(
             passed=False,
             reason="acceptance tests failed",
+            errors=result.stdout.splitlines() + result.stderr.splitlines(),
+        )
+    if not _pytest_passed(result.stdout):
+        return Result(
+            passed=False,
+            reason="acceptance tests failed: pytest ended without reporting that the tests "
+                   "passed, so the candidate is not believed",
             errors=result.stdout.splitlines() + result.stderr.splitlines(),
         )
     return None
@@ -963,11 +1114,10 @@ class BenchmarkVerdict(str, Enum):
     ACCEPT = "accept"
     REJECT = "reject"
     INCONCLUSIVE = "inconclusive"
-    # Too few usable timings to judge at all. Deliberately NOT neutral: the
-    # timings a candidate shares a process with can be made zero or NaN on
-    # purpose (patch the clock), and "unmeasurable" must not become a place to
-    # hide the way INCONCLUSIVE would be. Also the honest signal for a target
-    # too fast for the clock — raise the contract's bench_batch.
+    # Too few usable timings to judge at all. Deliberately NOT neutral, so that
+    # "unmeasurable" can never become a place to hide the way INCONCLUSIVE would
+    # be. Since OMNI-45 the timings come from the host's clock, which the
+    # candidate cannot reach, so in practice this means too few samples.
     UNMEASURABLE = "unmeasurable"
 
 
@@ -1027,9 +1177,10 @@ def benchmark_decision(
     - ``UNMEASURABLE`` — fewer than ``_MIN_DECIDABLE_PAIRS`` usable pairs. A
       failure, not neutral (see ``BenchmarkVerdict``).
 
-    What this function cannot defend against is timings that were *forged*
-    before they reached it: the candidate runs in the process that measures it
-    (KNOWN_ISSUES H2). And a percentile bootstrap on raw wall-clock sums
+    The timings come from the host's clock, around exchanges with a worker the
+    candidate runs in (OMNI-45), so the candidate cannot forge them the way it
+    could while it shared the measuring process (KNOWN_ISSUES H2, fixed). A
+    percentile bootstrap on raw wall-clock sums
     undercovers when scheduler stalls land in a few pairs — the false-accept
     rate at the margin is a few times the nominal (KNOWN_ISSUES M7).
     """
@@ -1064,6 +1215,44 @@ def benchmark_decision(
     )
 
 
+# How long one timed exchange of the *baseline* should take, as a multiple of
+# the pipe's own round trip (OMNI-45, H2). The exchange's fixed cost is then at
+# most 1/20 of the window, and being the same for both sides it can only pull
+# the ratio toward 1: toward rejecting a gain, never toward accepting a loss.
+# Kept as small as that allows, because pairing cancels drift only while the two
+# halves are adjacent in time (OMNI-41).
+_WINDOW_OVER_ROUND_TRIP = 20
+# Bounds on calls per timed exchange.
+_MAX_BATCH_CALLS = 20_000
+# Differential inputs per exchange: keeps replies small without a round trip each.
+_DIFF_CHUNK = 50
+
+
+def _host_oracle(spec: Contract) -> Any:
+    """The contract's oracle, loaded on the host from ``specs/`` (trusted, human-written).
+
+    From the repository, never from the sandbox's copy: the harness's reference
+    must not be a file the candidate's sandbox could reach.
+    """
+    import importlib.util
+
+    path = PROJECT_ROOT / str(spec.oracle_path)
+    module_spec = importlib.util.spec_from_file_location(f"_sis_host_oracle_{spec.name}", path)
+    if module_spec is None or module_spec.loader is None:
+        raise ImportError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(module)
+    return module
+
+
+class _WorkerFailed(Exception):
+    """A worker failed mid-gate; carries the gate's verdict for it."""
+
+    def __init__(self, result: Result) -> None:
+        super().__init__(result.reason)
+        self.result = result
+
+
 def _gate_differential_benchmark(ctx: _GateContext) -> Result | None:
     """Differential correctness over random inputs, then a like-for-like benchmark.
 
@@ -1072,12 +1261,38 @@ def _gate_differential_benchmark(ctx: _GateContext) -> Result | None:
     (a) Agreement with an **independent reference** over **randomised** inputs
         the candidate cannot predict — catches a diff that special-cases the
         known test and benchmark inputs but is wrong elsewhere.
-    (b) The harness drives the entry function itself (never the candidate's own
-        ``benchmark()``) and times candidate and baseline back-to-back on the
-        **same fresh** input, many times, deciding from the paired ratios via
+    (b) Candidate and baseline are timed back-to-back on the **same fresh**
+        inputs, many times, deciding from the paired ratios via
         :func:`benchmark_decision` (OMNI-41). Fresh inputs matter as much as
         pairing: a fixed workload timed repeatedly measures a cache, not an
         algorithm.
+
+    **The candidate never shares a process with the clock, the reference or the
+    verdict** (OMNI-45, closes KNOWN_ISSUES H2). Candidate and baseline each run
+    in their own :class:`~sis.sandbox_worker.SandboxWorker`, in the configured
+    sandbox; the reference runs here, loaded from ``specs/``; every exchange is
+    timed on this process's clock, and every answer arrives as JSON this
+    process decodes. Before, the candidate ran inside the script that timed it
+    and printed the verdict, and could write a forged verdict and exit.
+
+    **Timed in batches, sized by time.** An exchange with a worker costs a round
+    trip (about 20 µs in the subprocess sandbox, a few hundred in docker), far
+    more than a µs-scale call. So each exchange carries a batch of fresh inputs,
+    sized so the baseline's batch takes about ``_WINDOW_OVER_ROUND_TRIP`` round
+    trips. What batching cannot amortise is the per-call cost of sending an
+    input and its answer as JSON (about a µs for an int): the same for both
+    sides, it dilutes a gain rather than invents one, so the gate resolves
+    differences at the scale of a call's own work poorly — a known limit.
+
+    **Every timed answer is checked.** Candidate against baseline, and where
+    they differ, against the reference: a candidate that tells a timing batch
+    from a correctness batch (by size, say) and answers the first wrongly and
+    fast is rejected, not measured.
+
+    What remains outside this gate: the candidate's worker can still contend
+    for CPU while the baseline's batch runs (bounded by the sandbox's ``--cpus``
+    in docker; the subprocess sandbox can do more and is refused for a real
+    proposer).
 
     Class-1 only: both halves presuppose a reference that can be evaluated on
     demand, which is exactly what a Class-2 feature does not have.
@@ -1089,266 +1304,195 @@ def _gate_differential_benchmark(ctx: _GateContext) -> Result | None:
             reason=f"harness: contract oracle missing at {spec.oracle_path} "
                    "— correctness and benchmark gates cannot run",
         )
-    if ctx.baseline is None:
+    if ctx.baseline_code is None:
         return Result(
             passed=False,
             reason="harness: the benchmark gate needs a baseline and none was prepared",
         )
+    try:
+        oracle = _host_oracle(spec)
+    except Exception as exc:  # noqa: BLE001 - trusted code that fails is the harness's fault
+        return Result(passed=False, reason=f"harness: the contract oracle does not load ({exc})")
+
+    from sis.sandbox_worker import SandboxWorker, WorkerStartError
+
+    deadline = time.monotonic() + _timeout_seconds()
+    try:
+        cand = SandboxWorker(ctx.code_str, spec.entry).start()
+    except WorkerStartError as exc:
+        return _candidate_start_failure(exc, spec)
+    try:
+        try:
+            base = SandboxWorker(ctx.baseline_code, spec.entry).start()
+        except WorkerStartError as exc:
+            return Result(passed=False, reason=f"harness: the baseline did not start in its "
+                                               f"worker ({exc}) — the benchmark cannot run")
+        try:
+            return _judge(ctx, oracle, cand, base, deadline)
+        except _WorkerFailed as failed:
+            return failed.result
+        finally:
+            base.close()
+    finally:
+        cand.close()
+
+
+def _candidate_start_failure(exc: Exception, spec: Contract) -> Result:
+    if getattr(exc, "harness", False):
+        return Result(passed=False, reason=str(exc))
+    text = str(exc)
+    if "AttributeError" in text and spec.entry in text:
+        return Result(passed=False,
+                      reason=f"interface: candidate does not export {spec.entry!r} "
+                             f"(required by contract {spec.name!r})")
+    return Result(passed=False, reason=f"benchmark: the candidate did not start in its worker "
+                                       f"({' '.join(text.split())[:300]})")
+
+
+def _exchange(worker: Any, calls: list[list[Any]], deadline: float, who: str) -> Any:
+    """One timed exchange, or the gate's verdict on why it could not happen."""
+    from sis.sandbox_worker import WorkerError, WorkerTimeout
+
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise _WorkerFailed(Result(passed=False, reason="benchmark gate timed out"))
+    try:
+        return worker.call(calls, timeout_s=remaining)
+    except WorkerTimeout as exc:
+        raise _WorkerFailed(Result(passed=False, reason="benchmark gate timed out",
+                                   errors=[str(exc)])) from exc
+    except WorkerError as exc:
+        detail = " ".join(str(exc).split())[:300]
+        if who == "baseline":
+            raise _WorkerFailed(Result(
+                passed=False, reason=f"harness: the baseline's worker failed ({detail})")) from exc
+        # Not "harness:": the candidate can cause this (exit, or write to the
+        # channel). _attribute's probe decides whether the sandbox is at fault.
+        raise _WorkerFailed(Result(
+            passed=False, reason=f"benchmark: the candidate's worker failed ({detail})")) from exc
+
+
+def _mismatch(args: Any, why: str) -> _WorkerFailed:
+    return _WorkerFailed(Result(
+        passed=False,
+        reason="correctness mismatch (candidate disagrees with reference — "
+               "possible benchmark gaming)",
+        errors=[f"MISMATCH {args!r:.300}", why],
+    ))
+
+
+def _judge(ctx: _GateContext, oracle: Any, cand: Any, base: Any,
+           deadline: float) -> Result | None:
+    import copy as _copy
+
+    from sis.sandbox_worker import as_wire
+
+    spec = ctx.contract
     trials = getattr(spec, "diff_trials", DEFAULT_DIFF_TRIALS)
     max_ratio = getattr(spec, "max_latency_ratio", DEFAULT_MAX_LATENCY_RATIO)
     samples = getattr(spec, "bench_samples", DEFAULT_BENCH_SAMPLES)
-    batch = getattr(spec, "bench_batch", DEFAULT_BENCH_BATCH)
+    min_batch = getattr(spec, "bench_batch", DEFAULT_BENCH_BATCH)
     confidence = getattr(spec, "bench_confidence", DEFAULT_BENCH_CONFIDENCE)
     # Seeded so a verdict is reproducible, and reported on rejection — the same
-    # convention the invariant gate uses, and for the same reason: without the
-    # seed a surprising measurement cannot be re-run.
+    # convention the invariant gate uses.
     bench_seed = ctx.seed
-    canonical_path = str(_install_canonical(ctx.tmp))
-    script = textwrap.dedent(
-        f"""\
-        import os, sys, time, copy, random, importlib.util
 
-        # The harness keeps a duplicate of stdout and points fd 1 (and
-        # sys.stdout) at /dev/null before loading anything, so whatever the
-        # candidate *prints* — at import, per call, or from an atexit hook — goes
-        # nowhere. A pre-merge review forged a passing verdict with one atexit
-        # print against a parser that took the last matching line.
-        #
-        # This is NOT isolation. The candidate runs in this process and can
-        # reach anything here on purpose: `__main__._out` (or the dup'd fd via
-        # os.write), `time.perf_counter`, `timed`, `base_fn`. A candidate that
-        # writes a fabricated PAIRS/BASELINE/END to `_out` and calls os._exit(0)
-        # passes every gate and skips the correctness loop below — KNOWN_ISSUES
-        # H2, pinned by a strict-xfail test. Only running the candidate in a
-        # separate worker process, timed from here, closes it.
-        _out = os.fdopen(os.dup(1), "w")
-        os.dup2(os.open(os.devnull, os.O_WRONLY), 1)
-        sys.stdout = open(os.devnull, "w")
+    def reference(args: list[Any]) -> Any:
+        return as_wire(oracle.reference(*_copy.deepcopy(args)))
 
-        def emit(*parts):
-            _out.write(" ".join(str(p) for p in parts) + "\\n")
-            _out.flush()
+    def fresh(rng: random.Random) -> list[Any]:
+        # The wire form for both sides and the reference: a tuple becomes a list
+        # for all three, and each worker decodes its own copy (M10 by construction).
+        return list(as_wire(list(oracle.random_input(rng))))
 
-        def _load(path, name):
-            spec = importlib.util.spec_from_file_location(name, path)
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-            return mod
+    # (a) Differential correctness, inputs from system entropy.
+    rng = random.Random()
+    inputs = [fresh(rng) for _ in range(trials)]
+    for start in range(0, len(inputs), _DIFF_CHUNK):
+        chunk = inputs[start:start + _DIFF_CHUNK]
+        reply = _exchange(cand, chunk, deadline, "candidate")
+        for args, got in zip(chunk, reply.results, strict=True):
+            if not got.ok:
+                raise _mismatch(args, f"the candidate raised: {got.error}")
+            if got.value != reference(args):
+                raise _mismatch(args, "the candidate's answer differs from the reference")
 
-        canon = _load({canonical_path!r}, "_sis_canonical")
-        cand = _load({str(ctx.candidate)!r}, "candidate")
-        base = _load({str(ctx.baseline)!r}, "baseline")
-        oracle = _load({str(ctx.oracle)!r}, "oracle")
-
-        entry = {spec.entry!r}
-        if not hasattr(cand, entry):
-            emit("NOENTRY", entry)
-            sys.exit(4)
-        cand_fn = getattr(cand, entry)
-        base_fn = getattr(base, entry)
-
-        rng = random.Random()  # system entropy: inputs are unpredictable
-        for _ in range({trials}):
-            args = oracle.random_input(rng)
-            # The candidate gets its own copy (OMNI-47, M10): called on the
-            # reference's objects, a candidate that emptied its input list and
-            # returned [] "agreed" with a reference that then sorted nothing.
-            # Its output is rebuilt from plain builtins before the comparison
-            # (OMNI-46, H4), so the `!=` below is never the candidate's own.
-            try:
-                got = canon.canonical(cand_fn(*copy.deepcopy(args)))
-            except canon.NotPlainError as exc:
-                emit("NOTPLAIN", exc)
-                sys.exit(5)
-            if got != oracle.reference(*args):
-                emit("MISMATCH", args)
-                sys.exit(3)
-
-        # Tightly interleaved pairs over FRESH inputs (OMNI-41).
-        #
-        # Fresh inputs, not oracle.BENCH_INPUTS replayed: a fixed workload timed
-        # repeatedly rewards memoisation rather than speed, so a naive
-        # implementation under functools.cache measured as near-free and passed
-        # every gate. An argument is used once, so a cache cannot hit.
-        #
-        # One pair = candidate and baseline timed back-to-back on the SAME fresh
-        # input. Shared drift cancels in a ratio only in so far as the two halves
-        # are adjacent in time, so the window is kept as small as the clock
-        # allows and the sample count carries the precision. The order alternates
-        # so neither side systematically runs second on warm caches.
-        #
-        # Every sample is taken — there is deliberately no early stop. The first
-        # cut stopped once 11 pairs agreed, and a review showed a candidate that
-        # is slow only on the rarer, expensive inputs survives 11 draws often
-        # enough to matter (a slow 10% tail is missed with p = 0.9**11 ≈ 31%).
-        bench_rng = random.Random({bench_seed!r})
-
-        def timed(fn, batch):
-            start = time.perf_counter()
-            for args in batch:
-                fn(*args)
-            return time.perf_counter() - start
-
-        # The contract's own BENCH_INPUTS are timed too — ONCE each, as pairs
-        # mixed in among the fresh ones. The oracle chose them for shape
-        # coverage random_input lacks (sort: already-sorted, reverse-sorted,
-        # heavy-duplicate — where naive pivots go quadratic), and the first
-        # cut of this gate, timing random inputs only, lost that. Timed once,
-        # a cache cannot hit; they are public, so a candidate could special-case
-        # them, but they are a small share of total cost (~8% for
-        # sum_of_divisors) and cannot clear the margin alone.
-        work = [[args] for args in oracle.BENCH_INPUTS]
-        work += [[oracle.random_input(bench_rng) for _ in range({batch})]
-                 for _ in range({samples})]
-        bench_rng.shuffle(work)
-
-        # Each side times its own deep copy of the batch (OMNI-47, M10), made
-        # outside the timed window so copying costs neither side anything. On
-        # shared lists a candidate that grew its input after the differential
-        # loop made every baseline that ran after it slower — and itself look
-        # faster, with no faster code at all.
-        pairs = []
-        for sample_i, batch in enumerate(work):
-            cand_batch = copy.deepcopy(batch)
-            base_batch = copy.deepcopy(batch)
-            if sample_i % 2 == 0:
-                t_cand = timed(cand_fn, cand_batch)
-                t_base = timed(base_fn, base_batch)
-            else:
-                t_base = timed(base_fn, base_batch)
-                t_cand = timed(cand_fn, cand_batch)
-            pairs.append((t_cand, t_base))
-
-        # The *baseline's* per-call latency over BENCH_INPUTS, best of 5 —
-        # measure_baseline()'s method. The candidate is never timed on this fixed
-        # workload (that is what a cache games); its *reported* latency is this
-        # number scaled by the total-cost ratio. That is a display estimate, not
-        # a like-for-like measurement: the ratio is dominated by the large random
-        # inputs, so for `sort` it overstates the speedup on BENCH-sized inputs
-        # (~2.8x, per review). The verdict never uses it.
-        best = float("inf")
-        for inputs in [copy.deepcopy(oracle.BENCH_INPUTS) for _ in range(5)]:
-            start = time.perf_counter()
-            for args in inputs:
-                base_fn(*args)
-            best = min(best, time.perf_counter() - start)
-        emit("PAIRS", " ".join(f"{{c!r}},{{b!r}}" for c, b in pairs))
-        emit("BASELINE", repr(best / len(oracle.BENCH_INPUTS)))
-        emit("END")
-        """
+    # (b) The pipe's own round trip, after a warm-up, then a batch size.
+    for worker, who in ((cand, "candidate"), (base, "baseline")):
+        _exchange(worker, [], deadline, who)
+    round_trip = min(
+        _exchange(worker, [], deadline, who).elapsed_s
+        for _ in range(5) for worker, who in ((cand, "candidate"), (base, "baseline"))
     )
-    result = _run([_PY, "-c", script], ctx.tmpdir, ctx.env)
-    if timed_out := _timed_out(result, "benchmark"):
-        return timed_out
-    if result.returncode == 4:
-        return Result(
-            passed=False,
-            reason=f"interface: candidate does not export {spec.entry!r} "
-                   f"(required by contract {spec.name!r})",
-            errors=result.stdout.splitlines(),
-        )
-    if result.returncode == 3:
-        return Result(
-            passed=False,
-            reason="correctness mismatch (candidate disagrees with reference — "
-                   "possible benchmark gaming)",
-            errors=result.stdout.splitlines(),
-        )
-    if result.returncode == 5:
-        return Result(
-            passed=False,
-            reason="correctness mismatch (candidate output is not a plain builtin value, "
-                   "so it cannot be compared honestly — H4)",
-            errors=result.stdout.splitlines(),
-        )
-    if result.returncode != 0:
-        return Result(
-            passed=False,
-            reason="benchmark script crashed",
-            errors=result.stderr.splitlines(),
-        )
+    window = _WINDOW_OVER_ROUND_TRIP * round_trip
+    bench_rng = random.Random(bench_seed)
+    batch = max(1, min_batch)
+    while batch < _MAX_BATCH_CALLS:
+        # Fresh inputs, never timed again: a cache must not get a second look.
+        if _exchange(base, [fresh(bench_rng) for _ in range(batch)], deadline,
+                     "baseline").elapsed_s >= window:
+            break
+        batch = min(batch * 2, _MAX_BATCH_CALLS)
 
-    parsed = _parse_benchmark_output(result.stdout)
-    if parsed is None:
-        # Not "harness:": a candidate can cause this (exit early, or tamper with
-        # the harness's output), so it must not self-label as infrastructure and
-        # skip the OMNI-37 probe. _attribute probes the sandbox; only a failed
-        # self-check turns it into a harness fault.
-        return Result(
-            passed=False,
-            reason="benchmark output malformed or missing — expected PAIRS, BASELINE, "
-                   "END and nothing else (candidate exited early or tampered?)",
-            errors=result.stdout.splitlines()[:20],
-        )
-    pairs, measured_baseline = parsed
+    # The contract's own BENCH_INPUTS are timed too, ONCE each, spread among the
+    # fresh batches: the oracle chose them for shape coverage random_input lacks
+    # (sort: already-sorted, reverse-sorted, heavy-duplicate).
+    work = [[fresh(bench_rng) for _ in range(batch)] for _ in range(samples)]
+    for args in oracle.BENCH_INPUTS:
+        work[bench_rng.randrange(len(work))].append(list(as_wire(list(args))))
+
+    pairs: list[tuple[float, float]] = []
+    base_calls = 0
+    base_seconds = 0.0
+    for index, calls in enumerate(work):
+        # Alternating order, so neither side systematically runs second.
+        if index % 2 == 0:
+            c_reply = _exchange(cand, calls, deadline, "candidate")
+            b_reply = _exchange(base, calls, deadline, "baseline")
+        else:
+            b_reply = _exchange(base, calls, deadline, "baseline")
+            c_reply = _exchange(cand, calls, deadline, "candidate")
+        for args, got, theirs in zip(calls, c_reply.results, b_reply.results, strict=True):
+            if not got.ok:
+                raise _mismatch(args, f"the candidate raised while being timed: {got.error}")
+            if theirs.ok and got.value == theirs.value:
+                continue
+            if got.value != reference(args):
+                raise _mismatch(args, "the candidate answered wrongly while being timed")
+        pairs.append((c_reply.elapsed_s, b_reply.elapsed_s))
+        base_calls += len(calls)
+        base_seconds += b_reply.elapsed_s
 
     decision = benchmark_decision(pairs, max_ratio=max_ratio, confidence=confidence)
     if decision.verdict is BenchmarkVerdict.UNMEASURABLE:
-        # Not neutral and not "harness:" — the candidate can cause it (see
-        # BenchmarkVerdict.UNMEASURABLE); _attribute's probe decides whether the
-        # sandbox is at fault instead.
         return Result(
             passed=False,
             reason=f"benchmark unmeasurable: only {decision.samples} usable timing pairs "
-                   f"of {len(pairs)} (need {_MIN_DECIDABLE_PAIRS}) — the target is too "
-                   "fast for the clock (raise the contract's bench_batch) or the "
-                   f"candidate interfered with timing; seed={bench_seed}",
+                   f"of {len(pairs)} (need {_MIN_DECIDABLE_PAIRS}); seed={bench_seed}",
             seed=bench_seed,
         )
+    # Per-call latencies are for display (the PR's evidence, the episodic log);
+    # the verdict never uses them. The caller's measure_baseline() number when it
+    # passed one, so a step's reported gain is measured on one workload.
+    measured_baseline = ctx.baseline_latency if ctx.baseline_latency > 0 else max(
+        (base_seconds - len(pairs) * round_trip) / max(base_calls, 1), 1e-9)
     candidate_latency = measured_baseline * decision.ratio
     ctx.candidate_latency = candidate_latency
     if decision.verdict is BenchmarkVerdict.ACCEPT:
         return None
     detail = (
         f"candidate ~{candidate_latency:.6f}s vs baseline {measured_baseline:.6f}s "
-        f"per call (need ≤ {max_ratio:.0%}); {decision.describe()}; seed={bench_seed}"
+        f"per call (need ≤ {max_ratio:.0%}); {decision.describe()} of {batch} call(s) "
+        f"each; seed={bench_seed}"
     )
     if decision.verdict is BenchmarkVerdict.REJECT:
-        return Result(
-            passed=False,
-            reason=f"no improvement: {detail}",
-            latency_seconds=candidate_latency,
-            seed=bench_seed,
-        )
-    # Inconclusive: the candidate's best estimate clears the margin, but the
-    # interval cannot confirm it. Its own reject gate rather than "no
-    # improvement" — the evidence leans *for* the candidate — and the org records
-    # it like a no-op (episodic.NEUTRAL_OUTCOMES): spend counted, no bug, no
-    # breaker increment. benchmark_decision makes it unreachable for a candidate
-    # whose best estimate is slower, so it is not a hiding place for one.
-    return Result(
-        passed=False,
-        reason=f"benchmark inconclusive: {detail}",
-        latency_seconds=candidate_latency,
-        seed=bench_seed,
-    )
-
-
-def _parse_benchmark_output(stdout: str) -> tuple[list[tuple[float, float]], float] | None:
-    """Parse the benchmark script's output, strictly. ``None`` if malformed.
-
-    Exactly ``PAIRS``, ``BASELINE``, ``END`` — any other line, a duplicate, or a
-    missing sentinel is refused rather than parsed around, so output the harness
-    did not write cannot be mistaken for output it did.
-    """
-    lines = stdout.splitlines()
-    if len(lines) != 3 or lines[2] != "END":
-        return None
-    head, pair_line = lines[0].partition(" ")[::2]
-    tag, baseline_raw = lines[1].partition(" ")[::2]
-    if head != "PAIRS" or tag != "BASELINE":
-        return None
-    try:
-        pairs = []
-        for token in pair_line.split():
-            c, b = token.split(",")
-            pairs.append((float(c), float(b)))
-        baseline = float(baseline_raw)
-    except ValueError:
-        return None
-    if not math.isfinite(baseline) or baseline <= 0.0:
-        return None
-    return pairs, baseline
+        return Result(passed=False, reason=f"no improvement: {detail}",
+                      latency_seconds=candidate_latency, seed=bench_seed)
+    # Inconclusive: the best estimate clears the margin, the interval cannot
+    # confirm it. Neutral in the org (episodic.NEUTRAL_OUTCOMES); benchmark_decision
+    # makes it unreachable for a candidate whose best estimate is slower.
+    return Result(passed=False, reason=f"benchmark inconclusive: {detail}",
+                  latency_seconds=candidate_latency, seed=bench_seed)
 
 
 # Which gate name runs which implementation. The *contract* chooses the profile
@@ -1501,25 +1645,31 @@ def validate(
             else pathlib.Path(spec.target_file).read_text(encoding="utf-8")
         )
 
-    # Everything lives under the temp dir so the sandbox is self-contained
-    # (in docker mode only this dir is mounted — nothing reaches the host).
-    with tempfile.TemporaryDirectory() as tmpdir:
+    # Two directories, so the sandbox is self-contained (in docker mode only
+    # these are mounted — nothing reaches the host): the exam, which holds every
+    # file a gate trusts and is on sys.path, and a scratch the sandbox may write
+    # to. The exam is read-only in docker, and in both modes it is checked after
+    # every gate against what the host put there (OMNI-45, M9).
+    with tempfile.TemporaryDirectory() as tmpdir, tempfile.TemporaryDirectory() as scratchdir:
         tmp = pathlib.Path(tmpdir)
-        candidate = tmp / "target.py"
-        candidate.write_text(code_str, encoding="utf-8")
+        ctx = _GateContext(
+            contract=spec, code_str=code_str, tmp=tmp, tmpdir=tmpdir,
+            env=_sandbox_env(home=scratchdir, pythonpath=tmpdir), candidate=tmp / "target.py",
+            baseline_code=baseline_code, seed=run_seed, scratch=pathlib.Path(scratchdir),
+            baseline_latency=baseline_latency,
+        )
+        ctx.put("target.py", code_str)
 
         # sitecustomize.py runs at interpreter startup in every gate that has
         # tmp on PYTHONPATH, installing the network guard before any candidate
         # code runs. In docker mode --network none enforces this in the kernel
         # too; the guard stays as defence in depth.
-        (tmp / "sitecustomize.py").write_text(_NETWORK_GUARD, encoding="utf-8")
+        ctx.put("sitecustomize.py", _NETWORK_GUARD)
 
-        baseline_mod: pathlib.Path | None = None
         if baseline_code is not None:
             # Copied into the sandbox and loaded from the mount, never from an
             # external host path.
-            baseline_mod = tmp / "baseline.py"
-            baseline_mod.write_text(baseline_code, encoding="utf-8")
+            ctx.baseline = ctx.put("baseline.py", baseline_code)
 
         # The contract's oracle: reference implementation, benchmark inputs and
         # random-input generator. It is *code* and has to run beside the
@@ -1527,25 +1677,24 @@ def validate(
         # into a script as literals (which is what tied the whole gauntlet to
         # one target — L5). Optional: a Class-2 contract may declare none, and
         # the gate that requires one says so itself.
-        oracle_mod: pathlib.Path | None = None
         oracle_path = spec.oracle_path
         if oracle_path is not None:
             oracle_src = pathlib.Path(PROJECT_ROOT / oracle_path)
             if oracle_src.exists():
-                oracle_mod = tmp / "oracle.py"
-                oracle_mod.write_text(
-                    oracle_src.read_text(encoding="utf-8"), encoding="utf-8"
-                )
-
-        ctx = _GateContext(
-            contract=spec, code_str=code_str, tmp=tmp, tmpdir=tmpdir,
-            env=_sandbox_env(home=tmpdir, pythonpath=tmpdir), candidate=candidate,
-            baseline_code=baseline_code, baseline=baseline_mod, oracle=oracle_mod,
-            seed=run_seed,
-        )
+                ctx.oracle = ctx.put("oracle.py", oracle_src.read_text(encoding="utf-8"))
 
         for gate_name in profile:
-            if failure := _GATES[gate_name](ctx):
+            failure = _GATES[gate_name](ctx)
+            # Before anything is concluded from the gate: a gate that ran beside
+            # a candidate which rewrote the exam has not judged it. Checked when
+            # the gate passed too, since a pass is exactly what tampering buys.
+            if changed := ctx.tampering():
+                return Result(
+                    passed=False,
+                    reason=f"tampered: the candidate changed the exam files while the "
+                           f"{gate_name.value} gate ran ({changed})",
+                )
+            if failure:
                 return _attribute(failure, gate_name, ctx)
 
         return Result(

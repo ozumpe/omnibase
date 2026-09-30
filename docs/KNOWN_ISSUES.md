@@ -35,7 +35,7 @@ reference with no link target below.
 >
 > | ID | Jira |
 > |---|---|
-> | H2, M8, M9, M11 | [OMNI-45](https://olafzumpe.atlassian.net/browse/OMNI-45) (epic [OMNI-43](https://olafzumpe.atlassian.net/browse/OMNI-43)) |
+> | H2, M8, M9, M11 | [OMNI-45](https://olafzumpe.atlassian.net/browse/OMNI-45) (epic [OMNI-43](https://olafzumpe.atlassian.net/browse/OMNI-43)) — H2, M9 and M11 **fixed**, M8 partly (2026-09-29); M8's remainder is [OMNI-146](https://olafzumpe.atlassian.net/browse/OMNI-146) |
 > | H4 | [OMNI-46](https://olafzumpe.atlassian.net/browse/OMNI-46) (epic OMNI-43) — **fixed** |
 > | M10 | [OMNI-47](https://olafzumpe.atlassian.net/browse/OMNI-47) (epic OMNI-43) — **fixed** |
 > | H3 | [OMNI-48](https://olafzumpe.atlassian.net/browse/OMNI-48) (epic [OMNI-44](https://olafzumpe.atlassian.net/browse/OMNI-44)) |
@@ -58,33 +58,6 @@ reference with no link target below.
 > | L39 | [OMNI-42] |
 
 ## High
-
-- [OMNI-45] **H2 — The benchmark verdict can be forged from inside the measured
-  process** *(infrastructure for the fix exists since 2026-09-27: the sandbox
-  worker, OMNI-129, times and decodes on the host; the gates are not moved onto
-  it yet)* *(found 2026-09-26 by a statistics-lens review of the merged
-  OMNI-41 gate; reproduced)* — the Class-1 benchmark runs the candidate in the
-  same Python process as the harness that times it and reports the verdict.
-  OMNI-41 moved the verdict onto a duplicate of stdout, which stops a
-  candidate's *prints* (incl. `atexit`), but a candidate can reach the
-  duplicate itself: at import, write a fabricated `PAIRS`/`BASELINE`/`END` to
-  `__main__._out` and `os._exit(0)`. The naive `sum_of_divisors` plus that
-  forger passes **every** gate, reporting 1µs, and exits before the
-  differential-correctness loop — so a *wrong* candidate passes too. Closing
-  `_out` would not help (the dup'd fd is reachable with `os.write`), and any
-  in-process secret is readable by code that runs at import. The same reach
-  allows patching `time.perf_counter`, rebinding `base_fn`, or burning the GIL
-  from a thread during baseline windows. **Not new in kind** — the pre-OMNI-41
-  gate was forgeable with `print("1e-9 1.0"); os._exit(0)` — but OMNI-41's code
-  and docs claimed a private channel, which was false. Mitigations today: the
-  mandatory human PR merge, and (since this entry) a candidate that zeroes or
-  NaNs the timings gets a counted failure (`benchmark unmeasurable`, or
-  `benchmark output malformed` when the baseline is zeroed too) rather than the
-  neutral inconclusive it could previously steer to. Fix: run the candidate (and baseline) in separate
-  worker processes and time them from the harness, so candidate code never
-  shares a process with the clock or the verdict channel. Pinned by the
-  strict-xfail `test_a_candidate_cannot_forge_the_verdict_through_the_harness_itself`,
-  which flips to a failure the day this is fixed.
 
 - [OMNI-48] **H3 — A Serve-canary candidate runs as a full Ray control-plane worker, not
   in any sandbox** *(found 2026-09-26 by a multi-dimension review; confirmed by
@@ -115,57 +88,33 @@ reference with no link target below.
 
 ## Medium
 
-- [OMNI-45] **M8 — Every non-benchmark gate accepts exit code 0 as a pass, with no
-  positive verdict token** *(found 2026-09-26; reproduced)* — `_gate_interface`,
-  `_gate_acceptance`, `_gate_invariant` and `_gate_backtest` only check
-  `returncode != 0`. A Class-2 candidate that calls `os._exit(0)` at import
-  ends each gate's subprocess with code 0 before any assertion runs.
-  Reproduced against `roman`: `to_roman`/`from_roman` return wrong values and
-  the module calls `os._exit(0)`; `validate()` returns `"all gates passed"`.
-  **Not reachable through the loop today** — `roman`/Class-2 contracts aren't
-  in `DEFAULT_CONTRACTS` (`sis/contract.py` says wiring them in is its own
-  change) — so this is latent, not live, but it must close before that wiring
-  lands. Fix: require a positive, host-verified completion signal per gate
-  (e.g. pytest `--junitxml` with the expected test count and zero failures; a
-  per-run nonce for interface/invariant/backtest), never a bare exit code.
-
-- [OMNI-45] **M9 — The per-validation temp directory is shared, writable, and reused
-  across every gate, so a candidate can rewrite the exam files later gates
-  trust** *(found 2026-09-26; reproduced)* — `validate()` writes `oracle.py`,
-  `baseline.py` and `sitecustomize.py` once, then hands the same directory
-  (on `PYTHONPATH`, mounted `:rw` in docker, owned by the host user in both
-  sandbox modes) to every gate. The candidate runs first, in the interface
-  gate, and can overwrite those files before the differential, benchmark,
-  invariant and backtest gates read them. Reproduced against
-  `sum_of_divisors`: a candidate using the naive (wrong-above-9000) algorithm
-  appends matching wrong behaviour to `oracle.py` and a `sleep`-padded wrapper
-  to `baseline.py` at import; `validate()` returns `"all gates passed"`
-  reporting a fabricated 45µs. **Distinct from H2** — nothing here touches the
-  harness process, only files on disk, so H2's proposed worker-process fix
-  would not close it by itself. Fix: mount trusted files read-only (docker
-  `:ro`; `chmod 0444` in subprocess mode) in a directory separate from the
-  candidate's own writable scratch space, which should sit off `sys.path`
-  ahead of stdlib; verify a hash of every trusted file before each gate.
-
-- [OMNI-45] **M11 — A candidate's own exception inside the invariant or backtest gate is
-  filed as a harness/sandbox fault, not a candidate failure** *(found
-  2026-09-26 by a completeness critic; reproduced)* — `sis/invariant.py`'s
-  property wrapper catches only `AssertionError` around the candidate's call;
-  `sis/backtest.py` catches nothing at all around it. Any other exception
-  (e.g. an `IndexError` on an input the acceptance tests don't cover) makes
-  the gate script exit non-zero for a reason that isn't the counted
-  violation, and `_gate_invariant`/`_gate_backtest` map any other non-zero
-  exit to `"harness: ... crashed"` — precisely the misattribution **OMNI-37**
-  exists to prevent, in two gates it didn't reach. Reproduced against
-  `roman`: a candidate whose `to_roman` raises `IndexError` for
-  `2000 <= value < 3000` (outside the acceptance range) gets
-  `"harness: the invariant script crashed"`, and
-  `episodic.gate_from_reason` records `"harness"` — an operator would debug a
-  healthy sandbox, and reject-by-gate analytics under-count invariant
-  failures. Fix: wrap only the candidate's own call inside each gate script
-  and turn any exception into a counted violation (e.g. re-raise as an
-  `AssertionError` naming the candidate's exception, so Hypothesis can shrink
-  it and the seed still rides in the reason).
+- [OMNI-45] **M8 — Every non-benchmark gate accepted exit code 0 as a pass, with no
+  positive verdict token** *(found 2026-09-26; reproduced; **partly fixed
+  2026-09-29**, see below)* — `_gate_interface`, `_gate_acceptance`,
+  `_gate_invariant` and `_gate_backtest` only checked `returncode != 0`. A
+  Class-2 candidate that calls `os._exit(0)` at import ended each gate's
+  subprocess with code 0 before any assertion ran. Reproduced against `roman`:
+  `to_roman`/`from_roman` returned wrong values and the module called
+  `os._exit(0)`; `validate()` returned `"all gates passed"`. Latent for Class 2
+  (not in `DEFAULT_CONTRACTS`), live for the default contract's interface and
+  acceptance gates.
+  **Fixed so far (OMNI-45, slice 1):** every gate now needs evidence of a
+  verdict. The interface, invariant and backtest scripts print a per-run token
+  after their last check, and the harness believes a zero exit only with that
+  line in the output (`gauntlet._ended_without_verdict`); the acceptance gate
+  needs pytest's own `N passed in Xs` summary (`_pytest_passed`). `os._exit(0)`
+  at import, and a candidate that exits only when pytest has imported it, now
+  fail with "…ended the process… no verdict", on both contract classes and in
+  both sandboxes. A candidate that calls `sys.exit(0)` mid-call in the
+  invariant or backtest gate is a counted failure too (see M11).
+  **Still open** ([OMNI-146](https://olafzumpe.atlassian.net/browse/OMNI-146)):
+  in these four gates the token lives in the process the
+  candidate shares, so a candidate that finds it (the script's globals, the
+  call stack) can print it and exit. The benchmark gate no longer has that
+  reach (H2, fixed: its candidate answers from a worker of its own). Closing it
+  here means the same split for scripts that call the candidate themselves
+  (pytest's acceptance tests, Hypothesis's laws, the backtest replay), which is
+  a larger change than the benchmark's.
 
 - [OMNI-52] **M12 — A `soft_` operator config edit can rewrite `forbidden_` keys through
   unescaped YAML rendering** *(found 2026-09-26; reproduced end to end
@@ -425,6 +374,35 @@ reference with no link target below.
   reason, ratio) into the prompt as data, not instructions (see L27). The
   breaker and the budget bound the cost.
 
+- [OMNI-143] **L48** — The runbook's manual sync copies a `--loop` run a
+  second time, under a folder named for the wrong time *(found 2026-09-29
+  reviewing AWS run #5's artifacts)*. Since OMNI-140 the loop syncs itself to
+  `runs/<start time>/`, yet the runbook still has the operator run
+  `aws s3 sync runtime/ ".../runs/$(date +%Y%m%d-%H%M)/"` afterwards. Run #5
+  left `runs/20260929-2230/` beside `-2218/` and `-2238/` beside `-2233/`,
+  each identical but for one log line; `-2238` reads as a third run that never
+  happened. Fix: keep the manual sync for a single `main.py` run only, or aim
+  it at the folder the loop printed.
+- [OMNI-144] **L49** — A run's S3 folder carries every earlier run on the box
+  *(found 2026-09-29, same review)*. `sis/artifact_sync.py` uploads the
+  episodic log, its state and `loop.log` whole, and all three accumulate across
+  processes (carried spend is deliberate). Run #5's `sort` folder also holds
+  the six `sum_of_divisors` cycles, and its state reports both runs' spend and
+  acceptances. Nothing is lost, but reading a folder as one run double-counts.
+  Fix: a per-folder `run.json` manifest (start, code version, contract,
+  first/last `cycle_id`, spend at start and end), or upload this process's
+  slice alongside the cumulative files.
+- [OMNI-145] **L50** — An inconclusive candidate counts toward "converged"
+  and is never measured again *(found 2026-09-29 in AWS run #5, cycle
+  `6ea64dd07e95`)*. It measured a ratio of 0.8305, interval [0.6860, 0.9624]
+  over 109 pairs: the point estimate cleared the 0.90 margin, the interval did
+  not, so the verdict was neutral (OMNI-41). OMNI-138 counts every neutral
+  cycle toward `loop.converged_after`, so this one helped stop the loop with
+  "converged". Inconclusive is reachable only by a candidate that *looks*
+  faster, so it is the one neutral outcome that is not evidence of
+  convergence. Fix: count only `no_gain`/`no_change` toward convergence, and
+  consider one bounded re-measurement with a fresh seed before discarding.
+
 ## Resolved (Low)
 
 - [OMNI-1] **L5 — The gauntlet is hardwired to `sum_of_divisors`.** **RESOLVED
@@ -624,6 +602,87 @@ any long-lived cluster exists.
   front.
 
 ## Resolved
+
+- [OMNI-45] **H2 — The benchmark verdict could be forged from inside the measured
+  process** *(found 2026-09-26 by a statistics-lens review of the merged
+  OMNI-41 gate; reproduced)*. The Class-1 benchmark ran the candidate in the
+  same Python process as the harness that timed it and printed the verdict. A
+  candidate could write a fabricated `PAIRS`/`BASELINE`/`END` to the harness's
+  own output channel at import and `os._exit(0)`: the naive `sum_of_divisors`
+  plus that forger passed **every** gate reporting 1µs, and exited before the
+  differential loop, so a *wrong* candidate passed too. It could equally patch
+  `time.perf_counter`, rebind the baseline's function, or burn the GIL during
+  the baseline's windows. OMNI-41 had moved the verdict onto a duplicate of
+  stdout and claimed a private channel, which was false.
+  **Fixed 2026-09-29 (OMNI-45):** candidate and baseline each run in a
+  `SandboxWorker` (OMNI-129) in the configured sandbox; the oracle runs on the
+  host, loaded from `specs/`; every exchange is timed on the host's clock and
+  every answer decoded from JSON by the host. Exchanges carry a batch of fresh
+  inputs, sized by time so the baseline's batch takes about 20 pipe round trips
+  (measured here: ~20 µs a round trip in the subprocess sandbox, ~350 µs in
+  docker on a Mac); order alternates; `benchmark_decision` is unchanged. Every
+  timed answer is checked against the baseline's and, where they differ,
+  against the reference, so a candidate that is right while checked and wrong
+  while timed is rejected. JSON also closes H4 for this gate by construction.
+  The strict-xfail forger test now passes; new tests cover a candidate that is
+  only wrong while timed, one that writes forged replies into its pipe before
+  it is asked, and one that kills its worker mid-benchmark, each in both
+  sandboxes, and each shown to fail against a mutated or the old gate.
+  **Costs and limits:** the per-call JSON cost (~1 µs for an int) cannot be
+  amortised; it dilutes a gain rather than invents one, so µs-scale
+  improvements are resolved poorly. The candidate's worker can still contend
+  for CPU while the baseline's batch runs (bounded by docker's `--cpus`; the
+  subprocess sandbox, refused for a real proposer, allows more). The SLO gate
+  (OMNI-24) still times its candidate in-process.
+
+- [OMNI-45] **M11 — A candidate's own exception inside the invariant or backtest
+  gate was filed as a harness fault** *(found 2026-09-26 by a completeness
+  critic; reproduced)*. The invariant gate's property wrapper caught only
+  `AssertionError` around the candidate's call, and the backtest gate caught
+  nothing. Any other exception (an `IndexError` on an input the acceptance tests
+  do not cover) ended the script with an unmapped exit code, which the gate
+  reported as `harness: … crashed`. Reproduced against `roman`: `to_roman`
+  raising for `2000 <= value < 3000` got `harness: the invariant script
+  crashed`, recorded as gate `harness`: an operator debugging a healthy
+  sandbox, and invariant failures the analytics never counted. Found while
+  fixing it: a candidate that called `sys.exit(0)` in that band ended the script
+  with success and no verdict, and a wrong `roman` **passed every gate**.
+  **Fixed 2026-09-29 (OMNI-45, slice 1):** `canonical.guard_exports` turns an
+  exception raised by the candidate's own export, or a `SystemExit`, into
+  `CandidateRaised`, an `AssertionError`. It is applied after `wrap_exports` and
+  only in the invariant and backtest scripts, since acceptance tests legitimately
+  expect a candidate to raise. Hypothesis shrinks the counterexample (`args=(2000,)`)
+  and the seed rides in the reason; the backtest reports a failed replay. Pinned
+  in `tests/test_invariant.py` and `tests/test_backtest.py`, each shown to fail
+  with the fix reverted.
+
+- [OMNI-45] **M9 — The per-validation temp directory was shared, writable, and
+  reused across every gate, so a candidate could rewrite the exam files later
+  gates trust** *(found 2026-09-26; reproduced)*. `validate()` wrote `oracle.py`,
+  `baseline.py` and `sitecustomize.py` once and handed the same directory (on
+  `PYTHONPATH`, mounted `:rw` in docker) to every gate, the first of which ran
+  the candidate. Reproduced against `sum_of_divisors`: a wrong-above-9000
+  candidate appended matching wrong behaviour to `oracle.py` and a `sleep`-padded
+  wrapper to `baseline.py` at import, and `validate()` returned `"all gates
+  passed"` reporting a fabricated 45µs. Distinct from H2: nothing here touches the
+  harness process.
+  **Fixed 2026-09-29 (OMNI-45, slice 1):** (1) the exam (candidate, oracle,
+  baseline, tests, `sitecustomize`, the canonicaliser, comparators, fixtures) and
+  the sandbox's scratch (`HOME`/`TMPDIR`, the mypy and Hypothesis caches) are
+  separate directories, the scratch off `sys.path`. Docker mounts the exam `:ro`
+  and the scratch `:rw`, enforced by the kernel and pinned by a test that tries
+  to write both. (2) In both modes every trusted file goes through
+  `_GateContext.put`, which records its sha256, and after every gate, passed or
+  failed, `tampering()` compares the directory with that record: modified,
+  added (a planted `json.py` would shadow the standard library, since the exam is
+  on `sys.path`), removed, symlinked and special files all count. A difference
+  rejects the candidate as `tampered: …` (episodic gate `tampering`) before any
+  other conclusion. (3) `PYTHONDONTWRITEBYTECODE=1`: no `.pyc` appears beside
+  trusted code. **Residual:** in the subprocess sandbox (soft, and refused for a
+  real proposer) a candidate can change a file and put it back within one gate
+  run, which docker rules out. And a candidate that shares a process with a gate
+  can still forge that gate's verdict: M8's remainder (the benchmark gate no
+  longer shares one: H2, fixed).
 
 - [OMNI-138] **M27 — A converged target files bug tickets and trips the
   circuit breaker** *(found 2026-09-29 in the fourth AWS run, OMNI-29,
@@ -953,7 +1012,7 @@ any long-lived cluster exists.
   neutral at both SWE and QA stage (`episodic.neutral_status`) and reachable
   only by a candidate whose estimate clears the margin. The harness moves the
   verdict off the candidate's stdout — which stops its prints, not a candidate
-  that reaches into the harness on purpose (**H2**, still open). **The first cut of this fix was itself broken by an
+  that reaches into the harness on purpose (**H2**, fixed 2026-09-29 by OMNI-45). **The first cut of this fix was itself broken by an
   adversarial pre-merge review** and reworked before merge: deciding on the
   *median* per-input ratio accepted a candidate fast on the typical 70% of
   inputs and 4x slower on the rest (~2x slower in total, accepted ~98% of
@@ -1301,3 +1360,6 @@ any long-lived cluster exists.
 [OMNI-136]: https://olafzumpe.atlassian.net/browse/OMNI-136
 [OMNI-137]: https://olafzumpe.atlassian.net/browse/OMNI-137
 [OMNI-138]: https://olafzumpe.atlassian.net/browse/OMNI-138
+[OMNI-143]: https://olafzumpe.atlassian.net/browse/OMNI-143
+[OMNI-144]: https://olafzumpe.atlassian.net/browse/OMNI-144
+[OMNI-145]: https://olafzumpe.atlassian.net/browse/OMNI-145
