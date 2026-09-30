@@ -275,13 +275,12 @@ def test_trivially_wrong_impls_are_rejected(evil: str) -> None:
     assert not result.passed
 
 
-def test_a_candidate_that_breaks_the_clock_is_a_counted_failure_not_neutral() -> None:
-    # KNOWN_ISSUES H2 follow-up: the candidate shares the harness's process, so
-    # it can make every timing zero. That must land as a counted failure, never
-    # as the neutral "inconclusive" (no bug, no breaker) it could previously
-    # steer to. Guarded so it only fires inside the benchmark harness.
+def test_a_candidate_that_breaks_the_clock_breaks_only_its_own() -> None:
+    # KNOWN_ISSUES H2: while the candidate shared the harness's process it could
+    # make every timing zero. Since OMNI-45 the clock that times it is in the
+    # host's process, so patching its own changes nothing: the naive algorithm is
+    # measured as what it is, a counted "no improvement", never neutral.
     code = '''
-import sys
 import time
 
 
@@ -293,29 +292,25 @@ def benchmark(n: int = 10_000, repetitions: int = 5) -> float:
     return 1.0
 
 
-if sys.argv[:1] == ["-c"] and hasattr(sys.modules.get("__main__"), "_out"):
-    setattr(time, "perf_counter", lambda: 0.0)
+setattr(time, "perf_counter", lambda: 0.0)
+setattr(time, "perf_counter_ns", lambda: 0)
 '''
     result = _validate(code)
-    assert not result.passed
-    assert result.reason.startswith(("benchmark unmeasurable", "benchmark output malformed")), (
-        result.reason)
-    assert neutral_status(result.reason) is None
+    assert not result.passed, result.reason
+    # Naive against naive: rejected, or on a machine too loaded to tell it from
+    # the margin, inconclusive (neutral) -- the allowance
+    # test_correct_but_not_faster_is_rejected makes. Never accepted, and never
+    # "unmeasurable", which is what a zeroed clock produced before.
+    assert result.reason.startswith(("no improvement", "benchmark inconclusive")), result.reason
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="KNOWN_ISSUES H2: the candidate runs in the process that measures it, so it "
-           "can write a forged verdict to the harness's own output channel. Remove this "
-           "marker when the candidate is moved into a separate worker process.",
-)
 def test_a_candidate_cannot_forge_the_verdict_through_the_harness_itself() -> None:
-    # Reproduced 2026-09-26 by a statistics-lens review of the merged OMNI-41
-    # gate: the naive algorithm plus this forger passes EVERY gate (reported
-    # latency 1µs) and exits before the differential-correctness loop, so a
-    # wrong candidate would pass too. Strict xfail: this test turning green is
-    # the signal that H2 is fixed — and strict makes that a failure until the
-    # marker is removed, so the pin cannot silently outlive the hole.
+    # KNOWN_ISSUES H2, reproduced 2026-09-26 by a statistics-lens review of the
+    # merged OMNI-41 gate: the naive algorithm plus this forger passed EVERY gate
+    # (reported latency 1µs) and exited before the differential-correctness loop,
+    # so a wrong candidate would have passed too. Strict-xfail until OMNI-45 moved
+    # the candidate into a worker of its own: there is no harness channel in its
+    # process to write to, and the clock that times it is the host's.
     code = '''
 import os
 import sys
@@ -446,6 +441,7 @@ def _gate_ctx(
         contract=spec, code_str=source, tmp=tmp_path, tmpdir=str(tmp_path),
         env=gauntlet._sandbox_env(home=str(tmp_path), pythonpath=str(tmp_path)),
         candidate=candidate, baseline=baseline_mod, oracle=oracle, seed=1,
+        baseline_code=baseline,
     )
 
 
@@ -454,7 +450,9 @@ def test_the_differential_gate_itself_refuses_a_liar(tmp_path: pathlib.Path) -> 
     ctx = _gate_ctx(tmp_path, gauntlet.default_contract(), _LIAR_SUM, baseline=baseline)
     result = gauntlet._gate_differential_benchmark(ctx)
     assert result is not None and not result.passed
-    assert "not a plain builtin value" in result.reason
+    # Since OMNI-45 the answer crosses a pipe as JSON, so the value compared is a
+    # plain int built by the host; the liar's __eq__ never runs (H4 by construction).
+    assert result.reason.startswith("correctness mismatch"), result.reason
 
 
 def test_the_invariant_gate_itself_refuses_a_liar(tmp_path: pathlib.Path) -> None:
@@ -731,3 +729,129 @@ def test_only_pytests_own_summary_counts_as_passing() -> None:
     assert not gauntlet._pytest_passed("1 failed, 9 passed in 0.1s\n")
     assert not gauntlet._pytest_passed("9 passed, 1 error in 0.1s\n")
     assert not gauntlet._pytest_passed("all 10 passed\n")                   # not pytest's line
+
+
+# --- H2: the candidate is timed from outside its process (OMNI-45) ---
+#
+# The attacks that remain once the candidate has a worker of its own: telling a
+# timing batch from a correctness batch, answering before it is asked, and
+# killing its own worker. Each runs in both sandboxes.
+
+_FAST_THEN_WRONG = '''
+import math
+
+_calls = 0
+
+
+def sum_of_divisors(n: int) -> int:
+    # Right for the differential loop (300 calls in this worker), then wrong and
+    # instant: a candidate that only needs to be fast while it is being timed.
+    global _calls
+    _calls += 1
+    if _calls > 300:
+        return 1
+    total = 0
+    for i in range(1, math.isqrt(n) + 1):
+        if n % i == 0:
+            total += i
+            if i != n // i:
+                total += n // i
+    return total
+
+
+def benchmark(n: int = 10_000, repetitions: int = 5) -> float:
+    return 1.0
+'''
+
+_ANSWERS_BEFORE_ASKED = '''
+import json
+import os
+
+
+def sum_of_divisors(n: int) -> int:
+    return sum(i for i in range(1, n + 1) if n % i == 0)
+
+
+def benchmark(n: int = 10_000, repetitions: int = 5) -> float:
+    return 1.0
+
+
+# At import, before the worker has said it is ready: a forged handshake and
+# forged replies for the first requests, on every descriptor that might be the
+# channel. It cannot know the inputs, so the best it can send is a guess.
+_forged = json.dumps({"ready": True}) + "\\n" + "".join(
+    json.dumps({"id": i, "results": [{"ok": 1}] * 50}) + "\\n" for i in range(1, 8))
+for _fd in range(1, 32):
+    try:
+        os.write(_fd, _forged.encode())
+    except OSError:
+        pass
+'''
+
+_DIES_WHILE_TIMED = '''
+import math
+import os
+
+_calls = 0
+
+
+def sum_of_divisors(n: int) -> int:
+    global _calls
+    _calls += 1
+    if _calls > 400:
+        os._exit(0)
+    total = 0
+    for i in range(1, math.isqrt(n) + 1):
+        if n % i == 0:
+            total += i
+            if i != n // i:
+                total += n // i
+    return total
+
+
+def benchmark(n: int = 10_000, repetitions: int = 5) -> float:
+    return 1.0
+'''
+
+
+def test_a_candidate_that_is_only_wrong_while_timed_is_caught(sandbox: str) -> None:
+    result = _validate(_FAST_THEN_WRONG)
+    assert not result.passed
+    assert result.reason.startswith("correctness mismatch"), result.reason
+    assert any("while being timed" in e for e in result.errors), result.errors
+
+
+def test_a_candidate_that_answers_before_it_is_asked_cannot_guess_right(sandbox: str) -> None:
+    result = _validate(_ANSWERS_BEFORE_ASKED)
+    assert not result.passed, result.reason
+    assert not result.reason.startswith("harness"), result.reason
+
+
+def test_a_candidate_that_kills_its_worker_mid_benchmark_is_a_counted_failure(
+    sandbox: str,
+) -> None:
+    result = _validate(_DIES_WHILE_TIMED)
+    assert not result.passed
+    assert result.reason.startswith("benchmark: the candidate's worker failed"), result.reason
+    assert neutral_status(result.reason) is None
+
+
+def test_the_benchmark_runs_the_candidate_in_a_worker_of_its_own(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # Pins the shape of the fix: the gate starts a worker for the candidate and
+    # one for the baseline, and runs no script of its own that loads either.
+    from sis import sandbox_worker
+
+    started: list[str] = []
+    real_start = sandbox_worker.SandboxWorker.start
+
+    def spy(self):  # type: ignore[no-untyped-def]
+        started.append(self._source)
+        return real_start(self)
+
+    monkeypatch.setattr(sandbox_worker.SandboxWorker, "start", spy)
+    spec = gauntlet.default_contract()
+    baseline = (PROJECT_ROOT / spec.target_path).read_text(encoding="utf-8")
+    fast = (PROJECT_ROOT / str(spec.stub_candidate_path)).read_text(encoding="utf-8")
+    result = gauntlet.validate(fast, _BASELINE, baseline_source=baseline)
+    assert result.passed, result.reason
+    assert started == [fast, baseline]

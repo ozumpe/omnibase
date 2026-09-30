@@ -10,7 +10,8 @@ the exam, the verdict or the clock that judges it.
 reached over stdio needs no network at all, so a hot deployment keeps exactly
 the gauntlet's kernel-enforced isolation. A Serve replica does not: it is an
 ordinary Ray worker on the control-plane cluster (KNOWN_ISSUES H3). OMNI-48
-moves the canary onto this, and OMNI-45 the gates.
+moves the canary onto this. The benchmark gate already runs its candidate and
+baseline here (OMNI-45, H2).
 
 **What decoding JSON buys.** Every answer arrives as dict/list/str/int/float/
 bool/None, built by the host's own ``json`` module. A value with its own

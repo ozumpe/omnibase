@@ -90,9 +90,19 @@ internal target before it models anything external.
     point estimate misses it, else **inconclusive** — reachable only by a
     candidate that *looks* faster, and neutral like a no-op at both the SWE
     and QA stage (`episodic.neutral_status`: no bug, no breaker increment,
-    spend recorded). The candidate's prints go to /dev/null, but it still
-    runs in the process that measures it and **can forge the verdict on
-    purpose** (KNOWN_ISSUES **H2**, open). M7 — false-accept above nominal
+    spend recorded). **The candidate never shares a process with the clock,
+    the reference or the verdict** (OMNI-45, H2 fixed 2026-09-29): candidate and
+    baseline each run in a `SandboxWorker`, the oracle runs on the host from
+    `specs/`, and every exchange is timed on the host and decoded from JSON.
+    Exchanges carry a batch of fresh inputs, sized by time so the baseline's
+    batch takes ~20 pipe round trips (`_WINDOW_OVER_ROUND_TRIP`; ~20 µs a round
+    trip in the subprocess sandbox, ~350 µs in docker on a Mac). The per-call
+    JSON cost (~1 µs for an int) cannot be amortised and dilutes a gain rather
+    than invents one, so µs-scale differences are resolved poorly — accepted.
+    Every timed answer is checked against the baseline's, and differences
+    against the reference, so a candidate cannot be wrong only while timed. It
+    can still contend for CPU during the baseline's batch (bounded by docker's
+    `--cpus`). M7 — false-accept above nominal
     under stalls — is won't-fix for now (OMNI-88). Too few usable timings is
     `benchmark unmeasurable`, a counted failure, never neutral.
   - **Class 2** (`FeatureContract` — build what a spec describes, no
@@ -142,9 +152,11 @@ internal target before it models anything external.
     gate needs pytest's own `N passed` line (`gauntlet._ended_without_verdict`).
     A candidate's own exception (or `sys.exit`) inside the invariant or backtest
     gate is a counted violation (`canonical.guard_exports`), never
-    `harness: … crashed`. **What this is not:** the token and the gate script
-    still share a process with the candidate, so one that finds the token can
-    forge a pass. That is H2, and only the worker-process split closes it.
+    `harness: … crashed`. **What this is not:** in the interface, acceptance,
+    invariant and backtest gates the token and the gate script still share a
+    process with the candidate, so one that finds the token can forge a pass
+    (M8's remainder). The benchmark gate has no such token: its candidate runs
+    in a worker (see Class 1 above).
   - Every gate ends in a human PR. Generated code MUST be fully typed. What
     counts as correct/better is per-target — see `sis/contract.py`.
 - **Change-authorization policy (`sis/policy.py`) — what the loop may rewrite:**
@@ -696,9 +708,9 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   **Phase 0 is built:** `sis/sandbox_worker.py` (OMNI-129) serves a candidate
   hot from the sandbox. It is tested in both sandbox modes, including that a
   docker candidate cannot reach the network, Ray or the host's environment.
-- 996 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
+- 1003 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
   Ray-Serve-integration tests run separately, see Operational quick reference
-  above; 1058 total, recounted 2026-09-29 — corrected 2026-09-26, a multi-dimension review found the
+  above; 1065 total, recounted 2026-09-29 — corrected 2026-09-26, a multi-dimension review found the
   previously-documented 616/678 stale); `ruff`/`mypy --strict`/`pytest` clean;
   CI green; `feature → develop → main` enforced by both the client-side
   pre-push hook and active server-side rulesets.
@@ -732,20 +744,20 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
 **Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L
 severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
 the IDs in commits/PRs. **Open after a 2026-09-26 multi-dimension review with
-adversarial verification: H2–H3, M8 (partly fixed), M12–M14, M16–M17, M20–M23,
+adversarial verification: H3, M8 (partly fixed), M12–M14, M16–M17, M20–M23,
 L15–L20, L22, L25–L43; plus L46 from the second AWS run and L48–L50
 from the fifth (OMNI-143–145)** (M7 is won't-fix for now; H4, M10, M15, M19, L21, L23
 and L24 fixed 2026-09-26, OMNI-46/47/51/49/61/62; H5, H6, M24 and L44, found
 in the first AWS run, and L45, found releasing it, fixed 2026-09-27,
 OMNI-121–125; M18 and M25, the second run's duplicate PR, fixed the same day,
 OMNI-57/126; M26, the third run's conflicting second PR, and M27, the fourth run's
-breaker trip on a converged target, fixed 2026-09-29, OMNI-136/138; M9 and M11 fixed
-the same day, OMNI-45 slice 1). The headline, before
-trusting any gauntlet verdict: **the gate scripts judge a candidate inside its
-own process**. The exam files are now protected (M9) and a zero exit is no
-longer a verdict (M8, partly), but a candidate that shares the process can
-still forge the verdict token or the benchmark's output (H2, and what is left
-of M8). One redesign closes them, the worker-process split (OMNI-45, epic
+breaker trip on a converged target, fixed 2026-09-29, OMNI-136/138; H2, M9 and M11
+fixed the same day, OMNI-45). The headline, before trusting any gauntlet
+verdict: the Class-1 benchmark now judges its candidate from outside the
+candidate's process (H2), and the exam files are protected (M9). **The
+interface, acceptance, invariant and backtest gates still run their script in
+the candidate's process**: a zero exit is no longer a verdict, but a candidate
+that finds the per-run token can print it (M8's remainder, epic
 [OMNI-43](https://olafzumpe.atlassian.net/browse/OMNI-43)). Separately, the
 Serve canary runs candidate code as a full Ray worker in the control-plane
 cluster, before human review (H3, epic

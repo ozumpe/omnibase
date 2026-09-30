@@ -35,7 +35,7 @@ reference with no link target below.
 >
 > | ID | Jira |
 > |---|---|
-> | H2, M8, M9, M11 | [OMNI-45](https://olafzumpe.atlassian.net/browse/OMNI-45) (epic [OMNI-43](https://olafzumpe.atlassian.net/browse/OMNI-43)) — M9 and M11 **fixed**, M8 partly (slice 1, 2026-09-29) |
+> | H2, M8, M9, M11 | [OMNI-45](https://olafzumpe.atlassian.net/browse/OMNI-45) (epic [OMNI-43](https://olafzumpe.atlassian.net/browse/OMNI-43)) — H2, M9 and M11 **fixed**, M8 partly (2026-09-29) |
 > | H4 | [OMNI-46](https://olafzumpe.atlassian.net/browse/OMNI-46) (epic OMNI-43) — **fixed** |
 > | M10 | [OMNI-47](https://olafzumpe.atlassian.net/browse/OMNI-47) (epic OMNI-43) — **fixed** |
 > | H3 | [OMNI-48](https://olafzumpe.atlassian.net/browse/OMNI-48) (epic [OMNI-44](https://olafzumpe.atlassian.net/browse/OMNI-44)) |
@@ -58,36 +58,6 @@ reference with no link target below.
 > | L39 | [OMNI-42] |
 
 ## High
-
-- [OMNI-45] **H2 — The benchmark verdict can be forged from inside the measured
-  process** *(infrastructure for the fix exists since 2026-09-27: the sandbox
-  worker, OMNI-129, times and decodes on the host; the gates are not moved onto
-  it yet)* *(found 2026-09-26 by a statistics-lens review of the merged
-  OMNI-41 gate; reproduced)* — the Class-1 benchmark runs the candidate in the
-  same Python process as the harness that times it and reports the verdict.
-  OMNI-41 moved the verdict onto a duplicate of stdout, which stops a
-  candidate's *prints* (incl. `atexit`), but a candidate can reach the
-  duplicate itself: at import, write a fabricated `PAIRS`/`BASELINE`/`END` to
-  `__main__._out` and `os._exit(0)`. The naive `sum_of_divisors` plus that
-  forger passes **every** gate, reporting 1µs, and exits before the
-  differential-correctness loop — so a *wrong* candidate passes too. Closing
-  `_out` would not help (the dup'd fd is reachable with `os.write`), and any
-  in-process secret is readable by code that runs at import. The same reach
-  allows patching `time.perf_counter`, rebinding `base_fn`, or burning the GIL
-  from a thread during baseline windows. **Not new in kind** — the pre-OMNI-41
-  gate was forgeable with `print("1e-9 1.0"); os._exit(0)` — but OMNI-41's code
-  and docs claimed a private channel, which was false. Mitigations today: the
-  mandatory human PR merge, and (since this entry) a candidate that zeroes or
-  NaNs the timings gets a counted failure (`benchmark unmeasurable`, or
-  `benchmark output malformed` when the baseline is zeroed too) rather than the
-  neutral inconclusive it could previously steer to. Fix: run the candidate (and baseline) in separate
-  worker processes and time them from the harness, so candidate code never
-  shares a process with the clock or the verdict channel. Pinned by the
-  strict-xfail `test_a_candidate_cannot_forge_the_verdict_through_the_harness_itself`,
-  which flips to a failure the day this is fixed.
-  Slice 1 of OMNI-45 (M9, M11, part of M8, 2026-09-29) protects the exam files
-  and requires a verdict token; it does not move the candidate out of the
-  gate's process, so H2 is unchanged.
 
 - [OMNI-48] **H3 — A Serve-canary candidate runs as a full Ray control-plane worker, not
   in any sandbox** *(found 2026-09-26 by a multi-dimension review; confirmed by
@@ -137,11 +107,13 @@ reference with no link target below.
   fail with "…ended the process… no verdict", on both contract classes and in
   both sandboxes. A candidate that calls `sys.exit(0)` mid-call in the
   invariant or backtest gate is a counted failure too (see M11).
-  **Still open:** the token lives in the process the candidate shares, so a
-  candidate that finds it (the script's globals, the call stack) can print it
-  and exit. That is the same reach as **H2**, and the same fix closes both:
-  the gate's verdict is written by a harness process the candidate never
-  shares, over a pipe the host reads.
+  **Still open:** in these four gates the token lives in the process the
+  candidate shares, so a candidate that finds it (the script's globals, the
+  call stack) can print it and exit. The benchmark gate no longer has that
+  reach (H2, fixed: its candidate answers from a worker of its own). Closing it
+  here means the same split for scripts that call the candidate themselves
+  (pytest's acceptance tests, Hypothesis's laws, the backtest replay), which is
+  a larger change than the benchmark's.
 
 - [OMNI-52] **M12 — A `soft_` operator config edit can rewrite `forbidden_` keys through
   unescaped YAML rendering** *(found 2026-09-26; reproduced end to end
@@ -630,6 +602,38 @@ any long-lived cluster exists.
 
 ## Resolved
 
+- [OMNI-45] **H2 — The benchmark verdict could be forged from inside the measured
+  process** *(found 2026-09-26 by a statistics-lens review of the merged
+  OMNI-41 gate; reproduced)*. The Class-1 benchmark ran the candidate in the
+  same Python process as the harness that timed it and printed the verdict. A
+  candidate could write a fabricated `PAIRS`/`BASELINE`/`END` to the harness's
+  own output channel at import and `os._exit(0)`: the naive `sum_of_divisors`
+  plus that forger passed **every** gate reporting 1µs, and exited before the
+  differential loop, so a *wrong* candidate passed too. It could equally patch
+  `time.perf_counter`, rebind the baseline's function, or burn the GIL during
+  the baseline's windows. OMNI-41 had moved the verdict onto a duplicate of
+  stdout and claimed a private channel, which was false.
+  **Fixed 2026-09-29 (OMNI-45):** candidate and baseline each run in a
+  `SandboxWorker` (OMNI-129) in the configured sandbox; the oracle runs on the
+  host, loaded from `specs/`; every exchange is timed on the host's clock and
+  every answer decoded from JSON by the host. Exchanges carry a batch of fresh
+  inputs, sized by time so the baseline's batch takes about 20 pipe round trips
+  (measured here: ~20 µs a round trip in the subprocess sandbox, ~350 µs in
+  docker on a Mac); order alternates; `benchmark_decision` is unchanged. Every
+  timed answer is checked against the baseline's and, where they differ,
+  against the reference, so a candidate that is right while checked and wrong
+  while timed is rejected. JSON also closes H4 for this gate by construction.
+  The strict-xfail forger test now passes; new tests cover a candidate that is
+  only wrong while timed, one that writes forged replies into its pipe before
+  it is asked, and one that kills its worker mid-benchmark, each in both
+  sandboxes, and each shown to fail against a mutated or the old gate.
+  **Costs and limits:** the per-call JSON cost (~1 µs for an int) cannot be
+  amortised; it dilutes a gain rather than invents one, so µs-scale
+  improvements are resolved poorly. The candidate's worker can still contend
+  for CPU while the baseline's batch runs (bounded by docker's `--cpus`; the
+  subprocess sandbox, refused for a real proposer, allows more). The SLO gate
+  (OMNI-24) still times its candidate in-process.
+
 - [OMNI-45] **M11 — A candidate's own exception inside the invariant or backtest
   gate was filed as a harness fault** *(found 2026-09-26 by a completeness
   critic; reproduced)*. The invariant gate's property wrapper caught only
@@ -676,7 +680,8 @@ any long-lived cluster exists.
   trusted code. **Residual:** in the subprocess sandbox (soft, and refused for a
   real proposer) a candidate can change a file and put it back within one gate
   run, which docker rules out. And a candidate that shares a process with a gate
-  can still forge that gate's verdict: H2.
+  can still forge that gate's verdict: M8's remainder (the benchmark gate no
+  longer shares one: H2, fixed).
 
 - [OMNI-138] **M27 — A converged target files bug tickets and trips the
   circuit breaker** *(found 2026-09-29 in the fourth AWS run, OMNI-29,
@@ -1006,7 +1011,7 @@ any long-lived cluster exists.
   neutral at both SWE and QA stage (`episodic.neutral_status`) and reachable
   only by a candidate whose estimate clears the margin. The harness moves the
   verdict off the candidate's stdout — which stops its prints, not a candidate
-  that reaches into the harness on purpose (**H2**, still open). **The first cut of this fix was itself broken by an
+  that reaches into the harness on purpose (**H2**, fixed 2026-09-29 by OMNI-45). **The first cut of this fix was itself broken by an
   adversarial pre-merge review** and reworked before merge: deciding on the
   *median* per-input ratio accepted a candidate fast on the typical 70% of
   inputs and 4x slower on the rest (~2x slower in total, accepted ~98% of

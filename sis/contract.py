@@ -209,11 +209,12 @@ DEFAULT_DIFF_TRIALS = 300
 # Every sample is always taken. An early stop was tried and removed: a
 # candidate slow only on the rarer, expensive inputs slips past a small sample.
 DEFAULT_BENCH_SAMPLES = 99
-# Fresh inputs timed together per measurement. 1 is the tightest pairing and the
-# right default; raise it only for a target whose single call is below the
-# clock's resolution, where one call cannot be timed at all. Inputs are never
-# reused within or across windows — that is what stops a memoised candidate
-# measuring as fast (see the regression test in tests/test_adversarial.py).
+# The fewest fresh inputs timed per exchange. Since OMNI-45 the gate sizes each
+# exchange itself, until the baseline's batch takes about 20 of the pipe's round
+# trips (gauntlet._WINDOW_OVER_ROUND_TRIP), so this is only a floor. Inputs are
+# never reused within or across windows, which is what stops a memoised
+# candidate measuring as fast (see the regression test in
+# tests/test_adversarial.py).
 DEFAULT_BENCH_BATCH = 1
 # Two-sided coverage of the bootstrap interval on the total-time ratio. The
 # gate accepts only when the interval's upper end clears the margin.

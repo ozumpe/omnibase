@@ -26,7 +26,8 @@ The gauntlet copies this file into the sandbox as a standalone module
 
 What it does not do: stop a candidate that tampers with the *harness* — patches
 this module or the gate script from inside the process it shares with them
-(KNOWN_ISSUES H2/M9; OMNI-45 moves the candidate into its own worker process).
+(KNOWN_ISSUES M8/M9). The benchmark gate no longer needs this module: its
+candidate answers from a worker of its own, over JSON (OMNI-45).
 It defends against a hostile value, not a hostile process.
 """
 
