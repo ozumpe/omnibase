@@ -383,8 +383,12 @@ internal target before it models anything external.
   live runs — don't put planning there.
 
 ## Current status — where to pick up
-Released through **v0.3.4** (2026-09-29): v0.3.3 plus OMNI-45, gate
-integrity. The Class-1 benchmark times its candidate from outside the
+Released through **v0.3.5** (2026-09-29): v0.3.4 plus the two blockers before
+omnitrack Phase A. OMNI-146: the interface, acceptance, invariant and backtest
+gates judge the candidate from outside its process too (M8). OMNI-147: the loop
+builds a Class-2 feature from its spec (`--contract roman`). With them, OMNI-56,
+OMNI-64 and OMNI-78 (M17, L15, L33). Before that, **v0.3.4** (2026-09-29): v0.3.3
+plus OMNI-45, gate integrity. The Class-1 benchmark times its candidate from outside the
 candidate's process (H2), the exam files are protected (M9), a zero exit is no
 longer a verdict (M8 partly, the rest is OMNI-146), and a candidate's own
 exception counts against it (M11). Before that, **v0.3.3** (2026-09-29): v0.3.2
@@ -824,8 +828,8 @@ Two traps L5 surfaced, both worth knowing before writing similar code:
 
 **Next — the milestone plan is in Jira ([`OMNI`](https://olafzumpe.atlassian.net/browse/OMNI)),
 not here.** Check the board for current status rather than trusting this list.
-**Last reconciled against a live query on 2026-09-29** (146 issues, OMNI-1
-through OMNI-146; 85 Done, 0 In Progress, 61 To Do — most of the growth since 2026-09-26 is
+**Last reconciled against a live query on 2026-09-29** (147 issues, OMNI-1
+through OMNI-147; 90 Done, 0 In Progress, 57 To Do — most of the growth since 2026-09-26 is
 the KNOWN_ISSUES backfill, see "Known issues" above):
 
 1. ~~**[OMNI-1](https://olafzumpe.atlassian.net/browse/OMNI-1) — L5 target
@@ -905,7 +909,7 @@ the KNOWN_ISSUES backfill, see "Known issues" above):
    instance lifecycle: `user_data` racing Ubuntu's `unattended-upgrades` for
    the dpkg lock, and SSM sessions landing as `ssm-user` rather than `ubuntu`
    (every runbook step now starts with `sudo -iu ubuntu`). The box clones
-   the release tag in `var.repo_ref` (`v0.3.4`; a branch needs
+   the release tag in `var.repo_ref` (`v0.3.5`; a branch needs
    `allow_branch_ref = true`, OMNI-63) and every run records the commit it
    ran; run day uses `--contract sort`. **Rehearsed
    2026-09-23** on a local Ubuntu 24.04 box (`scripts/rehearse_aws_run.sh`),
