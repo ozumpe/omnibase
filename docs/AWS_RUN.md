@@ -24,7 +24,7 @@ This document has four parts:
 |---|---|
 | Code | release tag **`v0.3.5`** (`var.repo_ref`), never a branch — see [Which code runs](#which-code-runs) |
 | Box | one `m7i.xlarge`, `us-east-1`, **no inbound ports**; shell via SSM only |
-| Contract | one with room left: `sort` and `sum_of_divisors` have both converged, so re-seed a naive one on `ozumpe/testrun`'s `develop` first ([Before every run](#before-every-run-a-target-with-room-left)) |
+| Contract | Class 1, one with room left: `sort` and `sum_of_divisors` have both converged, so re-seed a naive one on `ozumpe/testrun`'s `develop` first ([Before every run](#before-every-run-a-target-with-room-left)). Or Class 2, `roman`: built from its spec, no re-seed (from `v0.3.5`) |
 | Where artifacts land | Jira `TES`, GitHub `ozumpe/testrun` (PRs against `develop`) |
 | Spend brakes | `SIS_BUDGET_USD=1.00` in the loop; an AWS Budget alarm (default $25/month) on the account |
 | Cost | about $0.20 an hour while the instance runs |
@@ -94,9 +94,18 @@ Then run the contract you re-seeded (`--contract sum_of_divisors` or
 
 **Or build a feature** (Class 2, from `v0.3.5`, OMNI-147):
 `--contract roman` writes `runtime/roman.py` from its spec and needs no
-re-seed, only that `develop` has no `runtime/roman.py` yet. Once its PR is
-merged, the next cycles find it built and the loop stops by itself. Leave
-`canary.backend` unset: the Serve canary is refused for a feature.
+re-seed, only that `develop` has no `runtime/roman.py` yet and no loop PR is
+open:
+
+```bash
+gh api "repos/ozumpe/testrun/contents/runtime/roman.py?ref=develop"   # expect 404
+gh pr list --repo ozumpe/testrun --state open                        # expect none
+```
+
+Once its PR is merged, the next cycles find it built and the loop stops by
+itself. Leave `canary.backend` unset: the Serve canary is refused for a
+feature. Its command and what to expect are in
+[step 5c](#5-the-run-itself-box).
 
 ### 0. Rehearse, if the box changed (laptop, optional)
 
@@ -272,6 +281,19 @@ poetry run python -u main.py --contract sum_of_divisors --loop --loop-max-cycles
   2>&1 | tee -i -a runtime/loop.log
 ```
 
+Or, to build the Class-2 feature (from `v0.3.5`):
+
+```bash
+poetry run python -u main.py --contract roman --brakes-breaker-threshold 5 \
+  --loop --loop-max-cycles 10 2>&1 | tee -i -a runtime/loop.log
+```
+
+`--brakes-breaker-threshold 5` is the setting for the `roman` run (decided
+2026-09-29). The reason is in "What to expect, Class 2" below: every rejected
+attempt counts toward the circuit breaker, and at the default of 3, three
+misses in a row would stop the run. `--show-config` in step 5b does not see
+the flag; the loop's own startup applies it to the CEO.
+
 `tee` keeps the console output on disk, where a new session can follow it
 without attaching (`tail -f ~/omnibase/runtime/loop.log`) and, from `v0.3.3`,
 where the loop's syncs upload it (before that, the by-hand sync in
@@ -280,7 +302,7 @@ printed, because a pipe, unlike a terminal, is buffered. `-i` makes tee ignore
 Ctrl-C, so that Ctrl-C stops the loop and tee still writes what the loop
 prints on its way out.
 
-What to expect:
+What to expect, Class 1 (`sum_of_divisors`, `sort`):
 
 - The first line says `[sis] contract: sum_of_divisors`.
 - Each passing cycle commits a step to one feature branch
@@ -305,6 +327,35 @@ What to expect:
   is broken and there is nothing to reset; choose another contract or target
   (OMNI-138). Before that fix, the same situation filed a bug per attempt and
   tripped the circuit breaker.
+
+What to expect, Class 2 (`roman`, OMNI-147):
+
+- The first line says `[sis] contract: roman`. The prompt is built from the
+  spec: the public API, the acceptance tests and the laws. There is no
+  baseline to beat and no timing anywhere.
+- An attempt that fails a gate is `[cycle] rolled_back: <gate>: <reason>`,
+  for example `acceptance: acceptance tests failed` or
+  `invariant: invariant violated in sandbox (seed=…): round_trip …`. No
+  branch exists yet. The reason is noted on the feature, and the next
+  attempt's prompt carries every earlier one.
+- **Each rejected attempt is a counted failure**: it files a bug in `TES` and
+  counts toward the circuit breaker. At the default
+  `brakes.breaker_threshold` of 3, three rejections in a row trip it and page
+  CRITICAL. Hence `--brakes-breaker-threshold 5` above: five in a row. A
+  tripped breaker is cleared with `python -m sis.admin reset-breaker
+  --reason "..."` (spend is not reset).
+- The **first attempt that passes every gate** is committed, and its PR opens
+  at once: `[cycle] verified_awaiting_human_merge: PR <n> awaits a human
+  merge`. The PR is titled `Build roman: 1 step (TES-…)`, and its description
+  lists the earlier attempts' reasons instead of a timing table. There are no
+  further steps.
+- The loop then **holds** until you merge or close the PR, as for Class 1.
+- After the merge, the next cycles judge the merged `runtime/roman.py` again.
+  Each is `[cycle] no_gain: built: already built: runtime/roman.py passes
+  every gate`, with no LLM call and no spend. After `loop.converged_after` (default
+  3) of them, the loop stops: `roman has converged`, with a WARNING page.
+- A closed (declined) PR releases the hold; the next cycle builds again from
+  scratch.
 
 **d. The dataset keeps itself** (OMNI-140, in `v0.3.3`). The loop uploads
 the episodic log, its state, the operator audit and the console log
