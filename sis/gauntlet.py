@@ -39,6 +39,7 @@ the candidate passes all gates.
 """
 
 import ast
+import contextlib
 import hashlib
 import json
 import math
@@ -48,6 +49,7 @@ import random
 import re
 import secrets
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -339,11 +341,9 @@ def _ended_without_verdict(stdout: str, nonce: str) -> bool:
     the output. Anywhere in it, not last: a candidate may print at exit, and a
     candidate that ended the process early cannot have printed the token.
 
-    This stops a candidate that ends the process, by accident or on purpose,
-    without knowing the token. It does **not** stop one that finds the token: the
-    script and the candidate share a process, so anything the script knows the
-    candidate can read. The benchmark gate no longer has this problem (its
-    candidate runs in a worker of its own, OMNI-45); these gates still do (M8).
+    Since OMNI-146 the scripts run in a harness process the candidate never
+    runs in, so it cannot find the token or end the process; the check stays as
+    a second line behind that, and still catches a harness that died early.
     """
     token = f"OK {nonce}"
     return not any(line.strip() == token for line in stdout.splitlines())
@@ -357,9 +357,8 @@ _PYTEST_BROKEN = re.compile(r"\b\d+ (failed|error|errors)\b")
 def _pytest_passed(stdout: str) -> bool:
     """Whether pytest's own summary says tests ran and none failed (M8).
 
-    Any line, not the last: a candidate may print at exit, after pytest is done.
-    A run that ended without a summary at all (``os._exit(0)`` while the test
-    module imported the candidate) has none.
+    Any line, not the last. Since OMNI-146 pytest runs in a harness process the
+    candidate never runs in, and this stays as a second line behind that.
     """
     lines = [line.strip() for line in stdout.splitlines()]
     return (any(_PYTEST_PASSED.match(line) for line in lines)
@@ -531,21 +530,165 @@ def ensure_canary_allows_proposer(canary_backend: str | None = None) -> None:
 
 
 def _install_canonical(ctx: _GateContext) -> pathlib.Path:
-    """Copy :mod:`sis.canonical` into the mount and return the copy's path.
+    """Copy :mod:`sis.canonical` into the harness directory and return the copy's path.
 
-    What every comparing gate reduces candidate output to before ``==``
-    (OMNI-46, H4). Copied like the oracle, so docker mode needs nothing from the
-    host — and rewritten by each gate that uses it rather than once per
-    validation, so a candidate that overwrote it while an earlier gate ran does
-    not get to keep the change, and recorded in the context's registry so that a
-    change made *during* a gate is caught as tampering (M9). The acceptance,
-    invariant and backtest gates still share a process with the candidate they
-    judge (M8's remainder); the benchmark gate does not (OMNI-45).
+    What the acceptance, invariant and backtest gates reduce output to before
+    ``==`` (OMNI-46, H4). Since OMNI-146 their output has crossed a pipe as JSON,
+    so it is plain already; the check stays as the rule's second line. Rewritten
+    by each gate that uses it and recorded in the context's registry, so a
+    change made while a gate ran is caught as tampering (M9).
     """
     return ctx.put(
-        f"{canonical.SANDBOX_MODULE}.py",
+        f"{_HARNESS}/{canonical.SANDBOX_MODULE}.py",
         pathlib.Path(canonical.__file__).read_text(encoding="utf-8"),
     )
+
+
+# --- the harness: a gate's trusted code, outside the candidate's process (OMNI-146) ---
+#
+# The acceptance, invariant and backtest gates run their trusted code (pytest,
+# Hypothesis, the backtest replay) in a process on the host, in this directory
+# under the exam, where ``target`` is not the candidate but a stand-in that
+# sends each call to the candidate's own worker (sandbox_worker.install_proxy).
+# The candidate runs only in that worker, in the configured sandbox; it never
+# shares a process with the code that judges it, so it cannot print the gate's
+# token, end its process early or patch its checks (KNOWN_ISSUES M8).
+_HARNESS = "harness"
+
+_PROXY_MODULE = '''\
+"""Written by the gauntlet: the candidate's exports, answered by a worker of its own."""
+import sys
+
+sys.path.append({root!r})
+from sis import sandbox_worker  # noqa: E402
+
+sandbox_worker.install_proxy(
+    globals(), source_path={source!r}, entry={entry!r}, exports={exports!r},
+    optional={optional!r}, worker_name={name!r}, call_timeout_s={timeout!r},
+)
+'''
+
+# The config a harness's worker must see as the gauntlet does. It runs in a
+# new process, so a value set by a CLI flag would otherwise not reach it.
+_HARNESS_CONFIG = frozenset({
+    "sandbox.mode", "sandbox.image", "sandbox.memory", "sandbox.cpus",
+    "sandbox.allow_unsandboxed_llm", "proposer.backend",
+})
+
+
+def _install_proxy(ctx: _GateContext, optional: Sequence[str] = ()) -> str:
+    """Write the stand-in ``target`` module for one gate; return its worker's name.
+
+    It stands in for the contract's ``public_api`` and for the *optional* names,
+    when the candidate has them. A fresh worker name per gate, so a harness that
+    timed out can have its worker's container killed by name (a SIGKILL to the
+    ``docker run`` client leaves the container running).
+    """
+    name = f"sis-gate-{uuid.uuid4().hex[:12]}"
+    spec = ctx.contract
+    ctx.put(f"{_HARNESS}/target.py", _PROXY_MODULE.format(
+        root=str(PROJECT_ROOT), source=str(ctx.candidate), entry=spec.entry,
+        exports=list(spec.public_api), optional=list(optional), name=name,
+        timeout=_timeout_seconds(),
+    ))
+    return name
+
+
+def _names_the_tests_use(source: str) -> list[str]:
+    """Every ``target.<name>`` and ``from target import <name>`` in a test module.
+
+    The acceptance tests are trusted and may use more of the candidate than
+    its ``public_api`` (sum_of_divisors' call ``target.benchmark()``). The
+    stand-in serves these too, when the candidate has them.
+    """
+    names: list[str] = []
+    for node in ast.walk(ast.parse(source)):
+        if (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+                and node.value.id == "target"):
+            names.append(node.attr)
+        elif isinstance(node, ast.ImportFrom) and node.module == "target":
+            names.extend(alias.name for alias in node.names if alias.name != "*")
+    return list(dict.fromkeys(names))
+
+
+def _harness_env(ctx: _GateContext) -> dict[str, str]:
+    """The environment of a gate's harness process.
+
+    The host's own, since the harness is trusted code and its worker's
+    ``docker`` client needs the host's docker context. Minus ``PYTHON*`` and
+    ``PYTEST_*`` settings meant for the process that launched it, plus what the
+    sandboxed gates had: no bytecode written beside the exam, and Hypothesis's
+    cache in the scratch.
+    """
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("PYTHON", "PYTEST_"))}
+    for key in config.SCHEMA:
+        if key.path in _HARNESS_CONFIG:
+            value = config.get(key.path)
+            env[key.env] = ("true" if value else "false") if isinstance(value, bool) else str(value)
+    scratch = ctx.scratch or pathlib.Path(ctx.env.get("HOME", ctx.tmpdir))
+    env.update({
+        "PYTHONPATH": str(ctx.tmp / _HARNESS),
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONHASHSEED": "0",
+        "HYPOTHESIS_STORAGE_DIRECTORY": str(scratch / ".hypothesis"),
+    })
+    return env
+
+
+def _run_harness(
+    ctx: _GateContext, argv: list[str], worker: str
+) -> subprocess.CompletedProcess[str]:
+    """Run a gate's harness on the host, with the gate's timeout.
+
+    A timeout kills the harness's whole process group (its worker too, in the
+    subprocess sandbox) and the worker's container by name (in docker).
+    """
+    cmd = [sys.executable, *argv]
+    timeout = _timeout_seconds()
+    proc = subprocess.Popen(
+        cmd, cwd=ctx.tmp / _HARNESS, env=_harness_env(ctx), stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, text=True, start_new_session=True,
+    )
+    try:
+        out, err = proc.communicate(timeout=timeout)
+        result = subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(OSError):
+            os.killpg(proc.pid, signal.SIGKILL)
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            proc.communicate(timeout=10)
+        result = _timeout_result(cmd, timeout)
+    if result.returncode != 0 and sandbox_mode() == "docker":
+        _docker_kill(worker)  # a harness that did not end normally did not close it
+    return result
+
+
+def _worker_failure(
+    result: subprocess.CompletedProcess[str], gate: str, spec: Contract
+) -> Result | None:
+    """The gate's result when the candidate's worker could not serve, else None."""
+    from sis.sandbox_worker import (
+        PROXY_EXIT_HARNESS,
+        PROXY_EXIT_MISSING,
+        PROXY_EXIT_NO_START,
+        PROXY_NOTE,
+    )
+
+    if timed_out := _timed_out(result, gate):
+        return timed_out
+    notes = [line.removeprefix(PROXY_NOTE).strip()
+             for line in result.stderr.splitlines() if line.startswith(PROXY_NOTE)]
+    note = notes[-1] if notes else "no detail"
+    if result.returncode == PROXY_EXIT_HARNESS:
+        return Result(passed=False, reason=note if note.startswith("harness:")
+                      else f"harness: the {gate} gate's worker could not start ({note})")
+    if result.returncode == PROXY_EXIT_MISSING:
+        return Result(passed=False, reason=f"interface: candidate does not export {note!r} "
+                                           f"(required by contract {spec.name!r})")
+    if result.returncode == PROXY_EXIT_NO_START:
+        return Result(passed=False, reason=f"interface: the candidate did not start in its "
+                                           f"worker for the {gate} gate ({note})")
+    return None
 
 
 def _gate_invariant(ctx: _GateContext) -> Result | None:
@@ -577,8 +720,9 @@ def _gate_invariant(ctx: _GateContext) -> Result | None:
 
     seed = ctx.seed
     nonce = secrets.token_hex(8)
+    worker = _install_proxy(ctx)
     script = invariant_script(
-        candidate_path=str(ctx.candidate),
+        candidate_path=str(ctx.tmp / _HARNESS / "target.py"),
         canonical_path=str(_install_canonical(ctx)),
         exports=list(spec.public_api),
         shared_path=str(shared_mod),
@@ -589,9 +733,9 @@ def _gate_invariant(ctx: _GateContext) -> Result | None:
         seed=seed,
         nonce=nonce,
     )
-    result = _run([_PY, "-c", script], ctx.tmpdir, ctx.env)
-    if timed_out := _timed_out(result, "invariant"):
-        return timed_out
+    result = _run_harness(ctx, ["-c", script], worker)
+    if failure := _worker_failure(result, "invariant", spec):
+        return failure
 
     detail = result.stdout.strip()
     if result.returncode == EXIT_NO_ENTRY_INV:
@@ -668,8 +812,7 @@ def _gate_backtest(ctx: _GateContext) -> Result | None:
     candidate's fault. Same reason the missing-oracle and missing-tests checks
     fail loudly rather than falling through.
     """
-    spec, tmpdir, env = ctx.contract, ctx.tmpdir, ctx.env
-    candidate, oracle_mod = ctx.candidate, ctx.oracle
+    spec, oracle_mod = ctx.contract, ctx.oracle
     if not spec.backtests:
         return None
 
@@ -712,8 +855,9 @@ def _gate_backtest(ctx: _GateContext) -> Result | None:
         plan.append(plan_entry(bt, fixture_path=fixture_dst, expect_path=expect_dst))
 
     nonce = secrets.token_hex(8)
+    worker = _install_proxy(ctx)
     script = build_script(
-        candidate_path=str(candidate),
+        candidate_path=str(ctx.tmp / _HARNESS / "target.py"),
         canonical_path=str(_install_canonical(ctx)),
         comparators_path=str(comparators_mod),
         # A Class-2 contract need not ship an oracle at all; when it does, its
@@ -723,9 +867,9 @@ def _gate_backtest(ctx: _GateContext) -> Result | None:
         plan=plan,
         nonce=nonce,
     )
-    result = _run([_PY, "-c", script], tmpdir, env)
-    if timed_out := _timed_out(result, "backtest"):
-        return timed_out
+    result = _run_harness(ctx, ["-c", script], worker)
+    if failure := _worker_failure(result, "backtest", spec):
+        return failure
     if result.returncode == EXIT_NO_ENTRY:
         return Result(
             passed=False,
@@ -970,72 +1114,48 @@ def _gate_interface(ctx: _GateContext) -> Result | None:
     asked for" is a structural-typing question, and mypy --strict against the
     contract's ``protocol`` is the right tool for it; duplicating that here in
     ``inspect`` would be a second, weaker implementation of the same idea.
+
+    The candidate is imported in a worker of its own, which reports what it
+    exports (OMNI-146); the verdict is decided here. That report is the
+    candidate's own account, so one that claims a ``seed`` it lacks gets past
+    this gate and fails the first call that passes one.
     """
+    from sis.sandbox_worker import SandboxWorker, WorkerStartError
+
     spec = ctx.contract
-    needs_seed = spec.determinism is Determinism.STOCHASTIC
-    nonce = secrets.token_hex(8)
-    script = textwrap.dedent(
-        f"""\
-        import sys, inspect, importlib.util
-        s = importlib.util.spec_from_file_location("candidate", {str(ctx.candidate)!r})
-        m = importlib.util.module_from_spec(s)
-        s.loader.exec_module(m)
-
-        missing = [n for n in {list(spec.public_api)!r} if not hasattr(m, n)]
-        if missing:
-            print("MISSING", ",".join(missing))
-            sys.exit(4)
-
-        entry = getattr(m, {spec.entry!r})
-        if not callable(entry):
-            print("NOTCALLABLE", {spec.entry!r})
-            sys.exit(6)
-
-        if {needs_seed!r}:
-            try:
-                params = inspect.signature(entry).parameters
-            except (TypeError, ValueError):
-                params = {{}}
-            if "seed" not in params:
-                print("NOSEED", {spec.entry!r})
-                sys.exit(5)
-        print("OK", {nonce!r})
-        """
-    )
-    result = _run([_PY, "-c", script], ctx.tmpdir, ctx.env)
-    if timed_out := _timed_out(result, "interface"):
-        return timed_out
-    detail = result.stdout.strip()
-    if result.returncode == 4:
-        return Result(
-            passed=False,
-            reason=f"interface: candidate does not export "
-                   f"{detail.removeprefix('MISSING').strip()!r} "
-                   f"(required by contract {spec.name!r})",
-        )
-    if result.returncode == 6:
+    timeout = _timeout_seconds()
+    try:
+        worker = SandboxWorker(
+            ctx.candidate.read_text(encoding="utf-8"), spec.entry, exports=spec.public_api,
+            call_timeout_s=timeout, start_timeout_s=timeout,
+        ).start()
+    except WorkerStartError as exc:
+        if exc.harness:
+            return Result(passed=False, reason=str(exc))
+        if exc.timed_out:
+            return Result(passed=False, reason="interface gate timed out",
+                          errors=str(exc).splitlines())
+        if exc.missing:
+            return Result(
+                passed=False,
+                reason=f"interface: candidate does not export {','.join(exc.missing)!r} "
+                       f"(required by contract {spec.name!r})",
+            )
+        return Result(passed=False, reason="interface: candidate could not be imported",
+                      errors=str(exc).splitlines())
+    entry = worker.exports[spec.entry]
+    worker.close()
+    if not entry.callable:
         return Result(
             passed=False,
             reason=f"interface: candidate's {spec.entry!r} is not callable "
                    f"(required by contract {spec.name!r})",
         )
-    if result.returncode == 5:
+    if spec.determinism is Determinism.STOCHASTIC and "seed" not in (entry.params or ()):
         return Result(
             passed=False,
             reason=f"interface: contract {spec.name!r} is stochastic, so {spec.entry!r} must "
                    "accept a 'seed' parameter — without it a failure cannot be reproduced",
-        )
-    if result.returncode != 0:
-        return Result(
-            passed=False,
-            reason="interface: candidate could not be imported",
-            errors=result.stderr.splitlines(),
-        )
-    if _ended_without_verdict(result.stdout, nonce):
-        return Result(
-            passed=False,
-            reason="interface: candidate ended the process while it was being imported, "
-                   "so the check produced no verdict",
         )
     return None
 
@@ -1052,9 +1172,10 @@ import target
 def _gate_acceptance(ctx: _GateContext) -> Result | None:
     """The contract's trusted-authored acceptance tests, run against the candidate.
 
-    Only they go into the sandbox: they ``import target``, which resolves to the
-    candidate. The harness's own tests import sis modules that are not present
-    there and are not the subject of validation.
+    They ``import target``, which in the harness resolves to the stand-in for
+    the candidate: pytest runs on the host, and every call reaches the
+    candidate in a worker of its own (OMNI-146). So pytest's exit code and
+    summary are written by a process the candidate never ran in.
 
     The suite is **required, not optional**. When it was missing this used to
     fall through to ``pytest <nonexistent dir>``, which exits non-zero and was
@@ -1070,22 +1191,22 @@ def _gate_acceptance(ctx: _GateContext) -> Result | None:
             reason=f"harness: contract acceptance tests missing at {spec.tests_path} "
                    "— the acceptance gate cannot run",
         )
-    tests_dst = ctx.tmp / "tests"
-    ctx.put("tests/__init__.py", "")
-    ctx.put("tests/test_target.py", tests_src.read_text(encoding="utf-8"))
+    tests = tests_src.read_text(encoding="utf-8")
+    worker = _install_proxy(ctx, optional=_names_the_tests_use(tests))
+    ctx.put(f"{_HARNESS}/tests/__init__.py", "")
+    ctx.put(f"{_HARNESS}/tests/test_target.py", tests)
     # Loaded by pytest before the test module imports `target`, so every
     # assertion compares plain values rather than whatever `__eq__` the
     # candidate's return type defines (OMNI-46, H4).
     _install_canonical(ctx)
-    ctx.put("tests/conftest.py", _ACCEPTANCE_CONFTEST.format(
+    ctx.put(f"{_HARNESS}/tests/conftest.py", _ACCEPTANCE_CONFTEST.format(
         module=canonical.SANDBOX_MODULE, names=tuple(spec.public_api)))
 
-    result = _run(
-        [_PY, "-m", "pytest", str(tests_dst), "-q", "--tb=short", "-p", "no:cacheprovider"],
-        ctx.tmpdir, ctx.env
+    result = _run_harness(
+        ctx, ["-m", "pytest", "tests", "-q", "--tb=short", "-p", "no:cacheprovider"], worker
     )
-    if timed_out := _timed_out(result, "acceptance"):
-        return timed_out
+    if failure := _worker_failure(result, "acceptance", spec):
+        return failure
     if result.returncode != 0:
         return Result(
             passed=False,
@@ -1341,7 +1462,7 @@ def _candidate_start_failure(exc: Exception, spec: Contract) -> Result:
     if getattr(exc, "harness", False):
         return Result(passed=False, reason=str(exc))
     text = str(exc)
-    if "AttributeError" in text and spec.entry in text:
+    if getattr(exc, "missing", ()):
         return Result(passed=False,
                       reason=f"interface: candidate does not export {spec.entry!r} "
                              f"(required by contract {spec.name!r})")
@@ -1417,13 +1538,17 @@ def _judge(ctx: _GateContext, oracle: Any, cand: Any, base: Any,
             if got.value != reference(args):
                 raise _mismatch(args, "the candidate's answer differs from the reference")
 
-    # (b) The pipe's own round trip, after a warm-up, then a batch size.
+    # (b) The pipe's own round trip, after a warm-up, then a batch size. The
+    # median of ten, not the fastest: on a loaded machine the best case is the
+    # rare one, and a window sized to it let one slow exchange end the sizing at
+    # a single call, where the pipe's cost hid a 200x gain (OMNI-141).
     for worker, who in ((cand, "candidate"), (base, "baseline")):
         _exchange(worker, [], deadline, who)
-    round_trip = min(
+    trips = sorted(
         _exchange(worker, [], deadline, who).elapsed_s
         for _ in range(5) for worker, who in ((cand, "candidate"), (base, "baseline"))
     )
+    round_trip = trips[len(trips) // 2]
     window = _WINDOW_OVER_ROUND_TRIP * round_trip
     bench_rng = random.Random(bench_seed)
     batch = max(1, min_batch)

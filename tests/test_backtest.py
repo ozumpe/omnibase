@@ -539,7 +539,9 @@ def test_a_comparator_never_sees_a_value_with_its_own_equality(tmp_path: pathlib
     )
     result = gauntlet._gate_backtest(_ctx(tmp_path, spec, candidate_source=liar))
     assert result is not None and not result.passed
-    assert "not a plain builtin value" in result.reason
+    # Since OMNI-146 the answer crosses a pipe as JSON: the comparator sees the
+    # plain 0 the liar wraps, never its __eq__.
+    assert "expected 12, got 0" in result.reason
 
 
 def test_a_candidate_that_raises_on_a_recorded_input_fails_the_backtest(
