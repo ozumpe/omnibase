@@ -236,6 +236,10 @@ internal target before it models anything external.
   refused with a real proposer or real adapters (no override — `jsonl` costs
   nothing). Operators pause/resume/reset through `python -m sis.admin`, each
   change with a written `--reason`, audited; a reset never touches spend.
+  **One loop per box** (OMNI-151, M28): `main.py` holds an exclusive `flock` on
+  `runtime/loop.lock` for the run, and a second start exits 3 naming the
+  holder. Two loops would each restore their own CEO from one state file, so
+  neither would enforce the cap for both (AWS run #7).
   **A trip pages a human** (OMNI-62), not only files a TES bug nobody watches:
   the `Notifier` port (SNS topic `adapters.notify_sns_topic_arn`, `sns:Publish`
   on that one topic) pages on a breaker trip, a spend-cap refusal, a broken
@@ -750,9 +754,9 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   **Phase 0 is built:** `sis/sandbox_worker.py` (OMNI-129) serves a candidate
   hot from the sandbox. It is tested in both sandbox modes, including that a
   docker candidate cannot reach the network, Ray or the host's environment.
-- 1043 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
+- 1047 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
   Ray-Serve-integration tests run separately, see Operational quick reference
-  above; 1105 total, recounted 2026-09-30 — corrected 2026-09-26, a multi-dimension review found the
+  above; 1109 total, recounted 2026-09-30 — corrected 2026-09-26, a multi-dimension review found the
   previously-documented 616/678 stale); `ruff`/`mypy --strict`/`pytest` clean;
   CI green; `feature → develop → main` enforced by both the client-side
   pre-push hook and active server-side rulesets.
@@ -786,7 +790,7 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
 **Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L
 severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
 the IDs in commits/PRs. **Open after a 2026-09-26 multi-dimension review with
-adversarial verification: H3, M12–M14, M16, M20–M23, M28 (from the seventh AWS run, OMNI-151),
+adversarial verification: H3, M12–M14, M16, M20–M23,
 L16–L20, L22, L25–L32, L35–L43; plus L46 from the second AWS run and L48–L50
 from the fifth (OMNI-143–145)** (M7 is won't-fix for now; H4, M10, M15, M19, L21, L23
 and L24 fixed 2026-09-26, OMNI-46/47/51/49/61/62; H5, H6, M24 and L44, found
@@ -796,7 +800,7 @@ OMNI-57/126; M26, the third run's conflicting second PR, and M27, the fourth run
 breaker trip on a converged target, fixed 2026-09-29, OMNI-136/138; H2, M8, M9
 and M11 fixed the same day, OMNI-45/146, and M17, L15 and L33 with OMNI-147,
 OMNI-56/64/78; L34 and L51–L53, the last three from the sixth run, fixed
-2026-09-30, OMNI-79/148–150). The headline, before trusting any
+2026-09-30, OMNI-79/148–150; M28, from the seventh, the same day, OMNI-151). The headline, before trusting any
 gauntlet verdict: every gate but SLO now judges its candidate from outside the
 candidate's process (H2, M8), and the exam files are protected (M9). **The SLO
 gate still runs its candidate in-process** (L42,

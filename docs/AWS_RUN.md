@@ -407,7 +407,9 @@ a session drops; `nohup` inside it only hides the loop from the stop above
 pgrep -af 'main.py'      # must print nothing
 ```
 
-Two loops on one box do not share the spend cap (M28, OMNI-151).
+Two loops on one box would not share the spend cap (M28). From the release
+after `v0.3.6` a second `main.py` refuses to start (exit 3) and names the
+running one (OMNI-151).
 
 **The operator console** stays bound to loopback on the box and is reached
 over port forwarding:

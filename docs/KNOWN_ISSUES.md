@@ -209,17 +209,6 @@ reference with no link target below.
   autouse fixture, with an explicit opt-in fixture for the handful of tests
   that intentionally want a real backend.
 
-- [OMNI-151] **M28 — A second loop can start on the same box, and the two do not
-  share the spend cap** *(found 2026-09-30 in AWS run #7, `v0.3.6`)*. A
-  `sum_of_divisors` loop started with `nohup` inside tmux survived the attempt
-  to stop it, and a `roman` loop started beside it. Each process bootstraps
-  its own Ray cluster and CEO, whose brakes are restored from the shared
-  `runtime/episodic_state.json`. So each enforces the whole budget alone, and
-  the persisted spend is last-writer-wins: it says $0.2910 where $0.3192 was
-  spent. Both append to the same episodic log and console log. After the merge
-  of #21, both started a cycle within 30 s; only the VCS hold (OMNI-136) keeps
-  such loops from opening competing PRs. Fix: one loop per box, an exclusive
-  `flock` on a lock file in `runtime/`, refused with the holder's PID.
 
 ## Low
 
@@ -615,6 +604,23 @@ any long-lived cluster exists.
   front.
 
 ## Resolved
+
+- [OMNI-151] **M28 — A second loop can start on the same box, and the two do not
+  share the spend cap** *(found 2026-09-30 in AWS run #7, `v0.3.6`)*. A
+  `sum_of_divisors` loop started with `nohup` inside tmux survived the attempt
+  to stop it, and a `roman` loop started beside it. Each process bootstraps
+  its own Ray cluster and CEO, whose brakes are restored from the shared
+  `runtime/episodic_state.json`. So each enforces the whole budget alone, and
+  the persisted spend is last-writer-wins: it says $0.2910 where $0.3192 was
+  spent. Both append to the same episodic log and console log. After the merge
+  of #21, both started a cycle within 30 s; only the VCS hold (OMNI-136) keeps
+  such loops from opening competing PRs. Fix: one loop per box, an exclusive
+  `flock` on a lock file in `runtime/`, refused with the holder's PID.
+  **Fixed 2026-09-30 (OMNI-151):** `main.py` takes an exclusive `flock` on
+  `runtime/loop.lock` (`sis/run_lock.py`) before any cluster, actor or spend,
+  and holds it for the run. A second start exits 3, naming the holder's PID,
+  start time and command. The kernel drops the lock however the holder ends,
+  SIGKILL included, so nothing is left to clear by hand.
 
 - [OMNI-56] **M17 — A QA-stage rejection drops the gauntlet's reject reason** *(found
   2026-09-26; confirmed by reading the code)* — when QA's own re-run of the
