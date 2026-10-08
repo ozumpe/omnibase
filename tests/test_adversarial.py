@@ -1153,3 +1153,70 @@ def test_an_input_range_too_small_to_time_once_each_is_the_exams_fault(
     assert gate_from_reason(result.reason) == "harness"
     assert neutral_status(result.reason) is None
 
+
+# --- OMNI-153 (KNOWN_ISSUES H8): the worker's loop is the candidate's to change --
+#
+# The loop that serves a candidate runs in the candidate's interpreter. What it
+# did once per call in Python, a candidate could make cheaper for its own
+# worker: the baseline's worker still paid. The same algorithm plus a patched
+# json.dumps measured 0.78. A plain batch now runs no Python per call
+# (tests/test_sandbox_worker.py pins that exactly); this is the whole gate.
+
+# A third slower than the fast target: its loop runs a third again, for nothing.
+# And it replaces, in its own process, what the old loop ran for every call.
+_SLOWER_BUT_CHEAPENS_ITS_WORKER = '''
+import json
+import math
+import sys
+from typing import Any
+
+
+def sum_of_divisors(n: int) -> int:
+    if n <= 0:
+        return 0
+    total = 0
+    sqrt_n = int(math.isqrt(n))
+    for i in range(1, sqrt_n + 1):
+        if n % i == 0:
+            total += i
+            if i != n // i:
+                total += n // i
+    for i in range(1, sqrt_n // 3 + 1):
+        if n % i == 0:
+            continue
+    return total
+
+
+def benchmark(n: int = 10_000, repetitions: int = 5) -> float:
+    return 1.0
+
+
+_real_dumps = json.dumps
+
+
+def _dumps(obj: Any, *args: Any, **kwargs: Any) -> str:
+    return "" if type(obj) is int else _real_dumps(obj, *args, **kwargs)
+
+
+def _lean(fn: Any, args: Any, kwargs: Any, track: Any) -> Any:
+    return {"ok": fn(*args)}
+
+
+setattr(json, "dumps", _dumps)
+setattr(sys.modules["__main__"], "_call", _lean)
+'''
+
+
+def test_a_slower_candidate_cannot_pass_by_making_its_workers_loop_cheaper(sandbox: str) -> None:
+    # "No slower" is the bar here, the easiest a contract can set. Against the
+    # fast target the old loop measured this candidate at 0.95 and accepted it;
+    # without its two patches it measured 1.20. Now it measures 1.30 either way.
+    spec = gauntlet.default_contract()
+    fast = (PROJECT_ROOT / str(spec.stub_candidate_path)).read_text(encoding="utf-8")
+    result = gauntlet.validate(_SLOWER_BUT_CHEAPENS_ITS_WORKER, _BASELINE, baseline_source=fast,
+                               contract=replace(spec, max_latency_ratio=1.0))
+    assert not result.passed, f"a cheaper worker loop was measured as speed: {result.reason!r}"
+    # Rejected, or on a heavily loaded machine inconclusive (neutral): under
+    # twelve copies at once on twelve cores, one run in ten came out so.
+    assert result.reason.startswith(("no improvement", "benchmark inconclusive")), result.reason
+

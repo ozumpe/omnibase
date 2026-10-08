@@ -110,12 +110,21 @@ internal target before it models anything external.
     reason). A range that cannot give every sample one unused input is the
     exam's fault, a `harness:` verdict that pages a human: with 300
     differential trials, a range under about 300 values.
-    The per-call
-    JSON cost (~1 µs for an int) cannot be amortised. While both workers pay
-    it, it dilutes a gain rather than invents one, so µs-scale differences are
-    resolved poorly — accepted. **A candidate can make its own worker's share
-    cheaper** (H8, OMNI-153, open): the same algorithm plus a patched
-    `json.dumps` measured 0.78 against a fast baseline.
+    **A timed batch runs no Python per call in the worker** (OMNI-153, H8
+    fixed 2026-10-08). The worker's loop is trusted code in the candidate's
+    interpreter, so whatever it did once per call the candidate could make
+    cheaper for its own worker: the same algorithm plus a patched `json.dumps`
+    measured 0.78. Now the loop decodes the request, runs the calls through
+    `itertools.starmap` and encodes the reply, three C calls for the batch
+    (`sandbox_worker_main._plain_batch`), and answers `{"id": n, "ok": [...]}`
+    when every call returned. Keep it that way: no per-call Python on the
+    timed path. The loop's per-call cost is ~0.17 µs (was 1.24). It cannot be
+    amortised and dilutes a gain rather than invents one, so differences well
+    under a µs are resolved poorly — accepted. **Still open: a candidate can
+    run a timed batch on several cores** (H9, OMNI-154). The same algorithm
+    split over helper processes or sub-interpreters measures 0.50, in docker's
+    two CPUs as well as outside it; the fix is one CPU per benchmark worker,
+    by `--cpuset-cpus`.
     Every timed answer is checked against the baseline's, and differences
     against the reference, so a candidate cannot be wrong only while timed. It
     can still contend for CPU during the baseline's batch (bounded by docker's
@@ -771,9 +780,9 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   **Phase 0 is built:** `sis/sandbox_worker.py` (OMNI-129) serves a candidate
   hot from the sandbox. It is tested in both sandbox modes, including that a
   docker candidate cannot reach the network, Ray or the host's environment.
-- 1064 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
+- 1077 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
   Ray-Serve-integration tests run separately, see Operational quick reference
-  above; 1126 total, recounted 2026-10-08 — corrected 2026-09-26, a multi-dimension review found the
+  above; 1139 total, recounted 2026-10-08 — corrected 2026-09-26, a multi-dimension review found the
   previously-documented 616/678 stale); `ruff`/`mypy --strict`/`pytest` clean;
   CI green; `feature → develop → main` enforced by both the client-side
   pre-push hook and active server-side rulesets.
@@ -812,7 +821,7 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
 **Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L
 severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
 the IDs in commits/PRs. **Open after a 2026-09-26 multi-dimension review with
-adversarial verification: H3, H8 (found 2026-10-08, OMNI-153), M12–M14, M16, M20–M23,
+adversarial verification: H3, H9 (found 2026-10-08, OMNI-154), M12–M14, M16, M20–M23,
 L16–L20, L22, L25–L32, L35–L43; plus L46 from the second AWS run and L48–L50
 from the fifth (OMNI-143–145)** (M7 is won't-fix for now; H4, M10, M15, M19, L21, L23
 and L24 fixed 2026-09-26, OMNI-46/47/51/49/61/62; H5, H6, M24 and L44, found
@@ -823,7 +832,8 @@ breaker trip on a converged target, fixed 2026-09-29, OMNI-136/138; H2, M8, M9
 and M11 fixed the same day, OMNI-45/146, and M17, L15 and L33 with OMNI-147,
 OMNI-56/64/78; L34 and L51–L53, the last three from the sixth run, fixed
 2026-09-30, OMNI-79/148–150; M28, from the seventh, the same day, OMNI-151;
-H7, the benchmark's repeated inputs, fixed 2026-10-08, OMNI-152). The headline, before trusting any
+H7, the benchmark's repeated inputs, and H8, the worker loop a candidate could
+make cheaper, fixed 2026-10-08, OMNI-152/153). The headline, before trusting any
 gauntlet verdict: every gate but SLO now judges its candidate from outside the
 candidate's process (H2, M8), and the exam files are protected (M9). **The SLO
 gate still runs its candidate in-process** (L42,

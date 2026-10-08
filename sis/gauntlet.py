@@ -1522,9 +1522,11 @@ def _gate_differential_benchmark(ctx: _GateContext) -> Result | None:
     more than a µs-scale call. So each exchange carries a batch of fresh inputs,
     sized so the baseline's batch takes about ``_WINDOW_OVER_ROUND_TRIP`` round
     trips. What batching cannot amortise is the per-call cost of sending an
-    input and its answer as JSON (about a µs for an int): the same for both
-    sides, it dilutes a gain rather than invents one, so the gate resolves
-    differences at the scale of a call's own work poorly — a known limit.
+    input and its answer as JSON (about 0.2 µs for an int). The worker's loop
+    runs no Python per call (OMNI-153, H8), so a candidate cannot make its own
+    share of that cheaper. The same for both sides, it dilutes a gain rather
+    than invents one, so the gate resolves differences well under a µs poorly
+    — a known limit.
 
     **Every timed answer is checked.** Candidate against baseline, and where
     they differ, against the reference: a candidate that tells a timing batch

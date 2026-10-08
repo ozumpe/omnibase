@@ -17,19 +17,32 @@ Protocol, one JSON object per line:
   "types": [...]}]}``. ``types`` is the exception's class hierarchy by name,
   so the host can raise the nearest builtin (OMNI-146). With ``track_args``, a
   call that changed its arguments also carries them as ``"args"``, so a caller
-  that relies on its input being left alone can still see that it was not.
+  that relies on its input being left alone can still see that it was not;
+- out, in short, when every call of a plain batch (no ``kwargs``, no
+  ``track_args``) returned: ``{"id": n, "ok": [value, ...]}``.
 
 The candidate runs in this process, so the host trusts nothing written here:
 it times every exchange on its own clock and decodes every answer itself.
 What this file does protect is the channel. The candidate's own prints go to
 /dev/null, not into the protocol, so a chatty candidate cannot corrupt it by
 accident.
+
+**A plain batch costs no Python per call** (OMNI-153, KNOWN_ISSUES H8). This
+loop runs in the candidate's interpreter, so the candidate can replace any of
+it, and whatever it makes cheaper its worker saves and the baseline's does
+not. When each call went through ``_call`` and one ``json.dumps`` of its own,
+a candidate that made either cheaper measured a fifth faster with the same
+algorithm. So the timed path is three C calls for the whole batch: decode the
+request, ``itertools.starmap`` over the calls, encode the reply. There is
+nothing left per call for Python to do cheaper. What a candidate can still
+save is a few microseconds per exchange, not per call.
 """
 
 from __future__ import annotations
 
 import importlib.util
 import inspect
+import itertools
 import json
 import os
 import sys
@@ -84,6 +97,45 @@ def _call(fn: Any, args: list[Any], kwargs: dict[str, Any], track: bool) -> dict
     return result
 
 
+def _checked(value: Any) -> dict[str, Any]:
+    """:func:`_encodable`, with whatever encoding the value raises as its failure."""
+    try:
+        return _encodable(value)
+    except BaseException as exc:  # noqa: BLE001 - a value's own code can run while it encodes
+        return _failure(exc)
+
+
+def _plain_batch(fn: Any, calls: list[list[Any]]) -> dict[str, Any]:
+    """A batch of plain calls as the body of its reply, with no Python per call.
+
+    ``extend`` keeps what ``starmap`` produced before a call raised, so no call
+    runs twice: the one that raised is reported, and the rest go one by one.
+    A call that raises ``StopIteration`` ends the iteration without an error,
+    so a batch that comes back short is that call's failure too.
+    """
+    values: list[Any] = []
+    try:
+        values.extend(itertools.starmap(fn, calls))
+        if len(values) == len(calls):
+            return {"ok": values}
+        failed = _failure(StopIteration())
+    except BaseException as exc:  # noqa: BLE001 - SystemExit included
+        failed = _failure(exc)
+    rest = calls[len(values) + 1:]
+    return {"results": [*map(_checked, values), failed,
+                        *(_call(fn, args, {}, False) for args in rest)]}
+
+
+def _reply(channel: TextIO, rid: Any, body: dict[str, Any]) -> None:
+    """Send one batch's reply, encoded once for all its answers."""
+    try:
+        text = json.dumps({"id": rid, **body})
+    except BaseException:  # noqa: BLE001 - some answer cannot cross: say which
+        text = json.dumps({"id": rid, "results": [_checked(value) for value in body["ok"]]})
+    channel.write(text + "\n")
+    channel.flush()
+
+
 def serve(module_path: str, exports: list[str], requests: TextIO, channel: TextIO) -> int:
     """Load the candidate, say whether it loaded, then answer until stdin closes.
 
@@ -118,13 +170,17 @@ def serve(module_path: str, exports: list[str], requests: TextIO, channel: TextI
             request = json.loads(line)
             rid, calls = request["id"], request["calls"]
             fn = fns[request.get("fn", required[0])]
-            kwargs = request.get("kwargs") or [{} for _ in calls]
+            kwargs = request.get("kwargs")
             track = request.get("track_args") is True
         except (ValueError, KeyError, TypeError) as exc:
             _send(channel, {"error": f"unreadable request: {_describe(exc)}"})
             continue
-        results = [_call(fn, args, kw, track) for args, kw in zip(calls, kwargs, strict=False)]
-        _send(channel, {"id": rid, "results": results})
+        if kwargs or track:
+            kwargs = kwargs or [{} for _ in calls]
+            _send(channel, {"id": rid, "results": [
+                _call(fn, args, kw, track) for args, kw in zip(calls, kwargs, strict=False)]})
+        else:
+            _reply(channel, rid, _plain_batch(fn, calls))
     return 0
 
 

@@ -39,7 +39,8 @@ reference with no link target below.
 > | H4 | [OMNI-46](https://olafzumpe.atlassian.net/browse/OMNI-46) (epic OMNI-43) — **fixed** |
 > | M10 | [OMNI-47](https://olafzumpe.atlassian.net/browse/OMNI-47) (epic OMNI-43) — **fixed** |
 > | H3 | [OMNI-48](https://olafzumpe.atlassian.net/browse/OMNI-48) (epic [OMNI-44](https://olafzumpe.atlassian.net/browse/OMNI-44)) |
-> | H8 | [OMNI-153] (epic OMNI-43), found 2026-10-08 |
+> | H8 | [OMNI-153] (epic OMNI-43), found 2026-10-08 — **fixed** the same day |
+> | H9 | [OMNI-154] (epic OMNI-43), found 2026-10-08 |
 > | M19 | [OMNI-49](https://olafzumpe.atlassian.net/browse/OMNI-49) (epic OMNI-44) — **fixed** (by refusal; isolation is H3) |
 > | M20, M21 | [OMNI-50](https://olafzumpe.atlassian.net/browse/OMNI-50) (epic OMNI-44) |
 > | M15 | [OMNI-51](https://olafzumpe.atlassian.net/browse/OMNI-51) — **fixed** |
@@ -87,28 +88,27 @@ reference with no link target below.
   network or the host's environment. Moving green onto it is OMNI-48, so H3
   stays open, and so does the refusal.
 
-- [OMNI-153] **H8 — A candidate can make its own worker's reply encoding cheaper,
-  so the same speed measures as faster** *(found 2026-10-08 by the adversarial
-  review of OMNI-152; reproduced 3 of 3 here and 7 of 7 in the review, also on
-  the gate before OMNI-152)* — the worker loop
-  (`sis/sandbox_worker_main.py`) is trusted code, but it runs in the
-  candidate's interpreter. For every call, `_encodable` runs
-  `json.dumps(value)` once only to test that the answer can cross the pipe. A
-  candidate that replaces `json.dumps` in its own process (returning `""` for
-  an int) makes that test free for its worker while the baseline's still pays
-  it. With the fast `sum_of_divisors` as the baseline, the same algorithm plus
-  that patch is accepted at a total-time ratio of 0.78 to 0.79; the same code
-  without it is rejected at 0.996. `mypy --strict` does not see it (`setattr`),
-  and nothing on disk changes, so the tamper check does not either. It matters
-  for calls that cost about as much as the protocol (a microsecond or two); for
-  a 200 µs call the encoding is 1%. The principle is wider than `json.dumps`:
-  anything the loop does in the candidate's process, the candidate can make
-  cheaper. So the claim that the per-call JSON cost "dilutes a gain rather than
-  invents one" holds only while both workers pay the same. Not tried in docker;
-  the same file runs in the container. Fix direction: encode each reply once,
-  in one C call, with the per-answer path only as the fallback; then measure
-  what a candidate can still save by replacing `_call` or `_send`, and either
-  close it or state the remainder against the margin.
+- [OMNI-154] **H9 — A candidate can run a timed batch on several cores, so the
+  same algorithm measures twice as fast** *(found 2026-10-08 by the review of
+  OMNI-153; reproduced 3 of 3 here, and 2 of 2 through the whole gate against
+  the worker loop before OMNI-153)* — the benchmark times a batch of calls by
+  wall clock, and the worker's loop runs in the candidate's interpreter. A
+  candidate that replaces the function that runs the batch can spread the
+  calls over helpers on other cores; the baseline runs its batch on one.
+  Against the fast `sum_of_divisors`, in the subprocess sandbox, in batches of
+  198: the same algorithm over forked helpers measures 0.50, over
+  sub-interpreters in threads of one process 0.51, and a slower algorithm over
+  forked helpers 0.59, all accepted; the same algorithm alone measures 0.99 to
+  1.02. The gain exists only because the benchmark sends calls in batches: in
+  production each call arrives on its own. Docker does not stop it as
+  configured. `sandbox.cpus` is 2, and 1 would not be enough either: `--cpus`
+  is a quota per 100 ms, and a timed exchange lasts a few hundred microseconds
+  in a worker that is otherwise idle, so two cores for that long are never
+  throttled. Not tried in docker. Fix direction: confine each benchmark worker
+  to one CPU with `--cpuset-cpus`, which cannot be left from inside, on
+  different CPUs for the two workers. The subprocess sandbox cannot enforce it
+  (a process may reset its own affinity) and is already refused for a real
+  proposer (M1).
 
 ## Medium
 
@@ -640,6 +640,54 @@ any long-lived cluster exists.
   front.
 
 ## Resolved
+
+- [OMNI-153] **H8 — A candidate can make its own worker's reply encoding cheaper,
+  so the same speed measures as faster** *(found 2026-10-08 by the adversarial
+  review of OMNI-152; reproduced 3 of 3 here and 7 of 7 in the review, also on
+  the gate before OMNI-152)* — the worker loop
+  (`sis/sandbox_worker_main.py`) is trusted code, but it runs in the
+  candidate's interpreter. For every call, `_encodable` runs
+  `json.dumps(value)` once only to test that the answer can cross the pipe. A
+  candidate that replaces `json.dumps` in its own process (returning `""` for
+  an int) makes that test free for its worker while the baseline's still pays
+  it. With the fast `sum_of_divisors` as the baseline, the same algorithm plus
+  that patch is accepted at a total-time ratio of 0.78 to 0.79; the same code
+  without it is rejected at 0.996. `mypy --strict` does not see it (`setattr`),
+  and nothing on disk changes, so the tamper check does not either. It matters
+  for calls that cost about as much as the protocol (a microsecond or two); for
+  a 200 µs call the encoding is 1%. The principle is wider than `json.dumps`:
+  anything the loop does in the candidate's process, the candidate can make
+  cheaper. So the claim that the per-call JSON cost "dilutes a gain rather than
+  invents one" holds only while both workers pay the same. Not tried in docker;
+  the same file runs in the container. Fix direction: encode each reply once,
+  in one C call, with the per-answer path only as the fallback; then measure
+  what a candidate can still save by replacing `_call` or `_send`, and either
+  close it or state the remainder against the margin.
+  **Fixed 2026-10-08 (OMNI-153):** a timed batch runs no Python per call. The
+  loop decodes the request, runs the calls through `itertools.starmap` and
+  encodes the reply, three C calls for the whole batch
+  (`sandbox_worker_main._plain_batch`, `_reply`). When every call returned, the
+  reply is the short form `{"id": n, "ok": [value, ...]}`. A call that raises
+  is reported in the long form, with the answers before it kept and no call
+  run twice; an answer that cannot cross is named on its own. Batches with
+  `kwargs` or `track_args`, which only the harness gates send and nothing
+  times, keep the per-call path. The loop's own cost per call fell from 1.24
+  to 0.17 µs, so a fast function is also resolved better: a candidate a third
+  slower than the fast `sum_of_divisors` now measures 1.30, where it measured
+  1.20. Measured against that baseline, four runs each: the patched
+  `json.dumps`, a replaced `_call`, a replaced `_plain_batch` and `_reply` with
+  the collector off and the candidate's own encoder, and its own request
+  decoder on top, all between 0.97 and 1.03, like the unpatched control. What
+  a candidate can still change is a few microseconds per exchange, not per
+  call. Regression tests: no Python function is entered between two calls of a
+  plain batch (the old loop entered six); `json.dumps` runs once per reply; a
+  candidate a third slower plus the two patches is rejected against a "no
+  slower" bar, where the old loop measured it at 0.95 and accepted it. Four of
+  the new tests fail on the old loop. Docker was not running where this was
+  written, and CI has no gauntlet image, so the docker variants of these tests
+  have not run yet. A review of the fix found one bug in it, fixed before it
+  was pushed (a call that raises `StopIteration` ended the C loop without an
+  error, and the reply came back short), and H9.
 
 - [OMNI-152] **H7 — The benchmark timed repeated inputs once its batches outgrew
   the oracle's input range, so a memoised candidate could pass** *(found
@@ -1523,3 +1571,4 @@ any long-lived cluster exists.
 [OMNI-151]: https://olafzumpe.atlassian.net/browse/OMNI-151
 [OMNI-152]: https://olafzumpe.atlassian.net/browse/OMNI-152
 [OMNI-153]: https://olafzumpe.atlassian.net/browse/OMNI-153
+[OMNI-154]: https://olafzumpe.atlassian.net/browse/OMNI-154
