@@ -440,3 +440,38 @@ def test_a_short_reply_with_the_wrong_number_of_answers_is_a_protocol_error() ->
     with _serve(source) as worker, pytest.raises(WorkerProtocolError, match="2 results expected"):
         worker.call([[1], [2]])
 
+
+# --- OMNI-154 (KNOWN_ISSUES H9): a worker confined to one CPU --------------------
+
+_REPORTS_ITS_CPUS = ("import os\n"
+                     "def f(widen):\n"
+                     "    if widen:\n        os.sched_setaffinity(0, range(64))\n"
+                     "    return sorted(os.sched_getaffinity(0))\n")
+
+
+def test_a_confined_worker_stays_on_its_cpu_whatever_it_asks_for(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if not _docker_ready():
+        pytest.skip("docker or the sis-gauntlet image is not available")
+    monkeypatch.setenv("SIS_SANDBOX", "docker")
+    config.reset_config_cache()
+    cpus = gauntlet._sandbox_cpus()
+    first, second = cpus[-1], cpus[0]
+    with SandboxWorker(_REPORTS_ITS_CPUS, "f", cpu=first).start() as worker:
+        assert worker.cpu == first
+        assert _one(worker, False) == [first]
+        # The cpuset is the kernel's: asking for every CPU changes nothing.
+        assert _one(worker, True) == [first]
+        worker.confine(second)
+        assert worker.cpu == second
+        assert _one(worker, True) == [second]
+
+
+def test_the_soft_sandbox_confines_nothing_and_says_so() -> None:
+    # A process there may reset its own affinity, so a cpu is not pretended.
+    with SandboxWorker("def f(n):\n    return n\n", "f", cpu=3).start() as worker:
+        assert worker.cpu is None
+        worker.confine(5)
+        assert worker.cpu is None and _one(worker, 1) == 1
+

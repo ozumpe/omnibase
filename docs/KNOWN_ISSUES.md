@@ -40,7 +40,7 @@ reference with no link target below.
 > | M10 | [OMNI-47](https://olafzumpe.atlassian.net/browse/OMNI-47) (epic OMNI-43) — **fixed** |
 > | H3 | [OMNI-48](https://olafzumpe.atlassian.net/browse/OMNI-48) (epic [OMNI-44](https://olafzumpe.atlassian.net/browse/OMNI-44)) |
 > | H8 | [OMNI-153] (epic OMNI-43), found 2026-10-08 — **fixed** the same day |
-> | H9 | [OMNI-154] (epic OMNI-43), found 2026-10-08 |
+> | H9 | [OMNI-154] (epic OMNI-43), found 2026-10-08 — **fixed** the same day |
 > | M19 | [OMNI-49](https://olafzumpe.atlassian.net/browse/OMNI-49) (epic OMNI-44) — **fixed** (by refusal; isolation is H3) |
 > | M20, M21 | [OMNI-50](https://olafzumpe.atlassian.net/browse/OMNI-50) (epic OMNI-44) |
 > | M15 | [OMNI-51](https://olafzumpe.atlassian.net/browse/OMNI-51) — **fixed** |
@@ -87,28 +87,6 @@ reference with no link target below.
   sandbox over stdio, and tests show a docker candidate cannot reach Ray, the
   network or the host's environment. Moving green onto it is OMNI-48, so H3
   stays open, and so does the refusal.
-
-- [OMNI-154] **H9 — A candidate can run a timed batch on several cores, so the
-  same algorithm measures twice as fast** *(found 2026-10-08 by the review of
-  OMNI-153; reproduced 3 of 3 here, and 2 of 2 through the whole gate against
-  the worker loop before OMNI-153)* — the benchmark times a batch of calls by
-  wall clock, and the worker's loop runs in the candidate's interpreter. A
-  candidate that replaces the function that runs the batch can spread the
-  calls over helpers on other cores; the baseline runs its batch on one.
-  Against the fast `sum_of_divisors`, in the subprocess sandbox, in batches of
-  198: the same algorithm over forked helpers measures 0.50, over
-  sub-interpreters in threads of one process 0.51, and a slower algorithm over
-  forked helpers 0.59, all accepted; the same algorithm alone measures 0.99 to
-  1.02. The gain exists only because the benchmark sends calls in batches: in
-  production each call arrives on its own. Docker does not stop it as
-  configured. `sandbox.cpus` is 2, and 1 would not be enough either: `--cpus`
-  is a quota per 100 ms, and a timed exchange lasts a few hundred microseconds
-  in a worker that is otherwise idle, so two cores for that long are never
-  throttled. Not tried in docker. Fix direction: confine each benchmark worker
-  to one CPU with `--cpuset-cpus`, which cannot be left from inside, on
-  different CPUs for the two workers. The subprocess sandbox cannot enforce it
-  (a process may reset its own affinity) and is already refused for a real
-  proposer (M1).
 
 ## Medium
 
@@ -641,6 +619,49 @@ any long-lived cluster exists.
 
 ## Resolved
 
+- [OMNI-154] **H9 — A candidate can run a timed batch on several cores, so the
+  same algorithm measures twice as fast** *(found 2026-10-08 by the review of
+  OMNI-153; reproduced 3 of 3 here, and 2 of 2 through the whole gate against
+  the worker loop before OMNI-153)* — the benchmark times a batch of calls by
+  wall clock, and the worker's loop runs in the candidate's interpreter. A
+  candidate that replaces the function that runs the batch can spread the
+  calls over helpers on other cores; the baseline runs its batch on one.
+  Against the fast `sum_of_divisors`, in the subprocess sandbox, in batches of
+  198: the same algorithm over forked helpers measures 0.50, over
+  sub-interpreters in threads of one process 0.51, and a slower algorithm over
+  forked helpers 0.59, all accepted; the same algorithm alone measures 0.99 to
+  1.02. The gain exists only because the benchmark sends calls in batches: in
+  production each call arrives on its own. Docker does not stop it as
+  configured. `sandbox.cpus` is 2, and 1 would not be enough either: `--cpus`
+  is a quota per 100 ms, and a timed exchange lasts a few hundred microseconds
+  in a worker that is otherwise idle, so two cores for that long are never
+  throttled. In docker, through the whole gate: over forked helpers 0.76 to
+  0.79, over sub-interpreters 0.81, both accepted 2 of 2.
+  **Fixed 2026-10-08 (OMNI-154):** in docker each benchmark worker's container
+  is confined to one CPU by `--cpuset-cpus` (`SandboxWorker(cpu=...)`). A
+  cpuset is the kernel's: a worker that asks for every CPU keeps its one. The
+  CPUs are asked from a trusted container in the same image
+  (`gauntlet._sandbox_cpus`), so they are ones a cpuset can name under Docker
+  Desktop's VM or a restricted daemon; a failure to ask is a `harness:`
+  verdict, and so is a CPU docker then refuses, which a trusted worker is
+  tried on before the candidate is blamed. The two workers get different CPUs (`gauntlet.benchmark_cpus`), so
+  a candidate that spins does not take the baseline's time: on different
+  physical cores where the host knows its hyperthreads, otherwise the highest
+  and the lowest. Halfway through the samples the workers swap CPUs
+  (`docker update`), so a CPU that is busier than the other counts against
+  both sides. A reject reason names the CPUs. Measured in docker after the
+  fix, three runs each: forked helpers 1.16 to 1.18, sub-interpreters 1.11 to
+  1.17, the same algorithm alone 0.99 to 1.01. On one CPU the helpers only
+  cost time. **The subprocess sandbox confines nothing**: a process there may
+  reset its own affinity, and macOS has no affinity call. It is refused for a
+  real proposer (M1), and there the takeover still measures 0.50. Regression
+  tests, docker only: both takeovers are not accepted (with the confinement
+  switched off both are, and the tests fail); a confined worker that asks for
+  every CPU keeps its one, and moves when told; the benchmark's two workers
+  get different CPUs and swap. Without docker: the choice of CPUs, the swap,
+  and the docker arguments. CI has no gauntlet image, so the docker tests run
+  on a developer's machine and in the rehearsal on the box.
+
 - [OMNI-153] **H8 — A candidate can make its own worker's reply encoding cheaper,
   so the same speed measures as faster** *(found 2026-10-08 by the adversarial
   review of OMNI-152; reproduced 3 of 3 here and 7 of 7 in the review, also on
@@ -685,9 +706,10 @@ any long-lived cluster exists.
   slower" bar, where the old loop measured it at 0.95 and accepted it. Four of
   the new tests fail on the old loop. Docker was not running where this was
   written, and CI has no gauntlet image, so the docker variants of these tests
-  have not run yet. A review of the fix found one bug in it, fixed before it
-  was pushed (a call that raises `StopIteration` ended the C loop without an
-  error, and the reply came back short), and H9.
+  had not run. They have since, with OMNI-154, and pass. A review of the fix
+  found one bug in it, fixed before it was pushed (a call that raises
+  `StopIteration` ended the C loop without an error, and the reply came back
+  short), and H9.
 
 - [OMNI-152] **H7 — The benchmark timed repeated inputs once its batches outgrew
   the oracle's input range, so a memoised candidate could pass** *(found

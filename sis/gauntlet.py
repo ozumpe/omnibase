@@ -40,6 +40,7 @@ the candidate passes all gates.
 
 import ast
 import contextlib
+import functools
 import hashlib
 import json
 import math
@@ -57,7 +58,7 @@ import textwrap
 import time
 import traceback
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -176,7 +177,8 @@ def sandbox_mode() -> str:
 _PY = "PYTHON"
 
 
-def _docker_args(tmpdir: str, env: dict[str, str], image: str, name: str) -> list[str]:
+def _docker_args(tmpdir: str, env: dict[str, str], image: str, name: str,
+                 *, cpuset: str | None = None) -> list[str]:
     """Build the ``docker run`` wrapper: no network, no caps, only tmpdir mounted.
 
     Kernel-enforced: ``--network none`` (no egress), ``--cap-drop ALL`` +
@@ -196,6 +198,11 @@ def _docker_args(tmpdir: str, env: dict[str, str], image: str, name: str) -> lis
     ``--cpus`` bound a runaway candidate's resource use (override via
     ``SIS_SANDBOX_MEMORY`` / ``SIS_SANDBOX_CPUS``). ``--user`` is the host
     user's uid, see :func:`_container_user`.
+
+    *cpuset* confines the container to those CPUs (``--cpuset-cpus``). Unlike
+    ``--cpus``, which is a quota per 100 ms and lets a short burst run on
+    every core, a cpuset cannot be left from inside. The benchmark's workers
+    get one CPU each (OMNI-154, H9).
     """
     args = [
         "docker", "run", "--rm",
@@ -208,6 +215,7 @@ def _docker_args(tmpdir: str, env: dict[str, str], image: str, name: str) -> lis
         "--pids-limit", "256",
         "--memory", str(config.get("sandbox.memory")),
         "--cpus", str(config.get("sandbox.cpus")),
+        *(("--cpuset-cpus", cpuset) if cpuset is not None else ()),
         *_mounts(tmpdir, env.get("HOME")),
         "-w", tmpdir,
     ]
@@ -251,6 +259,77 @@ def _container_user() -> str:
             "Run the loop as an unprivileged user — on the AWS box, `sudo -iu ubuntu`."
         )
     return f"{os.getuid()}:{os.getgid()}"
+
+
+@functools.cache
+def _sandbox_cpus() -> tuple[int, ...]:
+    """The CPUs a sandbox container may run on, asked from inside one.
+
+    Trusted code in the sandbox's own image: what it sees is what a cpuset can
+    name, whatever the daemon's own limits or a VM in between (Docker Desktop).
+    Asked once per process.
+    """
+    code = "import os; print(*sorted(os.sched_getaffinity(0)))"
+    try:
+        done = subprocess.run(
+            ["docker", "run", "--rm", "--network", "none", "--cap-drop", "ALL",
+             str(config.get("sandbox.image")), "python", "-c", code],
+            capture_output=True, text=True, timeout=120,
+        )
+        cpus = tuple(int(word) for word in done.stdout.split())
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        raise RuntimeError(f"cannot ask the sandbox which CPUs it has ({exc})") from exc
+    if done.returncode != 0 or not cpus:
+        raise RuntimeError("cannot ask the sandbox which CPUs it has "
+                           f"(exit {done.returncode}: {done.stderr.strip()[-200:]})")
+    return cpus
+
+
+def _cpu_siblings() -> dict[int, frozenset[int]]:
+    """Each CPU's hyperthread siblings, itself included, where the host can tell.
+
+    Read from the host's ``/sys``, so only on Linux, where the docker daemon
+    shares the host's kernel. Empty anywhere else, and when it cannot be read.
+    """
+    if not sys.platform.startswith("linux"):
+        return {}
+    siblings: dict[int, frozenset[int]] = {}
+    try:
+        for entry in pathlib.Path("/sys/devices/system/cpu").glob("cpu[0-9]*"):
+            text = (entry / "topology" / "thread_siblings_list").read_text(encoding="ascii")
+            group: set[int] = set()
+            for part in text.strip().split(","):
+                first, _, last = part.partition("-")
+                group.update(range(int(first), int(last or first) + 1))
+            siblings[int(entry.name[3:])] = frozenset(group)
+    except (OSError, ValueError):
+        return {}
+    return siblings
+
+
+def benchmark_cpus(
+    cpus: Sequence[int], siblings: Mapping[int, frozenset[int]],
+) -> tuple[int, int]:
+    """The CPU for the candidate's worker and the CPU for the baseline's. Pure.
+
+    One each, so a batch cannot be spread over several cores (OMNI-154, H9).
+    Two different ones, because on a shared CPU a candidate that spins would
+    take half the baseline's time. On different physical cores where the host
+    knows its hyperthreads; where it does not, the highest and the lowest,
+    which the two usual numberings of a four-CPU box both put on different
+    cores. A single CPU is shared: nothing can run beside it there anyway.
+    """
+    ordered = sorted(set(cpus))
+    if not ordered:
+        raise ValueError("no CPU to confine a benchmark worker to")
+    first = ordered[-1]
+    others = [cpu for cpu in ordered if cpu != first]
+    if not others:
+        return first, first
+    apart = [cpu for cpu in others if cpu not in siblings.get(first, frozenset())]
+    if siblings and apart:
+        return first, apart[-1]
+    return first, others[0]
 
 
 def _docker_kill(name: str) -> None:
@@ -1533,10 +1612,20 @@ def _gate_differential_benchmark(ctx: _GateContext) -> Result | None:
     from a correctness batch (by size, say) and answers the first wrongly and
     fast is rejected, not measured.
 
-    What remains outside this gate: the candidate's worker can still contend
-    for CPU while the baseline's batch runs (bounded by the sandbox's ``--cpus``
-    in docker; the subprocess sandbox can do more and is refused for a real
-    proposer).
+    **One CPU for each worker, and a different one** (OMNI-154, H9). The clock
+    is a wall clock and a batch is many calls, so a candidate that took over its
+    worker's loop could spread a batch over several cores and measure half the
+    time with the same algorithm. In docker each worker's container is confined
+    to one CPU by cpuset, which cannot be left from inside (``--cpus`` is a
+    quota per 100 ms, and a burst of a few hundred microseconds on every core
+    never reaches it). The two CPUs differ, so a candidate that spins does not
+    take the baseline's time, and halfway through the samples the workers swap
+    them, so a CPU that is busier than the other counts against both sides.
+    The subprocess sandbox cannot confine anything, a process there may reset
+    its own affinity, and it is refused for a real proposer (M1).
+
+    What remains outside this gate: the candidate's worker can still disturb
+    the machine while the baseline's batch runs (its memory, its caches).
 
     Class-1 only: both halves presuppose a reference that can be evaluated on
     demand, which is exactly what a Class-2 feature does not have.
@@ -1560,14 +1649,28 @@ def _gate_differential_benchmark(ctx: _GateContext) -> Result | None:
 
     from sis.sandbox_worker import SandboxWorker, WorkerStartError
 
+    cand_cpu: int | None = None
+    base_cpu: int | None = None
+    if sandbox_mode() == "docker":
+        try:
+            cand_cpu, base_cpu = benchmark_cpus(_sandbox_cpus(), _cpu_siblings())
+        except (RuntimeError, ValueError) as exc:
+            return Result(passed=False, reason=f"harness: the benchmark's workers cannot be "
+                                               f"confined to a CPU each ({exc})")
     deadline = time.monotonic() + _timeout_seconds()
     try:
-        cand = SandboxWorker(ctx.code_str, spec.entry).start()
+        cand = SandboxWorker(ctx.code_str, spec.entry, cpu=cand_cpu).start()
     except WorkerStartError as exc:
+        # Probe before blame (OMNI-37), for the confinement too: if a trusted
+        # worker cannot start on that CPU either, the candidate was not judged.
+        fault = _confinement_fault(cand_cpu)
+        if fault is not None:
+            return Result(passed=False, reason=f"harness: a benchmark worker cannot be "
+                                               f"confined to CPU {cand_cpu} ({fault})")
         return _candidate_start_failure(exc, spec)
     try:
         try:
-            base = SandboxWorker(ctx.baseline_code, spec.entry).start()
+            base = SandboxWorker(ctx.baseline_code, spec.entry, cpu=base_cpu).start()
         except WorkerStartError as exc:
             return Result(passed=False, reason=f"harness: the baseline did not start in its "
                                                f"worker ({exc}) — the benchmark cannot run")
@@ -1579,6 +1682,19 @@ def _gate_differential_benchmark(ctx: _GateContext) -> Result | None:
             base.close()
     finally:
         cand.close()
+
+
+def _confinement_fault(cpu: int | None) -> str | None:
+    """Why a trusted worker cannot start confined to *cpu*, or ``None`` if it can."""
+    if cpu is None:
+        return None
+    from sis.sandbox_worker import SandboxWorker, WorkerStartError
+
+    try:
+        SandboxWorker("def probe() -> int:\n    return 0\n", "probe", cpu=cpu).start().close()
+    except WorkerStartError as exc:
+        return " ".join(str(exc).split())[:300]
+    return None
 
 
 def _candidate_start_failure(exc: Exception, spec: Contract) -> Result:
@@ -1614,6 +1730,31 @@ def _exchange(worker: Any, calls: list[list[Any]], deadline: float, who: str) ->
         # channel). _attribute's probe decides whether the sandbox is at fault.
         raise _WorkerFailed(Result(
             passed=False, reason=f"benchmark: the candidate's worker failed ({detail})")) from exc
+
+
+def _swap_cpus(cand: Any, base: Any, deadline: float) -> None:
+    """Halfway through the samples, each worker moves to the other's CPU.
+
+    A CPU that is busier than the other for the length of a benchmark would
+    otherwise count against one side only: against the baseline, it reads as
+    a faster candidate. Nothing to do where the workers are not confined, or
+    share the only CPU.
+    """
+    from sis.sandbox_worker import WorkerError
+
+    theirs, ours = cand.cpu, base.cpu
+    if theirs is None or ours is None or theirs == ours:
+        return
+    try:
+        cand.confine(ours)
+        base.confine(theirs)
+    except WorkerError as exc:
+        raise _WorkerFailed(Result(
+            passed=False, reason=f"harness: the benchmark's workers could not swap CPUs "
+                                 f"({' '.join(str(exc).split())[:300]})")) from exc
+    # One untimed exchange each, so the move has happened before the clock runs.
+    _exchange(cand, [], deadline, "candidate")
+    _exchange(base, [], deadline, "baseline")
 
 
 def _mismatch(args: Any, why: str) -> _WorkerFailed:
@@ -1706,6 +1847,9 @@ def _judge(ctx: _GateContext, oracle: Any, cand: Any, base: Any,
     batch = timed.batch
     sized = f"{batch} call(s) each" + (
         ", capped by the oracle's input range" if timed.capped else "")
+    if cand.cpu is not None and base.cpu is not None:
+        sized += (f", both workers on CPU {cand.cpu}" if cand.cpu == base.cpu else
+                  f", one CPU per worker ({cand.cpu} and {base.cpu}, swapped halfway)")
     work = timed.batches
     for args in shapes:
         work[bench_rng.randrange(len(work))].append(args)
@@ -1714,6 +1858,8 @@ def _judge(ctx: _GateContext, oracle: Any, cand: Any, base: Any,
     base_calls = 0
     base_seconds = 0.0
     for index, calls in enumerate(work):
+        if index == len(work) // 2:
+            _swap_cpus(cand, base, deadline)
         # Alternating order, so neither side systematically runs second.
         if index % 2 == 0:
             c_reply = _exchange(cand, calls, deadline, "candidate")
