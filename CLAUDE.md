@@ -96,7 +96,18 @@ internal target before it models anything external.
     `specs/`, and every exchange is timed on the host and decoded from JSON.
     Exchanges carry a batch of fresh inputs, sized by time so the baseline's
     batch takes ~20 pipe round trips (`_WINDOW_OVER_ROUND_TRIP`; ~20 µs a round
-    trip in the subprocess sandbox, ~350 µs in docker on a Mac). The per-call
+    trip in the subprocess sandbox, ~350 µs in docker on a Mac). **No input
+    reaches a worker twice in one benchmark** (OMNI-152, H7 fixed 2026-10-08;
+    `gauntlet._UnusedInputs`): not in the timed batches, the sizing exchanges
+    or `BENCH_INPUTS`, and not after the candidate met it in the differential
+    phase. Inputs are compared by value, the way a cache would key them. A
+    fresh draw each time was not enough: 99 batches of 1024 from
+    `sum_of_divisors`' 19,999 values repeated four calls in five, and a cache
+    measured as speed (AWS run #7 ran at that size). When the oracle's range
+    cannot fill the batch the timing asks for, the batch shrinks (`capped by
+    the oracle's input range` in the reason), which hides a gain and never
+    invents one; fewer unused inputs than samples is `benchmark unmeasurable`.
+    The per-call
     JSON cost (~1 µs for an int) cannot be amortised and dilutes a gain rather
     than invents one, so µs-scale differences are resolved poorly — accepted.
     Every timed answer is checked against the baseline's, and differences
@@ -754,17 +765,22 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   **Phase 0 is built:** `sis/sandbox_worker.py` (OMNI-129) serves a candidate
   hot from the sandbox. It is tested in both sandbox modes, including that a
   docker candidate cannot reach the network, Ray or the host's environment.
-- 1047 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
+- 1055 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
   Ray-Serve-integration tests run separately, see Operational quick reference
-  above; 1109 total, recounted 2026-09-30 — corrected 2026-09-26, a multi-dimension review found the
+  above; 1117 total, recounted 2026-10-08 — corrected 2026-09-26, a multi-dimension review found the
   previously-documented 616/678 stale); `ruff`/`mypy --strict`/`pytest` clean;
   CI green; `feature → develop → main` enforced by both the client-side
   pre-push hook and active server-side rulesets.
-- **One known test flake** — re-run before chasing it:
+- **Two known test flakes** — re-run before chasing either:
   `test_a_drafted_skeleton_stages_without_touching_specs` (under `-n auto`)
   is **test-only** — [OMNI-42](https://olafzumpe.atlassian.net/browse/OMNI-42)
   (Low). It compares two `specs/` listings and races another worker creating
-  `specs/__pycache__`; `stage()` never writes into `specs/`. (The Serve
+  `specs/__pycache__`; `stage()` never writes into `specs/`.
+  `test_correct_but_not_faster_is_rejected` is **not** test-only: on a heavily
+  loaded machine the benchmark can accept its candidate, which is a few
+  percent slower than the baseline (M7,
+  [OMNI-88](https://olafzumpe.atlassian.net/browse/OMNI-88), won't-fix for
+  now). CI did so once, on 2026-10-08, through a test with the same candidate. (The Serve
   flake in `test_promotion_makes_the_candidate_the_new_baseline` was not a
   replica race but the 5% default canary weight — fixed in #110, see
   "Writing a Serve test" above.)
@@ -800,7 +816,8 @@ OMNI-57/126; M26, the third run's conflicting second PR, and M27, the fourth run
 breaker trip on a converged target, fixed 2026-09-29, OMNI-136/138; H2, M8, M9
 and M11 fixed the same day, OMNI-45/146, and M17, L15 and L33 with OMNI-147,
 OMNI-56/64/78; L34 and L51–L53, the last three from the sixth run, fixed
-2026-09-30, OMNI-79/148–150; M28, from the seventh, the same day, OMNI-151). The headline, before trusting any
+2026-09-30, OMNI-79/148–150; M28, from the seventh, the same day, OMNI-151;
+H7, the benchmark's repeated inputs, fixed 2026-10-08, OMNI-152). The headline, before trusting any
 gauntlet verdict: every gate but SLO now judges its candidate from outside the
 candidate's process (H2, M8), and the exam files are protected (M9). **The SLO
 gate still runs its candidate in-process** (L42,

@@ -7,10 +7,11 @@ covered by the adversarial corpus.
 """
 
 import math
+import random
 import statistics
 
 from sis.episodic import gate_from_reason, neutral_status
-from sis.gauntlet import BenchmarkVerdict, benchmark_decision
+from sis.gauntlet import BenchmarkVerdict, _UnusedInputs, benchmark_decision
 
 MARGIN = 0.90
 
@@ -115,3 +116,51 @@ def test_measurement_failures_are_named_and_never_neutral() -> None:
     ):
         assert gate_from_reason(reason) == gate
         assert neutral_status(reason) is None
+
+
+# --- OMNI-152 (KNOWN_ISSUES H7): no input is given out twice -----------------
+
+
+def _one_of(top: int) -> _UnusedInputs:
+    return _UnusedInputs(lambda rng: [rng.randint(1, top)])
+
+
+def test_no_input_is_given_out_twice_across_takes() -> None:
+    unused = _one_of(10_000)
+    rng = random.Random(7)
+    given = [args[0] for _ in range(20) for args in unused.take(rng, 300)]
+    assert len(given) == 6_000
+    assert len(set(given)) == len(given)
+
+
+def test_a_range_that_runs_short_gives_fewer_inputs_not_repeats() -> None:
+    # 50 values and a request for 1000: the old gate drew 1000, 950 of them
+    # repeats, which is what a cache was paid for.
+    unused = _one_of(50)
+    given = [args[0] for args in unused.take(random.Random(7), 1_000)]
+    assert len(set(given)) == len(given)
+    assert 40 <= len(given) <= 50
+    more = [args[0] for args in unused.take(random.Random(8), 1_000)]
+    assert set(more).isdisjoint(given)
+    assert len(given) + len(more) <= 50
+
+
+def test_an_input_already_used_elsewhere_is_never_given_out() -> None:
+    # What the candidate met in the differential phase is not timed later.
+    unused = _one_of(50)
+    for met in range(1, 41):
+        assert unused.use([met])
+    assert not unused.use([40])
+    given = {args[0] for args in unused.take(random.Random(7), 1_000)}
+    assert given and given <= set(range(41, 51))
+
+
+def test_inputs_are_compared_the_way_a_cache_would_key_them() -> None:
+    # functools.cache keys on equality: 1, 1.0 and True are one entry.
+    unused = _UnusedInputs(lambda rng: [0])
+    assert unused.use([1])
+    assert not unused.use([1.0])
+    assert not unused.use([True])
+    assert unused.use([[3, 1, 2], {"k": [1]}])
+    assert not unused.use([[3, 1, 2], {"k": [1]}])
+    assert unused.use([[1, 2, 3], {"k": [1]}])

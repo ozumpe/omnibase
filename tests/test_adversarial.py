@@ -13,7 +13,7 @@ import pathlib
 import pytest
 
 from sis import gauntlet
-from sis.contract import ROMAN, SORT, Contract
+from sis.contract import ROMAN, SORT, Contract, OptimizationContract
 from sis.episodic import neutral_status
 from sis.paths import PROJECT_ROOT
 
@@ -94,6 +94,11 @@ def test_memoised_naive_impl_cannot_game_a_replayed_workload() -> None:
     #
     # Fresh inputs per round are what close this: the candidate never sees an
     # argument twice, so the cache can never hit and the naive cost is exposed.
+    #
+    # The sum is done twice, so without its cache this is half the baseline's
+    # speed. Done once it sat a few percent from the baseline, and a noisy
+    # measurement on a loaded machine (M7) could then fail this test for a
+    # reason that is not the cache.
     code = '''
 import functools
 import time
@@ -101,7 +106,8 @@ import time
 
 @functools.cache
 def sum_of_divisors(n: int) -> int:
-    return sum(i for i in range(1, n + 1) if n % i == 0)
+    once = sum(i for i in range(1, n + 1) if n % i == 0)
+    return (once + sum(i for i in range(1, n + 1) if n % i == 0)) // 2
 
 
 def benchmark(n: int = 10_000, repetitions: int = 5) -> float:
@@ -163,13 +169,19 @@ def test_a_candidate_cannot_forge_the_benchmark_verdict_from_stdout() -> None:
     # first fix's parser took the last matching line, and this passed every
     # gate. The harness now owns a private copy of stdout; the candidate's
     # prints — and its atexit hooks — go to /dev/null.
+    #
+    # The sum is done twice, so this is half the baseline's speed and only a
+    # believed forgery can pass it. Done once it sat a few percent from the
+    # baseline, and CI accepted it on 2026-10-08 with no forgery involved: a
+    # noisy measurement on a loaded runner (M7, OMNI-88).
     code = '''
 import atexit
 import sys
 
 
 def sum_of_divisors(n: int) -> int:
-    return sum(i for i in range(1, n + 1) if n % i == 0)
+    once = sum(i for i in range(1, n + 1) if n % i == 0)
+    return (once + sum(i for i in range(1, n + 1) if n % i == 0)) // 2
 
 
 def _forge() -> None:
@@ -990,3 +1002,114 @@ def test_the_benchmark_runs_the_candidate_in_a_worker_of_its_own(monkeypatch) ->
     # The interface gate's worker, then the benchmark's two. The acceptance
     # gate's worker starts in its harness process (OMNI-146), unseen here.
     assert started == [fast, fast, baseline]
+
+
+# --- OMNI-152 (KNOWN_ISSUES H7): no input is timed twice ---------------------
+#
+# OMNI-41 drew a fresh input for every timed call. Since OMNI-45 the batch is
+# sized by time, and nothing bounded it against the oracle's input range: 99
+# batches of 1024 from 19,999 values repeat four calls in five. AWS run #7 ran
+# at exactly that size. A cache answers a repeat from a dictionary.
+
+from dataclasses import replace  # noqa: E402
+
+_NARROW_ORACLE = """
+import random
+
+
+def reference(n: int) -> int:
+    return sum(i for i in range(1, n + 1) if n % i == 0)
+
+
+def random_input(rng: random.Random) -> tuple[int]:
+    return (rng.randint(2, {top}),)
+
+
+BENCH_INPUTS: list[tuple[int]] = [(3,), (97,)]
+"""
+
+# Twice the baseline's work on a new input, and a dictionary lookup on a repeat.
+_SLOWER_BUT_MEMOISED = '''
+import functools
+
+
+@functools.cache
+def sum_of_divisors(n: int) -> int:
+    once = sum(i for i in range(1, n + 1) if n % i == 0)
+    return (once + sum(i for i in range(1, n + 1) if n % i == 0)) // 2
+
+
+def benchmark(n: int = 10_000, repetitions: int = 5) -> float:
+    return 1.0
+'''
+
+
+def _narrow_contract(tmp_path: pathlib.Path, top: int, **changes: Any) -> OptimizationContract:
+    """The default contract, its inputs drawn from only ``2..top``."""
+    oracle = tmp_path / "oracle.py"
+    oracle.write_text(_NARROW_ORACLE.format(top=top), encoding="utf-8")
+    return replace(gauntlet.default_contract(), oracle_path=str(oracle), **changes)
+
+
+def test_a_memoised_candidate_gains_nothing_when_batches_outgrow_the_input_range(
+    sandbox: str, tmp_path: pathlib.Path,
+) -> None:
+    # 99 batches of at least 1024 calls, from 1,999 possible inputs. The old
+    # gate drew them with replacement, so 98 calls in 100 were repeats and this
+    # candidate, half the baseline's speed, measured about ten times faster.
+    contract = _narrow_contract(tmp_path, top=2_000, bench_batch=1024)
+    result = gauntlet.validate(_SLOWER_BUT_MEMOISED, _BASELINE, contract=contract)
+    assert not result.passed, f"a cache was measured as speed: {result.reason!r}"
+    assert result.reason.startswith("no improvement"), result.reason
+    assert "capped by the oracle's input range" in result.reason
+
+
+def test_no_input_is_timed_twice_and_none_a_worker_has_met(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path,
+) -> None:
+    # The invariant itself, read off what the gate sends: no timing involved.
+    from sis import sandbox_worker
+
+    sent: dict[str, list[list[int]]] = {}
+    real_call = sandbox_worker.SandboxWorker.call
+
+    def spy(self: Any, calls: Any, **kwargs: Any) -> Any:
+        sent.setdefault(self._source, []).append([args[0] for args in calls])
+        return real_call(self, calls, **kwargs)
+
+    monkeypatch.setattr(sandbox_worker.SandboxWorker, "call", spy)
+    spec = gauntlet.default_contract()
+    baseline = (PROJECT_ROOT / spec.target_path).read_text(encoding="utf-8")
+    fast = (PROJECT_ROOT / str(spec.stub_candidate_path)).read_text(encoding="utf-8")
+    contract = _narrow_contract(tmp_path, top=2_000, bench_batch=64)
+    result = gauntlet.validate(fast, _BASELINE, baseline_source=baseline, contract=contract)
+    # A real gain is still measured with the batch cut down.
+    assert result.passed, result.reason
+
+    # A timed batch is the one list both workers were sent. The candidate alone
+    # gets the differential inputs, the baseline alone the sizing ones.
+    timed = [batch for batch in sent[fast] if batch and batch in sent[baseline]]
+    assert len(timed) == contract.bench_samples
+    inputs = [n for batch in timed for n in batch]
+    assert len(set(inputs)) == len(inputs), "an input was timed twice"
+    met_by_candidate = {n for batch in sent[fast] if batch not in timed for n in batch}
+    met_by_baseline = {n for batch in sent[baseline] if batch not in timed for n in batch}
+    assert met_by_candidate and set(inputs).isdisjoint(met_by_candidate)
+    assert set(inputs).isdisjoint(met_by_baseline)
+    # 1,999 inputs cannot fill 99 batches of 64: the batch shrank to fit them.
+    assert max(len(batch) for batch in timed) <= 1_999 // contract.bench_samples + 2
+
+
+def test_an_input_range_too_small_to_time_once_each_is_unmeasurable(
+    tmp_path: pathlib.Path,
+) -> None:
+    # 39 possible inputs, all met in the differential phase: nothing is left
+    # that the candidate has not seen. A counted failure, never an accept.
+    spec = gauntlet.default_contract()
+    fast = (PROJECT_ROOT / str(spec.stub_candidate_path)).read_text(encoding="utf-8")
+    result = gauntlet.validate(fast, _BASELINE, contract=_narrow_contract(tmp_path, top=40))
+    assert not result.passed
+    assert result.reason.startswith("benchmark unmeasurable"), result.reason
+    assert gate_from_reason(result.reason) == "benchmark_unmeasurable"
+    assert neutral_status(result.reason) is None
+

@@ -585,6 +585,18 @@ any long-lived cluster exists.
   goes through the canary and human review — and the obvious fix (trimming
   the ratio) would reopen the size-conditional gaming hole OMNI-41 closed.
   Re-measure once [OMNI-45] rebuilds the measurement, before deciding to fix.
+  **Seen in CI (2026-10-08, PR #159):** on a loaded runner (`-n auto`) the gate
+  accepted a candidate that is not at the margin. The naive sum written as a
+  generator, which measures 1.06 to 1.09 times the baseline on a quiet
+  machine, came out at 0.84 with its whole interval under 0.90. The same
+  candidate under 18 busy processes on a Mac ranged from 0.92 to 1.21 over 60
+  runs, with intervals about 0.22 wide, before and after OMNI-152 alike. So the
+  harm is no longer limited to a near-margin candidate when the machine is
+  heavily loaded. The AWS box runs one loop and little else (M28), and a human
+  merge still follows every accept. The two tests whose candidates sat that
+  close to the baseline for another reason (a forged verdict, a cache) now use
+  a candidate half the baseline's speed; `test_correct_but_not_faster_is_rejected`
+  keeps the near-baseline one, and is the test that fails when this happens.
 
 - [OMNI-89] **L6 — Preflight doesn't verify the PAT's Pull-requests scope.** Not fixable
   in our code. `check_connections.py::check_github` confirms repo access
@@ -604,6 +616,34 @@ any long-lived cluster exists.
   front.
 
 ## Resolved
+
+- [OMNI-152] **H7 — The benchmark timed repeated inputs once its batches outgrew
+  the oracle's input range, so a memoised candidate could pass** *(found
+  2026-09-30 running the suite on an overloaded machine; the same batch size is
+  in AWS run #7's log)*. It reopened the hole OMNI-41 closed. Since OMNI-45 the
+  benchmark sizes each exchange by time, and nothing bounded the batch against
+  the number of inputs the oracle can produce. `sum_of_divisors` draws from
+  19,999 values. A fast baseline, or a slow pipe (docker, or a loaded machine),
+  asks for 99 batches of 1024: about 101,000 draws, so four timed calls in five
+  repeated an earlier input. A candidate under `functools.cache` answers those
+  from a dictionary and measures faster without being faster. OMNI-41's rule was
+  "fresh inputs, never reused"; each draw was fresh, but the set of draws was
+  not. Run #7's console shows `99 paired samples of 1024 call(s) each` on the
+  box, so the current code plus a cache could have been accepted there.
+  **Fixed 2026-10-08 (OMNI-152):** no input reaches a worker twice in one
+  benchmark (`gauntlet._UnusedInputs`). Every input is remembered by value, the
+  way a cache would key it, and a repeat is drawn again. That covers the timed
+  batches, the sizing exchanges, the contract's `BENCH_INPUTS` and the inputs
+  the candidate met in the differential phase. The timed inputs are set aside
+  before each sizing exchange. When the range cannot fill the batch the timing
+  asks for, the batch shrinks (the reason says `capped by the oracle's input
+  range`): the pipe's cost then weighs more, which hides a gain and never
+  invents one. Fewer unused inputs than samples is `benchmark unmeasurable`, a
+  counted failure. `sum_of_divisors` with a fast baseline is now timed at about
+  180 calls a batch, not 1024. Regression tests: a candidate half the
+  baseline's speed plus a cache, which the old gate measured ten times faster;
+  the invariant read off what the gate sends its workers; and a range too small
+  to time at all.
 
 - [OMNI-151] **M28 — A second loop can start on the same box, and the two do not
   share the spend cap** *(found 2026-09-30 in AWS run #7, `v0.3.6`)*. A
@@ -1450,3 +1490,4 @@ any long-lived cluster exists.
 [OMNI-149]: https://olafzumpe.atlassian.net/browse/OMNI-149
 [OMNI-150]: https://olafzumpe.atlassian.net/browse/OMNI-150
 [OMNI-151]: https://olafzumpe.atlassian.net/browse/OMNI-151
+[OMNI-152]: https://olafzumpe.atlassian.net/browse/OMNI-152
