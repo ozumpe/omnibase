@@ -168,6 +168,7 @@ class SandboxWorker:
         exports: Sequence[str] = (),
         optional: Sequence[str] = (),
         name: str | None = None,
+        cpu: int | None = None,
         call_timeout_s: float = DEFAULT_CALL_TIMEOUT_S,
         start_timeout_s: float = START_TIMEOUT_S,
     ) -> None:
@@ -177,11 +178,17 @@ class SandboxWorker:
         *name* is the docker container's, for a caller that must be able to
         kill it from another process (the gauntlet, after a gate's harness
         timed out); otherwise one is made up.
+
+        *cpu* confines the worker to that one CPU (OMNI-154, H9), by a cpuset
+        the candidate cannot leave. Docker only: in the subprocess sandbox a
+        process may reset its own affinity, so nothing is confined there and
+        :attr:`cpu` stays ``None``.
         """
         self._source = source
         self._names = list(dict.fromkeys([entry, *exports]))
         self._optional = [n for n in dict.fromkeys(optional) if n not in self._names]
         self._name = name
+        self._cpu = cpu if gauntlet.sandbox_mode() == "docker" else None
         self._call_timeout_s = call_timeout_s
         self._start_timeout_s = start_timeout_s
         self._lock = threading.Lock()
@@ -212,8 +219,9 @@ class SandboxWorker:
         self._stderr = tempfile.TemporaryFile()
         if gauntlet.sandbox_mode() == "docker":
             self._container = self._name or f"sis-worker-{uuid.uuid4().hex[:12]}"
-            args = gauntlet._docker_args(self._dir, env, str(config.get("sandbox.image")),
-                                         self._container)
+            args = gauntlet._docker_args(
+                self._dir, env, str(config.get("sandbox.image")), self._container,
+                cpuset=None if self._cpu is None else str(self._cpu))
             cmd = [*args[:2], "-i", *args[2:], "python", *argv]
             # The docker *client* runs with the host's environment; the container
             # gets only the -e variables _docker_args passed.
@@ -240,6 +248,26 @@ class SandboxWorker:
             f"the candidate did not load: {error or repr(ready)}",
             missing=[n for n in missing if n in self._names] if isinstance(missing, list) else (),
         )
+
+    @property
+    def cpu(self) -> int | None:
+        """The one CPU this worker is confined to, or ``None`` if it is not confined."""
+        return self._cpu
+
+    def confine(self, cpu: int) -> None:
+        """Move a confined, running worker to another CPU. A no-op if it is not confined."""
+        with self._lock:
+            if self._cpu is None or self._container is None:
+                return
+            try:
+                done = subprocess.run(
+                    ["docker", "update", "--cpuset-cpus", str(cpu), self._container],
+                    capture_output=True, text=True, timeout=60)
+            except (OSError, subprocess.SubprocessError) as exc:
+                raise WorkerError(f"docker update did not run ({exc})") from exc
+            if done.returncode != 0:
+                raise WorkerError(f"docker update failed: {done.stderr.strip()[-300:]}")
+            self._cpu = cpu
 
     @property
     def exports(self) -> dict[str, Export]:

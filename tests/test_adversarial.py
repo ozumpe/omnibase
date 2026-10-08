@@ -1220,3 +1220,240 @@ def test_a_slower_candidate_cannot_pass_by_making_its_workers_loop_cheaper(sandb
     # twelve copies at once on twelve cores, one run in ten came out so.
     assert result.reason.startswith(("no improvement", "benchmark inconclusive")), result.reason
 
+
+# --- OMNI-154 (KNOWN_ISSUES H9): one CPU for each benchmark worker ---------------
+#
+# The clock is a wall clock and a timed batch is many calls. A candidate that
+# takes over its worker's loop could spread a batch over several cores: the
+# same algorithm measured 0.50 outside docker and 0.76 to 0.81 inside it, where
+# a container had two CPUs. Each worker's container is now confined to one CPU
+# by cpuset. Docker only: the subprocess sandbox cannot confine anything.
+
+# The fast target's algorithm, byte for byte.
+_SAME_ALGORITHM = r'''
+import json
+import math
+import os
+import sys
+import time
+from typing import Any
+
+
+def sum_of_divisors(n: int) -> int:
+    if n <= 0:
+        return 0
+    total = 0
+    sqrt_n = int(math.isqrt(n))
+    for i in range(1, sqrt_n + 1):
+        if n % i == 0:
+            total += i
+            if i != n // i:
+                total += n // i
+    return total
+
+
+def benchmark(n: int = 10_000, repetitions: int = 5) -> float:
+    times: list[float] = []
+    for _ in range(repetitions):
+        start = time.perf_counter()
+        sum_of_divisors(n)
+        times.append(time.perf_counter() - start)
+    return sum(times) / len(times)
+'''
+
+# It replaces the worker's _plain_batch by one that hands three quarters of
+# every batch to forked helper processes running the same function.
+_BATCH_OVER_FORKED_HELPERS = _SAME_ALGORITHM + r'''
+
+_HELPERS: int = 3
+_links: list[tuple[int, Any]] = []
+
+
+def _serve_helper(rfd: int, wfd: int) -> None:
+    rf = os.fdopen(rfd, "rb")
+    while True:
+        line = rf.readline()
+        if not line:
+            os._exit(0)
+        answers = [sum_of_divisors(n) for n in json.loads(line)]
+        os.write(wfd, json.dumps(answers).encode() + b"\n")
+
+
+def _start_helpers() -> None:
+    for _ in range(_HELPERS):
+        to_r, to_w = os.pipe()
+        from_r, from_w = os.pipe()
+        if os.fork() == 0:
+            for fd in range(0, 256):
+                if fd not in (to_r, from_w):
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
+            try:
+                _serve_helper(to_r, from_w)
+            finally:
+                os._exit(0)
+        os.close(to_r)
+        os.close(from_w)
+        _links.append((to_w, os.fdopen(from_r, "rb")))
+
+
+def _batch(fn: Any, calls: list[list[Any]]) -> dict[str, Any]:
+    count = len(calls)
+    if count < 8 or fn is not sum_of_divisors:
+        return {"ok": [fn(*args) for args in calls]}
+    size = -(-count // (len(_links) + 1))
+    chunks = [calls[start:start + size] for start in range(0, count, size)]
+    used = list(zip(_links, chunks[1:]))
+    for (to_w, _), chunk in used:
+        os.write(to_w, json.dumps([args[0] for args in chunk]).encode() + b"\n")
+    values: list[Any] = [sum_of_divisors(args[0]) for args in chunks[0]]
+    for (_, from_r), _chunk in used:
+        values.extend(json.loads(from_r.readline()))
+    return {"ok": values}
+
+
+if os.path.basename(sys.argv[0]) == "_sis_worker.py":
+    _start_helpers()
+    setattr(sys.modules["__main__"], "_plain_batch", _batch)
+'''
+
+# The same in one process: the helpers are threads, each running a
+# sub-interpreter with its own GIL, so no process limit stops it.
+_BATCH_OVER_SUB_INTERPRETERS = _SAME_ALGORITHM + r'''
+import importlib
+import threading
+
+_HELPERS: int = 3
+_links: list[tuple[int, Any]] = []
+
+_HELPER_SOURCE = """
+import json, math, os
+
+def sum_of_divisors(n):
+    if n <= 0:
+        return 0
+    total = 0
+    sqrt_n = int(math.isqrt(n))
+    for i in range(1, sqrt_n + 1):
+        if n % i == 0:
+            total += i
+            if i != n // i:
+                total += n // i
+    return total
+
+rf = os.fdopen(rfd, "rb", closefd=False)
+while True:
+    line = rf.readline()
+    if not line:
+        break
+    os.write(wfd, json.dumps([sum_of_divisors(n) for n in json.loads(line)]).encode() + b"\\n")
+"""
+
+
+def _start_helpers() -> None:
+    interpreters: Any = importlib.import_module("concurrent.interpreters")
+    for _ in range(_HELPERS):
+        to_r, to_w = os.pipe()
+        from_r, from_w = os.pipe()
+        interp = interpreters.create()
+        interp.prepare_main(rfd=to_r, wfd=from_w)
+        threading.Thread(target=interp.exec, args=(_HELPER_SOURCE,), daemon=True).start()
+        _links.append((to_w, os.fdopen(from_r, "rb")))
+
+
+def _batch(fn: Any, calls: list[list[Any]]) -> dict[str, Any]:
+    count = len(calls)
+    if count < 8 or fn is not sum_of_divisors:
+        return {"ok": [fn(*args) for args in calls]}
+    size = -(-count // (len(_links) + 1))
+    chunks = [calls[start:start + size] for start in range(0, count, size)]
+    used = list(zip(_links, chunks[1:]))
+    for (to_w, _), chunk in used:
+        os.write(to_w, json.dumps([args[0] for args in chunk]).encode() + b"\n")
+    values: list[Any] = [sum_of_divisors(args[0]) for args in chunks[0]]
+    for (_, from_r), _chunk in used:
+        values.extend(json.loads(from_r.readline()))
+    return {"ok": values}
+
+
+if os.path.basename(sys.argv[0]) == "_sis_worker.py":
+    _start_helpers()
+    setattr(sys.modules["__main__"], "_plain_batch", _batch)
+'''
+
+
+@pytest.fixture
+def docker_sandbox(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    if not _docker_ready():
+        pytest.skip("docker or the sis-gauntlet image is not available")
+    monkeypatch.setenv("SIS_SANDBOX", "docker")
+    config.reset_config_cache()
+    yield
+    config.reset_config_cache()
+
+
+@pytest.mark.parametrize("takeover", [_BATCH_OVER_FORKED_HELPERS, _BATCH_OVER_SUB_INTERPRETERS],
+                         ids=["forked-helpers", "sub-interpreters"])
+def test_a_batch_spread_over_several_cores_is_not_measured_as_speed(
+    docker_sandbox: None, takeover: str,
+) -> None:
+    spec = gauntlet.default_contract()
+    fast = (PROJECT_ROOT / str(spec.stub_candidate_path)).read_text(encoding="utf-8")
+    result = gauntlet.validate(takeover, _BASELINE, baseline_source=fast)
+    assert not result.passed, f"several cores were measured as speed: {result.reason!r}"
+    # On one CPU the helpers only cost time: it measured 1.11 to 1.18.
+    assert result.reason.startswith(("no improvement", "benchmark inconclusive")), result.reason
+    assert "one CPU per worker" in result.reason
+
+
+def test_the_benchmarks_workers_get_one_cpu_each_and_swap_them_halfway(
+    docker_sandbox: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from sis import sandbox_worker
+
+    started: list[tuple[str, int | None]] = []
+    moved: list[tuple[str, int]] = []
+    real_start = sandbox_worker.SandboxWorker.start
+    real_confine = sandbox_worker.SandboxWorker.confine
+
+    def start(worker: Any) -> Any:
+        started.append((worker._source, worker.cpu))
+        return real_start(worker)
+
+    def confine(worker: Any, cpu: int) -> None:
+        moved.append((worker._source, cpu))
+        real_confine(worker, cpu)
+
+    monkeypatch.setattr(sandbox_worker.SandboxWorker, "start", start)
+    monkeypatch.setattr(sandbox_worker.SandboxWorker, "confine", confine)
+    spec = gauntlet.default_contract()
+    baseline = (PROJECT_ROOT / spec.target_path).read_text(encoding="utf-8")
+    fast = (PROJECT_ROOT / str(spec.stub_candidate_path)).read_text(encoding="utf-8")
+    result = gauntlet.validate(fast, _BASELINE, baseline_source=baseline)
+    assert result.passed, result.reason
+
+    # The interface gate's worker is not confined; the benchmark's two are.
+    assert started[0] == (fast, None)
+    (_, candidate_cpu), (_, baseline_cpu) = started[1:]
+    assert candidate_cpu is not None and baseline_cpu is not None
+    assert candidate_cpu != baseline_cpu
+    assert {candidate_cpu, baseline_cpu} <= set(gauntlet._sandbox_cpus())
+    assert moved == [(fast, baseline_cpu), (baseline, candidate_cpu)]
+
+
+def test_a_cpu_the_sandbox_cannot_give_is_not_blamed_on_the_candidate(
+    docker_sandbox: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The candidate's worker is the first to be started on its CPU. If docker
+    # refuses that CPU, a trusted worker is tried there before anyone is blamed.
+    monkeypatch.setattr(gauntlet, "benchmark_cpus", lambda cpus, siblings: (999, 998))
+    spec = gauntlet.default_contract()
+    baseline = (PROJECT_ROOT / spec.target_path).read_text(encoding="utf-8")
+    fast = (PROJECT_ROOT / str(spec.stub_candidate_path)).read_text(encoding="utf-8")
+    result = gauntlet.validate(fast, _BASELINE, baseline_source=baseline)
+    assert not result.passed
+    assert result.reason.startswith("harness: a benchmark worker cannot be confined to CPU 999")
+    assert gate_from_reason(result.reason) == "harness"
+

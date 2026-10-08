@@ -10,14 +10,17 @@ import math
 import random
 import statistics
 
+from sis import gauntlet
 from sis.episodic import gate_from_reason, neutral_status
 from sis.gauntlet import (
     BenchmarkVerdict,
     _timed_work,
     _TimedWork,
     _UnusedInputs,
+    benchmark_cpus,
     benchmark_decision,
 )
+from sis.sandbox_worker import WorkerError
 
 MARGIN = 0.90
 
@@ -267,4 +270,77 @@ def test_inputs_met_before_the_benchmark_are_never_timed() -> None:
     work, _ = _work(2_000, per_call=0.0, met=range(1, 1_501))
     timed = _timed(work)
     assert timed and min(timed) > 1_500
+
+
+# --- OMNI-154 (KNOWN_ISSUES H9): one CPU for each benchmark worker ---------------
+
+
+def _cores(*groups: tuple[int, ...]) -> dict[int, frozenset[int]]:
+    return {cpu: frozenset(group) for group in groups for cpu in group}
+
+
+def test_the_two_workers_get_different_cpus() -> None:
+    # Where the host does not know its hyperthreads: the highest and the lowest.
+    assert benchmark_cpus(range(4), {}) == (3, 0)
+    assert benchmark_cpus(range(12), {}) == (11, 0)
+    assert benchmark_cpus([2, 3], {}) == (3, 2)
+
+
+def test_the_two_cpus_are_on_different_cores_where_the_host_can_tell() -> None:
+    # The two usual numberings of two cores with two threads each.
+    assert benchmark_cpus(range(4), _cores((0, 2), (1, 3))) == (3, 2)
+    assert benchmark_cpus(range(4), _cores((0, 1), (2, 3))) == (3, 1)
+    # One core, two threads: there is no other core to go to.
+    assert benchmark_cpus(range(2), _cores((0, 1))) == (1, 0)
+
+
+def test_a_single_cpu_is_shared_and_none_is_an_error() -> None:
+    assert benchmark_cpus([5], {}) == (5, 5)
+    try:
+        benchmark_cpus([], {})
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("no CPU must not pass for a confinement")
+
+
+class _FakeWorker:
+    def __init__(self, cpu: int | None, *, fails: bool = False) -> None:
+        self.cpu, self.fails = cpu, fails
+        self.log: list[object] = []
+
+    def confine(self, cpu: int) -> None:
+        if self.fails:
+            raise WorkerError("docker update failed: no such container")
+        self.log.append(("confine", cpu))
+        self.cpu = cpu
+
+    def call(self, calls: list[list[object]], *, timeout_s: float) -> object:
+        self.log.append(("call", list(calls)))
+        return object()
+
+
+def test_halfway_each_worker_moves_to_the_others_cpu_before_the_clock_runs_again() -> None:
+    cand, base = _FakeWorker(3), _FakeWorker(0)
+    gauntlet._swap_cpus(cand, base, deadline=float("inf"))
+    assert (cand.cpu, base.cpu) == (0, 3)
+    # One untimed, empty exchange each after the move.
+    assert cand.log == [("confine", 0), ("call", [])]
+    assert base.log == [("confine", 3), ("call", [])]
+
+
+def test_workers_that_are_not_confined_or_share_a_cpu_do_not_swap() -> None:
+    for cand, base in ((_FakeWorker(None), _FakeWorker(None)), (_FakeWorker(5), _FakeWorker(5))):
+        gauntlet._swap_cpus(cand, base, deadline=float("inf"))
+        assert cand.log == [] and base.log == []
+
+
+def test_a_swap_that_fails_is_the_harnesss_fault() -> None:
+    try:
+        gauntlet._swap_cpus(_FakeWorker(3, fails=True), _FakeWorker(0), deadline=float("inf"))
+    except gauntlet._WorkerFailed as failed:
+        assert failed.result.reason.startswith("harness: the benchmark's workers could not swap")
+        assert gate_from_reason(failed.result.reason) == "harness"
+    else:
+        raise AssertionError("a failed swap went unreported")
 
