@@ -28,7 +28,7 @@ This document has four parts:
 | Where artifacts land | Jira `TES`, GitHub `ozumpe/testrun` (PRs against `develop`) |
 | Spend brakes | `SIS_BUDGET_USD=1.00` in the loop; an AWS Budget alarm (default $25/month) on the account |
 | Cost | about $0.20 an hour while the instance runs |
-| Latest | run #6 (`v0.3.5`, `roman` built at the first attempt), 2026-09-30 — see [History](#history) |
+| Latest | run #7 (`v0.3.6`, `roman` built again; a second loop ran beside it, M28), 2026-09-30 — see [History](#history) |
 
 ---
 
@@ -398,6 +398,18 @@ syncs. `pause` idles the loop without exiting; to stop it outright, reattach
 Ctrl-C, and wait for `[loop] stopped` (the loop finishes the cycle in flight
 first). Closing the tmux session or its pane also stops the loop, the same way,
 from `v0.3.3`; before that it kills it on the spot.
+
+**One loop at a time, and no `nohup`.** tmux already keeps the loop alive when
+a session drops; `nohup` inside it only hides the loop from the stop above
+(run #7). Before starting another run, check that nothing is left:
+
+```bash
+pgrep -af 'main.py'      # must print nothing
+```
+
+Two loops on one box would not share the spend cap (M28). From the release
+after `v0.3.6` a second `main.py` refuses to start (exit 3) and names the
+running one (OMNI-151).
 
 **The operator console** stays bound to loopback on the box and is reached
 over port forwarding:
@@ -844,3 +856,14 @@ second operator, a second node.
   call. Artifacts in
   `s3://sis-first-run-artifacts-696644743351/runs/20260930-1818/`
   (`-1825` is its by-hand copy, L48).
+- **2026-09-30 — run #7, on `v0.3.6`, contracts `sum_of_divisors` and
+  `roman`**. `sum_of_divisors` (re-seeded) took two steps, 276 µs to 2 µs
+  (testrun #20), then one more feature (#21). `roman` was built again at the
+  first attempt (#22, $0.0315), merged, and after three "already built"
+  cycles the loop stopped as converged. The v0.3.6 fixes held: "Build the roman
+  feature" in Jira, nothing filed by the "already built" cycles, and no model
+  recorded for them. But the `sum_of_divisors` loop, started with `nohup` inside
+  tmux, survived the attempt to stop it. It ran beside `roman` from 23:04, and
+  after #21 merged it spent $0.0282 on a rejected cycle (TES-155 to 158). The two
+  loops did not share the spend cap (M28, OMNI-151). Artifacts in
+  `s3://sis-first-run-artifacts-696644743351/runs/20260930-2252/` and `-2304/`.

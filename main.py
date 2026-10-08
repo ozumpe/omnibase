@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import ray
 
-from sis import config, contract, episodic, gauntlet, loop, org
+from sis import config, contract, episodic, gauntlet, loop, org, run_lock
 
 
 def contract_banner(contract_name: str | None) -> str:
@@ -155,10 +155,19 @@ def main() -> None:
     gauntlet.ensure_canary_allows_proposer(canary_backend)
     print(contract_banner(contract_name), file=sys.stderr)
 
+    # One loop per box (OMNI-151, M28), before any cluster, actor or spend: two
+    # would each enforce the spend cap alone. Held until this function returns.
+    try:
+        lock = run_lock.acquire()
+    except run_lock.AlreadyRunning as exc:
+        print(f"[sis] {exc}", file=sys.stderr)
+        raise SystemExit(3) from None
+
     if "--loop" in sys.argv:
         run_server_loop(canary_backend, contract_name)
     else:
         run_org_cycle(contract_name, canary_backend)
+    lock.close()
 
 
 if __name__ == "__main__":
