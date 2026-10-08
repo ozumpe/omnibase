@@ -1348,6 +1348,120 @@ _WINDOW_OVER_ROUND_TRIP = 20
 _MAX_BATCH_CALLS = 20_000
 # Differential inputs per exchange: keeps replies small without a round trip each.
 _DIFF_CHUNK = 50
+# Draws in a row that may repeat a used input before the oracle's input range
+# counts as used up (OMNI-152): this many, or a few times the number of inputs
+# already used when that is more, so the last unused inputs of a small range are
+# still found. Bounded, so a range that is used up costs a fixed amount to see.
+_REDRAW_LIMIT = 100
+_REDRAWS_PER_USED = 8
+_REDRAW_CEILING = 200_000
+
+
+def _hashable(value: Any) -> Any:
+    """A JSON value as something a set can hold, equal exactly when the values are."""
+    if isinstance(value, list):
+        return tuple(_hashable(item) for item in value)
+    if isinstance(value, dict):
+        return frozenset((key, _hashable(item)) for key, item in value.items())
+    return value
+
+
+class _UnusedInputs:
+    """One benchmark's inputs, none of them given out twice (OMNI-152, H7).
+
+    Drawing a fresh input each time is not enough. Once the benchmark asks for
+    more inputs than the oracle's range holds, most draws repeat an earlier
+    one, and a candidate under ``functools.cache`` answers those from a
+    dictionary: it measures faster without being faster. ``sum_of_divisors``
+    draws from 19,999 values, and a fast baseline asked for 99 batches of 1024.
+
+    So every input is remembered and a repeat is drawn again. Inputs are
+    compared with ``==``, at least as coarsely as any cache could key them: a
+    dict keys ``1``, ``1.0`` and ``True`` alike, so here they are one input. A
+    range that runs short gives fewer inputs, never a repeated one.
+    """
+
+    def __init__(self, draw: Callable[[random.Random], list[Any]]) -> None:
+        self._draw = draw
+        self._used: set[Any] = set()
+
+    def use(self, args: list[Any]) -> bool:
+        """Mark *args* as used. False if they already were."""
+        key = _hashable(args)
+        if key in self._used:
+            return False
+        self._used.add(key)
+        return True
+
+    def take(self, rng: random.Random, count: int) -> list[list[Any]]:
+        """Up to *count* inputs never used before: fewer once the range runs short."""
+        taken: list[list[Any]] = []
+        repeats = 0
+        while len(taken) < count:
+            args = self._draw(rng)
+            if self.use(args):
+                taken.append(args)
+                repeats = 0
+                continue
+            repeats += 1
+            if repeats >= min(max(_REDRAW_LIMIT, _REDRAWS_PER_USED * len(self._used)),
+                              _REDRAW_CEILING):
+                break
+        return taken
+
+
+@dataclass(frozen=True)
+class _TimedWork:
+    """What the benchmark will time: one batch of unused inputs per sample."""
+
+    batches: list[list[list[Any]]]  # empty when the range cannot give each sample one input
+    batch: int                      # inputs per batch
+    capped: bool                    # the oracle's range, not the timing, set the batch
+    found: int                      # unused inputs found for timing
+
+
+def _timed_work(
+    unused: _UnusedInputs,
+    rng: random.Random,
+    *,
+    samples: int,
+    min_batch: int,
+    window: float,
+    time_baseline: Callable[[list[list[Any]]], float],
+    max_batch: int = _MAX_BATCH_CALLS,
+) -> _TimedWork:
+    """Choose the timed batches: sized by time, filled only with unused inputs.
+
+    The batch doubles until *time_baseline* (one exchange with the baseline's
+    worker, in seconds) takes at least *window* for a batch of that size. Every
+    input, the sizing ones included, comes from *unused*, so none is used twice
+    (OMNI-152, H7).
+
+    The timed inputs are set aside **before** each sizing exchange. Sizing
+    first would let a small range be spent on sizing and leave the timing with
+    nothing. When the range cannot fill the size the timing asks for, the batch
+    is what the inputs found can fill: smaller, never repeated.
+    """
+    batch = max(1, min_batch)
+    pool = unused.take(rng, samples * batch)
+    capped = len(pool) < samples * batch
+    while not capped and batch < max_batch:
+        probe = unused.take(rng, batch)
+        if len(probe) < batch:
+            pool += probe  # never sent to a worker, so still unused
+            capped = True
+            break
+        if time_baseline(probe) >= window:
+            break
+        batch = min(batch * 2, max_batch)
+        pool += unused.take(rng, samples * batch - len(pool))
+        capped = len(pool) < samples * batch
+    batch = min(batch, len(pool) // samples)
+    return _TimedWork(
+        batches=[pool[index * batch:(index + 1) * batch] for index in range(samples)]
+        if batch else [],
+        batch=batch, capped=capped, found=len(pool),
+    )
 
 
 def _host_oracle(spec: Contract) -> Any:
@@ -1387,7 +1501,13 @@ def _gate_differential_benchmark(ctx: _GateContext) -> Result | None:
         inputs, many times, deciding from the paired ratios via
         :func:`benchmark_decision` (OMNI-41). Fresh inputs matter as much as
         pairing: a fixed workload timed repeatedly measures a cache, not an
-        algorithm.
+        algorithm. **No input is timed twice, and none is timed after a worker
+        has met it** (OMNI-152, :class:`_UnusedInputs`, :func:`_timed_work`):
+        not in another timed batch, not in a sizing exchange, and not in (a).
+        When the oracle's input range is too small for the batch the timing
+        asks for, the batch shrinks instead, and each exchange's fixed cost
+        weighs more. A range that cannot give every sample one unused input is
+        the exam's fault, reported as ``harness:``.
 
     **The candidate never shares a process with the clock, the reference or the
     verdict** (OMNI-45, closes KNOWN_ISSUES H2). Candidate and baseline each run
@@ -1515,8 +1635,10 @@ def _judge(ctx: _GateContext, oracle: Any, cand: Any, base: Any,
     samples = getattr(spec, "bench_samples", DEFAULT_BENCH_SAMPLES)
     min_batch = getattr(spec, "bench_batch", DEFAULT_BENCH_BATCH)
     confidence = getattr(spec, "bench_confidence", DEFAULT_BENCH_CONFIDENCE)
-    # Seeded so a verdict is reproducible, and reported on rejection — the same
-    # convention the invariant gate uses.
+    # Seeded, and reported on rejection — the same convention the invariant
+    # gate uses. The seed fixes the order of the draws. Which of them are timed
+    # also depends on (a)'s inputs, which come from system entropy and are
+    # skipped here, so a seed alone does not replay a benchmark's inputs.
     bench_seed = ctx.seed
 
     def reference(args: list[Any]) -> Any:
@@ -1527,9 +1649,14 @@ def _judge(ctx: _GateContext, oracle: Any, cand: Any, base: Any,
         # for all three, and each worker decodes its own copy (M10 by construction).
         return list(as_wire(list(oracle.random_input(rng))))
 
-    # (a) Differential correctness, inputs from system entropy.
+    unused = _UnusedInputs(fresh)
+
+    # (a) Differential correctness, inputs from system entropy. The candidate
+    # has met these, so none of them is timed later.
     rng = random.Random()
     inputs = [fresh(rng) for _ in range(trials)]
+    for args in inputs:
+        unused.use(args)
     for start in range(0, len(inputs), _DIFF_CHUNK):
         chunk = inputs[start:start + _DIFF_CHUNK]
         reply = _exchange(cand, chunk, deadline, "candidate")
@@ -1552,20 +1679,34 @@ def _judge(ctx: _GateContext, oracle: Any, cand: Any, base: Any,
     round_trip = trips[len(trips) // 2]
     window = _WINDOW_OVER_ROUND_TRIP * round_trip
     bench_rng = random.Random(bench_seed)
-    batch = max(1, min_batch)
-    while batch < _MAX_BATCH_CALLS:
-        # Fresh inputs, never timed again: a cache must not get a second look.
-        if _exchange(base, [fresh(bench_rng) for _ in range(batch)], deadline,
-                     "baseline").elapsed_s >= window:
-            break
-        batch = min(batch * 2, _MAX_BATCH_CALLS)
-
-    # The contract's own BENCH_INPUTS are timed too, ONCE each, spread among the
-    # fresh batches: the oracle chose them for shape coverage random_input lacks
-    # (sort: already-sorted, reverse-sorted, heavy-duplicate).
-    work = [[fresh(bench_rng) for _ in range(batch)] for _ in range(samples)]
-    for args in oracle.BENCH_INPUTS:
-        work[bench_rng.randrange(len(work))].append(list(as_wire(list(args))))
+    # The contract's own BENCH_INPUTS are timed too, at most once each, spread
+    # among the fresh batches: the oracle chose them for shape coverage
+    # random_input lacks (sort: already-sorted, reverse-sorted, heavy-duplicate).
+    # Claimed before any fresh draw, so none repeats one. One the candidate met
+    # in (a) is left out: its answer was checked there, and it is not unused.
+    shapes = [args for args in (list(as_wire(list(given))) for given in oracle.BENCH_INPUTS)
+              if unused.use(args)]
+    timed = _timed_work(
+        unused, bench_rng, samples=samples, min_batch=min_batch, window=window,
+        time_baseline=lambda probe: float(
+            _exchange(base, probe, deadline, "baseline").elapsed_s),
+    )
+    if not timed.batches:
+        # The exam's fault, not the candidate's: no candidate can cause or cure
+        # it. A human has to widen the oracle's random_input.
+        return Result(
+            passed=False,
+            reason=f"harness: the contract oracle's random_input gives too few distinct "
+                   f"inputs to benchmark — {timed.found} unused found, and {samples} samples "
+                   f"need one each, since no input is timed twice (seed={bench_seed})",
+            seed=bench_seed,
+        )
+    batch = timed.batch
+    sized = f"{batch} call(s) each" + (
+        ", capped by the oracle's input range" if timed.capped else "")
+    work = timed.batches
+    for args in shapes:
+        work[bench_rng.randrange(len(work))].append(args)
 
     pairs: list[tuple[float, float]] = []
     base_calls = 0
@@ -1608,8 +1749,8 @@ def _judge(ctx: _GateContext, oracle: Any, cand: Any, base: Any,
         return None
     detail = (
         f"candidate ~{candidate_latency:.6f}s vs baseline {measured_baseline:.6f}s "
-        f"per call (need ≤ {max_ratio:.0%}); {decision.describe()} of {batch} call(s) "
-        f"each; seed={bench_seed}"
+        f"per call (need ≤ {max_ratio:.0%}); {decision.describe()} of {sized}; "
+        f"seed={bench_seed}"
     )
     if decision.verdict is BenchmarkVerdict.REJECT:
         return Result(passed=False, reason=f"no improvement: {detail}",

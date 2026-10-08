@@ -81,7 +81,7 @@ internal target before it models anything external.
     default). **The benchmark never decides on one comparison** (OMNI-41):
     candidate and baseline are timed back-to-back on the *same fresh* input
     (alternating order, seeded, never reused — a replayed workload rewarded
-    `functools.cache`, not speed), plus each `BENCH_INPUTS` entry timed once
+    `functools.cache`, not speed), plus each `BENCH_INPUTS` entry timed at most once
     for shape coverage. `gauntlet.benchmark_decision` (pure) decides on
     **total cost** — `sum(candidate)/sum(baseline)` with a paired-bootstrap
     interval — never a per-input median (a candidate fast on typical inputs
@@ -96,9 +96,26 @@ internal target before it models anything external.
     `specs/`, and every exchange is timed on the host and decoded from JSON.
     Exchanges carry a batch of fresh inputs, sized by time so the baseline's
     batch takes ~20 pipe round trips (`_WINDOW_OVER_ROUND_TRIP`; ~20 µs a round
-    trip in the subprocess sandbox, ~350 µs in docker on a Mac). The per-call
-    JSON cost (~1 µs for an int) cannot be amortised and dilutes a gain rather
-    than invents one, so µs-scale differences are resolved poorly — accepted.
+    trip in the subprocess sandbox, ~350 µs in docker on a Mac). **No input
+    is timed twice, and none is timed after a worker has met it** (OMNI-152,
+    H7 fixed 2026-10-08; `gauntlet._UnusedInputs`, `gauntlet._timed_work`):
+    not in another timed batch, a sizing exchange or `BENCH_INPUTS`, and not
+    after the candidate met it in the differential phase. Inputs are compared
+    with `==`, at least as coarsely as a cache could key them. A fresh draw
+    each time was not enough: 99 batches of 1024 from `sum_of_divisors`'
+    19,999 values repeated four calls in five, and a cache measured as speed
+    (AWS run #7 ran at that size). The timed inputs are set aside before each
+    sizing exchange. When the oracle's range cannot fill the batch the timing
+    asks for, the batch shrinks (`capped by the oracle's input range` in the
+    reason). A range that cannot give every sample one unused input is the
+    exam's fault, a `harness:` verdict that pages a human: with 300
+    differential trials, a range under about 300 values.
+    The per-call
+    JSON cost (~1 µs for an int) cannot be amortised. While both workers pay
+    it, it dilutes a gain rather than invents one, so µs-scale differences are
+    resolved poorly — accepted. **A candidate can make its own worker's share
+    cheaper** (H8, OMNI-153, open): the same algorithm plus a patched
+    `json.dumps` measured 0.78 against a fast baseline.
     Every timed answer is checked against the baseline's, and differences
     against the reference, so a candidate cannot be wrong only while timed. It
     can still contend for CPU during the baseline's batch (bounded by docker's
@@ -754,17 +771,22 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   **Phase 0 is built:** `sis/sandbox_worker.py` (OMNI-129) serves a candidate
   hot from the sandbox. It is tested in both sandbox modes, including that a
   docker candidate cannot reach the network, Ray or the host's environment.
-- 1047 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
+- 1064 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
   Ray-Serve-integration tests run separately, see Operational quick reference
-  above; 1109 total, recounted 2026-09-30 — corrected 2026-09-26, a multi-dimension review found the
+  above; 1126 total, recounted 2026-10-08 — corrected 2026-09-26, a multi-dimension review found the
   previously-documented 616/678 stale); `ruff`/`mypy --strict`/`pytest` clean;
   CI green; `feature → develop → main` enforced by both the client-side
   pre-push hook and active server-side rulesets.
-- **One known test flake** — re-run before chasing it:
+- **Two known test flakes** — re-run before chasing either:
   `test_a_drafted_skeleton_stages_without_touching_specs` (under `-n auto`)
   is **test-only** — [OMNI-42](https://olafzumpe.atlassian.net/browse/OMNI-42)
   (Low). It compares two `specs/` listings and races another worker creating
-  `specs/__pycache__`; `stage()` never writes into `specs/`. (The Serve
+  `specs/__pycache__`; `stage()` never writes into `specs/`.
+  `test_correct_but_not_faster_is_rejected` is **not** test-only: on a heavily
+  loaded machine the benchmark can accept its candidate, which is a few
+  percent slower than the baseline (M7,
+  [OMNI-88](https://olafzumpe.atlassian.net/browse/OMNI-88), won't-fix for
+  now). CI did so once, on 2026-10-08, through a test with the same candidate. (The Serve
   flake in `test_promotion_makes_the_candidate_the_new_baseline` was not a
   replica race but the 5% default canary weight — fixed in #110, see
   "Writing a Serve test" above.)
@@ -790,7 +812,7 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
 **Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L
 severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
 the IDs in commits/PRs. **Open after a 2026-09-26 multi-dimension review with
-adversarial verification: H3, M12–M14, M16, M20–M23,
+adversarial verification: H3, H8 (found 2026-10-08, OMNI-153), M12–M14, M16, M20–M23,
 L16–L20, L22, L25–L32, L35–L43; plus L46 from the second AWS run and L48–L50
 from the fifth (OMNI-143–145)** (M7 is won't-fix for now; H4, M10, M15, M19, L21, L23
 and L24 fixed 2026-09-26, OMNI-46/47/51/49/61/62; H5, H6, M24 and L44, found
@@ -800,7 +822,8 @@ OMNI-57/126; M26, the third run's conflicting second PR, and M27, the fourth run
 breaker trip on a converged target, fixed 2026-09-29, OMNI-136/138; H2, M8, M9
 and M11 fixed the same day, OMNI-45/146, and M17, L15 and L33 with OMNI-147,
 OMNI-56/64/78; L34 and L51–L53, the last three from the sixth run, fixed
-2026-09-30, OMNI-79/148–150; M28, from the seventh, the same day, OMNI-151). The headline, before trusting any
+2026-09-30, OMNI-79/148–150; M28, from the seventh, the same day, OMNI-151;
+H7, the benchmark's repeated inputs, fixed 2026-10-08, OMNI-152). The headline, before trusting any
 gauntlet verdict: every gate but SLO now judges its candidate from outside the
 candidate's process (H2, M8), and the exam files are protected (M9). **The SLO
 gate still runs its candidate in-process** (L42,

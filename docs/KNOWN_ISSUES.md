@@ -39,6 +39,7 @@ reference with no link target below.
 > | H4 | [OMNI-46](https://olafzumpe.atlassian.net/browse/OMNI-46) (epic OMNI-43) — **fixed** |
 > | M10 | [OMNI-47](https://olafzumpe.atlassian.net/browse/OMNI-47) (epic OMNI-43) — **fixed** |
 > | H3 | [OMNI-48](https://olafzumpe.atlassian.net/browse/OMNI-48) (epic [OMNI-44](https://olafzumpe.atlassian.net/browse/OMNI-44)) |
+> | H8 | [OMNI-153] (epic OMNI-43), found 2026-10-08 |
 > | M19 | [OMNI-49](https://olafzumpe.atlassian.net/browse/OMNI-49) (epic OMNI-44) — **fixed** (by refusal; isolation is H3) |
 > | M20, M21 | [OMNI-50](https://olafzumpe.atlassian.net/browse/OMNI-50) (epic OMNI-44) |
 > | M15 | [OMNI-51](https://olafzumpe.atlassian.net/browse/OMNI-51) — **fixed** |
@@ -85,6 +86,29 @@ reference with no link target below.
   sandbox over stdio, and tests show a docker candidate cannot reach Ray, the
   network or the host's environment. Moving green onto it is OMNI-48, so H3
   stays open, and so does the refusal.
+
+- [OMNI-153] **H8 — A candidate can make its own worker's reply encoding cheaper,
+  so the same speed measures as faster** *(found 2026-10-08 by the adversarial
+  review of OMNI-152; reproduced 3 of 3 here and 7 of 7 in the review, also on
+  the gate before OMNI-152)* — the worker loop
+  (`sis/sandbox_worker_main.py`) is trusted code, but it runs in the
+  candidate's interpreter. For every call, `_encodable` runs
+  `json.dumps(value)` once only to test that the answer can cross the pipe. A
+  candidate that replaces `json.dumps` in its own process (returning `""` for
+  an int) makes that test free for its worker while the baseline's still pays
+  it. With the fast `sum_of_divisors` as the baseline, the same algorithm plus
+  that patch is accepted at a total-time ratio of 0.78 to 0.79; the same code
+  without it is rejected at 0.996. `mypy --strict` does not see it (`setattr`),
+  and nothing on disk changes, so the tamper check does not either. It matters
+  for calls that cost about as much as the protocol (a microsecond or two); for
+  a 200 µs call the encoding is 1%. The principle is wider than `json.dumps`:
+  anything the loop does in the candidate's process, the candidate can make
+  cheaper. So the claim that the per-call JSON cost "dilutes a gain rather than
+  invents one" holds only while both workers pay the same. Not tried in docker;
+  the same file runs in the container. Fix direction: encode each reply once,
+  in one C call, with the per-answer path only as the fallback; then measure
+  what a candidate can still save by replacing `_call` or `_send`, and either
+  close it or state the remainder against the margin.
 
 ## Medium
 
@@ -585,6 +609,18 @@ any long-lived cluster exists.
   goes through the canary and human review — and the obvious fix (trimming
   the ratio) would reopen the size-conditional gaming hole OMNI-41 closed.
   Re-measure once [OMNI-45] rebuilds the measurement, before deciding to fix.
+  **Seen in CI (2026-10-08, PR #159):** on a loaded runner (`-n auto`) the gate
+  accepted a candidate that is not at the margin. The naive sum written as a
+  generator, which measures 1.06 to 1.09 times the baseline on a quiet
+  machine, came out at 0.84 with its whole interval under 0.90. The same
+  candidate under 18 busy processes on a Mac ranged from 0.92 to 1.21 over 60
+  runs, with intervals about 0.22 wide, before and after OMNI-152 alike. So the
+  harm is no longer limited to a near-margin candidate when the machine is
+  heavily loaded. The AWS box runs one loop and little else (M28), and a human
+  merge still follows every accept. The two tests whose candidates sat that
+  close to the baseline for another reason (a forged verdict, a cache) now use
+  a candidate half the baseline's speed; `test_correct_but_not_faster_is_rejected`
+  keeps the near-baseline one, and is the test that fails when this happens.
 
 - [OMNI-89] **L6 — Preflight doesn't verify the PAT's Pull-requests scope.** Not fixable
   in our code. `check_connections.py::check_github` confirms repo access
@@ -604,6 +640,41 @@ any long-lived cluster exists.
   front.
 
 ## Resolved
+
+- [OMNI-152] **H7 — The benchmark timed repeated inputs once its batches outgrew
+  the oracle's input range, so a memoised candidate could pass** *(found
+  2026-09-30 running the suite on an overloaded machine; the same batch size is
+  in AWS run #7's log)*. It reopened the hole OMNI-41 closed. Since OMNI-45 the
+  benchmark sizes each exchange by time, and nothing bounded the batch against
+  the number of inputs the oracle can produce. `sum_of_divisors` draws from
+  19,999 values. A fast baseline, or a slow pipe (docker, or a loaded machine),
+  asks for 99 batches of 1024: about 101,000 draws, so four timed calls in five
+  repeated an earlier input. A candidate under `functools.cache` answers those
+  from a dictionary and measures faster without being faster. OMNI-41's rule was
+  "fresh inputs, never reused"; each draw was fresh, but the set of draws was
+  not. Run #7's console shows `99 paired samples of 1024 call(s) each` on the
+  box, so the current code plus a cache could have been accepted there.
+  **Fixed 2026-10-08 (OMNI-152):** no input is timed twice, and none is timed
+  after a worker has met it (`gauntlet._UnusedInputs`, `gauntlet._timed_work`).
+  Every input is remembered and a repeat is drawn again; inputs are compared
+  with `==`, at least as coarsely as a cache could key them. That covers the
+  timed batches, the sizing exchanges, the contract's `BENCH_INPUTS` and the
+  inputs the candidate met in the differential phase (a `BENCH_INPUTS` entry it
+  met there is not timed). The timed inputs are set aside before each sizing
+  exchange, so sizing cannot use up a small range. When the range cannot fill
+  the batch the timing asks for, the batch shrinks (the reason says `capped by
+  the oracle's input range`), and each exchange's fixed cost weighs more.
+  `sum_of_divisors` with a fast baseline is now timed at up to 198 calls a
+  batch, not 1024. A range that cannot give each of the 99 samples one unused
+  input is the exam's fault: `harness: the contract oracle's random_input gives
+  too few distinct inputs`, paged and counted like any harness fault. With the
+  default 300 differential trials that means a range under about 300 values.
+  Regression tests: the sizing as a pure function with a scripted baseline; a
+  candidate half the baseline's speed plus a cache, which the old gate measured
+  ten times faster; the invariant read off what the gate sends its workers on
+  the real oracle; and a range too small to time. Five mutants of the fix were
+  each caught. An adversarial review before the merge found the test gap that
+  let the first of them through, and H8.
 
 - [OMNI-151] **M28 — A second loop can start on the same box, and the two do not
   share the spend cap** *(found 2026-09-30 in AWS run #7, `v0.3.6`)*. A
@@ -1450,3 +1521,5 @@ any long-lived cluster exists.
 [OMNI-149]: https://olafzumpe.atlassian.net/browse/OMNI-149
 [OMNI-150]: https://olafzumpe.atlassian.net/browse/OMNI-150
 [OMNI-151]: https://olafzumpe.atlassian.net/browse/OMNI-151
+[OMNI-152]: https://olafzumpe.atlassian.net/browse/OMNI-152
+[OMNI-153]: https://olafzumpe.atlassian.net/browse/OMNI-153
