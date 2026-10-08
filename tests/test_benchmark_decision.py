@@ -11,7 +11,13 @@ import random
 import statistics
 
 from sis.episodic import gate_from_reason, neutral_status
-from sis.gauntlet import BenchmarkVerdict, _UnusedInputs, benchmark_decision
+from sis.gauntlet import (
+    BenchmarkVerdict,
+    _timed_work,
+    _TimedWork,
+    _UnusedInputs,
+    benchmark_decision,
+)
 
 MARGIN = 0.90
 
@@ -138,11 +144,19 @@ def test_a_range_that_runs_short_gives_fewer_inputs_not_repeats() -> None:
     # repeats, which is what a cache was paid for.
     unused = _one_of(50)
     given = [args[0] for args in unused.take(random.Random(7), 1_000)]
-    assert len(set(given)) == len(given)
-    assert 40 <= len(given) <= 50
-    more = [args[0] for args in unused.take(random.Random(8), 1_000)]
-    assert set(more).isdisjoint(given)
-    assert len(given) + len(more) <= 50
+    assert sorted(given) == list(range(1, 51))
+    assert unused.take(random.Random(8), 1_000) == []
+
+
+def test_the_last_unused_inputs_of_a_small_range_are_found() -> None:
+    # 300 values, 200 of them met: 99 are asked for and 100 are left. Giving up
+    # after a fixed 100 repeats in a row lost this about every other time, and
+    # the benchmark then reported a range it could have timed as too small.
+    for seed in range(20):
+        unused = _one_of(300)
+        for met in range(1, 201):
+            unused.use([met])
+        assert len(unused.take(random.Random(seed), 99)) == 99, seed
 
 
 def test_an_input_already_used_elsewhere_is_never_given_out() -> None:
@@ -155,8 +169,10 @@ def test_an_input_already_used_elsewhere_is_never_given_out() -> None:
     assert given and given <= set(range(41, 51))
 
 
-def test_inputs_are_compared_the_way_a_cache_would_key_them() -> None:
-    # functools.cache keys on equality: 1, 1.0 and True are one entry.
+def test_inputs_are_compared_at_least_as_coarsely_as_a_cache_could_key_them() -> None:
+    # A dict keys 1, 1.0 and True alike, so a cache built on one answers all
+    # three from one entry. (functools.cache keeps a lone int apart from 1.0;
+    # being stricter than that costs nothing.)
     unused = _UnusedInputs(lambda rng: [0])
     assert unused.use([1])
     assert not unused.use([1.0])
@@ -164,3 +180,91 @@ def test_inputs_are_compared_the_way_a_cache_would_key_them() -> None:
     assert unused.use([[3, 1, 2], {"k": [1]}])
     assert not unused.use([[3, 1, 2], {"k": [1]}])
     assert unused.use([[1, 2, 3], {"k": [1]}])
+
+
+# --- OMNI-152: the timed batches, sized by time and filled with unused inputs --
+#
+# _timed_work with a scripted baseline, so the sizing loop is pinned without a
+# worker or a clock: the baseline "takes" per_call seconds for each input.
+
+
+def _work(
+    top: int, *, samples: int = 99, min_batch: int = 1, per_call: float = 1.0,
+    window: float = 64.0, met: range = range(0),
+) -> tuple[_TimedWork, list[list[int]]]:
+    unused = _one_of(top)
+    for n in met:
+        unused.use([n])
+    probes: list[list[int]] = []
+
+    def time_baseline(probe: list[list[int]]) -> float:
+        probes.append([args[0] for args in probe])
+        return per_call * len(probe)
+
+    work = _timed_work(unused, random.Random(11), samples=samples, min_batch=min_batch,
+                       window=window, time_baseline=time_baseline)
+    return work, probes
+
+
+def _timed(work: _TimedWork) -> list[int]:
+    return [args[0] for batch in work.batches for args in batch]
+
+
+def test_the_batch_grows_to_the_window_and_no_input_is_used_twice() -> None:
+    work, probes = _work(10**9)
+    assert [len(probe) for probe in probes] == [1, 2, 4, 8, 16, 32, 64]
+    assert (work.batch, work.capped) == (64, False)
+    assert [len(batch) for batch in work.batches] == [64] * 99
+    timed = _timed(work)
+    assert len(set(timed)) == len(timed)
+    assert set(timed).isdisjoint(n for probe in probes for n in probe)
+
+
+def test_a_small_range_caps_the_batch_while_it_is_growing() -> None:
+    # 2,000 values and a baseline so fast the window is never reached: the
+    # batch stops where the inputs do. Doubling by drawing with replacement,
+    # which is H7 itself, fills 99 batches of 32 here, most of them repeats.
+    work, probes = _work(2_000, per_call=0.0)
+    assert work.capped
+    assert work.batch == work.found // 99
+    assert 16 <= work.batch <= 19
+    timed = _timed(work)
+    assert len(timed) == 99 * work.batch
+    assert len(set(timed)) == len(timed)
+    assert set(timed).isdisjoint(n for probe in probes for n in probe)
+
+
+def test_the_timed_inputs_are_set_aside_before_sizing_can_use_them_up() -> None:
+    # 250 values. Set aside first, they fill 99 batches of 2. Sizing first
+    # would spend 127 of them on sizing exchanges and leave batches of 1.
+    work, _ = _work(250, per_call=0.0)
+    assert (work.batch, work.capped) == (2, True)
+
+
+def test_a_minimum_batch_the_range_cannot_fill_is_cut_down_without_sizing() -> None:
+    work, probes = _work(2_000, min_batch=1024)
+    assert probes == []
+    assert work.capped
+    assert work.batch == 2_000 // 99
+    assert len(set(_timed(work))) == 99 * work.batch
+
+
+def test_a_range_that_gives_out_while_sizing_keeps_the_batch_it_has() -> None:
+    # Exactly one input per sample, and none left for the first sizing exchange.
+    work, probes = _work(99)
+    assert probes == []
+    assert (work.batch, work.capped) == (1, True)
+    assert sorted(_timed(work)) == list(range(1, 100))
+
+
+def test_a_range_smaller_than_the_samples_gives_nothing_to_time() -> None:
+    work, probes = _work(60)
+    assert work.batches == [] and work.batch == 0 and probes == []
+    assert work.capped and work.found == 60
+
+
+def test_inputs_met_before_the_benchmark_are_never_timed() -> None:
+    work, _ = _work(2_000, per_call=0.0, met=range(1, 1_501))
+    timed = _timed(work)
+    assert timed and min(timed) > 1_500
+

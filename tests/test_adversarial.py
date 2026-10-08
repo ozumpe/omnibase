@@ -1064,52 +1064,92 @@ def test_a_memoised_candidate_gains_nothing_when_batches_outgrow_the_input_range
     assert "capped by the oracle's input range" in result.reason
 
 
+class _Sent:
+    """What one benchmark sent its two workers, read off SandboxWorker.call."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, candidate: str, baseline: str) -> None:
+        from sis import sandbox_worker
+
+        calls: dict[str, list[list[int]]] = {candidate: [], baseline: []}
+        real_call = sandbox_worker.SandboxWorker.call
+
+        def spy(worker: Any, batch: Any, **kwargs: Any) -> Any:
+            calls.setdefault(worker._source, []).append([args[0] for args in batch])
+            return real_call(worker, batch, **kwargs)
+
+        monkeypatch.setattr(sandbox_worker.SandboxWorker, "call", spy)
+        self._calls, self._candidate, self._baseline = calls, candidate, baseline
+
+    @property
+    def timed(self) -> list[list[int]]:
+        # A timed batch is the one list both workers were sent.
+        theirs = self._calls[self._baseline]
+        return [batch for batch in self._calls[self._candidate] if batch and batch in theirs]
+
+    def met_only_by(self, who: str) -> set[int]:
+        """Inputs one worker was sent outside the timed batches."""
+        source = self._candidate if who == "candidate" else self._baseline
+        timed = self.timed
+        return {n for batch in self._calls[source] if batch not in timed for n in batch}
+
+
 def test_no_input_is_timed_twice_and_none_a_worker_has_met(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The invariant itself, read off what the gate sends: no timing is judged.
+    # The real oracle, with the merged fast target as the baseline and the same
+    # code plus a cache as the candidate: the case H7 would have accepted. The
+    # baseline is fast, so the batch grows from 1 and the sizing loop runs.
+    spec = gauntlet.default_contract()
+    fast = (PROJECT_ROOT / str(spec.stub_candidate_path)).read_text(encoding="utf-8")
+    cached = "import functools\n" + fast.replace(
+        "def sum_of_divisors", "@functools.cache\ndef sum_of_divisors", 1)
+    assert cached.count("@functools.cache") == 1
+    sent = _Sent(monkeypatch, candidate=cached, baseline=fast)
+    gauntlet.validate(cached, _BASELINE, baseline_source=fast)
+
+    timed = sent.timed
+    assert len(timed) == spec.bench_samples
+    inputs = [n for batch in timed for n in batch]
+    assert len(set(inputs)) == len(inputs), "an input was timed twice"
+    # The candidate alone gets the differential inputs, the baseline alone the
+    # sizing ones. Neither is timed again.
+    differential, sizing = sent.met_only_by("candidate"), sent.met_only_by("baseline")
+    assert differential and set(inputs).isdisjoint(differential)
+    assert sizing and set(inputs).isdisjoint(sizing)
+
+
+def test_the_batch_shrinks_to_the_inputs_there_are_and_a_real_gain_still_shows(
     monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path,
 ) -> None:
-    # The invariant itself, read off what the gate sends: no timing involved.
-    from sis import sandbox_worker
-
-    sent: dict[str, list[list[int]]] = {}
-    real_call = sandbox_worker.SandboxWorker.call
-
-    def spy(self: Any, calls: Any, **kwargs: Any) -> Any:
-        sent.setdefault(self._source, []).append([args[0] for args in calls])
-        return real_call(self, calls, **kwargs)
-
-    monkeypatch.setattr(sandbox_worker.SandboxWorker, "call", spy)
     spec = gauntlet.default_contract()
     baseline = (PROJECT_ROOT / spec.target_path).read_text(encoding="utf-8")
     fast = (PROJECT_ROOT / str(spec.stub_candidate_path)).read_text(encoding="utf-8")
     contract = _narrow_contract(tmp_path, top=2_000, bench_batch=64)
+    sent = _Sent(monkeypatch, candidate=fast, baseline=baseline)
     result = gauntlet.validate(fast, _BASELINE, baseline_source=baseline, contract=contract)
-    # A real gain is still measured with the batch cut down.
     assert result.passed, result.reason
 
-    # A timed batch is the one list both workers were sent. The candidate alone
-    # gets the differential inputs, the baseline alone the sizing ones.
-    timed = [batch for batch in sent[fast] if batch and batch in sent[baseline]]
+    timed = sent.timed
     assert len(timed) == contract.bench_samples
     inputs = [n for batch in timed for n in batch]
     assert len(set(inputs)) == len(inputs), "an input was timed twice"
-    met_by_candidate = {n for batch in sent[fast] if batch not in timed for n in batch}
-    met_by_baseline = {n for batch in sent[baseline] if batch not in timed for n in batch}
-    assert met_by_candidate and set(inputs).isdisjoint(met_by_candidate)
-    assert set(inputs).isdisjoint(met_by_baseline)
-    # 1,999 inputs cannot fill 99 batches of 64: the batch shrank to fit them.
+    assert set(inputs).isdisjoint(sent.met_only_by("candidate"))
+    # 1,999 inputs cannot fill 99 batches of 64: at most 20 each, plus the
+    # oracle's two BENCH_INPUTS wherever they landed.
     assert max(len(batch) for batch in timed) <= 1_999 // contract.bench_samples + 2
 
 
-def test_an_input_range_too_small_to_time_once_each_is_unmeasurable(
+def test_an_input_range_too_small_to_time_once_each_is_the_exams_fault(
     tmp_path: pathlib.Path,
 ) -> None:
-    # 39 possible inputs, all met in the differential phase: nothing is left
-    # that the candidate has not seen. A counted failure, never an accept.
+    # 39 possible inputs and 99 samples: no candidate can cause that or cure
+    # it, so it is filed and paged as a harness fault, and never an accept.
     spec = gauntlet.default_contract()
     fast = (PROJECT_ROOT / str(spec.stub_candidate_path)).read_text(encoding="utf-8")
     result = gauntlet.validate(fast, _BASELINE, contract=_narrow_contract(tmp_path, top=40))
     assert not result.passed
-    assert result.reason.startswith("benchmark unmeasurable"), result.reason
-    assert gate_from_reason(result.reason) == "benchmark_unmeasurable"
+    assert result.reason.startswith("harness: the contract oracle's random_input"), result.reason
+    assert gate_from_reason(result.reason) == "harness"
     assert neutral_status(result.reason) is None
 

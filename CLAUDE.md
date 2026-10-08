@@ -81,7 +81,7 @@ internal target before it models anything external.
     default). **The benchmark never decides on one comparison** (OMNI-41):
     candidate and baseline are timed back-to-back on the *same fresh* input
     (alternating order, seeded, never reused — a replayed workload rewarded
-    `functools.cache`, not speed), plus each `BENCH_INPUTS` entry timed once
+    `functools.cache`, not speed), plus each `BENCH_INPUTS` entry timed at most once
     for shape coverage. `gauntlet.benchmark_decision` (pure) decides on
     **total cost** — `sum(candidate)/sum(baseline)` with a paired-bootstrap
     interval — never a per-input median (a candidate fast on typical inputs
@@ -97,19 +97,25 @@ internal target before it models anything external.
     Exchanges carry a batch of fresh inputs, sized by time so the baseline's
     batch takes ~20 pipe round trips (`_WINDOW_OVER_ROUND_TRIP`; ~20 µs a round
     trip in the subprocess sandbox, ~350 µs in docker on a Mac). **No input
-    reaches a worker twice in one benchmark** (OMNI-152, H7 fixed 2026-10-08;
-    `gauntlet._UnusedInputs`): not in the timed batches, the sizing exchanges
-    or `BENCH_INPUTS`, and not after the candidate met it in the differential
-    phase. Inputs are compared by value, the way a cache would key them. A
-    fresh draw each time was not enough: 99 batches of 1024 from
-    `sum_of_divisors`' 19,999 values repeated four calls in five, and a cache
-    measured as speed (AWS run #7 ran at that size). When the oracle's range
-    cannot fill the batch the timing asks for, the batch shrinks (`capped by
-    the oracle's input range` in the reason), which hides a gain and never
-    invents one; fewer unused inputs than samples is `benchmark unmeasurable`.
+    is timed twice, and none is timed after a worker has met it** (OMNI-152,
+    H7 fixed 2026-10-08; `gauntlet._UnusedInputs`, `gauntlet._timed_work`):
+    not in another timed batch, a sizing exchange or `BENCH_INPUTS`, and not
+    after the candidate met it in the differential phase. Inputs are compared
+    with `==`, at least as coarsely as a cache could key them. A fresh draw
+    each time was not enough: 99 batches of 1024 from `sum_of_divisors`'
+    19,999 values repeated four calls in five, and a cache measured as speed
+    (AWS run #7 ran at that size). The timed inputs are set aside before each
+    sizing exchange. When the oracle's range cannot fill the batch the timing
+    asks for, the batch shrinks (`capped by the oracle's input range` in the
+    reason). A range that cannot give every sample one unused input is the
+    exam's fault, a `harness:` verdict that pages a human: with 300
+    differential trials, a range under about 300 values.
     The per-call
-    JSON cost (~1 µs for an int) cannot be amortised and dilutes a gain rather
-    than invents one, so µs-scale differences are resolved poorly — accepted.
+    JSON cost (~1 µs for an int) cannot be amortised. While both workers pay
+    it, it dilutes a gain rather than invents one, so µs-scale differences are
+    resolved poorly — accepted. **A candidate can make its own worker's share
+    cheaper** (H8, OMNI-153, open): the same algorithm plus a patched
+    `json.dumps` measured 0.78 against a fast baseline.
     Every timed answer is checked against the baseline's, and differences
     against the reference, so a candidate cannot be wrong only while timed. It
     can still contend for CPU during the baseline's batch (bounded by docker's
@@ -765,9 +771,9 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   **Phase 0 is built:** `sis/sandbox_worker.py` (OMNI-129) serves a candidate
   hot from the sandbox. It is tested in both sandbox modes, including that a
   docker candidate cannot reach the network, Ray or the host's environment.
-- 1055 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
+- 1064 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
   Ray-Serve-integration tests run separately, see Operational quick reference
-  above; 1117 total, recounted 2026-10-08 — corrected 2026-09-26, a multi-dimension review found the
+  above; 1126 total, recounted 2026-10-08 — corrected 2026-09-26, a multi-dimension review found the
   previously-documented 616/678 stale); `ruff`/`mypy --strict`/`pytest` clean;
   CI green; `feature → develop → main` enforced by both the client-side
   pre-push hook and active server-side rulesets.
@@ -806,7 +812,7 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
 **Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L
 severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
 the IDs in commits/PRs. **Open after a 2026-09-26 multi-dimension review with
-adversarial verification: H3, M12–M14, M16, M20–M23,
+adversarial verification: H3, H8 (found 2026-10-08, OMNI-153), M12–M14, M16, M20–M23,
 L16–L20, L22, L25–L32, L35–L43; plus L46 from the second AWS run and L48–L50
 from the fifth (OMNI-143–145)** (M7 is won't-fix for now; H4, M10, M15, M19, L21, L23
 and L24 fixed 2026-09-26, OMNI-46/47/51/49/61/62; H5, H6, M24 and L44, found
