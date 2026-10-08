@@ -396,6 +396,17 @@ def test_a_call_that_raises_mid_batch_is_reported_and_no_call_runs_twice(mode: s
     assert results[2].error_types[:2] == ("ValueError", "Exception")
 
 
+def test_a_call_that_raises_stop_iteration_does_not_cut_the_batch_short(mode: str) -> None:
+    # To the C loop that runs a plain batch, StopIteration is the end of the
+    # calls, not an error: the reply came back with fewer answers than calls,
+    # which the host reads as a broken worker. Found by the review of the fix.
+    source = ("def f(n):\n    if n == 3:\n        return next(iter(()))\n    return n\n")
+    with _serve(source) as worker:
+        results = worker.call([[n] for n in range(1, 6)]).results
+    assert [r.value if r.ok else r.error for r in results] == [1, 2, "StopIteration: ", 4, 5]
+    assert results[2].error_types[:2] == ("StopIteration", "Exception")
+
+
 def test_an_exit_inside_a_plain_batch_is_a_failed_call_not_a_dead_worker() -> None:
     source = "def f(n):\n    if n == 1:\n        raise SystemExit(7)\n    return n\n"
     with _serve(source) as worker:

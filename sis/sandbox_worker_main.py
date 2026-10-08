@@ -110,15 +110,20 @@ def _plain_batch(fn: Any, calls: list[list[Any]]) -> dict[str, Any]:
 
     ``extend`` keeps what ``starmap`` produced before a call raised, so no call
     runs twice: the one that raised is reported, and the rest go one by one.
+    A call that raises ``StopIteration`` ends the iteration without an error,
+    so a batch that comes back short is that call's failure too.
     """
     values: list[Any] = []
     try:
         values.extend(itertools.starmap(fn, calls))
+        if len(values) == len(calls):
+            return {"ok": values}
+        failed = _failure(StopIteration())
     except BaseException as exc:  # noqa: BLE001 - SystemExit included
-        rest = calls[len(values) + 1:]
-        return {"results": [*map(_checked, values), _failure(exc),
-                            *(_call(fn, args, {}, False) for args in rest)]}
-    return {"ok": values}
+        failed = _failure(exc)
+    rest = calls[len(values) + 1:]
+    return {"results": [*map(_checked, values), failed,
+                        *(_call(fn, args, {}, False) for args in rest)]}
 
 
 def _reply(channel: TextIO, rid: Any, body: dict[str, Any]) -> None:

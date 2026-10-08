@@ -1216,5 +1216,7 @@ def test_a_slower_candidate_cannot_pass_by_making_its_workers_loop_cheaper(sandb
     result = gauntlet.validate(_SLOWER_BUT_CHEAPENS_ITS_WORKER, _BASELINE, baseline_source=fast,
                                contract=replace(spec, max_latency_ratio=1.0))
     assert not result.passed, f"a cheaper worker loop was measured as speed: {result.reason!r}"
-    assert result.reason.startswith("no improvement"), result.reason
+    # Rejected, or on a heavily loaded machine inconclusive (neutral): under
+    # twelve copies at once on twelve cores, one run in ten came out so.
+    assert result.reason.startswith(("no improvement", "benchmark inconclusive")), result.reason
 
