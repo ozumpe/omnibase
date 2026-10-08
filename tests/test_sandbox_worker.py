@@ -9,6 +9,7 @@ sandbox, and ``ensure_sandbox_ready`` refuses it for a real proposer (M1).
 from __future__ import annotations
 
 import functools
+import itertools
 import shutil
 import subprocess
 from collections.abc import Iterator
@@ -21,6 +22,7 @@ from sis.sandbox_worker import (
     HotSlot,
     SandboxWorker,
     WorkerDied,
+    WorkerProtocolError,
     WorkerStartError,
     WorkerTimeout,
     as_wire,
@@ -329,3 +331,101 @@ def test_the_proxy_behaves_like_the_candidates_own_module(mode: str, tmp_path) -
             to_roman({1, 2})
     finally:
         worker.close()
+
+
+# --- OMNI-153 (KNOWN_ISSUES H8): a plain batch costs no Python per call --------
+#
+# The worker's loop is trusted code in the candidate's interpreter, so whatever
+# it does once per call in Python, a candidate can make cheaper for its own
+# worker and not for the baseline's. With a `_call` and a `json.dumps` per
+# answer, the same algorithm plus a patched `json.dumps` measured 0.78.
+
+# Counts every Python function entered in the worker's process, and answers
+# with the count.
+_COUNTS_PYTHON_CALLS = """
+import sys
+
+_entered = 0
+
+
+def _count(frame, event, arg):
+    global _entered
+    if event == "call":
+        _entered += 1
+
+
+sys.setprofile(_count)
+
+
+def f(n):
+    return _entered
+"""
+
+
+def test_a_plain_batch_runs_no_python_between_its_calls(mode: str) -> None:
+    with _serve(_COUNTS_PYTHON_CALLS) as worker:
+        counts = [r.value for r in worker.call([[n] for n in range(50)]).results]
+    # One function entered per call: the candidate's own. The old loop entered
+    # six (its _call and _encodable, and json.dumps with what that calls).
+    assert [after - before for before, after in itertools.pairwise(counts)] == [1] * 49
+
+
+def test_a_plain_batch_is_encoded_once_not_once_per_answer(mode: str) -> None:
+    source = ("import json\n_real, _dumped = json.dumps, 0\n"
+              "def _counting(*args, **kwargs):\n"
+              "    global _dumped\n    _dumped += 1\n    return _real(*args, **kwargs)\n"
+              "json.dumps = _counting\n"
+              "def f(n):\n    return _dumped\n")
+    with _serve(source) as worker:
+        first = {r.value for r in worker.call([[n] for n in range(20)]).results}
+        second = {r.value for r in worker.call([[n] for n in range(20)]).results}
+    assert len(first) == 1 and len(second) == 1
+    assert second.pop() - first.pop() == 1
+
+
+def test_a_call_that_raises_mid_batch_is_reported_and_no_call_runs_twice(mode: str) -> None:
+    source = ("_seen = []\n"
+              "def f(n):\n    _seen.append(n)\n"
+              "    if n == 3:\n        raise ValueError('three')\n"
+              "    return len(_seen)\n")
+    with _serve(source) as worker:
+        results = worker.call([[n] for n in range(1, 6)]).results
+        assert worker.running
+    assert [r.value if r.ok else r.error for r in results] == [
+        1, 2, "ValueError: three", 4, 5]
+    assert results[2].error_types[:2] == ("ValueError", "Exception")
+
+
+def test_an_exit_inside_a_plain_batch_is_a_failed_call_not_a_dead_worker() -> None:
+    source = "def f(n):\n    if n == 1:\n        raise SystemExit(7)\n    return n\n"
+    with _serve(source) as worker:
+        results = worker.call([[0], [1], [2]]).results
+        assert worker.running
+    assert [r.ok for r in results] == [True, False, True]
+    assert str(results[1].error).startswith("SystemExit") and results[2].value == 2
+
+
+def test_an_answer_that_cannot_cross_is_named_and_the_others_arrive() -> None:
+    # The whole reply is encoded at once; when that fails, each answer is
+    # checked on its own, so one bad answer does not cost the batch.
+    source = ("class Raises(dict):\n    def items(self):\n        raise RuntimeError('boom')\n"
+              "def f(kind):\n"
+              "    return {'object': object(), 'raises': Raises(a=1)}.get(kind, kind)\n")
+    with _serve(source) as worker:
+        results = worker.call([["a"], ["object"], ["b"], ["raises"]]).results
+    assert [r.value for r in results if r.ok] == ["a", "b"]
+    assert str(results[1].error).startswith("not JSON-representable")
+    assert results[3].error == "RuntimeError: boom"
+
+
+def test_a_short_reply_with_the_wrong_number_of_answers_is_a_protocol_error() -> None:
+    # The short form is the candidate's process speaking, like any reply.
+    source = ("import json, sys\n"
+              "def _reply(channel, rid, body):\n"
+              "    channel.write(json.dumps({'id': rid, 'ok': [1]}) + chr(10))\n"
+              "    channel.flush()\n"
+              "sys.modules['__main__']._reply = _reply\n"
+              "def f(n):\n    return n\n")
+    with _serve(source) as worker, pytest.raises(WorkerProtocolError, match="2 results expected"):
+        worker.call([[1], [2]])
+

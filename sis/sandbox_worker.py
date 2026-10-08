@@ -356,6 +356,12 @@ class SandboxWorker:
             raise WorkerProtocolError(f"unreadable reply ({exc})") from exc
         if not isinstance(reply, dict) or reply.get("id") != rid:
             raise WorkerProtocolError(f"a reply to request {rid} expected, got {line[:200]!r}")
+        values = reply.get("ok")
+        if isinstance(values, list) and "results" not in reply:
+            # The short form: every call of a plain batch returned (OMNI-153).
+            if len(values) != expected:
+                raise WorkerProtocolError(f"{expected} results expected, got {len(values)}")
+            return [CallResult(ok=True, value=value) for value in values]
         items = reply.get("results")
         if not isinstance(items, list) or len(items) != expected:
             raise WorkerProtocolError(f"{expected} results expected, got {items!r:.200}")
