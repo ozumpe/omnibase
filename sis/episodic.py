@@ -92,6 +92,8 @@ class EpisodicEvent:
     #                         by nothing, still recognised for old rows)
     #            | harness   ("harness" = the gate could not run, not a verdict
     #                         on the candidate)
+    #            | error     (an exception inside the cycle, OMNI-55: no gate's
+    #                         verdict at all)
     #            | canary_evidence | canary_invariant | canary_disagreement
     #            | canary_regression  (evaluate_canary, OMNI-14: the ONLINE
     #                         analogue of correctness/benchmark, named
@@ -364,6 +366,11 @@ def gate_from_reason(reason: str | None) -> str | None:
     if not reason:
         return None
     r = reason.lower()
+    # An exception raised inside the cycle (OMNI-55, M16), not a gate's verdict.
+    # First, because its message can hold any word the checks below look for:
+    # "error: ReadTimeout: the read timed out" is not a gate that timed out.
+    if r.startswith("error:"):
+        return "error"
     # Timeout first: a timed-out gate's reason names the gate ("mypy gate timed
     # out"), so this must win over the gate-name checks below (L12).
     if "timed out" in r or "timeout" in r:
@@ -468,6 +475,24 @@ def gate_from_reason(reason: str | None) -> str | None:
     if "policy" in r:
         return "policy"
     return None
+
+
+def error_reason(exc: BaseException, where: str | None = None) -> str:
+    """The reason an exception inside a cycle is recorded under (OMNI-55). Pure.
+
+    ``error: Type: message``, which :func:`gate_from_reason` reads as the gate
+    ``error``. An exception that crossed a Ray actor arrives wrapped, and its
+    text is a coloured remote traceback with the message at the far end, so
+    the one that was raised is named, not the wrapper.
+    """
+    root = exc
+    for _ in range(5):
+        cause = getattr(root, "cause", None)
+        if not isinstance(cause, BaseException):
+            break
+        root = cause
+    text = " ".join(str(root).split())[:300]
+    return f"error: {type(root).__name__}: {text}" + (f" ({where})" if where else "")
 
 
 def event_from_cycle_result(
