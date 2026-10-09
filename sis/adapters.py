@@ -1,7 +1,7 @@
 """sis.adapters — default in-memory adapters implementing the ports.
 
 These are the bootstrap substrate: real, in-process implementations of the
-five capability ports that hold artifact state in memory. They make the
+capability ports that hold artifact state in memory. They make the
 whole org runnable locally with no external credentials, and they serve as
 the shared artifact bus + audit trail.
 
@@ -16,10 +16,14 @@ rather than performing them, per the project's hard rules.
 from __future__ import annotations
 
 import dataclasses
+import datetime
 import itertools
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from typing import Any
 
+from sis import config
+from sis.clock import ReplayClock
 from sis.metrics import summarise
 from sis.ports import (
     Branch,
@@ -31,8 +35,11 @@ from sis.ports import (
     Page,
     PullRequest,
     PullRequestNotFound,
+    Reading,
     RequiresHumanApproval,
+    Sensor,
     Severity,
+    TimeAxis,
 )
 
 
@@ -337,3 +344,76 @@ class InMemoryCloud:
 
     def live_version(self) -> str | None:
         return self._live
+
+
+# --- Sensor (OMNI-31) -----------------------------------------------------------
+
+
+def _aware(moment: datetime.datetime, where: str) -> datetime.datetime:
+    if moment.tzinfo is None or moment.tzinfo.utcoffset(moment) is None:
+        raise ValueError(f"{where}: {moment.isoformat()!r} has no timezone; a window "
+                         "over readings needs one, as the readings do")
+    return moment
+
+
+class SimSensor:
+    """Replays a canned trace of readings. Deterministic, no network: the default.
+
+    The simulated half of the Sensor port. What it holds is given to it, so it
+    is as good as that trace and no better: simulation is for refutation, real
+    data is for acceptance (docs/OMNITRACK_VISION.md, D4). Generating scenarios
+    is OMNI-34; this only replays.
+    """
+
+    def __init__(self, readings: Iterable[Reading] = ()) -> None:
+        self._readings = tuple(readings)
+
+    @classmethod
+    def from_records(cls, records: Iterable[Mapping[str, Any]]) -> SimSensor:
+        """From plain records (:meth:`Reading.as_record`), e.g. a JSON trace."""
+        return cls(Reading.from_record(record, where=f"trace record {index}")
+                   for index, record in enumerate(records))
+
+    def read(
+        self, start: datetime.datetime, end: datetime.datetime, *, by: TimeAxis,
+    ) -> list[Reading]:
+        start, end = _aware(start, "SimSensor.read start"), _aware(end, "SimSensor.read end")
+        other = TimeAxis.EVENT if by is TimeAxis.KNOWN else TimeAxis.KNOWN
+        return sorted(
+            (reading for reading in self._readings if start <= reading.at(by) < end),
+            key=lambda reading: (reading.at(by), reading.at(other),
+                                 reading.source, reading.series))
+
+
+def replay(
+    sensor: Sensor, clock: ReplayClock, start: datetime.datetime, end: datetime.datetime,
+    *, by: TimeAxis,
+) -> Iterator[Reading]:
+    """Yield a window's readings in *by*'s order, moving *clock* to each one first.
+
+    Event time comes from the trace, not from the machine: whoever consumes a
+    reading sees ``clock.now()`` at that reading's time. Which axis a replay
+    should run on, and how series of different cadence merge, is OMNI-35's
+    decision. The axis is named here so that it is always a decision.
+    """
+    for reading in sensor.read(start, end, by=by):
+        clock.advance_to(reading.at(by))
+        yield reading
+
+
+def make_sensor(backend: str | None = None) -> Sensor:
+    """The sensor ``sensor.backend`` names: the simulated one unless told otherwise.
+
+    Built by whoever starts a consumer and passed to it as an argument. Not
+    looked up from inside an actor, which keeps the environment it was created
+    with (the ``SIS_CONTRACT`` trap).
+    """
+    chosen = backend if backend is not None else str(config.get("sensor.backend"))
+    if chosen == "sim":
+        return SimSensor()
+    if chosen == "real":
+        raise RuntimeError(
+            "sensor.backend='real' has no adapter yet: the EIA sensor is OMNI-33, and it "
+            "does not land before the sanitising boundary for what it reads (OMNI-32)")
+    raise ValueError(f"sensor.backend={chosen!r} is not a sensor backend (sim, real)")
+

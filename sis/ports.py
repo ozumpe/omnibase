@@ -1,7 +1,8 @@
 """sis.ports — capability interfaces (the "ports") and the artifacts they carry.
 
 The *capability* is required; the *product* is replaceable. Each external
-subsystem (Document Store, Work Tracker, Version Control, Cloud, Telemetry)
+subsystem (Document Store, Work Tracker, Version Control, Cloud, Telemetry,
+and the Sensor that reads the modelled world)
 sits behind a ``typing.Protocol`` defined here. The default in-memory
 adapters live in :mod:`sis.adapters`; real MCP-backed adapters (Confluence,
 Jira, GitHub, AWS) can be dropped in later without touching the roles, as
@@ -14,9 +15,14 @@ queue, the inter-actor message bus, the audit trail, and long-term memory.
 
 from __future__ import annotations
 
+import datetime
+import math
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
+
+from sis.clock import parse_event_time
 
 
 class IssueType(str, Enum):
@@ -311,3 +317,114 @@ class Telemetry(Protocol):
     def emit(self, event: str, **fields: object) -> None: ...
 
     def events(self) -> list[dict[str, object]]: ...
+
+
+# --- the Sensor port: what the twin is shown of the world (OMNI-31) -----------
+
+
+class TimeAxis(str, Enum):
+    """Which of a reading's two times a question is about.
+
+    Never defaulted. "Readings from last week" by ``EVENT`` is what happened
+    last week; by ``KNOWN`` it is what was published last week, which includes
+    revisions of older weeks and leaves out last week's own figures if they are
+    not out yet. A caller that does not say which it means is how a backtest
+    comes to show a model the future.
+    """
+
+    EVENT = "event_time"   # the period a value describes
+    KNOWN = "known_at"     # when the value became available
+
+
+def _instant(value: object, where: str) -> datetime.datetime:
+    """A timezone-aware instant from a datetime or an ISO-8601 string."""
+    if isinstance(value, datetime.datetime):
+        value = value.isoformat()
+    if not isinstance(value, str):
+        raise ValueError(f"{where}: {value!r} is not an instant")
+    return parse_event_time(value, where=where)
+
+
+@dataclass(frozen=True)
+class Reading:
+    """One observation of the world: an artifact, like a page or an issue.
+
+    **It has two times**, both timezone-aware, neither defaulted:
+
+    - ``event_time``: the period the value describes, e.g. the week ending
+      Friday 30 September 2022;
+    - ``known_at``: when the value became available. Published, or failing
+      that, fetched.
+
+    EIA's weekly figures appear days after the week they describe. A replay
+    that hands a model a value before its ``known_at`` is handing it the
+    future, and a trace recorded without ``known_at`` can never be replayed
+    honestly: history does not come round again to be recorded properly.
+    Nothing here orders the two. Which one drives a replay is the replay's
+    decision (OMNI-35); a reading only has to carry both.
+
+    ``value`` is a finite number in ``unit``. A source's markers for "withheld"
+    or "not available" are not readings, and turning them into one is the
+    sanitising boundary's job (OMNI-32), not a quiet ``nan`` here.
+    """
+
+    source: str      # who published it, e.g. "eia"
+    series: str      # which series of theirs, by their own id
+    value: float
+    unit: str        # e.g. "USD/gal"; a number without one is not a measurement
+    event_time: datetime.datetime
+    known_at: datetime.datetime
+
+    def __post_init__(self) -> None:
+        where = f"Reading({self.source!r}, {self.series!r})"
+        for name in ("source", "series", "unit"):
+            text = getattr(self, name)
+            if not isinstance(text, str) or not text.strip():
+                raise ValueError(f"{where}: {name} must be a non-empty string, got {text!r}")
+        if isinstance(self.value, bool) or not isinstance(self.value, int | float) \
+                or not math.isfinite(self.value):
+            raise ValueError(f"{where}: value must be a finite number, got {self.value!r}")
+        object.__setattr__(self, "value", float(self.value))
+        for name in ("event_time", "known_at"):
+            object.__setattr__(self, name, _instant(getattr(self, name), f"{where}.{name}"))
+
+    def at(self, axis: TimeAxis) -> datetime.datetime:
+        """This reading's time on *axis*."""
+        return self.known_at if axis is TimeAxis.KNOWN else self.event_time
+
+    def as_record(self) -> dict[str, Any]:
+        """Plain JSON data: what a fixture stores and what crosses to a sandbox worker."""
+        return {"source": self.source, "series": self.series, "value": self.value,
+                "unit": self.unit, "event_time": self.event_time.isoformat(),
+                "known_at": self.known_at.isoformat()}
+
+    @classmethod
+    def from_record(cls, record: Mapping[str, Any], *, where: str = "reading") -> Reading:
+        """The reading a record describes. A missing field is an error, never a default."""
+        fields = ("source", "series", "value", "unit", "event_time", "known_at")
+        missing = [name for name in fields if name not in record]
+        if missing:
+            raise ValueError(f"{where}: missing {', '.join(missing)}")
+        return cls(**{name: record[name] for name in fields})
+
+
+@runtime_checkable
+class Sensor(Protocol):
+    """Reads the modelled world. Default adapter: ``SimSensor``, a canned trace.
+
+    The sixth port. The real adapter is its own story (OMNI-33), and what it
+    reads is untrusted input: an outside party writes it (OMNI-32).
+
+    Which sensor a consumer reads is passed to it as an argument, never looked
+    up from the environment inside an actor: actors keep the environment they
+    were created with, as for ``SIS_CONTRACT`` and the ``Clock`` port.
+    """
+
+    def read(
+        self, start: datetime.datetime, end: datetime.datetime, *, by: TimeAxis,
+    ) -> list[Reading]:
+        """The readings whose time on *by* lies in ``[start, end)``, in that
+        time's order. Ties are ordered by the other time, then source and
+        series, so the same world read twice gives the same list."""
+        ...
+

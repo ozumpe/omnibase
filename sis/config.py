@@ -310,6 +310,17 @@ SCHEMA: tuple[Key, ...] = (
         "adapters.artifacts_bucket; a killed process or a replaced box loses at "
         "most this many. 0 syncs only when the loop stops (OMNI-140)."),
 
+    # --- sensor: where readings of the modelled world come from (OMNI-31). ---
+    # Forbidden, like adapters.mode, and for a sharper reason: real data is the
+    # evidence a promotion needs (D4), so a loop that could switch itself to
+    # the simulator would be choosing its own exam.
+    Key("sensor", "backend", ConfigTier.FORBIDDEN, Kind.STR, "sim",
+        "SIS_SENSOR",
+        "'sim' replays a canned trace, with no network; 'real' reads the world "
+        "(no adapter yet: OMNI-33). Passed to a consumer as an argument, never "
+        "read from the environment inside an actor.",
+        choices=("sim", "real")),
+
     # --- contracts: which target a cycle optimises. --------------------------
     Key("contracts", "default", ConfigTier.SOFT, Kind.OPT_STR, None,
         "SIS_CONTRACT",
@@ -748,6 +759,11 @@ class LoopConfig:
 
 
 @dataclass(frozen=True)
+class SensorConfig:
+    backend: str
+
+
+@dataclass(frozen=True)
 class ContractsConfig:
     default: str | None
 
@@ -772,6 +788,7 @@ class Config:
     proposer: ProposerConfig
     canary: CanaryConfig
     loop: LoopConfig
+    sensor: SensorConfig
     contracts: ContractsConfig
     frontend: FrontendConfig
 
@@ -803,6 +820,7 @@ def config(*, env: Mapping[str, str] | None = None) -> Config:
         proposer=ProposerConfig(**_section("proposer", env)),
         canary=CanaryConfig(**_section("canary", env)),
         loop=LoopConfig(**_section("loop", env)),
+        sensor=SensorConfig(**_section("sensor", env)),
         contracts=ContractsConfig(**_section("contracts", env)),
         frontend=FrontendConfig(**_section("frontend", env)),
     )

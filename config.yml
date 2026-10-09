@@ -137,6 +137,13 @@ loop:
   # env: SIS_LOOP_ARTIFACT_SYNC_EVERY   flag: --loop-artifact-sync-every
   soft_artifact_sync_every: 1
 
+sensor:
+  # 'sim' replays a canned trace, with no network; 'real' reads the world (no adapter
+  # yet: OMNI-33). Passed to a consumer as an argument, never read from the environment
+  # inside an actor.
+  # env: SIS_SENSOR   flag: --sensor-backend
+  forbidden_backend: "sim"
+
 contracts:
   # Default contract name; --contract still overrides it per cycle.
   # env: SIS_CONTRACT   flag: --contracts-default

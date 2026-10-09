@@ -70,6 +70,12 @@ A port like the existing five, with **two adapters from day one**: `RealSensor` 
 world) and `SimSensor` (generates scenarios). Paired with a `Clock` port so the twin can
 run in event time, not wall-clock.
 
+**The port and its simulated adapter are built too** (OMNI-31): `Sensor`, `Reading` and
+`TimeAxis` in `sis/ports.py`, `SimSensor` and `replay` in `sis/adapters.py`. A reading
+carries two times, `event_time` and `known_at`, and every read names which one it means.
+What remains of E1 is the real adapter (OMNI-33) behind the sanitising boundary (OMNI-32),
+and scenario generation (OMNI-34).
+
 **The clock half is already built** — `sis/clock.py` (OMNI-23) ships `WallClock`,
 `ReplayClock`, and timezone-required `event_time` parsing, so what remains of E1 is the
 `Sensor` port and its two adapters. Note what that module already settled, so E1 doesn't
