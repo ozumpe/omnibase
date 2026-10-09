@@ -431,7 +431,13 @@ internal target before it models anything external.
   live runs — don't put planning there.
 
 ## Current status — where to pick up
-Released through **v0.3.6** (2026-09-30): v0.3.5 plus the fixes from the sixth
+Released through **v0.3.7** (2026-10-08): v0.3.6 plus the hardening after the
+seventh AWS run, most of it gate integrity. OMNI-151: one loop per box.
+OMNI-152: no benchmark input is timed twice (H7). OMNI-153: a timed batch
+runs no Python per call in the worker (H8). OMNI-154: one CPU for each
+benchmark worker (H9). OMNI-55: an exception inside a cycle is an outcome,
+and its spend is charged (M16, L30). Before that, **v0.3.6** (2026-09-30):
+v0.3.5 plus the fixes from the sixth
 AWS run, the first Class-2 run (`roman`, built at the first attempt).
 OMNI-149: a built feature's convergence check comes before planning, so it
 files nothing. OMNI-148: a feature's intake says "Build". OMNI-150: the log
@@ -891,8 +897,8 @@ Two traps L5 surfaced, both worth knowing before writing similar code:
 
 **Next — the milestone plan is in Jira ([`OMNI`](https://olafzumpe.atlassian.net/browse/OMNI)),
 not here.** Check the board for current status rather than trusting this list.
-**Last reconciled against a live query on 2026-09-30** (150 issues, OMNI-1
-through OMNI-150; 94 Done, 0 In Progress, 56 To Do — most of the growth since 2026-09-26 is
+**Last reconciled against a live query on 2026-10-08** (154 issues, OMNI-1
+through OMNI-154; 99 Done, 0 In Progress, 55 To Do — most of the growth since 2026-09-26 is
 the KNOWN_ISSUES backfill, see "Known issues" above):
 
 1. ~~**[OMNI-1](https://olafzumpe.atlassian.net/browse/OMNI-1) — L5 target
@@ -972,7 +978,7 @@ the KNOWN_ISSUES backfill, see "Known issues" above):
    instance lifecycle: `user_data` racing Ubuntu's `unattended-upgrades` for
    the dpkg lock, and SSM sessions landing as `ssm-user` rather than `ubuntu`
    (every runbook step now starts with `sudo -iu ubuntu`). The box clones
-   the release tag in `var.repo_ref` (`v0.3.6`; a branch needs
+   the release tag in `var.repo_ref` (`v0.3.7`; a branch needs
    `allow_branch_ref = true`, OMNI-63) and every run records the commit it
    ran; run day uses `--contract sort`. **Rehearsed
    2026-09-23** on a local Ubuntu 24.04 box (`scripts/rehearse_aws_run.sh`),
