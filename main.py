@@ -104,6 +104,10 @@ def run_org_cycle(contract_name: str | None = None, canary_backend: str | None =
     for info in ray.get(handles["SelfModel"].registry.remote()):
         print(f"  {info['role']:<9} {info['name']:<10} state={info['state']}"
               f" parent={info['parent']}")
+    if result.get("status") == "error":
+        # The cycle recorded its own failure (OMNI-55); a single run still
+        # ends as the failure it was, as when the exception ended it.
+        raise SystemExit(1)
 
 
 def run_server_loop(

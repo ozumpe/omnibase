@@ -47,7 +47,7 @@ reference with no link target below.
 > | M12 | [OMNI-52](https://olafzumpe.atlassian.net/browse/OMNI-52) |
 > | M13 | [OMNI-53](https://olafzumpe.atlassian.net/browse/OMNI-53) |
 > | M14 | [OMNI-54](https://olafzumpe.atlassian.net/browse/OMNI-54) |
-> | M16 (and L30) | [OMNI-55](https://olafzumpe.atlassian.net/browse/OMNI-55) |
+> | M16 (and L30) | [OMNI-55](https://olafzumpe.atlassian.net/browse/OMNI-55) — **fixed** (2026-10-08) |
 > | M17 | [OMNI-56](https://olafzumpe.atlassian.net/browse/OMNI-56) — **fixed** (2026-09-29) |
 > | M18 | [OMNI-57](https://olafzumpe.atlassian.net/browse/OMNI-57) — **fixed** (with OMNI-126) |
 > | M22 | [OMNI-58](https://olafzumpe.atlassian.net/browse/OMNI-58) — blocked by OMNI-51 |
@@ -56,7 +56,7 @@ reference with no link target below.
 > | L24 | [OMNI-62](https://olafzumpe.atlassian.net/browse/OMNI-62) (Notifier port) — **fixed** |
 > | M7 | [OMNI-88] — **won't fix** for now (label `wont-fix`); see the Won't fix section |
 > | L15–L20, L22, L25–L29, L31–L38, L40–L43 | one ticket each, [OMNI-64]–[OMNI-87], on each entry below (L15 and L33 **fixed** 2026-09-29). Each is linked (Relates) in Jira to the ticket it should ship with. |
-> | L30 | [OMNI-55], with M16 |
+> | L30 | [OMNI-55], with M16 — **fixed** (2026-10-08) |
 > | L39 | [OMNI-42] |
 
 ## High
@@ -143,22 +143,6 @@ reference with no link target below.
   caller already has `public_api` in hand); report anything else through
   `untranscribed_examples` as "names a function outside the contract's public
   API".
-
-- [OMNI-55] **M16 — Any exception after the LLM call loses that call's spend from the
-  CEO ledger and the episodic log, strands the branch/PR, and can kill
-  `--loop`** *(found 2026-09-26; confirmed by reading the code — the
-  triggering case is the already-documented L6 403)* — `run_cycle`
-  (`sis/org.py`) has no exception handling around the role calls; the cost is
-  known to the driver only via each method's return value, so a later raise
-  (an under-scoped PAT's 403 at `open_pr`, a transient Jira 500 on a status
-  transition, or a Serve error mid-canary) never reaches
-  `CEO.report_outcome`/`record_neutral`. Re-running repeats the same
-  untracked spend, so the hard cap never sees it, and `run_loop`
-  (`sis/loop.py`) has no per-cycle exception handling either — the whole
-  process exits. Fix: charge spend as soon as it's incurred (or recover it
-  via `try/finally`); wrap each `run_cycle` stage so an exception becomes a
-  recorded, breaker-counted `error` outcome — and, if a canary was live,
-  retires it — instead of an unhandled exception.
 
 - [OMNI-50] **M20 — The live canary's p95/p99 gate is close to a coin flip for targets
   where dispatch overhead dominates compute** *(found 2026-09-26; simulated
@@ -258,10 +242,6 @@ reference with no link target below.
   green fully before answering the caller, so a slow or hung candidate stalls
   every live client and can wedge DevOps. Fix: bound the green call with its
   own timeout, independent of the client's.
-- [OMNI-55] **L30** — An exception after the green deploy during a live canary leaves
-  green attached and the PR pending with no verdict, bug, or spend recorded
-  — the live-path sibling of M16. Fix: the same accounting fix as M16,
-  applied to `_canary_live`.
 - [OMNI-76] **L31** — Promotion serves the source snapshotted at canary time, not
   necessarily what a human actually merged if the PR was amended after the
   canary started. Fix: re-fetch the merged source at `observe_merge` time and
@@ -358,6 +338,16 @@ reference with no link target below.
   consider one bounded re-measurement with a fresh seed before discarding.
 
 ## Resolved (Low)
+
+- [OMNI-55] **L30** — An exception after the green deploy during a live canary leaves
+  green attached and the PR pending with no verdict, bug, or spend recorded
+  — the live-path sibling of M16. Fix: the same accounting fix as M16,
+  applied to `_canary_live`.
+  **Fixed 2026-10-08 (OMNI-55, with M16):** `DevOps._canary_live` treats an
+  error after the green deploy as a rejection: green is retired, the pending
+  PR is cleared, and the verdict's reason is the error, which the cycle
+  records and charges like any other canary rejection. Tested against a real
+  Serve deployment, with the window's fill failing once.
 
 - [OMNI-79] **L34** — The real GitHub adapter's `_get_file` treats any error
   (including a transient 5xx) the same as "file absent" and silently falls
@@ -618,6 +608,44 @@ any long-lived cluster exists.
   front.
 
 ## Resolved
+
+- [OMNI-55] **M16 — Any exception after the LLM call loses that call's spend from the
+  CEO ledger and the episodic log, strands the branch/PR, and can kill
+  `--loop`** *(found 2026-09-26; confirmed by reading the code — the
+  triggering case is the already-documented L6 403)* — `run_cycle`
+  (`sis/org.py`) has no exception handling around the role calls; the cost is
+  known to the driver only via each method's return value, so a later raise
+  (an under-scoped PAT's 403 at `open_pr`, a transient Jira 500 on a status
+  transition, or a Serve error mid-canary) never reaches
+  `CEO.report_outcome`/`record_neutral`. Re-running repeats the same
+  untracked spend, so the hard cap never sees it, and `run_loop`
+  (`sis/loop.py`) has no per-cycle exception handling either — the whole
+  process exits. Fix: charge spend as soon as it's incurred (or recover it
+  via `try/finally`); wrap each `run_cycle` stage so an exception becomes a
+  recorded, breaker-counted `error` outcome — and, if a canary was live,
+  retires it — instead of an unhandled exception.
+  **Fixed 2026-10-08 (OMNI-55):** an exception inside a cycle is an outcome,
+  not a crash.
+  The SWE's step never leaves by raising once it has asked for a proposal
+  (`SWE.implement`): the error comes back as a failed result that carries the
+  proposal's cost and names the exception. The driver (`org.run_cycle`) turns
+  anything else that raises after the cycle has started into status `error`:
+  the cost so far is charged to the CEO, the failure counts toward the
+  breaker in full, a bug is filed, a human is paged (it is not the
+  candidate's doing and will likely repeat), and a canary set by this cycle
+  is retired. The episodic row has the cost, the model and the gate `error`,
+  which is read first, since an exception's message can hold any word a
+  gate is recognised by. Ray's wrapper is not what is named: the reason is
+  the exception that was raised (`episodic.error_reason`). A bug that cannot
+  be filed no longer costs a cycle its verdict. `--loop` goes on, and the
+  breaker decides when to stop. Two things still raise: the refusals before
+  anything is spent, and a CEO that cannot be told, because a loop that
+  cannot reach its brakes must not go on. A single `main.py` run exits 1 on
+  an `error` cycle. The step the failed cycle had committed is not stranded:
+  the feature is kept with it, and the next cycle opens its PR without paying
+  for another proposal. Regression tests: a 403 at `open_pr` after a paid
+  proposal, with the real roles; errors before spend, after the step, and
+  after a canary; a loop that goes on. All nine fail on the code before.
 
 - [OMNI-154] **H9 — A candidate can run a timed batch on several cores, so the
   same algorithm measures twice as fast** *(found 2026-10-08 by the review of

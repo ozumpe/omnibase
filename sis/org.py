@@ -20,6 +20,7 @@ from __future__ import annotations
 import datetime
 import logging
 import sys
+import traceback
 from collections.abc import Mapping
 from typing import Any
 
@@ -392,6 +393,9 @@ def cycle_summary(result: Mapping[str, Any]) -> str:
         detail = "circuit breaker open, no cycle ran (python -m sis.admin status)"
     elif status == "budget_denied":
         detail = "spend cap reached, no cycle ran"
+    elif status == "error":
+        detail = " ".join(str(result.get("reason") or "no reason recorded").split())
+        detail = detail.removeprefix("error: ")
     elif status in ("verified_awaiting_human_merge", "feature_step"):
         base, cand = result.get("baseline_latency"), result.get("candidate_latency")
         timing = (f" (baseline {base:.6f}s -> candidate {cand:.6f}s)"
@@ -484,7 +488,17 @@ def run_cycle(
     Ray Serve deployment judged against live traffic; anything else keeps the
     legacy in-memory/real ``Cloud`` recording). Same reasoning as
     *contract_name*: an explicit argument, not ``SIS_CANARY`` alone, because
-    DevOps is an already-running actor by the time this runs."""
+    DevOps is an already-running actor by the time this runs.
+
+    **An exception inside a cycle is an outcome, not a crash** (OMNI-55, M16).
+    Whatever raises once the cycle has started (a 403 from the VCS, a 500 from
+    the work tracker, a role actor's error) is recorded as status ``error``:
+    the cost so far charged to the CEO, the failure counted toward the
+    breaker, a bug filed, a human paged, a canary set this cycle retired. So
+    the spend cap sees every dollar, and ``--loop`` goes on until the breaker
+    says stop. Only the refusals above still raise, before anything is spent;
+    and if the CEO itself cannot be told, the exception is raised again,
+    because a loop that cannot reach its brakes must not go on."""
     # Fail fast, before any spend or artifacts: an untrusted (non-stub) proposer
     # requires the kernel-enforced docker sandbox so its code can't read host
     # credentials (KNOWN_ISSUES.md M1). validate() re-checks as a backstop.
@@ -522,6 +536,31 @@ def run_cycle(
     # about — the first AWS run's log could not.
     known_contract: dict[str, str | None] = {"name": contract_name}
     called: dict[str, str | None] = {"model": None}
+    # What this cycle has cost and produced so far, for the error path below:
+    # whether the CEO has been told of the cost, and a canary to retire.
+    seen: dict[str, Any] = {"cost_usd": 0.0, "charged": False}
+
+    def _outcome(*, success: bool, gate: str | None = None) -> str | None:
+        """Tell the CEO how the cycle ended and what it cost. Once per cycle."""
+        trip: str | None = ray.get(ceo.report_outcome.remote(
+            success=success, cost_usd=seen["cost_usd"], reject_gate=gate))
+        seen["charged"] = True
+        return trip
+
+    def _neutral() -> str | None:
+        trip: str | None = ray.get(ceo.record_neutral.remote(cost_usd=seen["cost_usd"]))
+        seen["charged"] = True
+        return trip
+
+    def _file_bug(summary: str) -> str | None:
+        """File a bug, or say that it could not be filed. Never ends the cycle:
+        the outcome it reports is already decided, and often already charged."""
+        try:
+            return str(ray.get(devops.file_bug.remote(summary)))
+        except Exception as exc:  # noqa: BLE001
+            print(f"[sis] WARNING: bug not filed ({type(exc).__name__}: {exc}): {summary}",
+                  file=sys.stderr)
+            return None
 
     def _record(res: dict[str, Any], cost: float = 0.0) -> dict[str, Any]:
         res.setdefault("contract", known_contract["name"])
@@ -560,8 +599,7 @@ def run_cycle(
         """
         if not trip:
             return None
-        bug_id = str(ray.get(devops.file_bug.remote(
-            f"CIRCUIT BREAKER OPEN — human attention required: {trip}")))
+        bug_id = _file_bug(f"CIRCUIT BREAKER OPEN — human attention required: {trip}")
         econ = ray.get(ceo.economics.remote())
         page(ws, store, Severity.CRITICAL, f"circuit breaker open: {trip}",
              f"The loop has stopped starting cycles: {trip}.\n"
@@ -571,190 +609,248 @@ def run_cycle(
              "`python -m sis.admin reset-breaker --reason \"...\"` (spend is not reset).")
         return bug_id
 
-    # 1. Budget & goal gate (CEO). A pause is checked first and recorded as
-    # its own status: an operator's decision, not a brake that tripped.
-    if (paused := ray.get(ceo.pause_reason.remote())) is not None:
-        # "pause_reason", not "reason": the episodic log reads "reason" as a
-        # gauntlet rejection, and an operator's note is not one.
-        return _record({"status": "paused", "pause_reason": paused})
-    if ray.get(ceo.breaker_open.remote()):
-        return _record({"status": "circuit_breaker_open"})
-    if not ray.get(ceo.approve_budget.remote(estimate_usd)):
-        econ = ray.get(ceo.economics.remote())
-        page(ws, store, Severity.CRITICAL, "spend cap reached: cycle refused",
-             f"A cycle estimated at ${estimate_usd:.2f} would exceed the budget: "
-             f"spent ${econ['spent_usd']:.4f} of ${econ['budget_usd']:.2f}. No cycle "
-             "runs until the budget (brakes.budget_usd) is raised.")
-        return _record({"status": "budget_denied"})
+    def _cycle() -> dict[str, Any]:
+        # 1. Budget & goal gate (CEO). A pause is checked first and recorded as
+        # its own status: an operator's decision, not a brake that tripped.
+        if (paused := ray.get(ceo.pause_reason.remote())) is not None:
+            # "pause_reason", not "reason": the episodic log reads "reason" as a
+            # gauntlet rejection, and an operator's note is not one.
+            return _record({"status": "paused", "pause_reason": paused})
+        if ray.get(ceo.breaker_open.remote()):
+            return _record({"status": "circuit_breaker_open"})
+        if not ray.get(ceo.approve_budget.remote(estimate_usd)):
+            econ = ray.get(ceo.economics.remote())
+            page(ws, store, Severity.CRITICAL, "spend cap reached: cycle refused",
+                 f"A cycle estimated at ${estimate_usd:.2f} would exceed the budget: "
+                 f"spent ${econ['spent_usd']:.4f} of ${econ['budget_usd']:.2f}. No cycle "
+                 "runs until the budget (brakes.budget_usd) is raised.")
+            return _record({"status": "budget_denied"})
 
-    # A Class-2 feature already built has nothing to plan (OMNI-149, L52): the
-    # check costs nothing, so it comes before any page or issue is filed.
-    built = ray.get(swe.already_built.remote(contract_name))
-    if built is not None:
-        known_contract["name"] = built["contract"]
-        trip = ray.get(ceo.record_neutral.remote(cost_usd=0.0))
-        return _record({"status": episodic.NO_GAIN, "reason": built["reason"],
-                        "candidate_sha": built["candidate_sha"],
-                        "breaker_bug_id": _breaker_alarm(trip),
-                        "economics": ray.get(ceo.economics.remote()),
-                        "provenance": ray.get(sm.provenance.remote())})
+        # A Class-2 feature already built has nothing to plan (OMNI-149, L52): the
+        # check costs nothing, so it comes before any page or issue is filed.
+        built = ray.get(swe.already_built.remote(contract_name))
+        if built is not None:
+            known_contract["name"] = built["contract"]
+            trip = _neutral()
+            return _record({"status": episodic.NO_GAIN, "reason": built["reason"],
+                            "candidate_sha": built["candidate_sha"],
+                            "breaker_bug_id": _breaker_alarm(trip),
+                            "economics": ray.get(ceo.economics.remote()),
+                            "provenance": ray.get(sm.provenance.remote())})
 
-    # 2–4 happen once per feature (OMNI-135): a step of a feature in progress
-    # works under the plan its first step made, so a feature files one spec,
-    # one epic and one story rather than one of each per cycle.
-    plan = ray.get(cto.open_plan.remote(contract_name))
-    if plan is None:
-        # 2. Intake: a non-technical user drops a proposal into the proposal space.
-        proposal = ray.get(ws.create_page.remote(
-            space_keys()["proposal"], proposal_title, proposal_body, None, ["proposal"]))
+        # 2–4 happen once per feature (OMNI-135): a step of a feature in progress
+        # works under the plan its first step made, so a feature files one spec,
+        # one epic and one story rather than one of each per cycle.
+        plan = ray.get(cto.open_plan.remote(contract_name))
+        if plan is None:
+            # 2. Intake: a non-technical user drops a proposal into the proposal space.
+            proposal = ray.get(ws.create_page.remote(
+                space_keys()["proposal"], proposal_title, proposal_body, None, ["proposal"]))
 
-        # 3. Spec & design (PM + Designer).
-        spec_id = ray.get(pm.refine_proposal.remote(proposal.id))
-        ray.get(designer.outline.remote(spec_id))
+            # 3. Spec & design (PM + Designer).
+            spec_id = ray.get(pm.refine_proposal.remote(proposal.id))
+            ray.get(designer.outline.remote(spec_id))
 
-        # 4. Plan (CTO → Jira epic + stories).
-        plan = ray.get(cto.plan.remote(spec_id, contract_name))
-    elif plan.get("resumed"):
-        print(f"[sis] carrying on {plan['resumed']} ({plan['steps']} step(s) committed), "
-              "left unfinished by an earlier run", file=sys.stderr)
-    spec_id = str(plan["spec_id"])
-    story_id = str(plan["feature_story_id"])
+            # 4. Plan (CTO → Jira epic + stories).
+            plan = ray.get(cto.plan.remote(spec_id, contract_name))
+        elif plan.get("resumed"):
+            print(f"[sis] carrying on {plan['resumed']} ({plan['steps']} step(s) committed), "
+                  "left unfinished by an earlier run", file=sys.stderr)
+        spec_id = str(plan["spec_id"])
+        story_id = str(plan["feature_story_id"])
+        seen.update(spec_id=spec_id, story_id=story_id)
 
-    # 5. Implement (SWE → validated change on a feature branch + PR).
-    impl = ray.get(swe.implement.remote(story_id, contract_name))
-    cost_usd = float(impl.get("cost_usd", 0.0))
-    known_contract["name"] = impl.get("contract", contract_name)
-    called["model"] = impl.get("model")
+        # 5. Implement (SWE → validated change on a feature branch + PR).
+        impl = ray.get(swe.implement.remote(story_id, contract_name))
+        cost_usd = float(impl.get("cost_usd", 0.0))
+        known_contract["name"] = impl.get("contract", contract_name)
+        called["model"] = impl.get("model")
+        seen.update(cost_usd=cost_usd, pr_id=impl.get("pr_id"),
+                    candidate_sha=impl.get("candidate_sha"))
 
-    # A "no change" outcome — the candidate is identical to the current baseline
-    # — is not a failure: the loop correctly found nothing to improve. Record
-    # the spend, but don't file a bug or count it against the circuit breaker
-    # (three "nothing to do" cycles must not page a human). See KNOWN_ISSUES M3.
-    # An inconclusive benchmark (OMNI-41) is benign the same way: the gate could
-    # not tell the candidate from the margin, which says nothing against the
-    # candidate. It keeps its own status so the log never calls it "no change".
-    # So is a new feature that finds no further gain (OMNI-138): the target has
-    # converged. loop.serve stops after loop.converged_after of these in a row.
-    neutral_status = neutral_cycle_status(impl)
-    if neutral_status:
-        trip = ray.get(ceo.record_neutral.remote(cost_usd=cost_usd))
+        # A "no change" outcome — the candidate is identical to the current baseline
+        # — is not a failure: the loop correctly found nothing to improve. Record
+        # the spend, but don't file a bug or count it against the circuit breaker
+        # (three "nothing to do" cycles must not page a human). See KNOWN_ISSUES M3.
+        # An inconclusive benchmark (OMNI-41) is benign the same way: the gate could
+        # not tell the candidate from the margin, which says nothing against the
+        # candidate. It keeps its own status so the log never calls it "no change".
+        # So is a new feature that finds no further gain (OMNI-138): the target has
+        # converged. loop.serve stops after loop.converged_after of these in a row.
+        neutral_status = neutral_cycle_status(impl)
+        if neutral_status:
+            trip = _neutral()
+            breaker_bug_id = _breaker_alarm(trip)
+            return _record({"status": neutral_status, "reason": impl["reason"],
+                            "spec_id": spec_id, "story_id": story_id,
+                            "candidate_sha": impl.get("candidate_sha"),
+                            "breaker_bug_id": breaker_bug_id,
+                            "economics": ray.get(ceo.economics.remote()),
+                            "provenance": ray.get(sm.provenance.remote())}, cost_usd)
+
+        if not impl["passed"]:
+            gate, summary = rejection_bug(story_id, impl.get("reason"))
+            # The gate is passed so the CEO can weigh a correct-but-over-budget
+            # rejection (``slo``, OMNI-24) below a wrong one.
+            trip = _outcome(success=False, gate=gate)
+            # Failures become artifacts (ACTORS.md: DevOps files bug/defect Jiras).
+            bug_id = _file_bug(summary)
+            if gate == "harness":
+                # A broken sandbox fails every cycle after this one too, and nothing
+                # a proposer does will fix it — worth a person now, not after the
+                # breaker has counted three of them (OMNI-62).
+                page(ws, store, Severity.WARNING, f"sandbox broken during {story_id}",
+                     f"The candidate was not judged: {impl['reason']}\nFiled as {bug_id}.")
+            elif gate == "error":
+                # The SWE's step raised after its proposal (OMNI-55): not the
+                # candidate's doing either, and as likely to repeat.
+                page(ws, store, Severity.WARNING, f"cycle error during {story_id}",
+                     f"{impl['reason']}\nCost ${cost_usd:.4f}, charged. Filed as {bug_id}.")
+            breaker_bug_id = _breaker_alarm(trip)
+            return _record({"status": "error" if gate == "error" else "rolled_back",
+                            "reason": impl["reason"],
+                            "spec_id": spec_id, "story_id": story_id,
+                            "candidate_sha": impl.get("candidate_sha"),
+                            "bug_id": bug_id, "breaker_bug_id": breaker_bug_id,
+                            "economics": ray.get(ceo.economics.remote()),
+                            "provenance": ray.get(sm.provenance.remote())}, cost_usd)
+
+        # A step committed to a feature branch (OMNI-130): accepted by the gauntlet,
+        # but no PR until the feature is finished, so nothing for QA or a canary
+        # yet. The feature keeps growing on the next cycle.
+        if impl.get("feature_step"):
+            trip = _outcome(success=True)
+            return _record({"status": "feature_step", "spec_id": spec_id, "story_id": story_id,
+                            "branch": impl.get("branch"), "step": impl.get("step"),
+                            "candidate_sha": impl.get("candidate_sha"),
+                            "baseline_latency": impl.get("baseline"),
+                            "candidate_latency": impl.get("candidate_latency"),
+                            "breaker_bug_id": _breaker_alarm(trip),
+                            "economics": ray.get(ceo.economics.remote()),
+                            "provenance": ray.get(sm.provenance.remote())}, cost_usd)
+
+        # 6. Verify (QA + deterministic gauntlet).
+        approved, qa_reason = ray.get(qa.review.remote(story_id, impl["pr_id"], contract_name))
+
+        # QA re-measures, so it can land on a neutral verdict the SWE's run did not
+        # (OMNI-41: an inconclusive benchmark). Same fact, same handling — spend
+        # recorded, no bug, no breaker increment — or a noisy re-measurement would
+        # file a bug against a candidate the SWE's run had just accepted.
+        qa_neutral = None if approved else episodic.neutral_status(qa_reason)
+        if qa_neutral:
+            trip = _neutral()
+            breaker_bug_id = _breaker_alarm(trip)
+            return _record({"status": qa_neutral, "reason": qa_reason,
+                            "spec_id": spec_id, "story_id": story_id,
+                            "pr_id": impl["pr_id"],
+                            "candidate_sha": impl.get("candidate_sha"),
+                            "breaker_bug_id": breaker_bug_id,
+                            "economics": ray.get(ceo.economics.remote()),
+                            "provenance": ray.get(sm.provenance.remote())}, cost_usd)
+
+        # 7. Canary deploy to the green slot (DevOps). Promotion to live is the
+        #    human PR merge — intentionally NOT performed by the agent. On the
+        #    legacy backend the offline latency is recorded as-is (the candidate
+        #    is not re-run); on the "serve" backend this is a real deployment
+        #    judged against live traffic (OMNI-14) and can itself reject a
+        #    candidate QA already approved — the failure mode a canary exists to
+        #    catch (real concurrency/queueing the offline gauntlet cannot see).
+        canary = (ray.get(devops.canary.remote(
+                      impl["pr_id"], impl["candidate_latency"], canary_backend))
+                  if approved else None)
+        if canary is not None and canary.get("canary_passed", True):
+            seen["canary_version"] = canary.get("version")  # green is set: retired on an error
+
+        status, success, canary_reason = cycle_outcome(approved, canary)
+
+        # 8. PM acceptance + CEO records the outcome + spend (drives the brakes).
+        # A rejection keeps its reason and gate, as at the SWE stage (OMNI-56).
+        reason = (canary_reason if status == "canary_rejected"
+                  else qa_reason if status == "qa_rejected" else None)
+        ray.get(pm.accept.remote(spec_id, satisfied=success))
+        trip = _outcome(success=success, gate=episodic.gate_from_reason(reason))
+        if status == "canary_rejected":
+            bug_id = _file_bug(
+                f"Live canary rejected {story_id} (PR {impl['pr_id']}): {canary_reason}")
+        elif status == "qa_rejected":
+            qa_gate, summary = rejection_bug(story_id, qa_reason, pr_id=impl["pr_id"])
+            bug_id = _file_bug(summary)
+            if qa_gate == "harness":
+                page(ws, store, Severity.WARNING, f"sandbox broken during QA of {story_id}",
+                     f"The candidate was not judged: {qa_reason}\nFiled as {bug_id}.")
+        else:
+            bug_id = None
         breaker_bug_id = _breaker_alarm(trip)
-        return _record({"status": neutral_status, "reason": impl["reason"],
-                        "spec_id": spec_id, "story_id": story_id,
-                        "candidate_sha": impl.get("candidate_sha"),
-                        "breaker_bug_id": breaker_bug_id,
-                        "economics": ray.get(ceo.economics.remote()),
-                        "provenance": ray.get(sm.provenance.remote())}, cost_usd)
 
-    if not impl["passed"]:
-        gate, summary = rejection_bug(story_id, impl.get("reason"))
-        # The gate is passed so the CEO can weigh a correct-but-over-budget
-        # rejection (``slo``, OMNI-24) below a wrong one.
-        trip = ray.get(ceo.report_outcome.remote(
-            success=False, cost_usd=cost_usd, reject_gate=gate))
-        # Failures become artifacts (ACTORS.md: DevOps files bug/defect Jiras).
-        bug_id = ray.get(devops.file_bug.remote(summary))
-        if gate == "harness":
-            # A broken sandbox fails every cycle after this one too, and nothing
-            # a proposer does will fix it — worth a person now, not after the
-            # breaker has counted three of them (OMNI-62).
-            page(ws, store, Severity.WARNING, f"sandbox broken during {story_id}",
-                 f"The candidate was not judged: {impl['reason']}\nFiled as {bug_id}.")
-        breaker_bug_id = _breaker_alarm(trip)
-        return _record({"status": "rolled_back", "reason": impl["reason"],
-                        "spec_id": spec_id, "story_id": story_id,
-                        "candidate_sha": impl.get("candidate_sha"),
+        result = _record({
+            "status": status,
+            # Feeds episodic.event_from_cycle_result's existing reason/reject_gate
+            # extraction (result.get("reason")) with zero new plumbing there —
+            # CanaryVerdict.reason (evaluate_canary) is a distinct failure family
+            # from the offline gauntlet's, so gate_from_reason grows matching names.
+            "reason": reason,
+            "bug_id": bug_id,
+            "breaker_bug_id": breaker_bug_id,
+            "spec_id": spec_id,
+            "epic_id": plan["epic_id"],
+            "story_id": story_id,
+            "pr_id": impl["pr_id"],
+            "candidate_sha": impl.get("candidate_sha"),
+            "baseline_latency": impl["baseline"],
+            "candidate_latency": impl["candidate_latency"],
+            "canary": canary,
+            "economics": ray.get(ceo.economics.remote()),
+            "provenance": ray.get(sm.provenance.remote()),
+        }, cost_usd)
+        # A verified candidate waits for a human, possibly longer than this
+        # process lives: remembered so the next start still waits (OMNI-126).
+        # After the record, so its failure cannot cost the cycle its row.
+        try:
+            remember_pending_pr(store, result, repo=durable_vcs())
+        except Exception as exc:  # noqa: BLE001
+            print(f"[sis] WARNING: pending PR not remembered across a restart: {exc}",
+                  file=sys.stderr)
+        return result
+
+    def _failed(exc: Exception) -> dict[str, Any]:
+        """The ``error`` outcome for an exception raised inside the cycle (M16)."""
+        reason = episodic.error_reason(exc)
+        # The console log is what an operator reads; the traceback goes there.
+        traceback.print_exception(exc, file=sys.stderr)
+        trip = None
+        retired = None
+        if not seen["charged"]:
+            # Charged and counted first. If the CEO cannot be told, this raises,
+            # and the loop stops: it must not run on without its brakes.
+            trip = _outcome(success=False, gate="error")
+            # Green set by this cycle is not left attached to a failed one (L30).
+            if seen.get("canary_version"):
+                try:
+                    ray.get(devops.retire_canary.remote(
+                        seen["canary_version"], seen.get("pr_id")))
+                    retired = seen["canary_version"]
+                except Exception as retire_exc:  # noqa: BLE001
+                    print(f"[sis] WARNING: canary {seen['canary_version']} not retired: "
+                          f"{retire_exc}", file=sys.stderr)
+        where = f" during {seen['story_id']}" if seen.get("story_id") else ""
+        bug_id = _file_bug(f"Cycle error{where}: {reason}")
+        page(ws, store, Severity.WARNING, f"cycle error{where}",
+             f"{reason}\nCost ${seen['cost_usd']:.4f}"
+             f"{', charged' if seen['cost_usd'] else ''}. "
+             f"{'Filed as ' + bug_id + '.' if bug_id else 'The bug could not be filed.'}")
+        try:
+            breaker_bug_id = _breaker_alarm(trip)
+        except Exception as alarm_exc:  # noqa: BLE001
+            print(f"[sis] WARNING: breaker alarm not raised: {alarm_exc}", file=sys.stderr)
+            breaker_bug_id = None
+        return _record({"status": "error", "reason": reason,
+                        "spec_id": seen.get("spec_id"), "story_id": seen.get("story_id"),
+                        "pr_id": seen.get("pr_id"),
+                        "candidate_sha": seen.get("candidate_sha"),
                         "bug_id": bug_id, "breaker_bug_id": breaker_bug_id,
-                        "economics": ray.get(ceo.economics.remote()),
-                        "provenance": ray.get(sm.provenance.remote())}, cost_usd)
+                        "canary_retired": retired}, seen["cost_usd"])
 
-    # A step committed to a feature branch (OMNI-130): accepted by the gauntlet,
-    # but no PR until the feature is finished, so nothing for QA or a canary
-    # yet. The feature keeps growing on the next cycle.
-    if impl.get("feature_step"):
-        trip = ray.get(ceo.report_outcome.remote(success=True, cost_usd=cost_usd))
-        return _record({"status": "feature_step", "spec_id": spec_id, "story_id": story_id,
-                        "branch": impl.get("branch"), "step": impl.get("step"),
-                        "candidate_sha": impl.get("candidate_sha"),
-                        "baseline_latency": impl.get("baseline"),
-                        "candidate_latency": impl.get("candidate_latency"),
-                        "breaker_bug_id": _breaker_alarm(trip),
-                        "economics": ray.get(ceo.economics.remote()),
-                        "provenance": ray.get(sm.provenance.remote())}, cost_usd)
-
-    # 6. Verify (QA + deterministic gauntlet).
-    approved, qa_reason = ray.get(qa.review.remote(story_id, impl["pr_id"], contract_name))
-
-    # QA re-measures, so it can land on a neutral verdict the SWE's run did not
-    # (OMNI-41: an inconclusive benchmark). Same fact, same handling — spend
-    # recorded, no bug, no breaker increment — or a noisy re-measurement would
-    # file a bug against a candidate the SWE's run had just accepted.
-    qa_neutral = None if approved else episodic.neutral_status(qa_reason)
-    if qa_neutral:
-        trip = ray.get(ceo.record_neutral.remote(cost_usd=cost_usd))
-        breaker_bug_id = _breaker_alarm(trip)
-        return _record({"status": qa_neutral, "reason": qa_reason,
-                        "spec_id": spec_id, "story_id": story_id,
-                        "pr_id": impl["pr_id"],
-                        "candidate_sha": impl.get("candidate_sha"),
-                        "breaker_bug_id": breaker_bug_id,
-                        "economics": ray.get(ceo.economics.remote()),
-                        "provenance": ray.get(sm.provenance.remote())}, cost_usd)
-
-    # 7. Canary deploy to the green slot (DevOps). Promotion to live is the
-    #    human PR merge — intentionally NOT performed by the agent. On the
-    #    legacy backend the offline latency is recorded as-is (the candidate
-    #    is not re-run); on the "serve" backend this is a real deployment
-    #    judged against live traffic (OMNI-14) and can itself reject a
-    #    candidate QA already approved — the failure mode a canary exists to
-    #    catch (real concurrency/queueing the offline gauntlet cannot see).
-    canary = (ray.get(devops.canary.remote(
-                  impl["pr_id"], impl["candidate_latency"], canary_backend))
-              if approved else None)
-
-    status, success, canary_reason = cycle_outcome(approved, canary)
-
-    # 8. PM acceptance + CEO records the outcome + spend (drives the brakes).
-    # A rejection keeps its reason and gate, as at the SWE stage (OMNI-56).
-    reason = (canary_reason if status == "canary_rejected"
-              else qa_reason if status == "qa_rejected" else None)
-    ray.get(pm.accept.remote(spec_id, satisfied=success))
-    trip = ray.get(ceo.report_outcome.remote(
-        success=success, cost_usd=cost_usd, reject_gate=episodic.gate_from_reason(reason)))
-    if status == "canary_rejected":
-        bug_id = ray.get(devops.file_bug.remote(
-            f"Live canary rejected {story_id} (PR {impl['pr_id']}): {canary_reason}"))
-    elif status == "qa_rejected":
-        qa_gate, summary = rejection_bug(story_id, qa_reason, pr_id=impl["pr_id"])
-        bug_id = ray.get(devops.file_bug.remote(summary))
-        if qa_gate == "harness":
-            page(ws, store, Severity.WARNING, f"sandbox broken during QA of {story_id}",
-                 f"The candidate was not judged: {qa_reason}\nFiled as {bug_id}.")
-    else:
-        bug_id = None
-    breaker_bug_id = _breaker_alarm(trip)
-
-    result = _record({
-        "status": status,
-        # Feeds episodic.event_from_cycle_result's existing reason/reject_gate
-        # extraction (result.get("reason")) with zero new plumbing there —
-        # CanaryVerdict.reason (evaluate_canary) is a distinct failure family
-        # from the offline gauntlet's, so gate_from_reason grows matching names.
-        "reason": reason,
-        "bug_id": bug_id,
-        "breaker_bug_id": breaker_bug_id,
-        "spec_id": spec_id,
-        "epic_id": plan["epic_id"],
-        "story_id": story_id,
-        "pr_id": impl["pr_id"],
-        "candidate_sha": impl.get("candidate_sha"),
-        "baseline_latency": impl["baseline"],
-        "candidate_latency": impl["candidate_latency"],
-        "canary": canary,
-        "economics": ray.get(ceo.economics.remote()),
-        "provenance": ray.get(sm.provenance.remote()),
-    }, cost_usd)
-    # A verified candidate waits for a human, possibly longer than this
-    # process lives: remembered so the next start still waits (OMNI-126).
-    remember_pending_pr(store, result, repo=durable_vcs())
-    return result
+    try:
+        return _cycle()
+    except Exception as exc:  # noqa: BLE001 - an outcome, not a crash (OMNI-55)
+        return _failed(exc)
