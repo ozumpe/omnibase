@@ -44,6 +44,7 @@ are the actors' shared coordination + memory substrate.
 | Cloud / Infra             | AWS                        | Compute, networking, deploy targets |
 | Telemetry                 | cluster + cloud metrics    | Logs, metrics, traces |
 | Notifier                  | AWS SNS                    | Pages a human: breaker trip, spend-cap hit, broken sandbox, a loop that stopped (OMNI-62) |
+| Sensor                    | `SimSensor`, a canned trace (the real one, EIA, is OMNI-33) | Readings of the modelled world, each with a unit and two times: the period it describes and when it became known (OMNI-31) |
 
 Same adapter mechanism later connects **domain** actors to the modeled world's APIs
 (traffic sensors, building systems, etc.) — the "real world" connection is uniform.

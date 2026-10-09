@@ -35,6 +35,15 @@ internal target before it models anything external.
   Work Tracker=Jira, Version Control=GitHub, Cloud=AWS, Telemetry, Notifier=AWS SNS
   (OMNI-62). Default = in-memory
   adapters; real adapters in `sis/adapters_real.py` (`SIS_ADAPTERS=real`).
+  **The sixth port is the `Sensor`** (OMNI-31): it reads the modelled world.
+  A `Reading` is an artifact with a unit and **two timezone-aware times**,
+  `event_time` (the period the value describes) and `known_at` (when it
+  became available); a replay that hands a model a value before its
+  `known_at` hands it the future. Every read names its `TimeAxis`: there is
+  no default. `SimSensor` replays a canned trace and is the default
+  (`sensor.backend`, a `forbidden_` key: a loop that could pick the simulator
+  would pick its own exam). The real adapter is OMNI-33. A consumer is given
+  its sensor as an argument, never looks it up inside an actor.
 - SelfModel (digital twin): live actor registry, deploy slots, provenance graph,
   substrate — the first "piece of the world" the system models.
 - Episodic store (`sis/episodic.py`): every cycle's outcome behind a port —
@@ -222,7 +231,8 @@ internal target before it models anything external.
   - FORBIDDEN (never, no override): guardrail/safety code — the gauntlet and
     its output canonicaliser (`sis/canonical.py`), the hot-deploy sandbox
     worker (`sis/sandbox_worker.py`, `sis/sandbox_worker_main.py`), the contract layer (`sis/contract.py`, `sis/backtest.py`, `sis/invariant.py`,
-    `sis/slo.py`, `sis/clock.py`), the contract-author approval gate
+    `sis/slo.py`, `sis/clock.py`), the ports with the `Sensor` and the shape
+    of a reading (`sis/ports.py`, OMNI-31), the contract-author approval gate
     (`sis/contract_author.py`),
     `specs/` (the exam itself — oracles, acceptance tests, domain laws, backtest
     fixtures), cost accounting (`sis/cost.py` — the breaker/threshold logic
@@ -392,7 +402,7 @@ internal target before it models anything external.
   - Precedence: **CLI flag > env var > `config.yml` > built-in default.** Every
     legacy `SIS_*` var still works — it is the env layer.
   - Sections: `brakes`, `sandbox`, `policy`, `episodic`, `adapters`, `proposer`,
-    `canary`, `loop`, `contracts`. Each key is prefixed `forbidden_` /
+    `canary`, `loop`, `sensor`, `contracts`. Each key is prefixed `forbidden_` /
     `strict_` / `soft_`.
   - **The prefix gates the human operator UI (OMNI-28), not the loop.** The loop
     is stopped by `config.yml` and `sis/config.py` both being POLICY-FORBIDDEN,
@@ -662,10 +672,11 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   components (`Sensor`+`Clock` ports, the determinism axis above,
   stateful-actor swap, per-actor deploy slots, an emergence gate) across
   phases A–F, plus a 13-decision register (D0–D12, each with a
-  recommendation and a "decide by" phase). Of the five components only the
-  `Clock` half of E1 exists (`sis/clock.py`, OMNI-23); **Phase A is filed as
-  OMNI-30** — the `Sensor` port, the first `RealSensor`, the `SimSensor`, and
-  the first recorded fixture.
+  recommendation and a "decide by" phase). Of the five components only E1 has
+  code: its `Clock` half (`sis/clock.py`, OMNI-23) and, since OMNI-31, the
+  `Sensor` port with `SimSensor`. **Phase A is filed as OMNI-30**: what is
+  left of it is the sanitising boundary, the first `RealSensor`, scenario
+  generation, the first recorded fixture and the prediction-error report.
   - **The register is fully settled as of 2026-08-28: all of D0–D12 are
     decided** (D0 revised 2026-09-24). Read the doc for the full text; the
     load-bearing ones:
@@ -803,9 +814,9 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   **Phase 0 is built:** `sis/sandbox_worker.py` (OMNI-129) serves a candidate
   hot from the sandbox. It is tested in both sandbox modes, including that a
   docker candidate cannot reach the network, Ray or the host's environment.
-- 1099 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 63
+- 1128 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 63
   Ray-Serve-integration tests run separately, see Operational quick reference
-  above; 1162 total, recounted 2026-10-08 — corrected 2026-09-26, a multi-dimension review found the
+  above; 1191 total, recounted 2026-10-09 — corrected 2026-09-26, a multi-dimension review found the
   previously-documented 616/678 stale); `ruff`/`mypy --strict`/`pytest` clean;
   CI green; `feature → develop → main` enforced by both the client-side
   pre-push hook and active server-side rulesets.
@@ -1005,9 +1016,9 @@ the KNOWN_ISSUES backfill, see "Known issues" above):
    store names are written by outsiders; all of it can reach scenario
    libraries, backtest fixtures and potentially LLM prompts. Six stories, all
    `To Do`:
-   - [OMNI-31](https://olafzumpe.atlassian.net/browse/OMNI-31) (High) — `Sensor`
+   - ~~[OMNI-31](https://olafzumpe.atlassian.net/browse/OMNI-31) (High) — `Sensor`
      port + `SimSensor` default adapter; a reading carries two times, `event_time`
-     and `known_at`.
+     and `known_at`.~~ **Built 2026-10-09.**
    - [OMNI-32](https://olafzumpe.atlassian.net/browse/OMNI-32) (High) — sensor
      input is untrusted: the sanitisation boundary, before any real adapter.
    - [OMNI-33](https://olafzumpe.atlassian.net/browse/OMNI-33) (Medium) —

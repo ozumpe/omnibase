@@ -72,6 +72,10 @@ GUARDRAIL_PATHS: tuple[str, ...] = (
     # so a loop able to edit it could approve its own contract.
     "sis/contract_author.py",
     "sis/clock.py",           # event time: what a replayed gate believes "now" is
+    # The Sensor port and the shape of a reading (OMNI-31): what the twin is
+    # shown of the world. Real data is the evidence a promotion needs, so the
+    # code that reads it is not the loop's to rewrite. Its adapters are below.
+    "sis/ports.py",
     "sis/cost.py",            # spend accounting that feeds the brakes
     "sis/settings.py",        # secret loading + masking
     "sis/adapters.py",        # RequiresHumanApproval guardrails (in-memory)
