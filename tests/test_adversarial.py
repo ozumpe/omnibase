@@ -13,7 +13,7 @@ import pathlib
 import pytest
 
 from sis import gauntlet
-from sis.contract import ROMAN, SORT, Contract
+from sis.contract import ROMAN, SORT, Contract, OptimizationContract
 from sis.episodic import neutral_status
 from sis.paths import PROJECT_ROOT
 
@@ -94,6 +94,11 @@ def test_memoised_naive_impl_cannot_game_a_replayed_workload() -> None:
     #
     # Fresh inputs per round are what close this: the candidate never sees an
     # argument twice, so the cache can never hit and the naive cost is exposed.
+    #
+    # The sum is done twice, so without its cache this is half the baseline's
+    # speed. Done once it sat a few percent from the baseline, and a noisy
+    # measurement on a loaded machine (M7) could then fail this test for a
+    # reason that is not the cache.
     code = '''
 import functools
 import time
@@ -101,7 +106,8 @@ import time
 
 @functools.cache
 def sum_of_divisors(n: int) -> int:
-    return sum(i for i in range(1, n + 1) if n % i == 0)
+    once = sum(i for i in range(1, n + 1) if n % i == 0)
+    return (once + sum(i for i in range(1, n + 1) if n % i == 0)) // 2
 
 
 def benchmark(n: int = 10_000, repetitions: int = 5) -> float:
@@ -163,13 +169,19 @@ def test_a_candidate_cannot_forge_the_benchmark_verdict_from_stdout() -> None:
     # first fix's parser took the last matching line, and this passed every
     # gate. The harness now owns a private copy of stdout; the candidate's
     # prints — and its atexit hooks — go to /dev/null.
+    #
+    # The sum is done twice, so this is half the baseline's speed and only a
+    # believed forgery can pass it. Done once it sat a few percent from the
+    # baseline, and CI accepted it on 2026-10-08 with no forgery involved: a
+    # noisy measurement on a loaded runner (M7, OMNI-88).
     code = '''
 import atexit
 import sys
 
 
 def sum_of_divisors(n: int) -> int:
-    return sum(i for i in range(1, n + 1) if n % i == 0)
+    once = sum(i for i in range(1, n + 1) if n % i == 0)
+    return (once + sum(i for i in range(1, n + 1) if n % i == 0)) // 2
 
 
 def _forge() -> None:
@@ -990,3 +1002,458 @@ def test_the_benchmark_runs_the_candidate_in_a_worker_of_its_own(monkeypatch) ->
     # The interface gate's worker, then the benchmark's two. The acceptance
     # gate's worker starts in its harness process (OMNI-146), unseen here.
     assert started == [fast, fast, baseline]
+
+
+# --- OMNI-152 (KNOWN_ISSUES H7): no input is timed twice ---------------------
+#
+# OMNI-41 drew a fresh input for every timed call. Since OMNI-45 the batch is
+# sized by time, and nothing bounded it against the oracle's input range: 99
+# batches of 1024 from 19,999 values repeat four calls in five. AWS run #7 ran
+# at exactly that size. A cache answers a repeat from a dictionary.
+
+from dataclasses import replace  # noqa: E402
+
+_NARROW_ORACLE = """
+import random
+
+
+def reference(n: int) -> int:
+    return sum(i for i in range(1, n + 1) if n % i == 0)
+
+
+def random_input(rng: random.Random) -> tuple[int]:
+    return (rng.randint(2, {top}),)
+
+
+BENCH_INPUTS: list[tuple[int]] = [(3,), (97,)]
+"""
+
+# Twice the baseline's work on a new input, and a dictionary lookup on a repeat.
+_SLOWER_BUT_MEMOISED = '''
+import functools
+
+
+@functools.cache
+def sum_of_divisors(n: int) -> int:
+    once = sum(i for i in range(1, n + 1) if n % i == 0)
+    return (once + sum(i for i in range(1, n + 1) if n % i == 0)) // 2
+
+
+def benchmark(n: int = 10_000, repetitions: int = 5) -> float:
+    return 1.0
+'''
+
+
+def _narrow_contract(tmp_path: pathlib.Path, top: int, **changes: Any) -> OptimizationContract:
+    """The default contract, its inputs drawn from only ``2..top``."""
+    oracle = tmp_path / "oracle.py"
+    oracle.write_text(_NARROW_ORACLE.format(top=top), encoding="utf-8")
+    return replace(gauntlet.default_contract(), oracle_path=str(oracle), **changes)
+
+
+def test_a_memoised_candidate_gains_nothing_when_batches_outgrow_the_input_range(
+    sandbox: str, tmp_path: pathlib.Path,
+) -> None:
+    # 99 batches of at least 1024 calls, from 1,999 possible inputs. The old
+    # gate drew them with replacement, so 98 calls in 100 were repeats and this
+    # candidate, half the baseline's speed, measured about ten times faster.
+    contract = _narrow_contract(tmp_path, top=2_000, bench_batch=1024)
+    result = gauntlet.validate(_SLOWER_BUT_MEMOISED, _BASELINE, contract=contract)
+    assert not result.passed, f"a cache was measured as speed: {result.reason!r}"
+    assert result.reason.startswith("no improvement"), result.reason
+    assert "capped by the oracle's input range" in result.reason
+
+
+class _Sent:
+    """What one benchmark sent its two workers, read off SandboxWorker.call."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, candidate: str, baseline: str) -> None:
+        from sis import sandbox_worker
+
+        calls: dict[str, list[list[int]]] = {candidate: [], baseline: []}
+        real_call = sandbox_worker.SandboxWorker.call
+
+        def spy(worker: Any, batch: Any, **kwargs: Any) -> Any:
+            calls.setdefault(worker._source, []).append([args[0] for args in batch])
+            return real_call(worker, batch, **kwargs)
+
+        monkeypatch.setattr(sandbox_worker.SandboxWorker, "call", spy)
+        self._calls, self._candidate, self._baseline = calls, candidate, baseline
+
+    @property
+    def timed(self) -> list[list[int]]:
+        # A timed batch is the one list both workers were sent.
+        theirs = self._calls[self._baseline]
+        return [batch for batch in self._calls[self._candidate] if batch and batch in theirs]
+
+    def met_only_by(self, who: str) -> set[int]:
+        """Inputs one worker was sent outside the timed batches."""
+        source = self._candidate if who == "candidate" else self._baseline
+        timed = self.timed
+        return {n for batch in self._calls[source] if batch not in timed for n in batch}
+
+
+def test_no_input_is_timed_twice_and_none_a_worker_has_met(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The invariant itself, read off what the gate sends: no timing is judged.
+    # The real oracle, with the merged fast target as the baseline and the same
+    # code plus a cache as the candidate: the case H7 would have accepted. The
+    # baseline is fast, so the batch grows from 1 and the sizing loop runs.
+    spec = gauntlet.default_contract()
+    fast = (PROJECT_ROOT / str(spec.stub_candidate_path)).read_text(encoding="utf-8")
+    cached = "import functools\n" + fast.replace(
+        "def sum_of_divisors", "@functools.cache\ndef sum_of_divisors", 1)
+    assert cached.count("@functools.cache") == 1
+    sent = _Sent(monkeypatch, candidate=cached, baseline=fast)
+    gauntlet.validate(cached, _BASELINE, baseline_source=fast)
+
+    timed = sent.timed
+    assert len(timed) == spec.bench_samples
+    inputs = [n for batch in timed for n in batch]
+    assert len(set(inputs)) == len(inputs), "an input was timed twice"
+    # The candidate alone gets the differential inputs, the baseline alone the
+    # sizing ones. Neither is timed again.
+    differential, sizing = sent.met_only_by("candidate"), sent.met_only_by("baseline")
+    assert differential and set(inputs).isdisjoint(differential)
+    assert sizing and set(inputs).isdisjoint(sizing)
+
+
+def test_the_batch_shrinks_to_the_inputs_there_are_and_a_real_gain_still_shows(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path,
+) -> None:
+    spec = gauntlet.default_contract()
+    baseline = (PROJECT_ROOT / spec.target_path).read_text(encoding="utf-8")
+    fast = (PROJECT_ROOT / str(spec.stub_candidate_path)).read_text(encoding="utf-8")
+    contract = _narrow_contract(tmp_path, top=2_000, bench_batch=64)
+    sent = _Sent(monkeypatch, candidate=fast, baseline=baseline)
+    result = gauntlet.validate(fast, _BASELINE, baseline_source=baseline, contract=contract)
+    assert result.passed, result.reason
+
+    timed = sent.timed
+    assert len(timed) == contract.bench_samples
+    inputs = [n for batch in timed for n in batch]
+    assert len(set(inputs)) == len(inputs), "an input was timed twice"
+    assert set(inputs).isdisjoint(sent.met_only_by("candidate"))
+    # 1,999 inputs cannot fill 99 batches of 64: at most 20 each, plus the
+    # oracle's two BENCH_INPUTS wherever they landed.
+    assert max(len(batch) for batch in timed) <= 1_999 // contract.bench_samples + 2
+
+
+def test_an_input_range_too_small_to_time_once_each_is_the_exams_fault(
+    tmp_path: pathlib.Path,
+) -> None:
+    # 39 possible inputs and 99 samples: no candidate can cause that or cure
+    # it, so it is filed and paged as a harness fault, and never an accept.
+    spec = gauntlet.default_contract()
+    fast = (PROJECT_ROOT / str(spec.stub_candidate_path)).read_text(encoding="utf-8")
+    result = gauntlet.validate(fast, _BASELINE, contract=_narrow_contract(tmp_path, top=40))
+    assert not result.passed
+    assert result.reason.startswith("harness: the contract oracle's random_input"), result.reason
+    assert gate_from_reason(result.reason) == "harness"
+    assert neutral_status(result.reason) is None
+
+
+# --- OMNI-153 (KNOWN_ISSUES H8): the worker's loop is the candidate's to change --
+#
+# The loop that serves a candidate runs in the candidate's interpreter. What it
+# did once per call in Python, a candidate could make cheaper for its own
+# worker: the baseline's worker still paid. The same algorithm plus a patched
+# json.dumps measured 0.78. A plain batch now runs no Python per call
+# (tests/test_sandbox_worker.py pins that exactly); this is the whole gate.
+
+# A third slower than the fast target: its loop runs a third again, for nothing.
+# And it replaces, in its own process, what the old loop ran for every call.
+_SLOWER_BUT_CHEAPENS_ITS_WORKER = '''
+import json
+import math
+import sys
+from typing import Any
+
+
+def sum_of_divisors(n: int) -> int:
+    if n <= 0:
+        return 0
+    total = 0
+    sqrt_n = int(math.isqrt(n))
+    for i in range(1, sqrt_n + 1):
+        if n % i == 0:
+            total += i
+            if i != n // i:
+                total += n // i
+    for i in range(1, sqrt_n // 3 + 1):
+        if n % i == 0:
+            continue
+    return total
+
+
+def benchmark(n: int = 10_000, repetitions: int = 5) -> float:
+    return 1.0
+
+
+_real_dumps = json.dumps
+
+
+def _dumps(obj: Any, *args: Any, **kwargs: Any) -> str:
+    return "" if type(obj) is int else _real_dumps(obj, *args, **kwargs)
+
+
+def _lean(fn: Any, args: Any, kwargs: Any, track: Any) -> Any:
+    return {"ok": fn(*args)}
+
+
+setattr(json, "dumps", _dumps)
+setattr(sys.modules["__main__"], "_call", _lean)
+'''
+
+
+def test_a_slower_candidate_cannot_pass_by_making_its_workers_loop_cheaper(sandbox: str) -> None:
+    # "No slower" is the bar here, the easiest a contract can set. Against the
+    # fast target the old loop measured this candidate at 0.95 and accepted it;
+    # without its two patches it measured 1.20. Now it measures 1.30 either way.
+    spec = gauntlet.default_contract()
+    fast = (PROJECT_ROOT / str(spec.stub_candidate_path)).read_text(encoding="utf-8")
+    result = gauntlet.validate(_SLOWER_BUT_CHEAPENS_ITS_WORKER, _BASELINE, baseline_source=fast,
+                               contract=replace(spec, max_latency_ratio=1.0))
+    assert not result.passed, f"a cheaper worker loop was measured as speed: {result.reason!r}"
+    # Rejected, or on a heavily loaded machine inconclusive (neutral): under
+    # twelve copies at once on twelve cores, one run in ten came out so.
+    assert result.reason.startswith(("no improvement", "benchmark inconclusive")), result.reason
+
+
+# --- OMNI-154 (KNOWN_ISSUES H9): one CPU for each benchmark worker ---------------
+#
+# The clock is a wall clock and a timed batch is many calls. A candidate that
+# takes over its worker's loop could spread a batch over several cores: the
+# same algorithm measured 0.50 outside docker and 0.76 to 0.81 inside it, where
+# a container had two CPUs. Each worker's container is now confined to one CPU
+# by cpuset. Docker only: the subprocess sandbox cannot confine anything.
+
+# The fast target's algorithm, byte for byte.
+_SAME_ALGORITHM = r'''
+import json
+import math
+import os
+import sys
+import time
+from typing import Any
+
+
+def sum_of_divisors(n: int) -> int:
+    if n <= 0:
+        return 0
+    total = 0
+    sqrt_n = int(math.isqrt(n))
+    for i in range(1, sqrt_n + 1):
+        if n % i == 0:
+            total += i
+            if i != n // i:
+                total += n // i
+    return total
+
+
+def benchmark(n: int = 10_000, repetitions: int = 5) -> float:
+    times: list[float] = []
+    for _ in range(repetitions):
+        start = time.perf_counter()
+        sum_of_divisors(n)
+        times.append(time.perf_counter() - start)
+    return sum(times) / len(times)
+'''
+
+# It replaces the worker's _plain_batch by one that hands three quarters of
+# every batch to forked helper processes running the same function.
+_BATCH_OVER_FORKED_HELPERS = _SAME_ALGORITHM + r'''
+
+_HELPERS: int = 3
+_links: list[tuple[int, Any]] = []
+
+
+def _serve_helper(rfd: int, wfd: int) -> None:
+    rf = os.fdopen(rfd, "rb")
+    while True:
+        line = rf.readline()
+        if not line:
+            os._exit(0)
+        answers = [sum_of_divisors(n) for n in json.loads(line)]
+        os.write(wfd, json.dumps(answers).encode() + b"\n")
+
+
+def _start_helpers() -> None:
+    for _ in range(_HELPERS):
+        to_r, to_w = os.pipe()
+        from_r, from_w = os.pipe()
+        if os.fork() == 0:
+            for fd in range(0, 256):
+                if fd not in (to_r, from_w):
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
+            try:
+                _serve_helper(to_r, from_w)
+            finally:
+                os._exit(0)
+        os.close(to_r)
+        os.close(from_w)
+        _links.append((to_w, os.fdopen(from_r, "rb")))
+
+
+def _batch(fn: Any, calls: list[list[Any]]) -> dict[str, Any]:
+    count = len(calls)
+    if count < 8 or fn is not sum_of_divisors:
+        return {"ok": [fn(*args) for args in calls]}
+    size = -(-count // (len(_links) + 1))
+    chunks = [calls[start:start + size] for start in range(0, count, size)]
+    used = list(zip(_links, chunks[1:]))
+    for (to_w, _), chunk in used:
+        os.write(to_w, json.dumps([args[0] for args in chunk]).encode() + b"\n")
+    values: list[Any] = [sum_of_divisors(args[0]) for args in chunks[0]]
+    for (_, from_r), _chunk in used:
+        values.extend(json.loads(from_r.readline()))
+    return {"ok": values}
+
+
+if os.path.basename(sys.argv[0]) == "_sis_worker.py":
+    _start_helpers()
+    setattr(sys.modules["__main__"], "_plain_batch", _batch)
+'''
+
+# The same in one process: the helpers are threads, each running a
+# sub-interpreter with its own GIL, so no process limit stops it.
+_BATCH_OVER_SUB_INTERPRETERS = _SAME_ALGORITHM + r'''
+import importlib
+import threading
+
+_HELPERS: int = 3
+_links: list[tuple[int, Any]] = []
+
+_HELPER_SOURCE = """
+import json, math, os
+
+def sum_of_divisors(n):
+    if n <= 0:
+        return 0
+    total = 0
+    sqrt_n = int(math.isqrt(n))
+    for i in range(1, sqrt_n + 1):
+        if n % i == 0:
+            total += i
+            if i != n // i:
+                total += n // i
+    return total
+
+rf = os.fdopen(rfd, "rb", closefd=False)
+while True:
+    line = rf.readline()
+    if not line:
+        break
+    os.write(wfd, json.dumps([sum_of_divisors(n) for n in json.loads(line)]).encode() + b"\\n")
+"""
+
+
+def _start_helpers() -> None:
+    interpreters: Any = importlib.import_module("concurrent.interpreters")
+    for _ in range(_HELPERS):
+        to_r, to_w = os.pipe()
+        from_r, from_w = os.pipe()
+        interp = interpreters.create()
+        interp.prepare_main(rfd=to_r, wfd=from_w)
+        threading.Thread(target=interp.exec, args=(_HELPER_SOURCE,), daemon=True).start()
+        _links.append((to_w, os.fdopen(from_r, "rb")))
+
+
+def _batch(fn: Any, calls: list[list[Any]]) -> dict[str, Any]:
+    count = len(calls)
+    if count < 8 or fn is not sum_of_divisors:
+        return {"ok": [fn(*args) for args in calls]}
+    size = -(-count // (len(_links) + 1))
+    chunks = [calls[start:start + size] for start in range(0, count, size)]
+    used = list(zip(_links, chunks[1:]))
+    for (to_w, _), chunk in used:
+        os.write(to_w, json.dumps([args[0] for args in chunk]).encode() + b"\n")
+    values: list[Any] = [sum_of_divisors(args[0]) for args in chunks[0]]
+    for (_, from_r), _chunk in used:
+        values.extend(json.loads(from_r.readline()))
+    return {"ok": values}
+
+
+if os.path.basename(sys.argv[0]) == "_sis_worker.py":
+    _start_helpers()
+    setattr(sys.modules["__main__"], "_plain_batch", _batch)
+'''
+
+
+@pytest.fixture
+def docker_sandbox(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    if not _docker_ready():
+        pytest.skip("docker or the sis-gauntlet image is not available")
+    monkeypatch.setenv("SIS_SANDBOX", "docker")
+    config.reset_config_cache()
+    yield
+    config.reset_config_cache()
+
+
+@pytest.mark.parametrize("takeover", [_BATCH_OVER_FORKED_HELPERS, _BATCH_OVER_SUB_INTERPRETERS],
+                         ids=["forked-helpers", "sub-interpreters"])
+def test_a_batch_spread_over_several_cores_is_not_measured_as_speed(
+    docker_sandbox: None, takeover: str,
+) -> None:
+    spec = gauntlet.default_contract()
+    fast = (PROJECT_ROOT / str(spec.stub_candidate_path)).read_text(encoding="utf-8")
+    result = gauntlet.validate(takeover, _BASELINE, baseline_source=fast)
+    assert not result.passed, f"several cores were measured as speed: {result.reason!r}"
+    # On one CPU the helpers only cost time: it measured 1.11 to 1.18.
+    assert result.reason.startswith(("no improvement", "benchmark inconclusive")), result.reason
+    assert "one CPU per worker" in result.reason
+
+
+def test_the_benchmarks_workers_get_one_cpu_each_and_swap_them_halfway(
+    docker_sandbox: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from sis import sandbox_worker
+
+    started: list[tuple[str, int | None]] = []
+    moved: list[tuple[str, int]] = []
+    real_start = sandbox_worker.SandboxWorker.start
+    real_confine = sandbox_worker.SandboxWorker.confine
+
+    def start(worker: Any) -> Any:
+        started.append((worker._source, worker.cpu))
+        return real_start(worker)
+
+    def confine(worker: Any, cpu: int) -> None:
+        moved.append((worker._source, cpu))
+        real_confine(worker, cpu)
+
+    monkeypatch.setattr(sandbox_worker.SandboxWorker, "start", start)
+    monkeypatch.setattr(sandbox_worker.SandboxWorker, "confine", confine)
+    spec = gauntlet.default_contract()
+    baseline = (PROJECT_ROOT / spec.target_path).read_text(encoding="utf-8")
+    fast = (PROJECT_ROOT / str(spec.stub_candidate_path)).read_text(encoding="utf-8")
+    result = gauntlet.validate(fast, _BASELINE, baseline_source=baseline)
+    assert result.passed, result.reason
+
+    # The interface gate's worker is not confined; the benchmark's two are.
+    assert started[0] == (fast, None)
+    (_, candidate_cpu), (_, baseline_cpu) = started[1:]
+    assert candidate_cpu is not None and baseline_cpu is not None
+    assert candidate_cpu != baseline_cpu
+    assert {candidate_cpu, baseline_cpu} <= set(gauntlet._sandbox_cpus())
+    assert moved == [(fast, baseline_cpu), (baseline, candidate_cpu)]
+
+
+def test_a_cpu_the_sandbox_cannot_give_is_not_blamed_on_the_candidate(
+    docker_sandbox: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The candidate's worker is the first to be started on its CPU. If docker
+    # refuses that CPU, a trusted worker is tried there before anyone is blamed.
+    monkeypatch.setattr(gauntlet, "benchmark_cpus", lambda cpus, siblings: (999, 998))
+    spec = gauntlet.default_contract()
+    baseline = (PROJECT_ROOT / spec.target_path).read_text(encoding="utf-8")
+    fast = (PROJECT_ROOT / str(spec.stub_candidate_path)).read_text(encoding="utf-8")
+    result = gauntlet.validate(fast, _BASELINE, baseline_source=baseline)
+    assert not result.passed
+    assert result.reason.startswith("harness: a benchmark worker cannot be confined to CPU 999")
+    assert gate_from_reason(result.reason) == "harness"
+

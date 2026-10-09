@@ -7,10 +7,20 @@ covered by the adversarial corpus.
 """
 
 import math
+import random
 import statistics
 
+from sis import gauntlet
 from sis.episodic import gate_from_reason, neutral_status
-from sis.gauntlet import BenchmarkVerdict, benchmark_decision
+from sis.gauntlet import (
+    BenchmarkVerdict,
+    _timed_work,
+    _TimedWork,
+    _UnusedInputs,
+    benchmark_cpus,
+    benchmark_decision,
+)
+from sis.sandbox_worker import WorkerError
 
 MARGIN = 0.90
 
@@ -115,3 +125,222 @@ def test_measurement_failures_are_named_and_never_neutral() -> None:
     ):
         assert gate_from_reason(reason) == gate
         assert neutral_status(reason) is None
+
+
+# --- OMNI-152 (KNOWN_ISSUES H7): no input is given out twice -----------------
+
+
+def _one_of(top: int) -> _UnusedInputs:
+    return _UnusedInputs(lambda rng: [rng.randint(1, top)])
+
+
+def test_no_input_is_given_out_twice_across_takes() -> None:
+    unused = _one_of(10_000)
+    rng = random.Random(7)
+    given = [args[0] for _ in range(20) for args in unused.take(rng, 300)]
+    assert len(given) == 6_000
+    assert len(set(given)) == len(given)
+
+
+def test_a_range_that_runs_short_gives_fewer_inputs_not_repeats() -> None:
+    # 50 values and a request for 1000: the old gate drew 1000, 950 of them
+    # repeats, which is what a cache was paid for.
+    unused = _one_of(50)
+    given = [args[0] for args in unused.take(random.Random(7), 1_000)]
+    assert sorted(given) == list(range(1, 51))
+    assert unused.take(random.Random(8), 1_000) == []
+
+
+def test_the_last_unused_inputs_of_a_small_range_are_found() -> None:
+    # 300 values, 200 of them met: 99 are asked for and 100 are left. Giving up
+    # after a fixed 100 repeats in a row lost this about every other time, and
+    # the benchmark then reported a range it could have timed as too small.
+    for seed in range(20):
+        unused = _one_of(300)
+        for met in range(1, 201):
+            unused.use([met])
+        assert len(unused.take(random.Random(seed), 99)) == 99, seed
+
+
+def test_an_input_already_used_elsewhere_is_never_given_out() -> None:
+    # What the candidate met in the differential phase is not timed later.
+    unused = _one_of(50)
+    for met in range(1, 41):
+        assert unused.use([met])
+    assert not unused.use([40])
+    given = {args[0] for args in unused.take(random.Random(7), 1_000)}
+    assert given and given <= set(range(41, 51))
+
+
+def test_inputs_are_compared_at_least_as_coarsely_as_a_cache_could_key_them() -> None:
+    # A dict keys 1, 1.0 and True alike, so a cache built on one answers all
+    # three from one entry. (functools.cache keeps a lone int apart from 1.0;
+    # being stricter than that costs nothing.)
+    unused = _UnusedInputs(lambda rng: [0])
+    assert unused.use([1])
+    assert not unused.use([1.0])
+    assert not unused.use([True])
+    assert unused.use([[3, 1, 2], {"k": [1]}])
+    assert not unused.use([[3, 1, 2], {"k": [1]}])
+    assert unused.use([[1, 2, 3], {"k": [1]}])
+
+
+# --- OMNI-152: the timed batches, sized by time and filled with unused inputs --
+#
+# _timed_work with a scripted baseline, so the sizing loop is pinned without a
+# worker or a clock: the baseline "takes" per_call seconds for each input.
+
+
+def _work(
+    top: int, *, samples: int = 99, min_batch: int = 1, per_call: float = 1.0,
+    window: float = 64.0, met: range = range(0),
+) -> tuple[_TimedWork, list[list[int]]]:
+    unused = _one_of(top)
+    for n in met:
+        unused.use([n])
+    probes: list[list[int]] = []
+
+    def time_baseline(probe: list[list[int]]) -> float:
+        probes.append([args[0] for args in probe])
+        return per_call * len(probe)
+
+    work = _timed_work(unused, random.Random(11), samples=samples, min_batch=min_batch,
+                       window=window, time_baseline=time_baseline)
+    return work, probes
+
+
+def _timed(work: _TimedWork) -> list[int]:
+    return [args[0] for batch in work.batches for args in batch]
+
+
+def test_the_batch_grows_to_the_window_and_no_input_is_used_twice() -> None:
+    work, probes = _work(10**9)
+    assert [len(probe) for probe in probes] == [1, 2, 4, 8, 16, 32, 64]
+    assert (work.batch, work.capped) == (64, False)
+    assert [len(batch) for batch in work.batches] == [64] * 99
+    timed = _timed(work)
+    assert len(set(timed)) == len(timed)
+    assert set(timed).isdisjoint(n for probe in probes for n in probe)
+
+
+def test_a_small_range_caps_the_batch_while_it_is_growing() -> None:
+    # 2,000 values and a baseline so fast the window is never reached: the
+    # batch stops where the inputs do. Doubling by drawing with replacement,
+    # which is H7 itself, fills 99 batches of 32 here, most of them repeats.
+    work, probes = _work(2_000, per_call=0.0)
+    assert work.capped
+    assert work.batch == work.found // 99
+    assert 16 <= work.batch <= 19
+    timed = _timed(work)
+    assert len(timed) == 99 * work.batch
+    assert len(set(timed)) == len(timed)
+    assert set(timed).isdisjoint(n for probe in probes for n in probe)
+
+
+def test_the_timed_inputs_are_set_aside_before_sizing_can_use_them_up() -> None:
+    # 250 values. Set aside first, they fill 99 batches of 2. Sizing first
+    # would spend 127 of them on sizing exchanges and leave batches of 1.
+    work, _ = _work(250, per_call=0.0)
+    assert (work.batch, work.capped) == (2, True)
+
+
+def test_a_minimum_batch_the_range_cannot_fill_is_cut_down_without_sizing() -> None:
+    work, probes = _work(2_000, min_batch=1024)
+    assert probes == []
+    assert work.capped
+    assert work.batch == 2_000 // 99
+    assert len(set(_timed(work))) == 99 * work.batch
+
+
+def test_a_range_that_gives_out_while_sizing_keeps_the_batch_it_has() -> None:
+    # Exactly one input per sample, and none left for the first sizing exchange.
+    work, probes = _work(99)
+    assert probes == []
+    assert (work.batch, work.capped) == (1, True)
+    assert sorted(_timed(work)) == list(range(1, 100))
+
+
+def test_a_range_smaller_than_the_samples_gives_nothing_to_time() -> None:
+    work, probes = _work(60)
+    assert work.batches == [] and work.batch == 0 and probes == []
+    assert work.capped and work.found == 60
+
+
+def test_inputs_met_before_the_benchmark_are_never_timed() -> None:
+    work, _ = _work(2_000, per_call=0.0, met=range(1, 1_501))
+    timed = _timed(work)
+    assert timed and min(timed) > 1_500
+
+
+# --- OMNI-154 (KNOWN_ISSUES H9): one CPU for each benchmark worker ---------------
+
+
+def _cores(*groups: tuple[int, ...]) -> dict[int, frozenset[int]]:
+    return {cpu: frozenset(group) for group in groups for cpu in group}
+
+
+def test_the_two_workers_get_different_cpus() -> None:
+    # Where the host does not know its hyperthreads: the highest and the lowest.
+    assert benchmark_cpus(range(4), {}) == (3, 0)
+    assert benchmark_cpus(range(12), {}) == (11, 0)
+    assert benchmark_cpus([2, 3], {}) == (3, 2)
+
+
+def test_the_two_cpus_are_on_different_cores_where_the_host_can_tell() -> None:
+    # The two usual numberings of two cores with two threads each.
+    assert benchmark_cpus(range(4), _cores((0, 2), (1, 3))) == (3, 2)
+    assert benchmark_cpus(range(4), _cores((0, 1), (2, 3))) == (3, 1)
+    # One core, two threads: there is no other core to go to.
+    assert benchmark_cpus(range(2), _cores((0, 1))) == (1, 0)
+
+
+def test_a_single_cpu_is_shared_and_none_is_an_error() -> None:
+    assert benchmark_cpus([5], {}) == (5, 5)
+    try:
+        benchmark_cpus([], {})
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("no CPU must not pass for a confinement")
+
+
+class _FakeWorker:
+    def __init__(self, cpu: int | None, *, fails: bool = False) -> None:
+        self.cpu, self.fails = cpu, fails
+        self.log: list[object] = []
+
+    def confine(self, cpu: int) -> None:
+        if self.fails:
+            raise WorkerError("docker update failed: no such container")
+        self.log.append(("confine", cpu))
+        self.cpu = cpu
+
+    def call(self, calls: list[list[object]], *, timeout_s: float) -> object:
+        self.log.append(("call", list(calls)))
+        return object()
+
+
+def test_halfway_each_worker_moves_to_the_others_cpu_before_the_clock_runs_again() -> None:
+    cand, base = _FakeWorker(3), _FakeWorker(0)
+    gauntlet._swap_cpus(cand, base, deadline=float("inf"))
+    assert (cand.cpu, base.cpu) == (0, 3)
+    # One untimed, empty exchange each after the move.
+    assert cand.log == [("confine", 0), ("call", [])]
+    assert base.log == [("confine", 3), ("call", [])]
+
+
+def test_workers_that_are_not_confined_or_share_a_cpu_do_not_swap() -> None:
+    for cand, base in ((_FakeWorker(None), _FakeWorker(None)), (_FakeWorker(5), _FakeWorker(5))):
+        gauntlet._swap_cpus(cand, base, deadline=float("inf"))
+        assert cand.log == [] and base.log == []
+
+
+def test_a_swap_that_fails_is_the_harnesss_fault() -> None:
+    try:
+        gauntlet._swap_cpus(_FakeWorker(3, fails=True), _FakeWorker(0), deadline=float("inf"))
+    except gauntlet._WorkerFailed as failed:
+        assert failed.result.reason.startswith("harness: the benchmark's workers could not swap")
+        assert gate_from_reason(failed.result.reason) == "harness"
+    else:
+        raise AssertionError("a failed swap went unreported")
+

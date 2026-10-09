@@ -52,7 +52,8 @@ internal target before it models anything external.
   run as the host user's uid — never root; see KNOWN_ISSUES "Resolved"). A
   per-gate timeout kills infinite loops. A real (non-stub) proposer writes untrusted code
   and REQUIRES `SIS_SANDBOX=docker` — the loop refuses otherwise (override:
-  `SIS_ALLOW_UNSANDBOXED_LLM=1`); the subprocess sandbox leaves host files readable (M1).
+  `SIS_ALLOW_UNSANDBOXED_LLM=1`); the subprocess sandbox leaves host files readable (M1)
+  and cannot confine a benchmark worker to one CPU (H9).
   **The Serve canary is not a sandbox at all** — a green replica is an ordinary
   Ray worker — so `canary.backend=serve` is refused with any non-stub proposer,
   with **no** override, until OMNI-48 isolates it (OMNI-49, M19;
@@ -81,7 +82,7 @@ internal target before it models anything external.
     default). **The benchmark never decides on one comparison** (OMNI-41):
     candidate and baseline are timed back-to-back on the *same fresh* input
     (alternating order, seeded, never reused — a replayed workload rewarded
-    `functools.cache`, not speed), plus each `BENCH_INPUTS` entry timed once
+    `functools.cache`, not speed), plus each `BENCH_INPUTS` entry timed at most once
     for shape coverage. `gauntlet.benchmark_decision` (pure) decides on
     **total cost** — `sum(candidate)/sum(baseline)` with a paired-bootstrap
     interval — never a per-input median (a candidate fast on typical inputs
@@ -96,13 +97,45 @@ internal target before it models anything external.
     `specs/`, and every exchange is timed on the host and decoded from JSON.
     Exchanges carry a batch of fresh inputs, sized by time so the baseline's
     batch takes ~20 pipe round trips (`_WINDOW_OVER_ROUND_TRIP`; ~20 µs a round
-    trip in the subprocess sandbox, ~350 µs in docker on a Mac). The per-call
-    JSON cost (~1 µs for an int) cannot be amortised and dilutes a gain rather
-    than invents one, so µs-scale differences are resolved poorly — accepted.
+    trip in the subprocess sandbox, ~350 µs in docker on a Mac). **No input
+    is timed twice, and none is timed after a worker has met it** (OMNI-152,
+    H7 fixed 2026-10-08; `gauntlet._UnusedInputs`, `gauntlet._timed_work`):
+    not in another timed batch, a sizing exchange or `BENCH_INPUTS`, and not
+    after the candidate met it in the differential phase. Inputs are compared
+    with `==`, at least as coarsely as a cache could key them. A fresh draw
+    each time was not enough: 99 batches of 1024 from `sum_of_divisors`'
+    19,999 values repeated four calls in five, and a cache measured as speed
+    (AWS run #7 ran at that size). The timed inputs are set aside before each
+    sizing exchange. When the oracle's range cannot fill the batch the timing
+    asks for, the batch shrinks (`capped by the oracle's input range` in the
+    reason). A range that cannot give every sample one unused input is the
+    exam's fault, a `harness:` verdict that pages a human: with 300
+    differential trials, a range under about 300 values.
+    **A timed batch runs no Python per call in the worker** (OMNI-153, H8
+    fixed 2026-10-08). The worker's loop is trusted code in the candidate's
+    interpreter, so whatever it did once per call the candidate could make
+    cheaper for its own worker: the same algorithm plus a patched `json.dumps`
+    measured 0.78. Now the loop decodes the request, runs the calls through
+    `itertools.starmap` and encodes the reply, three C calls for the batch
+    (`sandbox_worker_main._plain_batch`), and answers `{"id": n, "ok": [...]}`
+    when every call returned. Keep it that way: no per-call Python on the
+    timed path. The loop's per-call cost is ~0.17 µs (was 1.24). It cannot be
+    amortised and dilutes a gain rather than invents one, so differences well
+    under a µs are resolved poorly — accepted. **Each benchmark worker has
+    one CPU, and a different one** (OMNI-154, H9 fixed 2026-10-08). The clock
+    is a wall clock and a batch is many calls, so a candidate that took over
+    its worker's loop spread the batch over several cores: the same algorithm
+    measured 0.50, and 0.76 to 0.81 in docker's two CPUs. In docker each
+    worker's container is confined by `--cpuset-cpus`, which cannot be left
+    from inside (`--cpus` is a quota per 100 ms; a burst of a few hundred µs
+    on every core never reaches it). The CPUs come from a trusted container
+    (`gauntlet._sandbox_cpus`), differ so a candidate that spins does not take
+    the baseline's time (`gauntlet.benchmark_cpus`), and are swapped halfway
+    so a busier CPU counts against both sides. **The subprocess sandbox
+    confines nothing** and is refused for a real proposer (M1).
     Every timed answer is checked against the baseline's, and differences
-    against the reference, so a candidate cannot be wrong only while timed. It
-    can still contend for CPU during the baseline's batch (bounded by docker's
-    `--cpus`). M7 — false-accept above nominal
+    against the reference, so a candidate cannot be wrong only while timed.
+    M7 — false-accept above nominal
     under stalls — is won't-fix for now (OMNI-88). Too few usable timings is
     `benchmark unmeasurable`, a counted failure, never neutral.
   - **Class 2** (`FeatureContract` — build what a spec describes, no
@@ -236,6 +269,20 @@ internal target before it models anything external.
   refused with a real proposer or real adapters (no override — `jsonl` costs
   nothing). Operators pause/resume/reset through `python -m sis.admin`, each
   change with a written `--reason`, audited; a reset never touches spend.
+  **An exception inside a cycle is an outcome, and its spend is charged**
+  (OMNI-55, M16 fixed 2026-10-08). The cost of a proposal used to reach the
+  driver only in `SWE.implement`'s return value, so a 403 at `open_pr` lost
+  it: the cap never saw it and `--loop` died. Now the SWE's step never leaves
+  by raising once a proposal was asked for; it returns the cost with the
+  error. `org.run_cycle` records anything else that raises as status `error`:
+  charged, counted toward the breaker in full, a bug filed, a human paged, a
+  canary set by that cycle retired. Only the refusals before any spend still
+  raise, and a CEO that cannot be told: a loop that cannot reach its brakes
+  must not go on.
+  **One loop per box** (OMNI-151, M28): `main.py` holds an exclusive `flock` on
+  `runtime/loop.lock` for the run, and a second start exits 3 naming the
+  holder. Two loops would each restore their own CEO from one state file, so
+  neither would enforce the cap for both (AWS run #7).
   **A trip pages a human** (OMNI-62), not only files a TES bug nobody watches:
   the `Notifier` port (SNS topic `adapters.notify_sns_topic_arn`, `sns:Publish`
   on that one topic) pages on a breaker trip, a spend-cap refusal, a broken
@@ -314,7 +361,7 @@ internal target before it models anything external.
 - **`pytest` defaults to `-m "not serve" -n auto`** (fast inner loop, ~50s,
   parallel): it deselects the Ray Serve integration tests
   (`test_live_canary.py`, `test_serve_cloud.py`, `test_serving.py`,
-  `test_loadgen.py`, `test_loop_serve.py`, 62 tests), which stand up a real
+  `test_loadgen.py`, `test_loop_serve.py`, 63 tests), which stand up a real
   cluster/Serve deployment and take minutes serially. **Not a full verification
   by itself** — run `poetry run pytest -m serve -n 0` (serial: they share a
   cluster and a port) before trusting a change touches Serve, or let CI run
@@ -384,7 +431,13 @@ internal target before it models anything external.
   live runs — don't put planning there.
 
 ## Current status — where to pick up
-Released through **v0.3.6** (2026-09-30): v0.3.5 plus the fixes from the sixth
+Released through **v0.3.7** (2026-10-08): v0.3.6 plus the hardening after the
+seventh AWS run, most of it gate integrity. OMNI-151: one loop per box.
+OMNI-152: no benchmark input is timed twice (H7). OMNI-153: a timed batch
+runs no Python per call in the worker (H8). OMNI-154: one CPU for each
+benchmark worker (H9). OMNI-55: an exception inside a cycle is an outcome,
+and its spend is charged (M16, L30). Before that, **v0.3.6** (2026-09-30):
+v0.3.5 plus the fixes from the sixth
 AWS run, the first Class-2 run (`roman`, built at the first attempt).
 OMNI-149: a built feature's convergence check comes before planning, so it
 files nothing. OMNI-148: a feature's intake says "Build". OMNI-150: the log
@@ -750,17 +803,22 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   **Phase 0 is built:** `sis/sandbox_worker.py` (OMNI-129) serves a candidate
   hot from the sandbox. It is tested in both sandbox modes, including that a
   docker candidate cannot reach the network, Ray or the host's environment.
-- 1043 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 62
+- 1099 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 63
   Ray-Serve-integration tests run separately, see Operational quick reference
-  above; 1105 total, recounted 2026-09-30 — corrected 2026-09-26, a multi-dimension review found the
+  above; 1162 total, recounted 2026-10-08 — corrected 2026-09-26, a multi-dimension review found the
   previously-documented 616/678 stale); `ruff`/`mypy --strict`/`pytest` clean;
   CI green; `feature → develop → main` enforced by both the client-side
   pre-push hook and active server-side rulesets.
-- **One known test flake** — re-run before chasing it:
+- **Two known test flakes** — re-run before chasing either:
   `test_a_drafted_skeleton_stages_without_touching_specs` (under `-n auto`)
   is **test-only** — [OMNI-42](https://olafzumpe.atlassian.net/browse/OMNI-42)
   (Low). It compares two `specs/` listings and races another worker creating
-  `specs/__pycache__`; `stage()` never writes into `specs/`. (The Serve
+  `specs/__pycache__`; `stage()` never writes into `specs/`.
+  `test_correct_but_not_faster_is_rejected` is **not** test-only: on a heavily
+  loaded machine the benchmark can accept its candidate, which is a few
+  percent slower than the baseline (M7,
+  [OMNI-88](https://olafzumpe.atlassian.net/browse/OMNI-88), won't-fix for
+  now). CI did so once, on 2026-10-08, through a test with the same candidate. (The Serve
   flake in `test_promotion_makes_the_candidate_the_new_baseline` was not a
   replica race but the 5% default canary weight — fixed in #110, see
   "Writing a Serve test" above.)
@@ -786,8 +844,8 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
 **Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L
 severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
 the IDs in commits/PRs. **Open after a 2026-09-26 multi-dimension review with
-adversarial verification: H3, M12–M14, M16, M20–M23,
-L16–L20, L22, L25–L32, L35–L43; plus L46 from the second AWS run and L48–L50
+adversarial verification: H3, M12–M14, M20–M23,
+L16–L20, L22, L25–L29, L31, L32, L35–L43; plus L46 from the second AWS run and L48–L50
 from the fifth (OMNI-143–145)** (M7 is won't-fix for now; H4, M10, M15, M19, L21, L23
 and L24 fixed 2026-09-26, OMNI-46/47/51/49/61/62; H5, H6, M24 and L44, found
 in the first AWS run, and L45, found releasing it, fixed 2026-09-27,
@@ -796,7 +854,11 @@ OMNI-57/126; M26, the third run's conflicting second PR, and M27, the fourth run
 breaker trip on a converged target, fixed 2026-09-29, OMNI-136/138; H2, M8, M9
 and M11 fixed the same day, OMNI-45/146, and M17, L15 and L33 with OMNI-147,
 OMNI-56/64/78; L34 and L51–L53, the last three from the sixth run, fixed
-2026-09-30, OMNI-79/148–150). The headline, before trusting any
+2026-09-30, OMNI-79/148–150; M28, from the seventh, the same day, OMNI-151;
+H7, the benchmark's repeated inputs, H8, the worker loop a candidate could
+make cheaper, and H9, a batch spread over several cores, fixed 2026-10-08,
+OMNI-152/153/154; M16 and L30, spend lost when a cycle raises, the same day,
+OMNI-55). The headline, before trusting any
 gauntlet verdict: every gate but SLO now judges its candidate from outside the
 candidate's process (H2, M8), and the exam files are protected (M9). **The SLO
 gate still runs its candidate in-process** (L42,
@@ -835,8 +897,8 @@ Two traps L5 surfaced, both worth knowing before writing similar code:
 
 **Next — the milestone plan is in Jira ([`OMNI`](https://olafzumpe.atlassian.net/browse/OMNI)),
 not here.** Check the board for current status rather than trusting this list.
-**Last reconciled against a live query on 2026-09-30** (150 issues, OMNI-1
-through OMNI-150; 94 Done, 0 In Progress, 56 To Do — most of the growth since 2026-09-26 is
+**Last reconciled against a live query on 2026-10-08** (154 issues, OMNI-1
+through OMNI-154; 99 Done, 0 In Progress, 55 To Do — most of the growth since 2026-09-26 is
 the KNOWN_ISSUES backfill, see "Known issues" above):
 
 1. ~~**[OMNI-1](https://olafzumpe.atlassian.net/browse/OMNI-1) — L5 target
@@ -916,7 +978,7 @@ the KNOWN_ISSUES backfill, see "Known issues" above):
    instance lifecycle: `user_data` racing Ubuntu's `unattended-upgrades` for
    the dpkg lock, and SSM sessions landing as `ssm-user` rather than `ubuntu`
    (every runbook step now starts with `sudo -iu ubuntu`). The box clones
-   the release tag in `var.repo_ref` (`v0.3.6`; a branch needs
+   the release tag in `var.repo_ref` (`v0.3.7`; a branch needs
    `allow_branch_ref = true`, OMNI-63) and every run records the commit it
    ran; run day uses `--contract sort`. **Rehearsed
    2026-09-23** on a local Ubuntu 24.04 box (`scripts/rehearse_aws_run.sh`),
@@ -1040,7 +1102,7 @@ has the defect write-ups and the ID → ticket table:
   — done 2026-09-26 (run day uses `sort`, so it was a hard prerequisite),
   OMNI-52 config YAML injection (M12), OMNI-53 OAuth never
   installed (M13), OMNI-54 worked examples limited to the public API (M14),
-  OMNI-55 spend lost on exceptions (M16), OMNI-56 QA-stage reject reason
+  ~~OMNI-55 spend lost on exceptions (M16)~~ (done 2026-10-08), OMNI-56 QA-stage reject reason
   (M17), ~~OMNI-57 PR closed without merging (M18)~~ (done 2026-09-27, with
   OMNI-126), OMNI-58 Serve baseline from
   the merged target (M22, unblocked by OMNI-51), OMNI-59 tests inherit `SIS_*`

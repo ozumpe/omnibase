@@ -153,6 +153,17 @@ def test_docker_args_are_locked_down(ordinary_user: None) -> None:
     assert "-e PATH=" not in joined
 
 
+def test_docker_args_confine_to_a_cpu_only_when_asked() -> None:
+    # OMNI-154: a cpuset, which cannot be left from inside. --cpus is a quota.
+    env = {"HOME": "/t", "PATH": "/usr/bin"}
+    plain = gauntlet._docker_args("/t", env, "image", "name")
+    assert "--cpuset-cpus" not in plain
+    confined = gauntlet._docker_args("/t", env, "image", "name", cpuset="3")
+    assert confined[confined.index("--cpuset-cpus") + 1] == "3"
+    assert confined.index("--cpuset-cpus") < confined.index("image")
+
+
+
 def test_docker_args_forward_no_host_credentials(ordinary_user: None) -> None:
     from sis.gauntlet import _docker_args
 

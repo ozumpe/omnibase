@@ -14,7 +14,7 @@ import pytest
 
 ray = pytest.importorskip("ray")
 
-from sis import org  # noqa: E402
+from sis import episodic, org  # noqa: E402
 from sis.contract import DEFAULT_CONTRACTS  # noqa: E402
 from sis.roles import LIVE_CANARY_REQUESTS  # noqa: E402
 
@@ -108,6 +108,40 @@ def test_a_disagreeing_candidate_is_rejected_rolled_back_and_reported(handles) -
     issue = ray.get(handles["Workspace"].get_issue.remote(result["bug_id"]))
     assert "Live canary rejected" in issue.summary
     assert pr.id in issue.summary
+
+
+def _warm_up_fails_once(devops):  # type: ignore[no-untyped-def]
+    """Inside DevOps: the next fill of the live window raises, then it works again."""
+    cloud = devops._serve_clouds["sort"]
+    real = cloud.warm_up
+
+    def broken(*args, **kwargs):  # type: ignore[no-untyped-def]
+        cloud.warm_up = real
+        raise ConnectionError("the load generator lost its connection")
+
+    cloud.warm_up = broken
+
+
+def test_an_error_after_the_green_deploy_retires_green_and_is_a_rejection(handles) -> None:  # type: ignore[no-untyped-def]
+    # L30 (OMNI-55): an exception once green was up left it attached and the PR
+    # pending, with no verdict. It is a rejection now, and green is released.
+    pr = _open_pr(handles, "feature/sort-then-error",
+                  "def sort_numbers(values):\n    return sorted(values)\n")
+    ray.get(handles["DevOps"].__ray_call__.remote(_warm_up_fails_once))
+
+    result = ray.get(handles["DevOps"].canary.remote(pr.id, 0.0001, "serve"))
+
+    assert result["canary_passed"] is False
+    assert result["reason"].startswith("error: ConnectionError: the load generator lost")
+    assert result["reason"].endswith("(during the live canary)")
+    # run_cycle reads that as canary_rejected, with the error as its gate.
+    assert org.cycle_outcome(True, result)[0] == "canary_rejected"
+    assert episodic.gate_from_reason(result["reason"]) == "error"
+    deployment = ray.get(handles["SelfModel"].deployment.remote())
+    assert deployment["slots"]["green"] is None
+    assert deployment["pending_pr"] is None
+    # Blue was not disturbed, and still answers.
+    assert _post([[3, 1, 2]])["result"] == [1, 2, 3]
 
 
 def test_cycle_outcome_turns_a_live_rejection_into_canary_rejected() -> None:

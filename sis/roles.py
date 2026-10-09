@@ -13,6 +13,7 @@ agent (the human PR is mandatory — gauntlet step 6).
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import pathlib
 import sys
@@ -22,7 +23,7 @@ from typing import Any, Literal
 
 import ray
 
-from sis import config, contract, contract_author, gauntlet, policy, proposer
+from sis import config, contract, contract_author, episodic, gauntlet, policy, proposer
 from sis import feature as feature_mod
 from sis.canary import DEFAULT_MIN_CANARY_SAMPLES, CanaryMode, evaluate_canary
 from sis.paths import PROJECT_ROOT, TARGET_PATH
@@ -679,6 +680,50 @@ class SWE(Role):
         return _built(spec, source)
 
     def implement(self, story_id: str, contract_name: str | None = None) -> dict[str, Any]:
+        """One step of the story: propose, judge, commit, and open the PR when due.
+
+        **What the proposal cost is never lost** (OMNI-55, M16). The cost is
+        known only here, and the driver learns it from the return value. So
+        once a proposal has been asked for, nothing that follows may leave by
+        raising: a 403 at ``open_pr``, a 500 from the work tracker, anything.
+        It comes back as a failed result that carries the cost and names the
+        error, and the driver charges it and counts the failure. An error
+        before any proposal still raises; the driver records that one too.
+        """
+        paid: dict[str, Any] = {}
+        try:
+            return self._implement(story_id, contract_name, paid)
+        except Exception as exc:  # noqa: BLE001 - reported with its cost, never lost
+            if not paid:
+                raise
+            return self._failed_after_proposal(story_id, exc, paid)
+
+    def _failed_after_proposal(
+        self, story_id: str, exc: Exception, paid: dict[str, Any],
+    ) -> dict[str, Any]:
+        """The failed result for an error that came after the proposal was asked for."""
+        reason = episodic.error_reason(exc, "in the SWE's step, after the proposal")
+        # Each of these may be what is failing, so none may stop the cost
+        # from getting back.
+        with contextlib.suppress(Exception):
+            ray.get(self._ws.emit.remote("swe.error", story_id=story_id, error=reason))
+        if paid.get("feature") is not None:
+            # A step was committed before the error. Kept, so the next cycle
+            # carries on from it (opens its PR) instead of proposing it again.
+            with contextlib.suppress(Exception):
+                ray.get(self._sm.set_feature.remote(paid["contract"], paid["feature"]))
+        with contextlib.suppress(Exception):
+            ray.get(self._sm.record.remote("outcome", story_id, passed=False, reason=reason))
+        # propose() clears its last cost before it calls anything, so this is
+        # this step's cost and no earlier one's: nothing if the call itself failed.
+        return {"passed": False, "reason": reason, "pr_id": None,
+                "cost_usd": proposer.last_cost_usd(),
+                "candidate_sha": paid.get("candidate_sha"),
+                "contract": paid["contract"], "model": proposer.last_model()}
+
+    def _implement(
+        self, story_id: str, contract_name: str | None, paid: dict[str, Any],
+    ) -> dict[str, Any]:
         # What this target is judged by — reference, inputs, margin. Resolved
         # FIRST, before any artifact is touched: a bad contract name is a
         # configuration error, and failing after moving the story to
@@ -717,6 +762,12 @@ class SWE(Role):
             # one a stopped process committed (OMNI-135): open its PR now.
             return self._finish_feature(
                 story_id, spec, feature, head, 0.0, _sha(head), "all gates passed")
+        if feature and head and feature_mod.is_full(feature, max_steps):
+            # Its last step was committed and the PR then failed to open
+            # (OMNI-55): open it now, without paying for another proposal.
+            return self._finish_feature(
+                story_id, spec, feature, head, 0.0, _sha(head),
+                f"{len(feature['steps'])} of {max_steps} steps")
         if head:
             current_source, origin = head, "feature_branch"
         else:
@@ -741,6 +792,8 @@ class SWE(Role):
         # sandboxed, not in-process
         baseline = (gauntlet.measure_baseline(current_source, contract=spec)
                     if isinstance(spec, contract.OptimizationContract) else 0.0)
+        # From here on an error is reported with what the proposal cost (M16).
+        paid["contract"] = spec.name
         try:
             candidate = proposer.propose(current_source, baseline, contract=spec,
                                          history=feature["attempts"] if feature else ())
@@ -758,6 +811,7 @@ class SWE(Role):
         model = proposer.last_model()
         candidate_sha = _sha(candidate)
         cost_usd = proposer.last_cost_usd()  # 0.0 for the stub; real $ for Claude
+        paid["candidate_sha"] = candidate_sha
         # Benchmark the candidate against the source the cycle is based on (the
         # merged target), not the stale local file — see KNOWN_ISSUES.md H1.
         report = gauntlet.validate(
@@ -823,6 +877,7 @@ class SWE(Role):
             feature_mod.step_message(spec.name, plan, step, baseline, report.latency_seconds,
                                      building=building)))
         feature = feature_mod.with_step(feature, story_id, baseline, report.latency_seconds)
+        paid["feature"] = feature  # committed: an error from here on keeps the step
         ray.get(self._sm.record.remote("commit", feature["branch"], story=story_id, step=step))
         if building:
             return self._finish_feature(story_id, spec, feature, candidate, cost_usd,
@@ -1143,6 +1198,27 @@ class DevOps(Role):
 
         record = cloud.deploy_canary(
             version, metrics={"latency_seconds": candidate_latency}, source=pr.artifact)
+        try:
+            return self._judge_live(pr, version, candidate_latency, spec, cloud, record)
+        except Exception as exc:  # noqa: BLE001 - green is up: it must not be left there
+            # An error after the deploy left green attached and the PR pending,
+            # with no verdict (L30, OMNI-55). It is a rejection now: green is
+            # retired, and the cycle records it like any other.
+            reason = episodic.error_reason(exc, "during the live canary")
+            with contextlib.suppress(Exception):
+                self.retire_canary(version, pr.id)
+            with contextlib.suppress(Exception):
+                ray.get(self._sm.record.remote(
+                    "canary_rejected", version, pr=pr.id, reason=reason))
+            return {"version": version, "slot": "green", "live": False,
+                    "latency_seconds": candidate_latency, "canary_passed": False,
+                    "reason": reason}
+
+    def _judge_live(
+        self, pr: PullRequest, version: str, candidate_latency: float,
+        spec: contract.OptimizationContract, cloud: Any, record: Any,
+    ) -> dict[str, Any]:
+        """Green is deployed: fill its window and decide. See :meth:`_canary_live`."""
         ray.get(self._sm.set_slot.remote("green", version))
         ray.get(self._sm.set_pending_pr.remote(pr.id))
         ray.get(self._sm.record.remote(

@@ -39,13 +39,15 @@ reference with no link target below.
 > | H4 | [OMNI-46](https://olafzumpe.atlassian.net/browse/OMNI-46) (epic OMNI-43) — **fixed** |
 > | M10 | [OMNI-47](https://olafzumpe.atlassian.net/browse/OMNI-47) (epic OMNI-43) — **fixed** |
 > | H3 | [OMNI-48](https://olafzumpe.atlassian.net/browse/OMNI-48) (epic [OMNI-44](https://olafzumpe.atlassian.net/browse/OMNI-44)) |
+> | H8 | [OMNI-153] (epic OMNI-43), found 2026-10-08 — **fixed** the same day |
+> | H9 | [OMNI-154] (epic OMNI-43), found 2026-10-08 — **fixed** the same day |
 > | M19 | [OMNI-49](https://olafzumpe.atlassian.net/browse/OMNI-49) (epic OMNI-44) — **fixed** (by refusal; isolation is H3) |
 > | M20, M21 | [OMNI-50](https://olafzumpe.atlassian.net/browse/OMNI-50) (epic OMNI-44) |
 > | M15 | [OMNI-51](https://olafzumpe.atlassian.net/browse/OMNI-51) — **fixed** |
 > | M12 | [OMNI-52](https://olafzumpe.atlassian.net/browse/OMNI-52) |
 > | M13 | [OMNI-53](https://olafzumpe.atlassian.net/browse/OMNI-53) |
 > | M14 | [OMNI-54](https://olafzumpe.atlassian.net/browse/OMNI-54) |
-> | M16 (and L30) | [OMNI-55](https://olafzumpe.atlassian.net/browse/OMNI-55) |
+> | M16 (and L30) | [OMNI-55](https://olafzumpe.atlassian.net/browse/OMNI-55) — **fixed** (2026-10-08) |
 > | M17 | [OMNI-56](https://olafzumpe.atlassian.net/browse/OMNI-56) — **fixed** (2026-09-29) |
 > | M18 | [OMNI-57](https://olafzumpe.atlassian.net/browse/OMNI-57) — **fixed** (with OMNI-126) |
 > | M22 | [OMNI-58](https://olafzumpe.atlassian.net/browse/OMNI-58) — blocked by OMNI-51 |
@@ -54,7 +56,7 @@ reference with no link target below.
 > | L24 | [OMNI-62](https://olafzumpe.atlassian.net/browse/OMNI-62) (Notifier port) — **fixed** |
 > | M7 | [OMNI-88] — **won't fix** for now (label `wont-fix`); see the Won't fix section |
 > | L15–L20, L22, L25–L29, L31–L38, L40–L43 | one ticket each, [OMNI-64]–[OMNI-87], on each entry below (L15 and L33 **fixed** 2026-09-29). Each is linked (Relates) in Jira to the ticket it should ship with. |
-> | L30 | [OMNI-55], with M16 |
+> | L30 | [OMNI-55], with M16 — **fixed** (2026-10-08) |
 > | L39 | [OMNI-42] |
 
 ## High
@@ -142,22 +144,6 @@ reference with no link target below.
   `untranscribed_examples` as "names a function outside the contract's public
   API".
 
-- [OMNI-55] **M16 — Any exception after the LLM call loses that call's spend from the
-  CEO ledger and the episodic log, strands the branch/PR, and can kill
-  `--loop`** *(found 2026-09-26; confirmed by reading the code — the
-  triggering case is the already-documented L6 403)* — `run_cycle`
-  (`sis/org.py`) has no exception handling around the role calls; the cost is
-  known to the driver only via each method's return value, so a later raise
-  (an under-scoped PAT's 403 at `open_pr`, a transient Jira 500 on a status
-  transition, or a Serve error mid-canary) never reaches
-  `CEO.report_outcome`/`record_neutral`. Re-running repeats the same
-  untracked spend, so the hard cap never sees it, and `run_loop`
-  (`sis/loop.py`) has no per-cycle exception handling either — the whole
-  process exits. Fix: charge spend as soon as it's incurred (or recover it
-  via `try/finally`); wrap each `run_cycle` stage so an exception becomes a
-  recorded, breaker-counted `error` outcome — and, if a canary was live,
-  retires it — instead of an unhandled exception.
-
 - [OMNI-50] **M20 — The live canary's p95/p99 gate is close to a coin flip for targets
   where dispatch overhead dominates compute** *(found 2026-09-26; simulated
   through the real `evaluate_canary`)* — Gate 4 compares nearest-rank p95/p99
@@ -209,6 +195,7 @@ reference with no link target below.
   autouse fixture, with an explicit opt-in fixture for the handful of tests
   that intentionally want a real backend.
 
+
 ## Low
 
 - [OMNI-65] **L16** — The OMNI-37 sandbox self-check (`probe_sandbox`) loads
@@ -255,10 +242,6 @@ reference with no link target below.
   green fully before answering the caller, so a slow or hung candidate stalls
   every live client and can wedge DevOps. Fix: bound the green call with its
   own timeout, independent of the client's.
-- [OMNI-55] **L30** — An exception after the green deploy during a live canary leaves
-  green attached and the PR pending with no verdict, bug, or spend recorded
-  — the live-path sibling of M16. Fix: the same accounting fix as M16,
-  applied to `_canary_live`.
 - [OMNI-76] **L31** — Promotion serves the source snapshotted at canary time, not
   necessarily what a human actually merged if the PR was amended after the
   canary started. Fix: re-fetch the merged source at `observe_merge` time and
@@ -355,6 +338,16 @@ reference with no link target below.
   consider one bounded re-measurement with a fresh seed before discarding.
 
 ## Resolved (Low)
+
+- [OMNI-55] **L30** — An exception after the green deploy during a live canary leaves
+  green attached and the PR pending with no verdict, bug, or spend recorded
+  — the live-path sibling of M16. Fix: the same accounting fix as M16,
+  applied to `_canary_live`.
+  **Fixed 2026-10-08 (OMNI-55, with M16):** `DevOps._canary_live` treats an
+  error after the green deploy as a rejection: green is retired, the pending
+  PR is cleared, and the verdict's reason is the error, which the cycle
+  records and charges like any other canary rejection. Tested against a real
+  Serve deployment, with the window's fill failing once.
 
 - [OMNI-79] **L34** — The real GitHub adapter's `_get_file` treats any error
   (including a transient 5xx) the same as "file absent" and silently falls
@@ -584,6 +577,18 @@ any long-lived cluster exists.
   goes through the canary and human review — and the obvious fix (trimming
   the ratio) would reopen the size-conditional gaming hole OMNI-41 closed.
   Re-measure once [OMNI-45] rebuilds the measurement, before deciding to fix.
+  **Seen in CI (2026-10-08, PR #159):** on a loaded runner (`-n auto`) the gate
+  accepted a candidate that is not at the margin. The naive sum written as a
+  generator, which measures 1.06 to 1.09 times the baseline on a quiet
+  machine, came out at 0.84 with its whole interval under 0.90. The same
+  candidate under 18 busy processes on a Mac ranged from 0.92 to 1.21 over 60
+  runs, with intervals about 0.22 wide, before and after OMNI-152 alike. So the
+  harm is no longer limited to a near-margin candidate when the machine is
+  heavily loaded. The AWS box runs one loop and little else (M28), and a human
+  merge still follows every accept. The two tests whose candidates sat that
+  close to the baseline for another reason (a forged verdict, a cache) now use
+  a candidate half the baseline's speed; `test_correct_but_not_faster_is_rejected`
+  keeps the near-baseline one, and is the test that fails when this happens.
 
 - [OMNI-89] **L6 — Preflight doesn't verify the PAT's Pull-requests scope.** Not fixable
   in our code. `check_connections.py::check_github` confirms repo access
@@ -603,6 +608,188 @@ any long-lived cluster exists.
   front.
 
 ## Resolved
+
+- [OMNI-55] **M16 — Any exception after the LLM call loses that call's spend from the
+  CEO ledger and the episodic log, strands the branch/PR, and can kill
+  `--loop`** *(found 2026-09-26; confirmed by reading the code — the
+  triggering case is the already-documented L6 403)* — `run_cycle`
+  (`sis/org.py`) has no exception handling around the role calls; the cost is
+  known to the driver only via each method's return value, so a later raise
+  (an under-scoped PAT's 403 at `open_pr`, a transient Jira 500 on a status
+  transition, or a Serve error mid-canary) never reaches
+  `CEO.report_outcome`/`record_neutral`. Re-running repeats the same
+  untracked spend, so the hard cap never sees it, and `run_loop`
+  (`sis/loop.py`) has no per-cycle exception handling either — the whole
+  process exits. Fix: charge spend as soon as it's incurred (or recover it
+  via `try/finally`); wrap each `run_cycle` stage so an exception becomes a
+  recorded, breaker-counted `error` outcome — and, if a canary was live,
+  retires it — instead of an unhandled exception.
+  **Fixed 2026-10-08 (OMNI-55):** an exception inside a cycle is an outcome,
+  not a crash.
+  The SWE's step never leaves by raising once it has asked for a proposal
+  (`SWE.implement`): the error comes back as a failed result that carries the
+  proposal's cost and names the exception. The driver (`org.run_cycle`) turns
+  anything else that raises after the cycle has started into status `error`:
+  the cost so far is charged to the CEO, the failure counts toward the
+  breaker in full, a bug is filed, a human is paged (it is not the
+  candidate's doing and will likely repeat), and a canary set by this cycle
+  is retired. The episodic row has the cost, the model and the gate `error`,
+  which is read first, since an exception's message can hold any word a
+  gate is recognised by. Ray's wrapper is not what is named: the reason is
+  the exception that was raised (`episodic.error_reason`). A bug that cannot
+  be filed no longer costs a cycle its verdict. `--loop` goes on, and the
+  breaker decides when to stop. Two things still raise: the refusals before
+  anything is spent, and a CEO that cannot be told, because a loop that
+  cannot reach its brakes must not go on. A single `main.py` run exits 1 on
+  an `error` cycle. The step the failed cycle had committed is not stranded:
+  the feature is kept with it, and the next cycle opens its PR without paying
+  for another proposal. Regression tests: a 403 at `open_pr` after a paid
+  proposal, with the real roles; errors before spend, after the step, and
+  after a canary; a loop that goes on. All nine fail on the code before.
+
+- [OMNI-154] **H9 — A candidate can run a timed batch on several cores, so the
+  same algorithm measures twice as fast** *(found 2026-10-08 by the review of
+  OMNI-153; reproduced 3 of 3 here, and 2 of 2 through the whole gate against
+  the worker loop before OMNI-153)* — the benchmark times a batch of calls by
+  wall clock, and the worker's loop runs in the candidate's interpreter. A
+  candidate that replaces the function that runs the batch can spread the
+  calls over helpers on other cores; the baseline runs its batch on one.
+  Against the fast `sum_of_divisors`, in the subprocess sandbox, in batches of
+  198: the same algorithm over forked helpers measures 0.50, over
+  sub-interpreters in threads of one process 0.51, and a slower algorithm over
+  forked helpers 0.59, all accepted; the same algorithm alone measures 0.99 to
+  1.02. The gain exists only because the benchmark sends calls in batches: in
+  production each call arrives on its own. Docker does not stop it as
+  configured. `sandbox.cpus` is 2, and 1 would not be enough either: `--cpus`
+  is a quota per 100 ms, and a timed exchange lasts a few hundred microseconds
+  in a worker that is otherwise idle, so two cores for that long are never
+  throttled. In docker, through the whole gate: over forked helpers 0.76 to
+  0.79, over sub-interpreters 0.81, both accepted 2 of 2.
+  **Fixed 2026-10-08 (OMNI-154):** in docker each benchmark worker's container
+  is confined to one CPU by `--cpuset-cpus` (`SandboxWorker(cpu=...)`). A
+  cpuset is the kernel's: a worker that asks for every CPU keeps its one. The
+  CPUs are asked from a trusted container in the same image
+  (`gauntlet._sandbox_cpus`), so they are ones a cpuset can name under Docker
+  Desktop's VM or a restricted daemon; a failure to ask is a `harness:`
+  verdict, and so is a CPU docker then refuses, which a trusted worker is
+  tried on before the candidate is blamed. The two workers get different CPUs (`gauntlet.benchmark_cpus`), so
+  a candidate that spins does not take the baseline's time: on different
+  physical cores where the host knows its hyperthreads, otherwise the highest
+  and the lowest. Halfway through the samples the workers swap CPUs
+  (`docker update`), so a CPU that is busier than the other counts against
+  both sides. A reject reason names the CPUs. Measured in docker after the
+  fix, three runs each: forked helpers 1.16 to 1.18, sub-interpreters 1.11 to
+  1.17, the same algorithm alone 0.99 to 1.01. On one CPU the helpers only
+  cost time. **The subprocess sandbox confines nothing**: a process there may
+  reset its own affinity, and macOS has no affinity call. It is refused for a
+  real proposer (M1), and there the takeover still measures 0.50. Regression
+  tests, docker only: both takeovers are not accepted (with the confinement
+  switched off both are, and the tests fail); a confined worker that asks for
+  every CPU keeps its one, and moves when told; the benchmark's two workers
+  get different CPUs and swap. Without docker: the choice of CPUs, the swap,
+  and the docker arguments. CI has no gauntlet image, so the docker tests run
+  on a developer's machine and in the rehearsal on the box.
+
+- [OMNI-153] **H8 — A candidate can make its own worker's reply encoding cheaper,
+  so the same speed measures as faster** *(found 2026-10-08 by the adversarial
+  review of OMNI-152; reproduced 3 of 3 here and 7 of 7 in the review, also on
+  the gate before OMNI-152)* — the worker loop
+  (`sis/sandbox_worker_main.py`) is trusted code, but it runs in the
+  candidate's interpreter. For every call, `_encodable` runs
+  `json.dumps(value)` once only to test that the answer can cross the pipe. A
+  candidate that replaces `json.dumps` in its own process (returning `""` for
+  an int) makes that test free for its worker while the baseline's still pays
+  it. With the fast `sum_of_divisors` as the baseline, the same algorithm plus
+  that patch is accepted at a total-time ratio of 0.78 to 0.79; the same code
+  without it is rejected at 0.996. `mypy --strict` does not see it (`setattr`),
+  and nothing on disk changes, so the tamper check does not either. It matters
+  for calls that cost about as much as the protocol (a microsecond or two); for
+  a 200 µs call the encoding is 1%. The principle is wider than `json.dumps`:
+  anything the loop does in the candidate's process, the candidate can make
+  cheaper. So the claim that the per-call JSON cost "dilutes a gain rather than
+  invents one" holds only while both workers pay the same. Not tried in docker;
+  the same file runs in the container. Fix direction: encode each reply once,
+  in one C call, with the per-answer path only as the fallback; then measure
+  what a candidate can still save by replacing `_call` or `_send`, and either
+  close it or state the remainder against the margin.
+  **Fixed 2026-10-08 (OMNI-153):** a timed batch runs no Python per call. The
+  loop decodes the request, runs the calls through `itertools.starmap` and
+  encodes the reply, three C calls for the whole batch
+  (`sandbox_worker_main._plain_batch`, `_reply`). When every call returned, the
+  reply is the short form `{"id": n, "ok": [value, ...]}`. A call that raises
+  is reported in the long form, with the answers before it kept and no call
+  run twice; an answer that cannot cross is named on its own. Batches with
+  `kwargs` or `track_args`, which only the harness gates send and nothing
+  times, keep the per-call path. The loop's own cost per call fell from 1.24
+  to 0.17 µs, so a fast function is also resolved better: a candidate a third
+  slower than the fast `sum_of_divisors` now measures 1.30, where it measured
+  1.20. Measured against that baseline, four runs each: the patched
+  `json.dumps`, a replaced `_call`, a replaced `_plain_batch` and `_reply` with
+  the collector off and the candidate's own encoder, and its own request
+  decoder on top, all between 0.97 and 1.03, like the unpatched control. What
+  a candidate can still change is a few microseconds per exchange, not per
+  call. Regression tests: no Python function is entered between two calls of a
+  plain batch (the old loop entered six); `json.dumps` runs once per reply; a
+  candidate a third slower plus the two patches is rejected against a "no
+  slower" bar, where the old loop measured it at 0.95 and accepted it. Four of
+  the new tests fail on the old loop. Docker was not running where this was
+  written, and CI has no gauntlet image, so the docker variants of these tests
+  had not run. They have since, with OMNI-154, and pass. A review of the fix
+  found one bug in it, fixed before it was pushed (a call that raises
+  `StopIteration` ended the C loop without an error, and the reply came back
+  short), and H9.
+
+- [OMNI-152] **H7 — The benchmark timed repeated inputs once its batches outgrew
+  the oracle's input range, so a memoised candidate could pass** *(found
+  2026-09-30 running the suite on an overloaded machine; the same batch size is
+  in AWS run #7's log)*. It reopened the hole OMNI-41 closed. Since OMNI-45 the
+  benchmark sizes each exchange by time, and nothing bounded the batch against
+  the number of inputs the oracle can produce. `sum_of_divisors` draws from
+  19,999 values. A fast baseline, or a slow pipe (docker, or a loaded machine),
+  asks for 99 batches of 1024: about 101,000 draws, so four timed calls in five
+  repeated an earlier input. A candidate under `functools.cache` answers those
+  from a dictionary and measures faster without being faster. OMNI-41's rule was
+  "fresh inputs, never reused"; each draw was fresh, but the set of draws was
+  not. Run #7's console shows `99 paired samples of 1024 call(s) each` on the
+  box, so the current code plus a cache could have been accepted there.
+  **Fixed 2026-10-08 (OMNI-152):** no input is timed twice, and none is timed
+  after a worker has met it (`gauntlet._UnusedInputs`, `gauntlet._timed_work`).
+  Every input is remembered and a repeat is drawn again; inputs are compared
+  with `==`, at least as coarsely as a cache could key them. That covers the
+  timed batches, the sizing exchanges, the contract's `BENCH_INPUTS` and the
+  inputs the candidate met in the differential phase (a `BENCH_INPUTS` entry it
+  met there is not timed). The timed inputs are set aside before each sizing
+  exchange, so sizing cannot use up a small range. When the range cannot fill
+  the batch the timing asks for, the batch shrinks (the reason says `capped by
+  the oracle's input range`), and each exchange's fixed cost weighs more.
+  `sum_of_divisors` with a fast baseline is now timed at up to 198 calls a
+  batch, not 1024. A range that cannot give each of the 99 samples one unused
+  input is the exam's fault: `harness: the contract oracle's random_input gives
+  too few distinct inputs`, paged and counted like any harness fault. With the
+  default 300 differential trials that means a range under about 300 values.
+  Regression tests: the sizing as a pure function with a scripted baseline; a
+  candidate half the baseline's speed plus a cache, which the old gate measured
+  ten times faster; the invariant read off what the gate sends its workers on
+  the real oracle; and a range too small to time. Five mutants of the fix were
+  each caught. An adversarial review before the merge found the test gap that
+  let the first of them through, and H8.
+
+- [OMNI-151] **M28 — A second loop can start on the same box, and the two do not
+  share the spend cap** *(found 2026-09-30 in AWS run #7, `v0.3.6`)*. A
+  `sum_of_divisors` loop started with `nohup` inside tmux survived the attempt
+  to stop it, and a `roman` loop started beside it. Each process bootstraps
+  its own Ray cluster and CEO, whose brakes are restored from the shared
+  `runtime/episodic_state.json`. So each enforces the whole budget alone, and
+  the persisted spend is last-writer-wins: it says $0.2910 where $0.3192 was
+  spent. Both append to the same episodic log and console log. After the merge
+  of #21, both started a cycle within 30 s; only the VCS hold (OMNI-136) keeps
+  such loops from opening competing PRs. Fix: one loop per box, an exclusive
+  `flock` on a lock file in `runtime/`, refused with the holder's PID.
+  **Fixed 2026-09-30 (OMNI-151):** `main.py` takes an exclusive `flock` on
+  `runtime/loop.lock` (`sis/run_lock.py`) before any cluster, actor or spend,
+  and holds it for the run. A second start exits 3, naming the holder's PID,
+  start time and command. The kernel drops the lock however the holder ends,
+  SIGKILL included, so nothing is left to clear by hand.
 
 - [OMNI-56] **M17 — A QA-stage rejection drops the gauntlet's reject reason** *(found
   2026-09-26; confirmed by reading the code)* — when QA's own re-run of the
@@ -1431,3 +1618,7 @@ any long-lived cluster exists.
 [OMNI-148]: https://olafzumpe.atlassian.net/browse/OMNI-148
 [OMNI-149]: https://olafzumpe.atlassian.net/browse/OMNI-149
 [OMNI-150]: https://olafzumpe.atlassian.net/browse/OMNI-150
+[OMNI-151]: https://olafzumpe.atlassian.net/browse/OMNI-151
+[OMNI-152]: https://olafzumpe.atlassian.net/browse/OMNI-152
+[OMNI-153]: https://olafzumpe.atlassian.net/browse/OMNI-153
+[OMNI-154]: https://olafzumpe.atlassian.net/browse/OMNI-154
