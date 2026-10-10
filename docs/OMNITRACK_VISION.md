@@ -98,6 +98,10 @@ real data is for acceptance.** Sim finds failure modes and drives coverage; prom
 requires real-trace evidence (**D4**). The simulator gets its own contract, backtested
 against recorded sensor traces, or it drifts and takes everything downstream with it.
 
+**The boundary for the second trap below is built** (OMNI-32): `sis/sensor_input.py`.
+Every record a real adapter fetches goes through `sanitise`, and free text is carried as
+`UntrustedText`, which is inert wherever it is formatted.
+
 **The second trap: sensor data is untrusted input.** The existing hard rules treat
 generated *code* as untrusted; a `RealSensor` adds untrusted *data* — readings an outside
 party can influence. Traces flow into scenario libraries, backtest fixtures, and (because

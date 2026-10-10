@@ -76,6 +76,10 @@ GUARDRAIL_PATHS: tuple[str, ...] = (
     # shown of the world. Real data is the evidence a promotion needs, so the
     # code that reads it is not the loop's to rewrite. Its adapters are below.
     "sis/ports.py",
+    # The one door sensor data comes in through (OMNI-32): what is refused,
+    # what counts as plausible, how outsiders' text is quoted. A loop able to
+    # edit it could widen what it trusts.
+    "sis/sensor_input.py",
     "sis/cost.py",            # spend accounting that feeds the brakes
     "sis/settings.py",        # secret loading + masking
     "sis/adapters.py",        # RequiresHumanApproval guardrails (in-memory)
