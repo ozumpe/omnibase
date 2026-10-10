@@ -44,6 +44,21 @@ internal target before it models anything external.
   (`sensor.backend`, a `forbidden_` key: a loop that could pick the simulator
   would pick its own exam). The real adapter is OMNI-33. A consumer is given
   its sensor as an argument, never looks it up inside an actor.
+  **Sensor input is untrusted, and comes in through one door** (OMNI-32):
+  `sensor_input.sanitise`. Generated code was the untrusted thing; a real
+  sensor adds data an outside party writes, and it reaches fixtures,
+  scenarios and possibly a prompt. Every record a real adapter fetches
+  becomes a `Reading`, is stated `Absent` (a marker such as `W` or `NA` is no
+  value, never zero), or is refused with a reason: the wrong shape, a series
+  the adapter did not declare, a number that is not plainly one, a value
+  outside its series' plausible range, a time without a timezone, a value
+  known before its period began, a field or a batch over its size. Nothing is
+  dropped without a count (`Sanitised.counts()`). A rejection's text shows
+  only a few harmless characters of what the source sent. Free text is
+  `UntrustedText`, with no raw `str()`: formatted, it is marked and inert,
+  so it cannot close a docstring or leave a string; `.literal()` is its
+  `repr`, for an expression of its own. A real adapter builds no `Reading`
+  itself (pinned by a test).
 - SelfModel (digital twin): live actor registry, deploy slots, provenance graph,
   substrate — the first "piece of the world" the system models.
 - Episodic store (`sis/episodic.py`): every cycle's outcome behind a port —
@@ -232,7 +247,8 @@ internal target before it models anything external.
     its output canonicaliser (`sis/canonical.py`), the hot-deploy sandbox
     worker (`sis/sandbox_worker.py`, `sis/sandbox_worker_main.py`), the contract layer (`sis/contract.py`, `sis/backtest.py`, `sis/invariant.py`,
     `sis/slo.py`, `sis/clock.py`), the ports with the `Sensor` and the shape
-    of a reading (`sis/ports.py`, OMNI-31), the contract-author approval gate
+    of a reading (`sis/ports.py`, OMNI-31), the door sensor data comes in
+    through (`sis/sensor_input.py`, OMNI-32), the contract-author approval gate
     (`sis/contract_author.py`),
     `specs/` (the exam itself — oracles, acceptance tests, domain laws, backtest
     fixtures), cost accounting (`sis/cost.py` — the breaker/threshold logic
@@ -675,8 +691,9 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   recommendation and a "decide by" phase). Of the five components only E1 has
   code: its `Clock` half (`sis/clock.py`, OMNI-23) and, since OMNI-31, the
   `Sensor` port with `SimSensor`. **Phase A is filed as OMNI-30**: what is
-  left of it is the sanitising boundary, the first `RealSensor`, scenario
-  generation, the first recorded fixture and the prediction-error report.
+  left of it is the first `RealSensor`, scenario generation, the first
+  recorded fixture and the prediction-error report. The sanitising boundary
+  the real sensor reads through is built (OMNI-32).
   - **The register is fully settled as of 2026-08-28: all of D0–D12 are
     decided** (D0 revised 2026-09-24). Read the doc for the full text; the
     load-bearing ones:
@@ -814,9 +831,9 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   **Phase 0 is built:** `sis/sandbox_worker.py` (OMNI-129) serves a candidate
   hot from the sandbox. It is tested in both sandbox modes, including that a
   docker candidate cannot reach the network, Ray or the host's environment.
-- 1128 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 63
+- 1271 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 63
   Ray-Serve-integration tests run separately, see Operational quick reference
-  above; 1191 total, recounted 2026-10-09 — corrected 2026-09-26, a multi-dimension review found the
+  above; 1334 total, recounted 2026-10-09 — corrected 2026-09-26, a multi-dimension review found the
   previously-documented 616/678 stale); `ruff`/`mypy --strict`/`pytest` clean;
   CI green; `feature → develop → main` enforced by both the client-side
   pre-push hook and active server-side rulesets.
@@ -1019,8 +1036,9 @@ the KNOWN_ISSUES backfill, see "Known issues" above):
    - ~~[OMNI-31](https://olafzumpe.atlassian.net/browse/OMNI-31) (High) — `Sensor`
      port + `SimSensor` default adapter; a reading carries two times, `event_time`
      and `known_at`.~~ **Built 2026-10-09.**
-   - [OMNI-32](https://olafzumpe.atlassian.net/browse/OMNI-32) (High) — sensor
-     input is untrusted: the sanitisation boundary, before any real adapter.
+   - ~~[OMNI-32](https://olafzumpe.atlassian.net/browse/OMNI-32) (High) — sensor
+     input is untrusted: the sanitisation boundary, before any real adapter.~~
+     **Built 2026-10-09.**
    - [OMNI-33](https://olafzumpe.atlassian.net/browse/OMNI-33) (Medium) —
      EIA `RealSensor`, and settle the trace capture format (D12), vintages and
      reconstructed `known_at` for backfilled history included.
