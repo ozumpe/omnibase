@@ -640,6 +640,26 @@ any long-lived cluster exists.
   stderr before the handshake still names its last line with never more than
   the tail held; 2 MB written during a call does not stop the answer.
 
+- [OMNI-157] **H12 — A failed brake-state save let a restart undo spend that was
+  charged** *(found 2026-10-14 by a review of the OMNI-33 push; reproduced by
+  the reviewer with a disk-full probe: $0.70 live, $0.10 on disk)* —
+  `run_cycle`'s `_record` caught a failed `save_state("ceo", …)`, warned and
+  returned normally, so the loop went on spending. The previous snapshot
+  stayed readable, so a restart restored it without opening the breaker
+  (OMNI-61 only fails closed on state it cannot read). **Fixed 2026-10-14
+  (OMNI-157):** a cycle's spend is reserved before anything is spent:
+  `CEO.reserve(estimate)` after the budget gate, and the state, reservation
+  included (`reserved_usd`), is saved before the cycle goes on. If that save
+  fails, nothing is spent. The cycle's outcome replaces the reservation with
+  what it really cost. A save that fails, before the cycle or after it, opens
+  the breaker with the reason (`CEO.trip`), files a bug and pages a human, so
+  nothing more is spent. A CEO started from saved state that still holds a
+  reservation counts it as spent: that cycle's outcome was never saved
+  (`bootstrap` says so). So a restart never sees less than was spent, as long
+  as a cycle costs no more than the estimate the budget gate approved (one
+  proposal, `max_tokens` 8000, against the default $0.50). Regression tests:
+  `tests/test_brake_persistence.py`.
+
 - [OMNI-55] **M16 — Any exception after the LLM call loses that call's spend from the
   CEO ledger and the episodic log, strands the branch/PR, and can kill
   `--loop`** *(found 2026-09-26; confirmed by reading the code — the
@@ -1145,6 +1165,9 @@ any long-lived cluster exists.
   is refused with a real proposer or real adapters
   (`roles.brake_persistence_problem`, at bootstrap and per cycle, no
   override). Tests: `tests/test_brake_state.py`, `tests/test_ceo_fail_closed.py`.
+  **What it missed** (found 2026-10-14, H12, OMNI-157): state that was saved
+  and stays readable, but stops being saved. A failed save only warned, so a
+  restart restored the last saved spend and forgot the rest. See H12.
 
 - [OMNI-61] **L23** — `CEO.reset_breaker()` has no caller anywhere outside tests; in
   practice the only reset is deleting the state file, which also zeroes
@@ -1655,3 +1678,4 @@ any long-lived cluster exists.
 [OMNI-154]: https://olafzumpe.atlassian.net/browse/OMNI-154
 [OMNI-155]: https://olafzumpe.atlassian.net/browse/OMNI-155
 [OMNI-156]: https://olafzumpe.atlassian.net/browse/OMNI-156
+[OMNI-157]: https://olafzumpe.atlassian.net/browse/OMNI-157

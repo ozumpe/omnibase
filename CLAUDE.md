@@ -320,6 +320,13 @@ internal target before it models anything external.
   refused with a real proposer or real adapters (no override — `jsonl` costs
   nothing). Operators pause/resume/reset through `python -m sis.admin`, each
   change with a written `--reason`, audited; a reset never touches spend.
+  **Spend is reserved and saved before it is spent** (OMNI-157, H12): after
+  the budget gate the CEO reserves the cycle's estimate, and the state is
+  saved before the cycle goes on; the outcome replaces the reservation with
+  the real cost. A save that fails, before or after, opens the breaker and
+  pages, and a CEO started from a state that still holds a reservation counts
+  it as spent. A failed save used to warn and go on, so a restart forgot the
+  spend since the last save.
   **An exception inside a cycle is an outcome, and its spend is charged**
   (OMNI-55, M16 fixed 2026-10-08). The cost of a proposal used to reach the
   driver only in `SWE.implement`'s return value, so a 403 at `open_pr` lost

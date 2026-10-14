@@ -357,12 +357,20 @@ class CEO(Role):
         # An operator's pause (sis.admin): refuses new cycles without tripping
         # the breaker or touching any counter. The reason, or None.
         self._paused: str | None = None
+        # What the cycle in flight may spend, reserved before it spends anything
+        # and persisted with the rest (OMNI-157, H12). Its outcome replaces it
+        # with what it really cost.
+        self._reserved = 0.0
         self._charter_id: str | None = None
         # Rehydrate persisted brake/spend state (L9) — only on a *fresh* actor.
         # A detached CEO that already exists (get_if_exists) keeps its live state;
         # this path runs on first bootstrap or after a cluster/actor restart.
         if state:
-            self._spent = float(state.get("spent_usd", 0.0))
+            # A reservation in saved state is a cycle whose outcome was never
+            # saved: it stopped mid-cycle, or its save failed. What it spent is
+            # unknown, so it is counted as spent up to what was reserved.
+            self._spent = (float(state.get("spent_usd", 0.0))
+                           + float(state.get("reserved_usd", 0.0)))
             # float(): pre-OMNI-24 snapshots stored an int, which still loads.
             self._consecutive_failures = float(state.get("consecutive_failures", 0))
             self._accepted = int(state.get("accepted", 0))
@@ -382,6 +390,28 @@ class CEO(Role):
                                      spent=self._spent, budget=self._budget))
         return True
 
+    def reserve(self, estimate_usd: float) -> None:
+        """Reserve what an approved cycle may spend, before it spends anything
+        (OMNI-157, H12). The driver persists the state with the reservation in
+        it before the cycle goes on, so a restart that finds no outcome counts
+        the reservation as spent rather than forgetting the cycle."""
+        self._reserved = float(estimate_usd)
+
+    def trip(self, reason: str) -> str | None:
+        """Open the breaker for a reason found outside the brakes, and release
+        any reservation (nothing more will be spent). Returns *reason* on a
+        fresh trip, like :meth:`report_outcome`, so the caller pages once.
+
+        Used when the brake state cannot be persisted (OMNI-157, H12): a loop
+        that cannot record its spend must not go on spending."""
+        self._reserved = 0.0
+        if self._tripped:
+            return None
+        self._tripped = True
+        self._trip_reason = reason
+        ray.get(self._ws.emit.remote("breaker.tripped", reason=reason, **self.economics()))
+        return reason
+
     def report_outcome(
         self, *, success: bool, cost_usd: float = 0.0, reject_gate: str | None = None,
     ) -> str | None:
@@ -397,6 +427,7 @@ class CEO(Role):
         "pages a human".
         """
         self._spent += cost_usd
+        self._reserved = 0.0   # what the cycle really cost replaces its reservation
         if success:
             self._consecutive_failures = 0.0
             self._accepted += 1
@@ -417,6 +448,7 @@ class CEO(Role):
         catches. Returns the brake reason on a fresh trip, else None.
         """
         self._spent += cost_usd
+        self._reserved = 0.0
         return self._evaluate_brakes()
 
     def _evaluate_brakes(self) -> str | None:
@@ -464,6 +496,7 @@ class CEO(Role):
             "tripped": self._tripped,
             "trip_reason": self._trip_reason,
             "paused": self._paused,
+            "reserved_usd": self._reserved,
         }
 
     def pause_reason(self) -> str | None:
