@@ -666,6 +666,16 @@ any long-lived cluster exists.
   as a cycle costs no more than the estimate the budget gate approved (one
   proposal, `max_tokens` 8000, against the default $0.50). Regression tests:
   `tests/test_brake_persistence.py`.
+  An adversarial review of the fix the same day closed four gaps in it. A
+  reservation with no outcome is settled as a failure too, not only as spend,
+  so an unknown outcome can still trip a brake (`CEO._settle_unknown_outcome`).
+  It is settled when a new CEO starts from the state, and also at the next
+  reservation of a detached CEO that outlived its driver, which used to
+  overwrite it; `approve_budget` counts an outstanding one. An SWE whose
+  process dies during its step (not a raise of its own, which by OMNI-55
+  comes before any proposal) is charged the reservation, not $0. And a save
+  that fails pages even when the breaker was already open: that page had not
+  said the state was no longer saved.
 
 - [OMNI-158] **H13 — An admin command could overwrite newer brake state with an
   older snapshot** *(found 2026-10-14 by a review of the OMNI-33 push;
@@ -685,6 +695,11 @@ any long-lived cluster exists.
   stops two keys' saves from losing one another), in one transaction for
   DuckDB. A lock alone would not have done: the stale snapshot is taken
   before the lock. A state without a version, saved before this, still saves.
+  Versions are compared only within one `lineage`, carried in the state: a
+  CEO started from saved state continues it, one that could not read its
+  state begins a new one at version 0. Without that (found by the review of
+  the fix), a file repaired during the documented OMNI-61 recovery kept its
+  higher numbers and silently blocked every save of the new CEO.
   Regression tests: `tests/test_brake_state.py` (two processes, the lock,
   DuckDB) and `tests/test_brake_persistence.py` (the reviewer's sequence with
   the real CEO).

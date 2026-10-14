@@ -329,11 +329,12 @@ internal target before it models anything external.
   the budget gate the CEO reserves the cycle's estimate, and the state is
   saved before the cycle goes on; the outcome replaces the reservation with
   the real cost. A save that fails, before or after, opens the breaker and
-  pages, and a CEO started from a state that still holds a reservation counts
-  it as spent. A failed save used to warn and go on, so a restart forgot the
+  pages, and a reservation no outcome replaced (found at boot, or still
+  outstanding at the next reservation) counts as spent and as a failure. A failed save used to warn and go on, so a restart forgot the
   spend since the last save. **An older snapshot never replaces a newer one**
   (OMNI-158, H13): the loop and `sis.admin` both save the CEO's state, so the
-  CEO numbers it (`version`, one more per change) and the store keeps the
+  CEO numbers it (`version`, one more per change, within a `lineage` that a
+  CEO started from unreadable state begins afresh) and the store keeps the
   higher version, checking and writing under one lock (jsonl) or transaction
   (DuckDB).
   **An exception inside a cycle is an outcome, and its spend is charged**

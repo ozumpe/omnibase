@@ -17,6 +17,7 @@ import contextlib
 import hashlib
 import pathlib
 import sys
+import uuid
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
@@ -363,35 +364,54 @@ class CEO(Role):
         self._reserved = 0.0
         # Counts every change to the state below, in the order this actor made
         # them (its methods run one at a time). The store never replaces a
-        # saved state with an older one (OMNI-158, H13): the loop and
-        # `sis.admin` both save snapshots, each taken before it is written.
+        # saved state with an older one of the same lineage (OMNI-158, H13):
+        # the loop and `sis.admin` both save snapshots, each taken before it is
+        # written. A lineage is one line of states, each grown from the last; a
+        # CEO started from saved state continues its lineage, one started from
+        # nothing, or from state it could not read, begins a new one, and its
+        # numbers say nothing about the old one's.
         self._version = 0
+        self._lineage = uuid.uuid4().hex
         self._charter_id: str | None = None
         # Rehydrate persisted brake/spend state (L9) — only on a *fresh* actor.
         # A detached CEO that already exists (get_if_exists) keeps its live state;
         # this path runs on first bootstrap or after a cluster/actor restart.
         if state:
-            # A reservation in saved state is a cycle whose outcome was never
-            # saved: it stopped mid-cycle, or its save failed. What it spent is
-            # unknown, so it is counted as spent up to what was reserved.
-            self._spent = (float(state.get("spent_usd", 0.0))
-                           + float(state.get("reserved_usd", 0.0)))
+            self._spent = float(state.get("spent_usd", 0.0))
             # float(): pre-OMNI-24 snapshots stored an int, which still loads.
             self._consecutive_failures = float(state.get("consecutive_failures", 0))
             self._accepted = int(state.get("accepted", 0))
             self._tripped = bool(state.get("tripped", False))
             self._trip_reason = state.get("trip_reason")
             self._paused = state.get("paused")
-            # Past the saved version if a reservation was just counted: this
-            # state differs from the one saved under that number.
-            self._version = int(state.get("version", 0)) + (
-                1 if float(state.get("reserved_usd", 0.0)) else 0)
+            self._version = int(state.get("version", 0))
+            self._lineage = str(state.get("lineage") or self._lineage)
+            self._reserved = float(state.get("reserved_usd", 0.0))
+            self._settle_unknown_outcome()
+
+    def _settle_unknown_outcome(self) -> None:
+        """Count a reservation whose cycle never reported an outcome (OMNI-157).
+
+        It stopped mid-cycle, or its outcome could not be saved: found in saved
+        state at boot, or still outstanding at the next reservation on a CEO
+        that outlived its driver. What it spent is unknown, so it is counted as
+        spent up to what was reserved, and, its result unknown too, as a
+        failure. Either can trip a brake, as a reported outcome would.
+        """
+        if not self._reserved:
+            return
+        self._spent += self._reserved
+        self._reserved = 0.0
+        self._consecutive_failures += 1
+        self._version += 1
+        self._evaluate_brakes()
 
     def approve_budget(self, estimate_usd: float) -> bool:
         """Goal/cost gate: refuse if this attempt would breach the hard cap."""
         if self._tripped:
             return False
-        if self._spent + estimate_usd > self._budget:
+        # An outstanding reservation is spend, until an outcome says otherwise.
+        if self._spent + self._reserved + estimate_usd > self._budget:
             ray.get(self._ws.emit.remote("budget.denied", estimate=estimate_usd,
                                          spent=self._spent, budget=self._budget))
             return False
@@ -403,7 +423,9 @@ class CEO(Role):
         """Reserve what an approved cycle may spend, before it spends anything
         (OMNI-157, H12). The driver persists the state with the reservation in
         it before the cycle goes on, so a restart that finds no outcome counts
-        the reservation as spent rather than forgetting the cycle."""
+        the reservation as spent rather than forgetting the cycle. One still
+        outstanding is a cycle that never reported: it is settled first."""
+        self._settle_unknown_outcome()
         self._reserved = float(estimate_usd)
         self._version += 1
 
@@ -511,6 +533,7 @@ class CEO(Role):
             "paused": self._paused,
             "reserved_usd": self._reserved,
             "version": self._version,
+            "lineage": self._lineage,
         }
 
     def pause_reason(self) -> str | None:

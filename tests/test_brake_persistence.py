@@ -158,6 +158,11 @@ def test_a_ceo_started_from_a_reservation_counts_it_as_spent(handles: dict[str, 
         "reserved_usd": 0.60})
     state = ray.get(ceo.state_snapshot.remote())
     assert (state["spent_usd"], state["reserved_usd"]) == (pytest.approx(0.70), 0.0)
+    # Its outcome is unknown too: it counts as a failure, and can trip a brake.
+    assert state["consecutive_failures"] == 1
+    near = CEO.remote(budget_usd=10.0, breaker_threshold=3, state={
+        "spent_usd": 0.10, "consecutive_failures": 2, "reserved_usd": 0.60})
+    assert ray.get(near.breaker_open.remote()) is True
     # A state saved before reservations existed still loads.
     old = CEO.remote(budget_usd=10.0, state={"spent_usd": 0.10})
     assert ray.get(old.state_snapshot.remote())["spent_usd"] == pytest.approx(0.10)
@@ -187,3 +192,77 @@ def test_an_admin_snapshot_taken_before_a_cycle_does_not_undo_its_spend(
     restarted = CEO.remote(budget_usd=10.0, state=loops)
     ray.get(restarted.pause.remote("x"))
     assert ray.get(restarted.state_snapshot.remote())["version"] > loops["version"]
+
+
+# --- the review of the fix (2026-10-14) --------------------------------------------
+
+
+@ray.remote
+class _DyingSWE:
+    """An SWE whose process ends during its step, as an OOM kill would."""
+
+    def already_built(self, *args: Any) -> None:
+        return None
+
+    def implement(self, *args: Any) -> None:
+        import os
+
+        os._exit(1)
+
+
+def test_an_swe_that_dies_mid_step_is_charged_its_reservation(
+    handles: dict[str, Any], monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    # Its proposal may have been paid for before it died; nothing reports the
+    # cost, so it is charged what was reserved, not nothing.
+    store = _store(monkeypatch, tmp_path, saves=100)
+    ceo = handles["CEO"]
+    spent = ray.get(ceo.state_snapshot.remote())["spent_usd"]
+    result = org.run_cycle({**handles, "SWE": _DyingSWE.remote()}, "t", "b",
+                           estimate_usd=ESTIMATE)
+    assert result["status"] == "error" and result["cost_usd"] == ESTIMATE
+    state = ray.get(ceo.state_snapshot.remote())
+    assert (state["spent_usd"], state["reserved_usd"]) == (pytest.approx(spent + ESTIMATE), 0.0)
+    assert store.load_state("ceo")["spent_usd"] == pytest.approx(spent + ESTIMATE)
+
+
+def test_a_live_ceo_settles_a_reservation_its_driver_left_behind(handles: dict[str, Any]) -> None:
+    # A detached CEO outlives a driver killed mid-cycle; the next run reuses it.
+    ceo = CEO.remote(budget_usd=1.0)
+    ray.get(ceo.reserve.remote(0.5))                    # the killed driver's cycle
+    assert ray.get(ceo.approve_budget.remote(0.6)) is False   # the reservation is spend
+    ray.get(ceo.reserve.remote(0.3))                    # the next run's cycle
+    state = ray.get(ceo.state_snapshot.remote())
+    assert (state["spent_usd"], state["reserved_usd"]) == (pytest.approx(0.5), 0.3)
+    assert state["consecutive_failures"] == 1
+
+
+def test_a_save_that_fails_with_the_breaker_already_open_still_pages(
+    handles: dict[str, Any], monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    # Opened by something else first (say, this cycle's own outcome): that page
+    # said "breaker open", not that the brake state is no longer being saved.
+    _store(monkeypatch, tmp_path, saves=0)
+    ray.get(handles["CEO"].trip.remote("consecutive failure threshold"))
+    pages = len(_pages(handles))
+    result = org.run_cycle(handles, "t", "b", estimate_usd=ESTIMATE)
+    assert result["status"] == "circuit_breaker_open"
+    assert "No space left" in result["brakes_unpersisted"]
+    assert len(_pages(handles)) == pages + 1
+
+
+def test_a_ceo_that_could_not_read_its_state_saves_over_a_repaired_file(
+    handles: dict[str, Any], tmp_path: Path,
+) -> None:
+    # The documented recovery: repair the file, reset the breaker. The repaired
+    # file's higher version belongs to another lineage and must not block saves.
+    from sis.roles import unreadable_brake_state
+
+    store = episodic.JsonlEpisodicStore(tmp_path / "episodic.jsonl")
+    store.save_state("ceo", {"spent_usd": 0.40, "version": 57, "lineage": "before"})
+    ceo = CEO.remote(budget_usd=10.0, state=unreadable_brake_state("truncated"))
+    ray.get(ceo.reset_breaker.remote())
+    after = ray.get(ceo.state_snapshot.remote())
+    assert after["version"] < 57 and after["lineage"] != "before"
+    assert store.save_state("ceo", after) is True
+    assert store.load_state("ceo") == after

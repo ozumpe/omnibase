@@ -182,6 +182,16 @@ def test_state_without_a_version_still_saves_last_write_wins(tmp_path: Path) -> 
     assert store.load_state("pending_pr") == {"pr": "2"}
 
 
+def test_versions_are_compared_only_within_one_lineage(tmp_path: Path) -> None:
+    # A CEO that could not read its state starts a new lineage at version 0; a
+    # file repaired meanwhile has its own numbers, which do not outrank it.
+    store, _ = _store(tmp_path)
+    store.save_state("ceo", {"spent_usd": 0.40, "version": 57, "lineage": "old"})
+    assert store.save_state("ceo", {"spent_usd": 0.0, "version": 1, "lineage": "new"}) is True
+    assert store.save_state("ceo", {"spent_usd": 0.4, "version": 0, "lineage": "new"}) is False
+    assert store.load_state("ceo") == {"spent_usd": 0.0, "version": 1, "lineage": "new"}
+
+
 def test_duckdb_keeps_the_newer_version_too(tmp_path: Path) -> None:
     pytest.importorskip("duckdb")
     from sis.episodic import DuckDBEpisodicStore

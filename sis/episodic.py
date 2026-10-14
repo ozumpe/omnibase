@@ -177,9 +177,16 @@ def superseded(saved: object, value: dict[str, Any]) -> bool:
     put back spend the newer one had counted. A lock alone would not help:
     the snapshot is stale before the lock is taken. Without a version on
     either side, the latest write wins, as before.
+
+    Versions are compared only within one ``lineage``. A CEO that could not
+    read its saved state begins a new lineage at version 0; a file repaired
+    meanwhile keeps its own, higher numbers, which say nothing about the new
+    CEO's states, and must not keep them from being saved (the documented
+    recovery: spend restarts from what the new CEO has counted since).
     """
-    new = value.get("version")
-    old = saved.get("version") if isinstance(saved, dict) else None
+    if not isinstance(saved, dict) or saved.get("lineage") != value.get("lineage"):
+        return False
+    new, old = value.get("version"), saved.get("version")
     return type(new) is int and type(old) is int and old > new
 
 
