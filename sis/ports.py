@@ -412,8 +412,9 @@ class Reading:
 class Sensor(Protocol):
     """Reads the modelled world. Default adapter: ``SimSensor``, a canned trace.
 
-    The sixth port. The real adapter is its own story (OMNI-33), and what it
-    reads is untrusted input: an outside party writes it (OMNI-32).
+    The sixth port. The real adapter is ``EIASensor`` in
+    :mod:`sis.adapters_real` (OMNI-33), and what it reads is untrusted input:
+    an outside party writes it (OMNI-32).
 
     Which sensor a consumer reads is passed to it as an argument, never looked
     up from the environment inside an actor: actors keep the environment they

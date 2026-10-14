@@ -73,8 +73,10 @@ run in event time, not wall-clock.
 **The port and its simulated adapter are built too** (OMNI-31): `Sensor`, `Reading` and
 `TimeAxis` in `sis/ports.py`, `SimSensor` and `replay` in `sis/adapters.py`. A reading
 carries two times, `event_time` and `known_at`, and every read names which one it means.
-What remains of E1 is the real adapter (OMNI-33) behind the sanitising boundary (OMNI-32),
-and scenario generation (OMNI-34).
+The real adapter is built as well (OMNI-33): `EIASensor` in `sis/adapters_real.py`
+captures EIA's bulk file into an append-only trace (`sis/sensor_trace.py`, D12's capture
+format) through the sanitising boundary (OMNI-32). What remains of E1 is scenario
+generation (OMNI-34).
 
 **The clock half is already built** — `sis/clock.py` (OMNI-23) ships `WallClock`,
 `ReplayClock`, and timezone-required `event_time` parsing, so what remains of E1 is the
@@ -328,7 +330,14 @@ consumer sales. Filed as
 [OMNI-39](https://olafzumpe.atlassian.net/browse/OMNI-39), not yet broken into stories.
 
 *Data sources, verified 2026-09-24.* Licence and terms of use are checked separately, by
-a human, before any adapter is written against a source.
+a human, before any adapter is written against a source. **EIA's were checked by Olaf on
+2026-10-13**: its data is public domain and may be reused and redistributed with an
+acknowledgment that dates the publication ("Source: U.S. Energy Information
+Administration (Oct 2008)"); the EIA name may not imply endorsement; and content may not
+be modified while still naming EIA as its source. So a trace keeps EIA's values and unit
+text as published, each capture records the acknowledgment, and anything derived from
+them (a sum, an interpolation, a model's output) is ours, never labelled EIA's
+(`sis/sensor_trace.py`, OMNI-33).
 
 | Source | What | Level | Cadence, latest | Access |
 |---|---|---|---|---|

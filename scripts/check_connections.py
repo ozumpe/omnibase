@@ -15,7 +15,9 @@ integrations are reported as SKIP (not a failure). Tokens are never printed.
 ``--deep`` additionally lists the Jira project's workflow statuses and checks
 that the ones the org transitions to (``In Progress``, ``Ready for Review``,
 ``TBD``, ``Done``, ``To Do``) actually exist — so the first real cycle won't
-fail on a ``JiraWorkTracker.transition`` name mismatch. Still read-only.
+fail on a ``JiraWorkTracker.transition`` name mismatch — and reports the
+sensor: whether EIA's bulk file answers, and what the local trace holds
+(OMNI-33). Still read-only.
 """
 
 from __future__ import annotations
@@ -204,6 +206,30 @@ def check_pager(settings: Settings) -> bool | None:
     return True
 
 
+def check_sensor() -> bool | None:
+    """EIA's bulk file answers (HEAD, no download), and what the local trace holds.
+
+    Read-only, and needs no credentials: the bulk file is public and keyless
+    (OMNI-33). What EIA's server sends back is printed only as numbers.
+    """
+    try:
+        import requests
+
+        from sis import sensor_trace
+        from sis.adapters_real import EIA_BULK_URL, EIA_TRACE
+
+        response = requests.head(EIA_BULK_URL, allow_redirects=True, timeout=30)
+        response.raise_for_status()
+        size = str(response.headers.get("Content-Length", ""))
+        held = sensor_trace.describe(sensor_trace.load(EIA_TRACE))
+    except Exception as exc:  # noqa: BLE001
+        _line(FAIL, "Sensor", _summarise(exc))
+        return False
+    _line(OK, "Sensor", f"EIA bulk file, {size if size.isdigit() else '?'} bytes; "
+                        f"trace: {held}")
+    return True
+
+
 def _summarise(exc: Exception) -> str:
     """One-line error summary that never echoes credentials."""
     text = str(exc)
@@ -227,6 +253,7 @@ def main() -> int:
     ]
     if deep:
         results.append(check_jira_workflow(settings))
+        results.append(check_sensor())
 
     checked = [r for r in results if r is not None]
     failed = [r for r in checked if r is False]

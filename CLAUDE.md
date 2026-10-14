@@ -42,8 +42,29 @@ internal target before it models anything external.
   `known_at` hands it the future. Every read names its `TimeAxis`: there is
   no default. `SimSensor` replays a canned trace and is the default
   (`sensor.backend`, a `forbidden_` key: a loop that could pick the simulator
-  would pick its own exam). The real adapter is OMNI-33. A consumer is given
-  its sensor as an argument, never looks it up inside an actor.
+  would pick its own exam). A consumer is given its sensor as an argument,
+  never looks it up inside an actor.
+  **The real sensor is `EIASensor`** (OMNI-33, `sis/adapters_real.py`): EIA's
+  bulk file `PET.zip` (no key), five weekly series (PADD 5 gasoline stocks;
+  California, Los Angeles, San Francisco and US retail prices).
+  `scripts/capture_sensor.py` fetches it and appends to an append-only trace,
+  `runtime/sensor_traces/eia.jsonl`, in D12's capture format
+  (`sis/sensor_trace.py`, POLICY-FORBIDDEN). `read()` answers from the trace
+  alone, through the door again; `absent()` shows what EIA stated no value
+  for, so a value it later blanks is visible as withdrawn. A changed value is
+  a new line with a later `known_at`, never an overwrite. The first capture of a series backfills
+  it, each `known_at` reconstructed from EIA's release schedule and marked
+  `reconstructed`. That schedule is wrong for an irregular delay: the stocks
+  for the week ending 2022-06-17 came out 12 days later, and the prices for
+  Monday 2022-06-20 on the same day (2022-06-29). So OMNI-35 checks its window
+  against EIA's release archive. Later values are known at the fetch that
+  first saw them. Read-back also checks each value line against its capture
+  (in its block, known no later than the fetch, the block whole). It cannot
+  catch a forgery consistent with itself; the human promotion into `specs/`
+  is the guard there. No trace is written under `specs/` (checked by inode,
+  so `SPECS/` on a Mac is caught too). EIA's terms were
+  checked by Olaf on 2026-10-13 (public domain, an acknowledgment dated by
+  publication, no modified content labelled EIA's).
   **Sensor input is untrusted, and comes in through one door** (OMNI-32):
   `sensor_input.sanitise`. Generated code was the untrusted thing; a real
   sensor adds data an outside party writes, and it reaches fixtures,
@@ -1039,9 +1060,10 @@ the KNOWN_ISSUES backfill, see "Known issues" above):
    - ~~[OMNI-32](https://olafzumpe.atlassian.net/browse/OMNI-32) (High) — sensor
      input is untrusted: the sanitisation boundary, before any real adapter.~~
      **Built 2026-10-09.**
-   - [OMNI-33](https://olafzumpe.atlassian.net/browse/OMNI-33) (Medium) —
+   - ~~[OMNI-33](https://olafzumpe.atlassian.net/browse/OMNI-33) (Medium) —
      EIA `RealSensor`, and settle the trace capture format (D12), vintages and
-     reconstructed `known_at` for backfilled history included.
+     reconstructed `known_at` for backfilled history included.~~ **Built
+     2026-10-13** (`EIASensor`, `sis/sensor_trace.py`).
    - [OMNI-34](https://olafzumpe.atlassian.net/browse/OMNI-34) (Medium) —
      `SimSensor` scenario generation (supply, outage, demand and data-event
      scenarios): refutation inputs, and the gauntlet's input generator (D7).

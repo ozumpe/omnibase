@@ -315,11 +315,15 @@ def test_the_loop_may_not_edit_the_boundary(monkeypatch: pytest.MonkeyPatch) -> 
         config.reset_config_cache()
 
 
-def test_a_real_adapter_makes_no_reading_of_its_own() -> None:
-    # One door: a real adapter gets its readings from sanitise(), and builds none.
-    tree = ast.parse((PROJECT_ROOT / "sis" / "adapters_real.py").read_text(encoding="utf-8"))
+@pytest.mark.parametrize("module", ["adapters_real.py", "sensor_trace.py"])
+def test_a_real_adapter_makes_no_reading_of_its_own(module: str) -> None:
+    # One door: a real adapter, and the trace it keeps (OMNI-33), get their
+    # readings from sanitise(), and build none: not directly, and not from
+    # plain records either (SimSensor.from_records skips the door).
+    tree = ast.parse((PROJECT_ROOT / "sis" / module).read_text(encoding="utf-8"))
     built = [node.lineno for node in ast.walk(tree) if isinstance(node, ast.Call) and (
         (isinstance(node.func, ast.Name) and node.func.id == "Reading")
-        or (isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
-            and node.func.value.id == "Reading"))]
-    assert built == [], f"sis/adapters_real.py builds a Reading itself at line(s) {built}"
+        or (isinstance(node.func, ast.Attribute) and (
+            node.func.attr in ("from_record", "from_records")
+            or (isinstance(node.func.value, ast.Name) and node.func.value.id == "Reading"))))]
+    assert built == [], f"sis/{module} builds a Reading itself at line(s) {built}"

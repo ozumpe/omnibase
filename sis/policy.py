@@ -80,6 +80,11 @@ GUARDRAIL_PATHS: tuple[str, ...] = (
     # what counts as plausible, how outsiders' text is quoted. A loop able to
     # edit it could widen what it trusts.
     "sis/sensor_input.py",
+    # How a real sensor's readings are captured and read back (OMNI-33, D12):
+    # the format every fixture inherits, and the schedule-based known_at of
+    # backfilled history. A loop able to edit it could shape what its own
+    # models are later judged against.
+    "sis/sensor_trace.py",
     "sis/cost.py",            # spend accounting that feeds the brakes
     "sis/settings.py",        # secret loading + masking
     "sis/adapters.py",        # RequiresHumanApproval guardrails (in-memory)

@@ -138,9 +138,9 @@ loop:
   soft_artifact_sync_every: 1
 
 sensor:
-  # 'sim' replays a canned trace, with no network; 'real' reads the world (no adapter
-  # yet: OMNI-33). Passed to a consumer as an argument, never read from the environment
-  # inside an actor.
+  # 'sim' replays a canned trace, with no network; 'real' reads EIA's petroleum data as
+  # scripts/capture_sensor.py captured it (OMNI-33). Passed to a consumer as an
+  # argument, never read from the environment inside an actor.
   # env: SIS_SENSOR   flag: --sensor-backend
   forbidden_backend: "sim"
 

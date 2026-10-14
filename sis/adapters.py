@@ -412,8 +412,10 @@ def make_sensor(backend: str | None = None) -> Sensor:
     if chosen == "sim":
         return SimSensor()
     if chosen == "real":
-        raise RuntimeError(
-            "sensor.backend='real' has no adapter yet: the EIA sensor is OMNI-33, and it "
-            "does not land before the sanitising boundary for what it reads (OMNI-32)")
+        # EIA's data as captured (OMNI-33). Imported here: the real adapters'
+        # module is not needed for the simulated default.
+        from sis.adapters_real import EIASensor
+
+        return EIASensor()
     raise ValueError(f"sensor.backend={chosen!r} is not a sensor backend (sim, real)")
 

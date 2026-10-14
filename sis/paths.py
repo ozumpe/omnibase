@@ -22,6 +22,10 @@ EPISODIC_DUCKDB = RUNTIME_DIR / "episodic.duckdb"
 # because nothing reads it — no gate loads a staged file, and only specs/ is
 # ever copied into a sandbox. Promotion into specs/ is the human-approved step.
 CONTRACT_STAGING_DIR = RUNTIME_DIR / "contract_staging"
+# What real sensors captured (sis/sensor_trace.py, OMNI-33): append-only, one
+# file per source. Staging in the same sense: no gate reads it, and a trace
+# reaches specs/ only through the human-approved promote path (OMNI-35).
+SENSOR_TRACES_DIR = RUNTIME_DIR / "sensor_traces"
 
 # Generated/candidate code.
 CANDIDATES_DIR = RUNTIME_DIR / "candidates"

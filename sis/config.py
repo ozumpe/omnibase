@@ -316,9 +316,10 @@ SCHEMA: tuple[Key, ...] = (
     # the simulator would be choosing its own exam.
     Key("sensor", "backend", ConfigTier.FORBIDDEN, Kind.STR, "sim",
         "SIS_SENSOR",
-        "'sim' replays a canned trace, with no network; 'real' reads the world "
-        "(no adapter yet: OMNI-33). Passed to a consumer as an argument, never "
-        "read from the environment inside an actor.",
+        "'sim' replays a canned trace, with no network; 'real' reads EIA's "
+        "petroleum data as scripts/capture_sensor.py captured it (OMNI-33). "
+        "Passed to a consumer as an argument, never read from the environment "
+        "inside an actor.",
         choices=("sim", "real")),
 
     # --- contracts: which target a cycle optimises. --------------------------

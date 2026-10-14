@@ -39,6 +39,7 @@ runtime/loop.log
 runtime/loop.lock
 # Drafted contracts awaiting human approval — local review state, not source.
 runtime/contract_staging/
+runtime/sensor_traces/
 
 # Editor / tooling
 .idea/
