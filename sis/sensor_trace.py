@@ -411,8 +411,8 @@ def capture_lines(
         if fetched_at <= before:
             raise TraceRefused(
                 f"a capture fetched at {fetched_at.isoformat()} is not after the trace's "
-                f"last capture ({before.isoformat()}): the clock went back, or two captures "
-                "share an instant. Nothing is appended")
+                f"last capture ({before.isoformat()}): this host's clock is behind, or was "
+                "ahead when that capture was taken. Nothing is appended")
     state, watched = _latest(readings, absent)
     counts: dict[str, dict[str, int]] = {}
     kept: list[dict[str, Any]] = []

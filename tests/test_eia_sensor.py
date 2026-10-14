@@ -250,11 +250,31 @@ def test_a_capture_not_after_the_last_one_is_refused_and_appends_nothing(
     assert sensor.trace.read_bytes() == before
     earlier = EIASensor(sensor.trace, clock=ReplayClock(FIRST - datetime.timedelta(hours=1)),
                         fetch=_fetch(_bulk_lines([_stocks(["20220930", None])])))
-    with pytest.raises(TraceRefused, match="the clock went back"):
+    with pytest.raises(TraceRefused, match="clock is behind"):
         earlier.capture()                                       # a clock stepped back
     assert sensor.trace.read_bytes() == before
     clock.advance_to(SECOND)
     assert sensor.capture().appended == 1                       # later is fine
+
+
+def test_a_capture_is_stamped_under_the_traces_lock(tmp_path: pathlib.Path) -> None:
+    # Stamped before the lock, a capture that downloaded first but reached the
+    # lock second was refused as if the clock had gone back (OMNI-160).
+    trace = tmp_path / "eia.jsonl"
+    held: list[bool] = []
+
+    class _Probe:
+        def now(self) -> datetime.datetime:
+            with open(trace, "rb") as probe:
+                try:
+                    fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    held.append(False)
+                except BlockingIOError:
+                    held.append(True)
+            return FIRST
+
+    EIASensor(trace, fetch=_fetch(_bulk_lines(_AUTUMN)), clock=_Probe()).capture()
+    assert held == [True]
 
 
 def test_a_trace_whose_captures_are_out_of_order_fails_the_read(tmp_path: pathlib.Path) -> None:

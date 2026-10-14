@@ -732,8 +732,15 @@ any long-lived cluster exists.
   no period has two lines at one `known_at`, and capture order is `known_at`
   order. Regression tests: a capture at the same instant and one with a
   clock stepped back are refused; an edited trace out of order fails the
-  read; withdrawn then restored over three captures reads as restored, and a
-  fourth appends nothing.
+  read. A control, which passes without the fix too: withdrawn then restored
+  over captures at distinct times reads as restored, and a fourth appends
+  nothing. The review of the fix found that a capture was stamped after its
+  download but before the trace's lock, so of two captures at once, one
+  stamped earlier that reached the lock second was refused as if the clock
+  had gone back. Captures are now stamped under the lock (a later stamp is
+  still an upper bound on when the values were known). A clock that was ahead
+  for one capture stops captures until real time passes it; the runbook says
+  what to do.
 
 - [OMNI-55] **M16 — Any exception after the LLM call loses that call's spend from the
   CEO ledger and the episodic log, strands the branch/PR, and can kill

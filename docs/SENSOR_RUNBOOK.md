@@ -148,10 +148,17 @@ contract-author path.
 
 Captures serialize with an exclusive file lock, and reads take a shared one, so
 a read never sees half a capture's block. Appends are synced; caught
-write failures roll back the attempted block. A capture whose fetch time is not
-after the trace's last capture is refused and appends nothing: two captures at
-one instant, or a clock that stepped back, would leave two revisions of a value
-that a replay could not order. Check the host clock, then capture again. The writer refuses destinations
+write failures roll back the attempted block. A capture is stamped while it
+holds that lock, and one whose fetch time is not after the trace's last capture
+is refused and appends nothing: two captures at one instant, or a clock that
+stepped back, would leave two revisions of a value that a replay could not
+order. If it is refused, compare the host clock with the last capture's
+`fetched_at`. A clock that is behind: correct it and capture again. A clock
+that is right now but was ahead when that capture was taken: captures resume
+once real time passes that `fetched_at`; the values it wrote carry a
+`known_at` in the future, which a replay would show late, not early. To
+capture sooner, move the trace aside (keeping it) and start a new one, which
+backfills with reconstructed times and loses the revisions observed so far. The writer refuses destinations
 inside `specs/`, symlinks at the opened path and multiply linked files. These
 checks do not justify treating runtime staging data as immutable evidence.
 
