@@ -116,6 +116,84 @@ def test_an_interrupted_save_keeps_the_previous_state(
     assert store.load_state("ceo") == {"spent_usd": 1.5}
 
 
+# --- OMNI-158 (H13): an older snapshot never replaces a newer one ---------------
+
+
+def test_an_older_version_saved_last_leaves_the_newer_one(tmp_path: Path) -> None:
+    # The reviewer's case: the loop saved $0.70 as version 8, then sis.admin
+    # wrote its snapshot from before that cycle, $0.10 as version 7.
+    store, _ = _store(tmp_path)
+    assert store.save_state("ceo", {"spent_usd": 0.70, "version": 8}) is True
+    assert store.save_state("ceo", {"spent_usd": 0.10, "version": 7}) is False
+    assert store.load_state("ceo") == {"spent_usd": 0.70, "version": 8}
+    # The same version again, or a later one, is saved.
+    assert store.save_state("ceo", {"spent_usd": 0.70, "version": 8, "paused": "x"}) is True
+    assert store.save_state("ceo", {"spent_usd": 0.75, "version": 9}) is True
+    assert store.load_state("ceo") == {"spent_usd": 0.75, "version": 9}
+
+
+def test_a_newer_version_from_another_process_is_kept(tmp_path: Path) -> None:
+    import subprocess
+    import sys
+
+    store, _ = _store(tmp_path)
+    store.save_state("ceo", {"spent_usd": 0.10, "version": 7})
+    other = ("import pathlib, sys\nfrom sis.episodic import JsonlEpisodicStore\n"
+             "store = JsonlEpisodicStore(pathlib.Path(sys.argv[1]))\n"
+             "assert store.save_state('ceo', {'spent_usd': 0.70, 'version': 8})\n")
+    subprocess.run([sys.executable, "-c", other, str(tmp_path / "episodic.jsonl")],
+                   check=True, cwd=Path(__file__).resolve().parent.parent)
+    assert store.save_state("ceo", {"spent_usd": 0.10, "version": 7}) is False
+    assert store.load_state("ceo") == {"spent_usd": 0.70, "version": 8}
+
+
+def test_the_read_and_the_write_of_a_save_hold_one_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Another process's save cannot land between this one's read and write.
+    import fcntl
+
+    store, _ = _store(tmp_path)
+    held: list[bool] = []
+    real_read = JsonlEpisodicStore._read_blob
+
+    def read_while_checking(self: JsonlEpisodicStore) -> dict[str, Any]:
+        with open(tmp_path / "episodic_state.lock", "a", encoding="utf-8") as probe:
+            try:
+                fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                held.append(False)
+            except BlockingIOError:
+                held.append(True)
+        return real_read(self)
+
+    monkeypatch.setattr(JsonlEpisodicStore, "_read_blob", read_while_checking)
+    store.save_state("ceo", {"version": 1})
+    store.save_state("ceo", {"version": 2})
+    assert held and all(held)
+
+
+def test_state_without_a_version_still_saves_last_write_wins(tmp_path: Path) -> None:
+    store, _ = _store(tmp_path)
+    assert store.save_state("ceo", {"spent_usd": 1.0, "version": 3}) is True
+    assert store.save_state("ceo", {"spent_usd": 2.0}) is True      # a state saved before H13
+    assert store.save_state("pending_pr", {"pr": "1"}) is True       # other keys: no version
+    assert store.save_state("pending_pr", {"pr": "2"}) is True
+    assert store.load_state("ceo") == {"spent_usd": 2.0}
+    assert store.load_state("pending_pr") == {"pr": "2"}
+
+
+def test_duckdb_keeps_the_newer_version_too(tmp_path: Path) -> None:
+    pytest.importorskip("duckdb")
+    from sis.episodic import DuckDBEpisodicStore
+
+    store = DuckDBEpisodicStore(tmp_path / "episodic.duckdb")
+    assert store.save_state("ceo", {"spent_usd": 0.70, "version": 8}) is True
+    assert store.save_state("ceo", {"spent_usd": 0.10, "version": 7}) is False
+    assert store.load_state("ceo") == {"spent_usd": 0.70, "version": 8}
+    assert store.save_state("ceo", {"spent_usd": 0.80, "version": 9}) is True
+    assert store.load_state("ceo") == {"spent_usd": 0.80, "version": 9}
+
+
 def test_the_fail_closed_state_holds_the_breaker_and_names_why() -> None:
     state = unreadable_brake_state("episodic_state.json: Expecting value")
     assert state["tripped"] is True

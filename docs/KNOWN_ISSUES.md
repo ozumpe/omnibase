@@ -660,6 +660,28 @@ any long-lived cluster exists.
   proposal, `max_tokens` 8000, against the default $0.50). Regression tests:
   `tests/test_brake_persistence.py`.
 
+- [OMNI-158] **H13 — An admin command could overwrite newer brake state with an
+  older snapshot** *(found 2026-10-14 by a review of the OMNI-33 push;
+  reproduced by the reviewer: a $0.70 snapshot overwritten by an older $0.10
+  one)* — the loop (after every cycle) and `python -m sis.admin` (after every
+  action) each take a snapshot of the live CEO and save it later.
+  `JsonlEpisodicStore.save_state` replaced the file atomically, but neither
+  serialised writers nor knew which snapshot was newer, so an admin snapshot
+  taken before a cycle and written after the loop saved it put the old spend
+  back on disk. **Fixed 2026-10-14 (OMNI-158):** the CEO numbers its state
+  (`version`, incremented by every change; its methods run one at a time, so
+  the order is its own), and the store never replaces a saved state with a
+  lower version (`episodic.superseded`). `save_state` returns False when it
+  kept the later one, which is no failure: that version includes this one,
+  and `sis.admin` says so. The check and the write are one step: under an
+  exclusive lock on `episodic_state.lock` for the jsonl store (which also
+  stops two keys' saves from losing one another), in one transaction for
+  DuckDB. A lock alone would not have done: the stale snapshot is taken
+  before the lock. A state without a version, saved before this, still saves.
+  Regression tests: `tests/test_brake_state.py` (two processes, the lock,
+  DuckDB) and `tests/test_brake_persistence.py` (the reviewer's sequence with
+  the real CEO).
+
 - [OMNI-55] **M16 — Any exception after the LLM call loses that call's spend from the
   CEO ledger and the episodic log, strands the branch/PR, and can kill
   `--loop`** *(found 2026-09-26; confirmed by reading the code — the
@@ -1679,3 +1701,4 @@ any long-lived cluster exists.
 [OMNI-155]: https://olafzumpe.atlassian.net/browse/OMNI-155
 [OMNI-156]: https://olafzumpe.atlassian.net/browse/OMNI-156
 [OMNI-157]: https://olafzumpe.atlassian.net/browse/OMNI-157
+[OMNI-158]: https://olafzumpe.atlassian.net/browse/OMNI-158

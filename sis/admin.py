@@ -148,11 +148,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     # Persisted now, not at the next cycle: a paused loop runs no cycles, and a
     # pause that a restart forgot would be no pause at all.
     try:
-        episodic.get_episodic_store().save_state("ceo", after)
+        saved = episodic.get_episodic_store().save_state("ceo", after)
     except Exception as exc:  # noqa: BLE001 - live state is changed; say what is not
         print(f"WARNING: the running CEO is updated, but its state was not persisted "
               f"({exc}); a restart before the next cycle would not see this change.",
               file=sys.stderr)
+    else:
+        if not saved:
+            # The loop saved a later version first (OMNI-158, H13). The CEO
+            # numbers its changes in order, so that version includes this one.
+            print("A later state of the CEO was already saved, and it includes this change.")
     return 0
 
 

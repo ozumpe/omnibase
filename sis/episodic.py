@@ -20,6 +20,7 @@ retrieval) is a new backend implementing the same port — the loop doesn't chan
 
 from __future__ import annotations
 
+import fcntl
 import json
 import uuid
 from collections import Counter
@@ -166,6 +167,22 @@ class StateUnreadable(RuntimeError):
     """
 
 
+def superseded(saved: object, value: dict[str, Any]) -> bool:
+    """Whether *saved* is a later version of a state than *value*. Pure (OMNI-158).
+
+    A state that carries an integer ``version`` (the CEO's counts its own
+    changes) never replaces a saved one with a higher version. Two processes
+    save the CEO's state, the loop and ``sis.admin``, each from a snapshot
+    taken before it writes, so without this an older snapshot written last
+    put back spend the newer one had counted. A lock alone would not help:
+    the snapshot is stale before the lock is taken. Without a version on
+    either side, the latest write wins, as before.
+    """
+    new = value.get("version")
+    old = saved.get("version") if isinstance(saved, dict) else None
+    return type(new) is int and type(old) is int and old > new
+
+
 class EpisodicStore(Protocol):
     def append(self, event: EpisodicEvent) -> None: ...
     def events(self) -> list[EpisodicEvent]: ...
@@ -176,8 +193,10 @@ class EpisodicStore(Protocol):
     #
     # load_state returns None only when there is no state; unreadable state
     # raises StateUnreadable. save_state never overwrites state it could not
-    # read — that would destroy the evidence of what the brakes were (OMNI-61).
-    def save_state(self, key: str, value: dict[str, Any]) -> None: ...
+    # read — that would destroy the evidence of what the brakes were (OMNI-61)
+    # — nor a later version of it (OMNI-158, :func:`superseded`), and returns
+    # False when it kept the saved state for that reason.
+    def save_state(self, key: str, value: dict[str, Any]) -> bool: ...
     def load_state(self, key: str) -> dict[str, Any] | None: ...
 
 
@@ -193,8 +212,8 @@ class NullEpisodicStore:
     def summary(self) -> dict[str, Any]:
         return summarize([])
 
-    def save_state(self, key: str, value: dict[str, Any]) -> None:
-        return None
+    def save_state(self, key: str, value: dict[str, Any]) -> bool:
+        return True
 
     def load_state(self, key: str) -> dict[str, Any] | None:
         return None
@@ -208,20 +227,32 @@ class JsonlEpisodicStore:
         # Latest-wins state sits next to the event log (…/episodic_state.json),
         # so constructing the store on a tmp path isolates both in tests.
         self._state_path = path.with_name(f"{path.stem}_state.json")
+        # Held around each read-compare-write of that file, by every process
+        # that saves (OMNI-158). Separate, since the state file is replaced.
+        self._lock_path = path.with_name(f"{path.stem}_state.lock")
 
     def append(self, event: EpisodicEvent) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(asdict(event)) + "\n")
 
-    def save_state(self, key: str, value: dict[str, Any]) -> None:
+    def save_state(self, key: str, value: dict[str, Any]) -> bool:
         # Read-modify-write of the whole blob, replaced atomically: a crash
         # leaves the previous file or the new one, never a truncated one. An
         # unreadable existing file is NOT overwritten — it used to be replaced
         # with {} here, which erased the spend the brakes had counted (OMNI-61).
-        blob = self._read_blob() if self._state_path.exists() else {}
-        blob[key] = value
-        write_text_atomic(self._state_path, json.dumps(blob, indent=2))
+        # Under an exclusive lock, so another process's save cannot land
+        # between the read and the write: neither a later version of this key
+        # (OMNI-158) nor another key's value is lost.
+        self._state_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self._lock_path, "a", encoding="utf-8") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            blob = self._read_blob() if self._state_path.exists() else {}
+            if superseded(blob.get(key), value):
+                return False
+            blob[key] = value
+            write_text_atomic(self._state_path, json.dumps(blob, indent=2))
+        return True
 
     def load_state(self, key: str) -> dict[str, Any] | None:
         if not self._state_path.exists():
@@ -314,15 +345,31 @@ class DuckDBEpisodicStore:
     def summary(self) -> dict[str, Any]:
         return summarize(self.events())
 
-    def save_state(self, key: str, value: dict[str, Any]) -> None:
-        # One upsert statement: DuckDB applies it transactionally, so this
-        # backend already has the all-or-nothing write the jsonl one needed
-        # sis.atomic for (OMNI-61).
-        self._con.execute(
-            "INSERT INTO kv_state (key, value) VALUES (?, ?) "
-            "ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-            [key, json.dumps(value)],
-        )
+    def save_state(self, key: str, value: dict[str, Any]) -> bool:
+        # One transaction: the version check and the upsert (OMNI-158), with
+        # the all-or-nothing write the jsonl backend needed sis.atomic for
+        # (OMNI-61). DuckDB lets one process write a database file, so the
+        # transaction is all the serialising there is to do.
+        self._con.execute("BEGIN TRANSACTION")
+        try:
+            row = self._con.execute(
+                "SELECT value FROM kv_state WHERE key = ?", [key]).fetchone()
+            if row is not None and superseded(json.loads(row[0]), value):
+                self._con.execute("ROLLBACK")
+                return False
+            self._con.execute(
+                "INSERT INTO kv_state (key, value) VALUES (?, ?) "
+                "ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                [key, json.dumps(value)],
+            )
+            self._con.execute("COMMIT")
+        except BaseException:
+            try:
+                self._con.execute("ROLLBACK")
+            except Exception:  # noqa: BLE001 - no transaction left; the first error counts
+                pass
+            raise
+        return True
 
     def load_state(self, key: str) -> dict[str, Any] | None:
         row = self._con.execute(

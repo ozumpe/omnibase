@@ -596,7 +596,10 @@ def run_cycle(
         return res
 
     def _persist_brakes() -> Exception | None:
-        """Save the CEO's state; the exception if it could not be saved."""
+        """Save the CEO's state; the exception if it could not be saved.
+
+        A store that keeps a later version instead (``sis.admin`` saved one
+        first, OMNI-158) is no failure: that version includes this one."""
         try:
             store.save_state("ceo", ray.get(ceo.state_snapshot.remote()))
         except Exception as exc:  # noqa: BLE001

@@ -29,12 +29,12 @@ class _DiskFull(episodic.JsonlEpisodicStore):
         super().__init__(path)
         self.saves = saves
 
-    def save_state(self, key: str, value: dict[str, Any]) -> None:
+    def save_state(self, key: str, value: dict[str, Any]) -> bool:
         if key == "ceo":
             if self.saves <= 0:
                 raise OSError(28, "No space left on device")
             self.saves -= 1
-        super().save_state(key, value)
+        return super().save_state(key, value)
 
 
 @pytest.fixture(scope="module")
@@ -161,3 +161,29 @@ def test_a_ceo_started_from_a_reservation_counts_it_as_spent(handles: dict[str, 
     # A state saved before reservations existed still loads.
     old = CEO.remote(budget_usd=10.0, state={"spent_usd": 0.10})
     assert ray.get(old.state_snapshot.remote())["spent_usd"] == pytest.approx(0.10)
+
+
+# --- OMNI-158 (H13): an admin snapshot older than the loop's is never written ---------
+
+
+def test_an_admin_snapshot_taken_before_a_cycle_does_not_undo_its_spend(
+    handles: dict[str, Any], tmp_path: Path,
+) -> None:
+    # The reviewer's sequence, with the real CEO: sis.admin takes its snapshot,
+    # a cycle is charged and the loop saves, then sis.admin writes its own.
+    store = episodic.JsonlEpisodicStore(tmp_path / "episodic.jsonl")
+    ceo = handles["CEO"]
+    ray.get(ceo.pause.remote("looking into a spike"))
+    admins = ray.get(ceo.state_snapshot.remote())
+    ray.get(ceo.resume.remote())
+    ray.get(ceo.report_outcome.remote(success=True, cost_usd=0.60))
+    loops = ray.get(ceo.state_snapshot.remote())
+    assert loops["version"] > admins["version"]
+
+    assert store.save_state("ceo", loops) is True
+    assert store.save_state("ceo", admins) is False
+    assert store.load_state("ceo") == loops
+    # A CEO started from what was saved continues past it.
+    restarted = CEO.remote(budget_usd=10.0, state=loops)
+    ray.get(restarted.pause.remote("x"))
+    assert ray.get(restarted.state_snapshot.remote())["version"] > loops["version"]

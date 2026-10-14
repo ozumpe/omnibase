@@ -326,7 +326,11 @@ internal target before it models anything external.
   the real cost. A save that fails, before or after, opens the breaker and
   pages, and a CEO started from a state that still holds a reservation counts
   it as spent. A failed save used to warn and go on, so a restart forgot the
-  spend since the last save.
+  spend since the last save. **An older snapshot never replaces a newer one**
+  (OMNI-158, H13): the loop and `sis.admin` both save the CEO's state, so the
+  CEO numbers it (`version`, one more per change) and the store keeps the
+  higher version, checking and writing under one lock (jsonl) or transaction
+  (DuckDB).
   **An exception inside a cycle is an outcome, and its spend is charged**
   (OMNI-55, M16 fixed 2026-10-08). The cost of a proposal used to reach the
   driver only in `SWE.implement`'s return value, so a 403 at `open_pr` lost

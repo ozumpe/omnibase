@@ -361,6 +361,11 @@ class CEO(Role):
         # and persisted with the rest (OMNI-157, H12). Its outcome replaces it
         # with what it really cost.
         self._reserved = 0.0
+        # Counts every change to the state below, in the order this actor made
+        # them (its methods run one at a time). The store never replaces a
+        # saved state with an older one (OMNI-158, H13): the loop and
+        # `sis.admin` both save snapshots, each taken before it is written.
+        self._version = 0
         self._charter_id: str | None = None
         # Rehydrate persisted brake/spend state (L9) — only on a *fresh* actor.
         # A detached CEO that already exists (get_if_exists) keeps its live state;
@@ -377,6 +382,10 @@ class CEO(Role):
             self._tripped = bool(state.get("tripped", False))
             self._trip_reason = state.get("trip_reason")
             self._paused = state.get("paused")
+            # Past the saved version if a reservation was just counted: this
+            # state differs from the one saved under that number.
+            self._version = int(state.get("version", 0)) + (
+                1 if float(state.get("reserved_usd", 0.0)) else 0)
 
     def approve_budget(self, estimate_usd: float) -> bool:
         """Goal/cost gate: refuse if this attempt would breach the hard cap."""
@@ -396,6 +405,7 @@ class CEO(Role):
         it before the cycle goes on, so a restart that finds no outcome counts
         the reservation as spent rather than forgetting the cycle."""
         self._reserved = float(estimate_usd)
+        self._version += 1
 
     def trip(self, reason: str) -> str | None:
         """Open the breaker for a reason found outside the brakes, and release
@@ -405,6 +415,7 @@ class CEO(Role):
         Used when the brake state cannot be persisted (OMNI-157, H12): a loop
         that cannot record its spend must not go on spending."""
         self._reserved = 0.0
+        self._version += 1
         if self._tripped:
             return None
         self._tripped = True
@@ -428,6 +439,7 @@ class CEO(Role):
         """
         self._spent += cost_usd
         self._reserved = 0.0   # what the cycle really cost replaces its reservation
+        self._version += 1
         if success:
             self._consecutive_failures = 0.0
             self._accepted += 1
@@ -449,6 +461,7 @@ class CEO(Role):
         """
         self._spent += cost_usd
         self._reserved = 0.0
+        self._version += 1
         return self._evaluate_brakes()
 
     def _evaluate_brakes(self) -> str | None:
@@ -497,6 +510,7 @@ class CEO(Role):
             "trip_reason": self._trip_reason,
             "paused": self._paused,
             "reserved_usd": self._reserved,
+            "version": self._version,
         }
 
     def pause_reason(self) -> str | None:
@@ -513,12 +527,14 @@ class CEO(Role):
         away from the cluster rather than trusting this method to.
         """
         self._paused = reason
+        self._version += 1
         ray.get(self._ws.emit.remote("loop.paused", reason=reason))
         return self.state_snapshot()
 
     def resume(self) -> dict[str, Any]:
         """Undo :meth:`pause`. The breaker, if open, stays open."""
         self._paused = None
+        self._version += 1
         ray.get(self._ws.emit.remote("loop.resumed"))
         return self.state_snapshot()
 
@@ -531,6 +547,7 @@ class CEO(Role):
         self._tripped = False
         self._trip_reason = None
         self._consecutive_failures = 0.0
+        self._version += 1
         ray.get(self._ws.emit.remote("breaker.reset", **self.economics()))
         return True
 
