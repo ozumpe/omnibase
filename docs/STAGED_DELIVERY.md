@@ -6,11 +6,13 @@ sandbox worker (`sis/sandbox_worker.py`,
 [OMNI-129](https://olafzumpe.atlassian.net/browse/OMNI-129)), and phase 1,
 feature branches (`sis/feature.py`,
 [OMNI-130](https://olafzumpe.atlassian.net/browse/OMNI-130)), are built. The
-other phases are planned.
+gate separation built on that worker also shipped (OMNI-45/146), and Class-2
+construction is integrated (OMNI-147/149). Serve isolation, agent review,
+develop blue/green, AI approval and dynamic feature sizing remain planned.
 
 ## Why
 
-Until now, every verified candidate opened one pull request, and the loop then
+Before staged delivery, every verified candidate opened one pull request, and the loop then
 held until a human merged or closed it. OMNI-126 made that hold survive
 restarts, but the loop still did nothing while it waited. So it improved only
 as fast as a human reviewed.
@@ -25,48 +27,50 @@ The engine adopts the flow this repository already uses for its own work:
 
 | Stage | Who acts | What reaches it |
 |---|---|---|
-| **Feature** branch | The agent, autonomously | Only versions that passed the local tests, the gauntlet's hard thresholds and the agent's own review. Several iterations per feature; failed versions are never pushed (already true today). Tested hot in the sandbox (phase 0). |
-| **`develop`** | A human merges one PR per finished feature. AI approval is optional, behind a `forbidden_` key, off by default. | Integration and autonomous improvement; deployed blue/green. |
+| **Feature** branch | The agent, autonomously | Passing versions are committed; failed attempts remain feedback. Optimizations can take several steps; Class 2 finishes at its first passing step. The sandbox worker exists; agent self-review and automatic hot feature testing are planned. |
+| **`develop`** | A human merges one fixed-head PR per finished feature. | The next feature starts from merged code. Automatic develop blue/green and optional AI approval are planned, not available switches today. |
 | **`main`** | A human, always, by release PR | Production |
 
 Git keeps the history of every version the agent stood behind, and only those.
 Nothing reaches production without a human merge; `develop` receives a
 feature, not every step of one.
 
-A feature is finished after `N` accepted steps (a config value, default 3), or
-as soon as a step finds no further gain. A dynamic budget that follows the
-steps' gains is OMNI-134.
+An optimization feature finishes at the configured accepted-step limit or when
+a step finds no further gain. Class 2 finishes at its first passing step; a
+built feature is revalidated before planning and returns neutral `no_gain` if
+still correct. See `config.yml` for the step limit and
+[CLASS2_CONTRACT.md](CLASS2_CONTRACT.md) for feature construction. Dynamic
+sizing based on gains is OMNI-134, still planned.
 
 ## Alternatives considered and rejected
 
-- **Auto-merge to live.** It removes the human gate, and it is unsafe while a
-  candidate can forge its own benchmark verdict (KNOWN_ISSUES H2, OMNI-45).
+- **Auto-merge to live.** It removes the mandatory human gate. At decision time
+  the benchmark-verdict forgery H2 was also open; OMNI-45 fixed that defect,
+  but did not authorize auto-merge or make the Serve canary a sandbox.
 - **Batching on one long-lived loop branch.** Squash merges break its ancestry,
   and the next batch then conflicts on the target file. The PR head also moves
   while a human reviews it, so the merge takes in steps nobody saw.
 - **Keeping the lineage outside git.** It avoids those conflicts, but loses the
   history.
 
-## The stories, in order
+## Delivery status (2026-10-13)
 
-1. **OMNI-129, phase 0: the sandbox worker** (below). It comes first because
-   OMNI-48, OMNI-45 and OMNI-133 all build on it.
-2. **OMNI-130, phase 1: feature branches.** Each iteration starts from the
-   feature branch's head, and its prompt carries the earlier attempts and why
-   they failed (the useful half of OMNI-127). A finished feature becomes one PR
-   to `develop`, whose head never moves after it is opened. Holds are per
-   contract.
-3. **Before AWS run #3:** a `develop` branch on `ozumpe/testrun`, a re-seeded
-   naive `sum_of_divisors` (it improved in four steps in July), and
-   `github.default_base: develop`. Then v0.3.0 and the run, measuring
-   iterations, cost and review time per feature.
-4. **Then:**
-   - OMNI-48 (the canary onto the worker);
-   - OMNI-133 (`develop` blue/green);
-   - OMNI-131 (the agent's own review);
-   - OMNI-45 (the gates onto the worker);
-   - OMNI-132 (optional AI approval, blocked by OMNI-45);
-   - OMNI-134 (dynamic feature size).
+| Work | State |
+|---|---|
+| OMNI-129: sandbox worker and hot-slot primitive | Built |
+| OMNI-130: accepted feature steps, attempt feedback and fixed-head PRs | Built; incomplete work can resume after restart |
+| AWS preparation: testrun develop branch, target re-seeding and base setting | Completed before run #3; subsequent runs recorded in [AWS_RUN.md](AWS_RUN.md) |
+| OMNI-45/146: benchmark and correctness gates separated from candidate workers | Built; SLO remains in-process |
+| OMNI-147/149: Class-2 construction and already-built convergence | Built |
+| OMNI-48: move Serve green onto the worker | Planned; non-stub Serve refusal remains |
+| OMNI-131/133: agent review and develop blue/green | Planned |
+| OMNI-132: optional AI approval | Planned; no implemented configuration switch |
+| OMNI-134: dynamic feature size | Planned |
+
+Each optimization iteration uses the feature's accepted head and earlier attempt
+feedback. Rejected attempts are also retained before a branch exists for Class 2.
+The finished PR head does not move while a human reviews it. Recovery asks real
+version control about outstanding loop PRs as well as reading persisted state.
 
 ## Phase 0: the sandbox worker
 
@@ -127,10 +131,10 @@ Desktop; measure it before relying on either number.
 
 ## Risks
 
-- **Local tests and hot deploys run AI-written code no human has reviewed.**
-  That is the sandbox's job, and its known gaps are OMNI-45's. They matter most
-  once AI approval (OMNI-132) is switched on, which is why that story is
-  blocked by OMNI-45.
+- **Gates run AI-written code no human has reviewed.** That is the sandbox's
+  job. OMNI-45/146 separate the trusted verdict from the candidate, but the
+  SLO and Serve limitations remain; see [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
+  AI approval (OMNI-132) is planned, not something operators can switch on.
 - **Feature size is a judgement call.** Too small, and review is the
-  bottleneck again; too large, and review stops being real. The default `N` = 3
-  and a hard cap bound it; OMNI-134 makes it follow the evidence.
+  bottleneck again; too large, and review stops being real. The configured step
+  limit bounds it; OMNI-134 proposes sizing it from evidence.

@@ -181,9 +181,8 @@ def test_the_default_sensor_is_the_simulated_one_and_needs_no_credentials() -> N
     assert isinstance(make_sensor(), SimSensor)
 
 
-def test_the_real_sensor_is_refused_until_it_exists() -> None:
-    with pytest.raises(RuntimeError, match="OMNI-33"):
-        make_sensor("real")
+def test_only_the_two_backends_are_sensors() -> None:
+    # 'real' is the EIA sensor (OMNI-33, tests/test_eia_sensor.py).
     with pytest.raises(ValueError, match="not a sensor backend"):
         make_sensor("csv")
 

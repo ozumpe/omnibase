@@ -1,9 +1,12 @@
 # From Class 2 to omnitrack — building a digital twin with omnibase
 
-**Status:** vision & sequencing. **None of E1–E5 is built** — with one exception, the
-`Clock` port, which D6 pulled forward into
-[OMNI-23](https://olafzumpe.atlassian.net/browse/OMNI-23) and which shipped as
-`sis/clock.py`.
+**Status:** vision & sequencing. **E1 is partially implemented**: the `Clock`
+port (OMNI-23), `Sensor`/`SimSensor` (OMNI-31), the sanitising boundary
+(OMNI-32), and EIA capture/replay (OMNI-33, current working tree). Scenario
+generation (OMNI-34), the first approved domain fixture and prediction-error
+reporting remain planned. E2–E5 are not built. No fuel-market model is attached
+to the running loop yet. See [SENSOR_RUNBOOK.md](SENSOR_RUNBOOK.md) for what the
+implemented sensor actually reads.
 
 The Class-2 base this document builds on **has landed** (2026-08-11):
 `FeatureContract` with a contract-selected gate profile, `InterfaceGate`,
@@ -42,15 +45,15 @@ scalar for hundreds of components and nothing converges against it.
 
 ---
 
-## 2. What OMNI-3 provides — and what it doesn't
+## 2. What the engine provides — and what it doesn't
 
-| Capability | After OMNI-3 | Gap for omnitrack |
+| Capability | Current implementation | Gap for omnitrack |
 |---|---|---|
 | Verify a built feature offline | ✅ `FeatureContract` + invariants + backtests | assumes a **deterministic** entry point |
-| Verify on live traffic | ✅ `ServeCloud` canary, same predicates | assumes a **stateless** target |
+| Verify on live traffic | ⚠️ `ServeCloud` mechanics for stub optimization runs | stateless only; non-stub proposers and Class 2 are refused pending isolation/domain integration |
 | Any target, any language | ⚠️ contract yes; `ToolchainAdapter` **parked** (OMNI-20) — Python only today | — |
 | Spec → contract | ✅ contract-author actor (human-reviewed) | — |
-| **Read the world** | ⚠️ `Clock` port shipped (OMNI-23); no `Sensor` | no way to *read* the world — event time exists, readings don't |
+| **Read the world** | ✅ Clock, Sensor, SimSensor, sanitisation and EIA trace capture/replay | scenario generation and approved domain fixtures remain; no domain consumer is wired into the loop |
 | **Know the model is wrong** | ❌ | trigger is "code is slow", not "model disagrees with reality" |
 | **Model non-deterministic reaction** | ❌ | every gate compares values, not distributions |
 | **Hold live state across a swap** | ❌ | canary works *because* the target is stateless |
@@ -66,19 +69,22 @@ None of this is an engine rewrite.
 ## 3. The five new components
 
 ### E1 — `Sensor` port (+ a clock)
-A port like the existing five, with **two adapters from day one**: `RealSensor` (reads the
-world) and `SimSensor` (generates scenarios). Paired with a `Clock` port so the twin can
+A dedicated port with two adapters: `EIASensor` (captures and reads observations)
+and `SimSensor` (replays supplied readings; scenario generation is still planned).
+Paired with a `Clock` port so the twin can
 run in event time, not wall-clock.
 
 **The port and its simulated adapter are built too** (OMNI-31): `Sensor`, `Reading` and
 `TimeAxis` in `sis/ports.py`, `SimSensor` and `replay` in `sis/adapters.py`. A reading
 carries two times, `event_time` and `known_at`, and every read names which one it means.
-What remains of E1 is the real adapter (OMNI-33) behind the sanitising boundary (OMNI-32),
-and scenario generation (OMNI-34).
+The real adapter is built as well (OMNI-33): `EIASensor` in `sis/adapters_real.py`
+captures EIA's bulk file into an append-only trace (`sis/sensor_trace.py`, D12's capture
+format) through the sanitising boundary (OMNI-32). What remains of E1 is scenario
+generation (OMNI-34).
 
 **The clock half is already built** — `sis/clock.py` (OMNI-23) ships `WallClock`,
 `ReplayClock`, and timezone-required `event_time` parsing, so what remains of E1 is the
-`Sensor` port and its two adapters. Note what that module already settled, so E1 doesn't
+scenario generator and the approved domain fixtures. Note what that module already settled, so E1 doesn't
 relitigate it: event time is *not* used for durations (the benchmark gate keeps
 `perf_counter`) and *not* for the audit trail (`SelfModel.record` stays on the wall
 clock). Only "when did something happen out there" goes behind the port.
@@ -328,7 +334,14 @@ consumer sales. Filed as
 [OMNI-39](https://olafzumpe.atlassian.net/browse/OMNI-39), not yet broken into stories.
 
 *Data sources, verified 2026-09-24.* Licence and terms of use are checked separately, by
-a human, before any adapter is written against a source.
+a human, before any adapter is written against a source. **EIA's were checked by Olaf on
+2026-10-13**: its data is public domain and may be reused and redistributed with an
+acknowledgment that dates the publication ("Source: U.S. Energy Information
+Administration (Oct 2008)"); the EIA name may not imply endorsement; and content may not
+be modified while still naming EIA as its source. So a trace keeps EIA's values and unit
+text as published, each capture records the acknowledgment, and anything derived from
+them (a sum, an interpolation, a model's output) is ours, never labelled EIA's
+(`sis/sensor_trace.py`, OMNI-33).
 
 | Source | What | Level | Cadence, latest | Access |
 |---|---|---|---|---|

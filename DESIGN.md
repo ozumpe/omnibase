@@ -3,6 +3,12 @@
 This is the detailed companion to `CLAUDE.md`. The control-loop diagram lives in
 `ray_self_improving_control_loop.svg` in this folder.
 
+**Implementation boundary:** the engine builds and optimizes designated Python
+targets under human-authored contracts. Supervised AWS runs are complete;
+external-domain simulation and an unattended monitor-driven server remain
+planned. Sections 3–5 distinguish the implemented runtime from its intended
+extensions; §8 is explicitly a historical bootstrap snapshot.
+
 ## 1. Vision
 
 A server that monitors and models a slice of the real world (traffic, appliances,
@@ -45,11 +51,13 @@ see @ACTORS.md.** Summary below.
 Organizational metaphor -> Ray primitive:
 - **CEO / CTO / PM** -> Ray **named, detached** actors; hold goals, budget, and
   state, survive tasks, looked up by name cluster-wide.
-- **SWE / QA / DevOps** (and PM's **Designer** helpers) -> Ray actors the supervisors
-  spawn and own.
-- **Supervision** -> Ray's `max_restarts` / `max_task_retries`: a crashing
-  implementation actor restarts or surfaces as a failure without taking down its
-  parent — the QA->rollback spine without hand-rolling one.
+- **SWE / QA / DevOps / Designer** -> currently named, detached actors too;
+  `org.bootstrap()` centrally creates all seven roles with `get_if_exists=True`.
+  Supervisor-owned child workers are the intended organization, not today's
+  actor ownership graph.
+- **Supervision** -> Ray restart/retry controls are available, but the spawning
+  hierarchy and dynamic worker supervision are planned. Candidate timeouts and
+  failure attribution are implemented by the gauntlet and sandbox workers.
 
 **Coordination principle:** actors coordinate through durable artifacts —
 Confluence (designs), Jira (plans/status/bugs), Git (code/PRs) — not just in-memory
@@ -71,6 +79,16 @@ coordination + memory substrate:
   (GitHub MCP / `gh`).
 - **Cloud/Infra** — compute, deploy targets. Default: **AWS**.
 - **Telemetry** — logs, metrics, traces.
+- **Notifier** — pages on trips and operational failures; AWS SNS with real
+  adapters (OMNI-62).
+- **Sensor** — `SimSensor` and EIA capture/replay, passed explicitly to a
+  consumer. Untrusted observations enter through `sensor_input.sanitise`.
+  See [`docs/SENSOR_RUNBOOK.md`](docs/SENSOR_RUNBOOK.md).
+
+The engine's real adapters use REST/SDK calls. MCP/`gh` integrations are
+contributor tools; they are not the runtime transport. Cloud's recording
+adapters and the opt-in `ServeCloud` traffic backend are separate from AWS
+provisioning in `infra/aws/`.
 
 The same adapter mechanism later connects **domain** actors to the modeled world's
 APIs (traffic sensors, building systems, …).
@@ -80,58 +98,79 @@ A dedicated named, detached actor (the **Registry / SelfModel**) keeps a live,
 queryable model of the system itself and its substrate — the *first piece of the
 world the server models*, using the same machinery it will later point at traffic /
 a building / a factory.
-- Software/self: actor registry (role, state, parent/child, mailbox depth, restarts,
-  placement), blue/green deploy slots & live version, active cycles, provenance graph.
-- Hardware/runtime: Ray cluster nodes, CPU/RAM/GPU/disk/network headroom, AWS
-  instance types/region/autoscaling, OS & runtime versions.
-- Why load-bearing: error collection (map an exception to actor+node+version),
-  blue/green handling (which slot is live; capacity for a green env), building
-  additional roles (reason over its own org chart to add e.g. a SecurityReviewer),
-  and starting/monitoring actors (source of truth for supervision & placement).
+- Implemented software records: actor name/role/parent/state/restart counter,
+  contracts and PR-contract links, deploy slots/live version/pending PR, and
+  provenance. Lifecycle records are updated by the application, not automatic
+  Ray monitoring. The CEO owns budget and brake state.
+- Implemented substrate snapshot: Ray cluster resource totals, Python version
+  and platform (`SelfModel.substrate`).
+- Planned: mailbox depth, automatic lifecycle monitoring, actor placement,
+  per-node headroom, AWS inventory and dynamic role creation based on capacity.
 
 ## 4. Self-improvement control loop
 
 Monitor → budget/goal gate → propose → validation gauntlet → Ray Serve canary →
 promote or rollback → log outcome → circuit breaker. See the SVG for the picture.
 
-- **Monitor & detect** — Ray worker actors emit metrics. Trigger a cycle only on a
-  *sustained* SLO breach over a rolling window, never a single spike.
+- **Monitor & detect** — a sustained-breach trigger exists, but `main.py --loop`
+  currently uses repeated demo intake. Wiring observations to autonomous domain
+  or SLO-driven work remains planned.
 - **Budget & goal gate** — supervisor actors decide whether an attempt is worth the
   LLM cost. Hard cap, not a soft "track."
-- **Propose** — an LLM actor builds a prompt from system state and generates Python
-  on a feature branch.
+- **Propose** — SWE builds a contract-derived prompt with prior attempt feedback.
+  Passing optimization steps accumulate on a feature branch before one fixed-head
+  PR; Class 2 opens its PR at the first passing step. Rejections remain feedback.
 - **Validation gauntlet** — see §5.
-- **Ray Serve canary** — deploy the new version alongside the old, shift weighted
-  traffic, compare against baseline. For an internal (non-served) actor, the
-  equivalent is: spin up the new actor version, shadow-run real traffic, then
-  atomically swap the named-actor handle.
-- **Promote / rollback** — promote shifts 100% of traffic; rollback kills the new
-  version. Both outcomes (including failed diffs) are logged to episodic memory.
-- **Circuit breaker** — N consecutive failed/regressed attempts freezes the loop and
-  pages a human.
+- **Canary** — the recording backend executes no candidate code. Opt-in Serve
+  runs live traffic, but is refused with any non-stub proposer (no override,
+  until OMNI-48) and with Class 2. It uses shadow dispatch in the org flow.
+  Atomic named-actor swaps for internal stateful targets remain planned.
+- **Promote / rollback** — a human merges or closes the PR; `observe_merge()`
+  applies that decision by promoting or releasing green. Serve promotion
+  redeploys blue; recording adapters update deploy records. The loop never merges.
+- **Brakes and outcomes** — counted failures contribute to the breaker and trips
+  page a human. Neutral no-op/no-gain/inconclusive outcomes record spend without
+  incrementing it; convergence stops politely. Cycle exceptions are recorded and
+  charged. See `config.yml` for controls and `docs/KNOWN_ISSUES.md` for limitations.
 
 ## 5. Validation gauntlet (the compile-gate replacement)
 
-Python runs anything you hand it, so the gauntlet has to be strict. Order matters —
-cheapest, safest checks first:
+`Contract.gate_profile()` chooses the ordered gates; `validate()` dispatches
+them through one entry point. Candidate Python must be fully typed.
 
-1. **`ast.parse`** — instant syntax check. The nearest thing to "does it compile."
-2. **`mypy --strict`** (or pyright) — the only static type safety net you have.
-   Generated code MUST be fully type-annotated; require this in the prompt template.
-3. **`pytest`** — the existing suite must pass. Every bug ever found becomes a
-   permanent regression test (the suite is the moat).
-4. **Benchmark** — must beat the current baseline by a defined margin, or it's a
-   regression.
-5. **Sandboxed run** — execute the candidate in an isolated Ray task with its own
-   `runtime_env`, ideally inside a locked-down container: **no network egress, no
-   credential mounts.** In steps 3 and 4 the candidate runs *inside* this sandbox
-   so an infinite loop or malicious diff is contained, and the tests, the clock
-   and the verdict that judge it stay outside, in a process it never runs in
-   (OMNI-45, OMNI-146). A candidate served *hot* (a canary, a feature
-   under test) runs in the same sandbox through the sandbox worker,
-   `sis/sandbox_worker.py`: a long-lived process reached over stdin/stdout, so it
-   needs no network (OMNI-129, `docs/STAGED_DELIVERY.md`).
-6. **Human PR** — mandatory manual review before anything merges.
+- **Optimization:** syntax → no-op → strict types → interface → acceptance →
+  invariants → backtests → differential correctness and benchmark.
+- **Feature construction:** syntax → strict types → interface → acceptance →
+  invariants → backtests → optional latency SLO. There is no reference benchmark.
+
+Undeclared invariants/backtests and absent SLOs have nothing to check. The
+acceptance suite is the contract's trusted tests, not the entire repository's
+CI suite. See [`docs/CLASS2_CONTRACT.md`](docs/CLASS2_CONTRACT.md).
+
+**Execution boundary:** acceptance, invariant and backtest harnesses run on the
+host and call a JSON proxy to `SandboxWorker`. The candidate never runs in the
+process judging those gates. Benchmark candidate and baseline have separate
+workers; reference, timing and verdict stay on the host. The SLO gate remains
+in-process inside its sandbox, with the limitation recorded as OMNI-86.
+
+Docker isolates candidate execution with no network, no credentials, a read-only
+exam mount, separate scratch space and the host's non-root uid. Subprocess mode
+is a soft guard that leaves host files readable and cannot enforce CPU affinity;
+a real proposer requires Docker unless an explicit unsafe override is set.
+Each gate has a timeout. Failed gates are followed by a trusted sandbox probe
+so harness failures are attributed correctly, and trusted exam files are checked
+for tampering after every gate.
+
+Benchmarks use paired total cost over unused inputs, with an interval deciding
+accept/reject/inconclusive. Timed batches have no per-call Python harness work;
+Docker confines each worker to a different single CPU and swaps them halfway.
+See [`docs/CODE_TOUR.md`](docs/CODE_TOUR.md) for execution details.
+
+The worker also provides a hot-slot primitive for future deployment. It is not
+yet the Serve canary backend: an ordinary Serve replica still has control-plane
+access, so a passing offline candidate from a real proposer cannot be served
+there. Every finished feature ends in a human-reviewed PR before promotion.
+
 
 ## 6. Guardrails (MCP + repo)
 
@@ -144,8 +183,8 @@ cheapest, safest checks first:
   write tokens, never admin. Destructive actions (deleting issues, archiving pages)
   require human approval. Update Jira status only after a successful commit/deploy.
   Documentation follows fixed Confluence templates, not free-form pages.
-- **Secrets:** `.env` in `.gitignore` for local dev only; AWS Secrets Manager / SSM
-  Parameter Store with IAM roles in the cloud. Never commit tokens.
+- **Secrets:** gitignored `secrets.local.yml` locally; AWS Secrets Manager with
+  an instance IAM role in the cloud (`sis/settings.py`). Never commit tokens.
 - **Configuration:** every knob is declared once in `sis/config.py` and rendered
   into a committed `config.yml` (CLI flag > env var > file > built-in default).
   Both are guardrail code: the sandbox mode, the spend brakes and the policy's

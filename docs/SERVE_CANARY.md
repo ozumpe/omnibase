@@ -9,6 +9,14 @@ is orthogonal follow-on work, not this doc's core loop. Tracked as
 Depends on [`docs/CLASS2_CONTRACT.md`](CLASS2_CONTRACT.md) — read that first.
 This doc is the extension of it that makes the canary step real.
 
+**Current scope:** the org flow supports the two optimization contracts and
+forces shadow dispatch. `--canary serve` is refused for Class-2 contracts and
+for any non-stub proposer. The Class-2/domain-canary discussion and pseudocode
+below describe intended reuse, not a supported Class-2 deployment today. The
+latency and error-rate gates have open defects (OMNI-50); see
+[KNOWN_ISSUES.md](KNOWN_ISSUES.md). Scrubbing a replica's environment does not
+isolate it from the Ray control plane.
+
 > **Where green is going (2026-09-27).** Green still runs as an ordinary Ray
 > worker, which is why `--canary serve` is refused with a real proposer
 > (KNOWN_ISSUES H3, OMNI-49). Its replacement exists: the sandbox worker
@@ -355,12 +363,11 @@ step 1 (already done):
    the source it is handed. Serving the merged target is trusted code; serving a
    *candidate* runs LLM-generated code in a Ray worker, and a Serve replica is
    **not** the gauntlet sandbox — no scrubbed env, no egress block, no per-call
-   timeout. That is the intended shape of a canary and the candidate has passed
-   every offline gate, but the guarantee is *procedural* here rather than
-   kernel-enforced. **Settled in step 9:** green gets a scrubbed `runtime_env`
-   (every non-allowlisted variable blanked), while egress stays open by
-   construction — a replica exists to answer HTTP. A credential boundary, not a
-   sandbox.
+   timeout. **Historical conclusion:** step 9 added a scrubbed `runtime_env`
+   (every non-allowlisted variable blanked), while egress stayed open. That did
+   not establish isolation: the later H3 review found Ray control-plane access.
+   Current operation refuses non-stub Serve candidates until OMNI-48; passing
+   every offline gate does not bypass the refusal.
 
 7. ~~**`Cloud.shift_traffic` / `Cloud.live_metrics`** on the port~~ — **done**
    (2026-08-05). The port grew both; `InMemoryCloud` implements them for real
@@ -420,13 +427,11 @@ step 1 (already done):
    became control-plane calls, and blue is never touched. Regression test:
    `test_deploying_a_canary_does_not_restart_blue`.
 
-   **The step-6 sandbox question, settled.** A green replica now runs with a
-   scrubbed `runtime_env`: every non-allowlisted environment variable is blanked,
-   so candidate code cannot read `ANTHROPIC_API_KEY`, `AWS_*` or any other
-   env-carried credential. **Network egress stays open by construction** — a
-   replica exists to answer HTTP, so `--network none` is unavailable here in a
-   way it is not in the gauntlet. This is therefore a *credential boundary, not
-   a sandbox*, and `sis/serving.py` says so where someone extending it will look.
+   **Environment scrubbing, not sandboxing.** Green blanks non-allowlisted
+   environment variables, but the later H3 review established that it can reach
+   credentials held by control-plane actors. Network egress also remains open.
+   This is not an effective credential boundary. Non-stub candidates are refused
+   until OMNI-48 isolates their execution; see the current-scope note above.
    Scrubbing works by **blanking rather than omitting**, because Ray's
    `runtime_env["env_vars"]` merges with the inherited environment — listing only
    the safe variables would have left every secret intact. Both halves are
@@ -552,8 +557,8 @@ Recorded here so the sequencing above reads against settled ground:
 |---|---|---|
 | Paired samples | **Shadow by default**, `CanaryMode` per target | `LiveSample.baseline_response` is optional; the response-agreement gate is shadow-only |
 | First served target | **A sort** | scalable input (real latency signal) + unique output (strict shadow check) |
-| Ray Serve in CI | **Yes** — CI runs Serve | `ServeCloud` (step 9) gets real coverage, not skipped integration tests. In the event no new CI stage was needed: `ray[serve]` is a core dependency, so the existing `pytest` job already runs the live Serve tests from steps 6, 8 and 9 |
-| Property testing | **Hypothesis**, added as an optional dep group | lands with step 5/8, its first actual use — not added ahead of a caller |
+| Ray Serve in CI | **Yes** — CI runs Serve | Code changes run a separate serial `pytest -m serve -n 0` job; bare `pytest` excludes it. Docs-only changes run the docs gate. |
+| Property testing | **Hypothesis**, shipped in the dev dependencies | Used by invariant gates and included in the gauntlet image; no optional Hypothesis group is required. |
 
 ## Open problems
 
