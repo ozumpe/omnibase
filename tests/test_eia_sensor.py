@@ -9,6 +9,7 @@ later ones are made up for the test.
 from __future__ import annotations
 
 import datetime
+import fcntl
 import hashlib
 import importlib.util
 import json
@@ -450,6 +451,43 @@ def test_two_captures_at_once_backfill_once(tmp_path: pathlib.Path) -> None:
     sensor_trace.append(trace, first)
     worker.join(5)
     assert seen == [1]                    # it read the first block, not an empty file
+
+
+def test_a_read_during_a_capture_waits_for_its_whole_block(tmp_path: pathlib.Path) -> None:
+    # OMNI-159 (M29): load() read without the writer's lock, so a read that
+    # landed mid-block saw a cut-short trace and called it edited.
+    later = [_stocks(["20221202", 30001], ["20221125", 29943], ["20220930", 24700],
+                     ["20220805", 29192]), _ca(["20221003", 6.213])]
+    whole, clock = _sensor(tmp_path / "whole", _AUTUMN, later)
+    whole.capture()
+    first = whole.trace.read_bytes()
+    clock.advance_to(SECOND)
+    whole.capture()
+    block = whole.trace.read_bytes()[len(first):]
+    expected = whole.read(*AUTUMN_2022, by=TimeAxis.KNOWN)
+
+    sensor = EIASensor(tmp_path / "eia.jsonl")
+    sensor.trace.write_bytes(first)
+    outcome: list[object] = []
+
+    def read() -> None:
+        try:
+            outcome.append(sensor.read(*AUTUMN_2022, by=TimeAxis.KNOWN))
+        except Exception as exc:  # noqa: BLE001 - the test inspects it
+            outcome.append(exc)
+
+    reader = threading.Thread(target=read)
+    with open(sensor.trace, "ab") as writer:     # a capture, halfway through its block
+        fcntl.flock(writer, fcntl.LOCK_EX)
+        writer.write(block[:len(block) // 2])
+        writer.flush()
+        reader.start()
+        time.sleep(0.3)
+        assert outcome == [], "the read went ahead of a capture still writing"
+        writer.write(block[len(block) // 2:])
+        writer.flush()
+    reader.join(10)
+    assert outcome == [expected]
 
 
 def test_a_series_larger_than_one_batch_is_captured_and_read_in_batches(

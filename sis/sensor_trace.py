@@ -167,11 +167,19 @@ def _decode(raw: bytes, where: pathlib.Path) -> list[dict[str, Any]]:
 
 
 def load(path: pathlib.Path) -> list[dict[str, Any]]:
-    """Every line of the trace at *path*, oldest first. None if nothing was captured yet."""
+    """Every line of the trace at *path*, oldest first. None if nothing was captured yet.
+
+    Read under a shared lock (OMNI-159, M29): :func:`append` holds an
+    exclusive one for a capture's whole block, so a read sees the trace before
+    the block or after it, never half of it, which would read as cut short.
+    """
     try:
-        raw = path.read_bytes()
+        handle = open(path, "rb")  # noqa: SIM115 - closed below, and with it the lock
     except FileNotFoundError:
         return []
+    with handle:
+        fcntl.flock(handle, fcntl.LOCK_SH)
+        raw = handle.read()
     return _decode(raw, path)
 
 

@@ -682,6 +682,18 @@ any long-lived cluster exists.
   DuckDB) and `tests/test_brake_persistence.py` (the reviewer's sequence with
   the real CEO).
 
+- [OMNI-159] **M29 — Reading a sensor trace while a capture appended to it reported
+  the trace as corrupt** *(found 2026-10-14 by a review of the OMNI-33 push;
+  reproduced by the reviewer, and here)* — `sensor_trace.append` holds an
+  exclusive `flock` for a capture's whole block, but `sensor_trace.load`
+  (`EIASensor.read`, `check_connections --deep`) read without it. A read in
+  the middle of a multi-MB block saw half of it: "cut short or edited", a
+  false tamper alarm, or a block shorter than its capture line says.
+  **Fixed 2026-10-14 (OMNI-159):** `load` reads under a shared lock, so it
+  sees the trace before a block or after it. Regression test: a read started
+  while a writer holds the lock halfway through a block waits for it and
+  returns the whole trace.
+
 - [OMNI-55] **M16 — Any exception after the LLM call loses that call's spend from the
   CEO ledger and the episodic log, strands the branch/PR, and can kill
   `--loop`** *(found 2026-09-26; confirmed by reading the code — the
@@ -1702,3 +1714,4 @@ any long-lived cluster exists.
 [OMNI-156]: https://olafzumpe.atlassian.net/browse/OMNI-156
 [OMNI-157]: https://olafzumpe.atlassian.net/browse/OMNI-157
 [OMNI-158]: https://olafzumpe.atlassian.net/browse/OMNI-158
+[OMNI-159]: https://olafzumpe.atlassian.net/browse/OMNI-159
