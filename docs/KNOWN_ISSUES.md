@@ -609,6 +609,37 @@ any long-lived cluster exists.
 
 ## Resolved
 
+- [OMNI-155] **H10 — A candidate could block the host past the worker timeout by not
+  reading its input** *(found 2026-10-14 by a review of the OMNI-33 push;
+  reproduced by the reviewer, and here: a host still writing after 20 s
+  against a 1 s timeout)* — `SandboxWorker.call` wrote and flushed the request,
+  blocking, before its timed read began. The candidate owns the worker
+  process, so it can stop reading stdin (moving fd 0 aside at import is
+  enough), and a request larger than the pipe then held the host for ever.
+  Neither the call's timeout nor the benchmark's deadline could interrupt the
+  write. **Fixed 2026-10-14 (OMNI-155):** stdin is non-blocking, and one
+  deadline covers sending the request and reading its answer
+  (`SandboxWorker._send`). A worker that has not taken the whole request by
+  then is killed with `WorkerTimeout`. The first write is tried at once, so a
+  request that fits the pipe costs no extra system call on the timed path.
+  Regression test, in both sandboxes: a candidate that stops reading, sent
+  8 MB.
+
+- [OMNI-156] **H11 — A candidate's stderr was stored and read back without a bound,
+  on the host** *(found 2026-10-14 by a review of the OMNI-33 push; the
+  unrestricted read confirmed with a probe, exhaustion not attempted)* — the
+  worker's stderr went to a host-side temporary file, written in docker by
+  the docker client, past the container's limits; `_stderr_tail` read it all,
+  decoded and split it to keep 300 characters of the last line. **Fixed
+  2026-10-14 (OMNI-156):** stderr is a pipe, drained in the same select loops
+  that send a request and wait for its answer, and only its last
+  `STDERR_TAIL_BYTES` (8 KiB) are kept. After a worker stops, at most 1 MiB
+  more is read. Draining while waiting also matters for liveness: in docker
+  the client forwards stdout and stderr in order, so an undrained stderr
+  would hold up the answer. Regression tests, in both sandboxes: 4 MB of
+  stderr before the handshake still names its last line with never more than
+  the tail held; 2 MB written during a call does not stop the answer.
+
 - [OMNI-55] **M16 — Any exception after the LLM call loses that call's spend from the
   CEO ledger and the episodic log, strands the branch/PR, and can kill
   `--loop`** *(found 2026-09-26; confirmed by reading the code — the
@@ -1622,3 +1653,5 @@ any long-lived cluster exists.
 [OMNI-152]: https://olafzumpe.atlassian.net/browse/OMNI-152
 [OMNI-153]: https://olafzumpe.atlassian.net/browse/OMNI-153
 [OMNI-154]: https://olafzumpe.atlassian.net/browse/OMNI-154
+[OMNI-155]: https://olafzumpe.atlassian.net/browse/OMNI-155
+[OMNI-156]: https://olafzumpe.atlassian.net/browse/OMNI-156

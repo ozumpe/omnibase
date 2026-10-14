@@ -107,7 +107,11 @@ internal target before it models anything external.
   **Hot deploys go through the sandbox worker** (`sis/sandbox_worker.py`,
   OMNI-129): the candidate is served from the gauntlet's own sandbox over
   stdin/stdout, so it needs no network. The host times each exchange and
-  JSON-decodes each answer, so neither can be faked from inside. OMNI-48 moves
+  JSON-decodes each answer, so neither can be faked from inside. One deadline
+  covers sending a request and reading its answer, so a worker that stops
+  reading its input is killed like one that never answers (OMNI-155, H10).
+  Its stderr is drained as it comes and only an 8 KiB tail is kept, never a
+  host-side file (OMNI-156, H11). OMNI-48 moves
   the canary onto it; until then the refusal above stands.
   **A broken sandbox is never blamed on the candidate** (OMNI-37): when a
   sandboxed gate fails, the gauntlet first runs a trusted self-check in the

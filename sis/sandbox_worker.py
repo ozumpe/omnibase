@@ -57,6 +57,12 @@ DEFAULT_CALL_TIMEOUT_S = 10.0
 START_TIMEOUT_S = 30.0
 # A reply is the candidate's output; one this large is an attack or a bug.
 MAX_REPLY_BYTES = 16 * 1024 * 1024
+# What the host keeps of a worker's stderr: its last bytes, for one diagnostic
+# line (OMNI-156, H11). Everything before them is read and dropped as it comes.
+STDERR_TAIL_BYTES = 8192
+# Read from stderr once a worker has stopped, at most: what a pipe holds, and
+# then some. A worker still writing cannot keep the host reading.
+_STDERR_FINAL_READ_BYTES = 1024 * 1024
 
 _WORKER_FILE = "_sis_worker.py"
 _CANDIDATE_FILE = "candidate.py"
@@ -196,6 +202,8 @@ class SandboxWorker:
         self._container: str | None = None
         self._dir: str | None = None
         self._stderr: IO[bytes] | None = None
+        self._stderr_tail_bytes = bytearray()
+        self._stderr_open = False
         self._buf = b""
         self._next_id = 0
         self._exports: dict[str, Export] = {}
@@ -214,9 +222,10 @@ class SandboxWorker:
         env = gauntlet._sandbox_env(home=self._dir, pythonpath=self._dir)
         argv = [str(workdir / _WORKER_FILE), str(workdir / _CANDIDATE_FILE), *self._names,
                 *(f"?{n}" for n in self._optional)]
-        # Host-side and outside the mounted directory: the candidate can write
-        # into its own directory, not into what the host reads back as diagnostics.
-        self._stderr = tempfile.TemporaryFile()
+        # stderr is a pipe the host drains while it waits on the worker, keeping
+        # only its tail (OMNI-156, H11). It used to be a host-side file that the
+        # candidate could grow without bound (in docker the client writes it, on
+        # the host, past the container's limits) and that was read back whole.
         if gauntlet.sandbox_mode() == "docker":
             self._container = self._name or f"sis-worker-{uuid.uuid4().hex[:12]}"
             args = gauntlet._docker_args(
@@ -226,13 +235,20 @@ class SandboxWorker:
             # The docker *client* runs with the host's environment; the container
             # gets only the -e variables _docker_args passed.
             self._proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                          stderr=self._stderr)
+                                          stderr=subprocess.PIPE)
         else:
             self._proc = subprocess.Popen([sys.executable, *argv], stdin=subprocess.PIPE,
-                                          stdout=subprocess.PIPE, stderr=self._stderr,
+                                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                           cwd=self._dir, env=env)
+        assert self._proc.stdin is not None and self._proc.stderr is not None
+        # Requests are written by _send, against a deadline (OMNI-155, H10).
+        os.set_blocking(self._proc.stdin.fileno(), False)
+        self._stderr = self._proc.stderr
+        os.set_blocking(self._stderr.fileno(), False)
+        self._stderr_open = True
         try:
-            line = self._read_line(self._start_timeout_s)
+            line = self._read_line(time.monotonic() + self._start_timeout_s,
+                                   self._start_timeout_s)
             ready = json.loads(line)
         except WorkerTimeout as exc:
             self._start_failed(f"no handshake ({exc})", timed_out=True)
@@ -315,6 +331,7 @@ class SandboxWorker:
             if self._stderr is not None:
                 self._stderr.close()
                 self._stderr = None
+                self._stderr_open = False
             if self._dir is not None:
                 shutil.rmtree(self._dir, ignore_errors=True)
                 self._dir = None
@@ -364,16 +381,14 @@ class SandboxWorker:
                 raise WorkerDied(f"the worker is not running{self._exit_note()}")
             self._next_id += 1
             rid = self._next_id
-            payload = json.dumps({"id": rid, **request})
+            payload = json.dumps({"id": rid, **request}).encode("utf-8") + b"\n"
+            timeout = self._call_timeout_s if timeout_s is None else timeout_s
+            # One deadline for sending and answering (OMNI-155, H10): a worker
+            # that stops reading its input is as late as one that never answers.
+            deadline = time.monotonic() + timeout
             started = time.perf_counter()
-            try:
-                assert self._proc.stdin is not None
-                self._proc.stdin.write(payload.encode("utf-8") + b"\n")
-                self._proc.stdin.flush()
-            except OSError as exc:
-                raise WorkerDied(f"the worker stopped reading ({exc}){self._exit_note()}") \
-                    from exc
-            line = self._read_line(self._call_timeout_s if timeout_s is None else timeout_s)
+            self._send(payload, deadline, timeout)
+            line = self._read_line(deadline, timeout)
             elapsed = time.perf_counter() - started
             return Reply(self._parse(line, rid, len(calls)), elapsed)
 
@@ -413,22 +428,60 @@ class SandboxWorker:
 
     # --- the pipe ----------------------------------------------------------------------
 
-    def _read_line(self, timeout_s: float) -> bytes:
-        """One line from the worker, or a timeout (which kills it), or its death."""
+    def _send(self, data: bytes, deadline: float, timeout_s: float) -> None:
+        """Write a request whole by *deadline*, or kill the worker (OMNI-155, H10).
+
+        The pipe is non-blocking. The candidate owns the process that reads it,
+        so it can stop reading; a blocking write would then wait for ever, and
+        no timeout had started yet. The first write is tried at once, so an
+        exchange whose request fits the pipe costs no extra system call.
+        """
+        assert self._proc is not None and self._proc.stdin is not None
+        fd = self._proc.stdin.fileno()
+        view = memoryview(data)
+        while view:
+            try:
+                view = view[os.write(fd, view):]
+                continue
+            except BlockingIOError:
+                pass
+            except OSError as exc:  # a broken pipe: the worker is gone
+                raise WorkerDied(f"the worker stopped reading ({exc}){self._exit_note()}") \
+                    from exc
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self._kill()
+                raise WorkerTimeout(f"the request was not read within {timeout_s:g}s; "
+                                    "the worker was killed")
+            err = self._stderr_fds()
+            readable, _, _ = select.select(err, [fd], [], remaining)
+            if readable:
+                self._take_stderr()
+
+    def _read_line(self, deadline: float, timeout_s: float) -> bytes:
+        """One line from the worker by *deadline*, or a timeout (which kills it),
+        or its death. stderr is drained meanwhile (OMNI-156, H11): a worker
+        blocked on a full stderr pipe would never answer, and in docker the
+        client forwards both streams in order, so it would block stdout too."""
         assert self._proc is not None and self._proc.stdout is not None
         fd = self._proc.stdout.fileno()
-        deadline = time.monotonic() + timeout_s
         while b"\n" not in self._buf:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 self._kill()
                 raise WorkerTimeout(f"no answer within {timeout_s:g}s; the worker was killed")
-            ready, _, _ = select.select([fd], [], [], remaining)
-            if not ready:
+            err = self._stderr_fds()
+            ready, _, _ = select.select([fd, *err], [], [], remaining)
+            if err and err[0] in ready:
+                self._take_stderr()
+            if fd not in ready:
                 continue
             chunk = os.read(fd, 65536)
             if not chunk:
-                self._proc.wait(timeout=5)
+                try:
+                    self._proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:   # its output ended, and it lingers
+                    self._kill()
                 raise WorkerDied(f"the worker exited{self._exit_note()}")
             self._buf += chunk
             if len(self._buf) > MAX_REPLY_BYTES:
@@ -453,12 +506,40 @@ class SandboxWorker:
         tail = self._stderr_tail()
         return f"{note}; {tail}" if tail else note
 
+    def _stderr_fds(self) -> list[int]:
+        """The stderr pipe to wait on, while it is open (a closed one is always
+        readable, and would spin the loop)."""
+        return [self._stderr.fileno()] if self._stderr is not None and self._stderr_open else []
+
+    def _take_stderr(self) -> int:
+        """Read what the worker wrote to stderr, keeping only the last
+        :data:`STDERR_TAIL_BYTES` (OMNI-156, H11). Returns the bytes read."""
+        if self._stderr is None or not self._stderr_open:
+            return 0
+        try:
+            chunk = os.read(self._stderr.fileno(), 65536)
+        except BlockingIOError:
+            return 0
+        except OSError:
+            chunk = b""
+        if not chunk:
+            self._stderr_open = False
+            return 0
+        self._stderr_tail_bytes += chunk
+        del self._stderr_tail_bytes[:-STDERR_TAIL_BYTES]
+        return len(chunk)
+
     def _stderr_tail(self) -> str:
-        """The end of the worker's stderr: the candidate's text, so data only."""
-        if self._stderr is None:
-            return ""
-        self._stderr.seek(0)
-        lines = self._stderr.read().decode("utf-8", "replace").strip().splitlines()
+        """The end of the worker's stderr: the candidate's text, so data only.
+
+        What is still in the pipe is read first, up to a bound, so a worker
+        that is still writing cannot keep the host reading; the host never
+        holds more than the kept tail.
+        """
+        read = 0
+        while read < _STDERR_FINAL_READ_BYTES and (got := self._take_stderr()):
+            read += got
+        lines = self._stderr_tail_bytes.decode("utf-8", "replace").strip().splitlines()
         return f"stderr: {lines[-1][:300]}" if lines else ""
 
 
