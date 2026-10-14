@@ -694,6 +694,25 @@ any long-lived cluster exists.
   while a writer holds the lock halfway through a block waits for it and
   returns the whole trace.
 
+- [OMNI-160] **L54 — Two captures at the same instant left a restored sensor value
+  looking withdrawn** *(found 2026-10-14 by a review of the OMNI-33 push;
+  confirmed by reading the code)* — `sensor_trace._latest` picks each
+  period's latest state by `known_at`, and listed readings before absences,
+  so on equal `known_at` an absence won whatever the order of the captures.
+  With a fixed `ReplayClock`, a value withdrawn and then restored stayed
+  "absent" in the trace's own view, and every later capture appended the
+  restored value again. A clock that stepped back did the same, and let a
+  later capture write a `known_at` earlier than one already in the trace.
+  **Fixed 2026-10-14 (OMNI-160):** ambiguous revision times are refused, not
+  broken by a tie. A capture whose fetch time is not after the trace's last
+  capture is refused and appends nothing (`capture_lines`), and a trace whose
+  captures are out of fetch-time order fails the read (`_check_blocks`). Then
+  no period has two lines at one `known_at`, and capture order is `known_at`
+  order. Regression tests: a capture at the same instant and one with a
+  clock stepped back are refused; an edited trace out of order fails the
+  read; withdrawn then restored over three captures reads as restored, and a
+  fourth appends nothing.
+
 - [OMNI-55] **M16 — Any exception after the LLM call loses that call's spend from the
   CEO ledger and the episodic log, strands the branch/PR, and can kill
   `--loop`** *(found 2026-09-26; confirmed by reading the code — the
@@ -1715,3 +1734,4 @@ any long-lived cluster exists.
 [OMNI-157]: https://olafzumpe.atlassian.net/browse/OMNI-157
 [OMNI-158]: https://olafzumpe.atlassian.net/browse/OMNI-158
 [OMNI-159]: https://olafzumpe.atlassian.net/browse/OMNI-159
+[OMNI-160]: https://olafzumpe.atlassian.net/browse/OMNI-160

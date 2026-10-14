@@ -60,7 +60,10 @@ internal target before it models anything external.
   against EIA's release archive. Later values are known at the fetch that
   first saw them. Read-back also checks each value line against its capture
   (in its block, known no later than the fetch, the block whole), under a
-  shared lock, so a read never sees half a capture (OMNI-159). It cannot
+  shared lock, so a read never sees half a capture (OMNI-159). Each capture
+  must be fetched after the last, or it is refused: two at one instant, or a
+  clock stepped back, would leave revisions a replay cannot order (OMNI-160).
+  It cannot
   catch a forgery consistent with itself; the human promotion into `specs/`
   is the guard there. No trace is written under `specs/` (checked by inode,
   so `SPECS/` on a Mac is caught too). EIA's terms were

@@ -237,6 +237,52 @@ def test_a_value_the_source_later_blanks_shows_as_withdrawn(tmp_path: pathlib.Pa
         sensor.absent(datetime.datetime(2022, 1, 1), everything[1], by=TimeAxis.KNOWN)
 
 
+def test_a_capture_not_after_the_last_one_is_refused_and_appends_nothing(
+        tmp_path: pathlib.Path) -> None:
+    # OMNI-160 (L54): at one instant, a withdrawal and a restoration could not be
+    # ordered, and the trace's own view of the period was decided by a tie.
+    withdrawn = [_stocks(["20220930", None])]
+    sensor, clock = _sensor(tmp_path, [_stocks(["20220930", 24675])], withdrawn, withdrawn)
+    sensor.capture()
+    before = sensor.trace.read_bytes()
+    with pytest.raises(TraceRefused, match="not after the trace's last capture"):
+        sensor.capture()                                        # the same instant
+    assert sensor.trace.read_bytes() == before
+    earlier = EIASensor(sensor.trace, clock=ReplayClock(FIRST - datetime.timedelta(hours=1)),
+                        fetch=_fetch(_bulk_lines([_stocks(["20220930", None])])))
+    with pytest.raises(TraceRefused, match="the clock went back"):
+        earlier.capture()                                       # a clock stepped back
+    assert sensor.trace.read_bytes() == before
+    clock.advance_to(SECOND)
+    assert sensor.capture().appended == 1                       # later is fine
+
+
+def test_a_trace_whose_captures_are_out_of_order_fails_the_read(tmp_path: pathlib.Path) -> None:
+    sensor, clock = _sensor(tmp_path, _AUTUMN, _AUTUMN)
+    sensor.capture()
+    clock.advance_to(SECOND)
+    sensor.capture()                                            # nothing new: its line alone
+    second = len(sensor.trace.read_text(encoding="utf-8").splitlines()) - 1
+    _edit(sensor, lambda lines: _with(lines, second, fetched_at=FIRST.isoformat()))
+    with pytest.raises(TraceRefused, match="not after the one before it"):
+        sensor.read(*AUTUMN_2022, by=TimeAxis.EVENT)
+
+
+def test_a_value_withdrawn_and_restored_reads_as_restored(tmp_path: pathlib.Path) -> None:
+    third, fourth = SECOND + datetime.timedelta(days=1), SECOND + datetime.timedelta(days=2)
+    sensor, clock = _sensor(tmp_path, *([_stocks(["20220930", value])]
+                                        for value in (24675, None, 24675, 24675)))
+    for when in (None, SECOND, third, fourth):
+        if when is not None:
+            clock.advance_to(when)
+        report = sensor.capture()
+    assert report.appended == 0                     # the restored value, unchanged
+    everything = (datetime.datetime(2022, 1, 1, tzinfo=UTC),
+                  datetime.datetime(2027, 1, 1, tzinfo=UTC))
+    assert [r.known_at for r in sensor.read(*everything, by=TimeAxis.KNOWN)] == [
+        datetime.datetime(2022, 10, 6, 17, tzinfo=EASTERN), third]
+
+
 # --- what the door refuses ----------------------------------------------------------
 
 

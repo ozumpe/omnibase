@@ -146,13 +146,17 @@ contract-author path.
 
 ## Failure and recovery
 
-Captures serialize with an exclusive file lock. Appends are synced; caught
-write failures roll back the attempted block. The writer refuses destinations
+Captures serialize with an exclusive file lock, and reads take a shared one, so
+a read never sees half a capture's block. Appends are synced; caught
+write failures roll back the attempted block. A capture whose fetch time is not
+after the trace's last capture is refused and appends nothing: two captures at
+one instant, or a clock that stepped back, would leave two revisions of a value
+that a replay could not order. Check the host clock, then capture again. The writer refuses destinations
 inside `specs/`, symlinks at the opened path and multiply linked files. These
 checks do not justify treating runtime staging data as immutable evidence.
 
-An incomplete final line, invalid UTF-8/JSON, inconsistent capture block or a
-record rejected on read causes a refusal. No reader silently skips that damage.
+An incomplete final line, invalid UTF-8/JSON, inconsistent capture block,
+captures out of fetch-time order or a record rejected on read causes a refusal. No reader silently skips that damage.
 To investigate:
 
 1. Stop captures and preserve a byte-for-byte copy of the affected trace.
