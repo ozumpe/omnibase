@@ -37,21 +37,32 @@ the provenance graph, and the actor registry.
 
 **Verify the project health:**
 ```bash
-poetry run pytest                                   # full suite
+poetry run pytest                                   # fast suite; excludes Serve
+poetry run pytest -m serve -n 0                      # Serve integration; serial
+poetry run pytest -m docs -n 0                       # docs-only verification
 poetry run mypy --strict sis/ main.py scripts/      # type gate
 poetry run ruff check .                             # lint gate
 ```
 
-**Optimise the other target.** Two contracts ship; the engine names neither:
+**Choose a contract.** Two optimization contracts and one feature contract ship:
 
 ```bash
 poetry run python main.py --contract sort   # runtime/sort_target.py
 poetry run python main.py                   # runtime/target.py (default)
+poetry run python main.py --contract roman  # build to_roman/from_roman from the spec
 ```
 
 ---
 
 ## Level 0a — the operator console (Panel)
+
+**Current limits:** OMNI-53 means configured GitHub OAuth is not installed as
+the Panel server's authentication provider; OMNI-52 permits YAML injection
+through string-valued config edits. Keep the console on loopback and use SSM
+port forwarding for remote access. Do not expose it on the strength of OAuth
+settings, and avoid string-valued UI edits until the renderer is fixed. See
+[OPERATOR_FRONTEND.md](OPERATOR_FRONTEND.md) and
+[KNOWN_ISSUES.md](KNOWN_ISSUES.md).
 
 View system state and edit configuration in a browser. Independent of
 everything below it: the console never starts the engine, so "is it running?"
@@ -92,6 +103,24 @@ with, deliberately — see `sis/config.py`'s `file_layer()`.
 > on a public address at all, consider a tunnel or Tailscale with the loopback
 > bind: this console edits the settings of a system that executes generated
 > code, and not being reachable beats any cipher suite.
+
+---
+
+## Sensor capture — observations for the future domain model
+
+The current-tree EIA adapter is operated separately from the control loop:
+
+```bash
+poetry install --with real
+poetry run python scripts/capture_sensor.py
+```
+
+It captures five weekly stock/price series into `runtime/sensor_traces/eia.jsonl`
+without an API key or Ray. It is not in older release tags. Selecting
+`sensor.backend=real` only reads that trace; it does not fetch or start a domain
+model. Capture can append accepted records and still exit 1 for reported source
+problems. See [SENSOR_RUNBOOK.md](SENSOR_RUNBOOK.md) for replay, reconstruction,
+revisions and failure recovery.
 
 ---
 
@@ -202,10 +231,10 @@ Two guarantees worth knowing, both verified by tests rather than asserted:
 - **Deploying a canary does not restart blue.** Green is a separate Serve
   application the router attaches to, precisely so adding one never re-runs the
   blue graph. The one-application version of this cycled the blue replica.
-- **The green replica's environment is scrubbed.** Candidate code cannot read
-  `ANTHROPIC_API_KEY`, `AWS_*` or any other env-carried credential. Network
-  egress stays open by construction — a replica exists to answer HTTP — so this
-  is a credential boundary, **not** the gauntlet's sandbox.
+- **The green replica's environment is scrubbed, but it is not isolated.**
+  It remains a Ray worker with control-plane access. Env scrubbing is not a
+  credential-security guarantee. Serve is refused for non-stub proposers,
+  with no override, until OMNI-48; Class-2 contracts are also refused.
 
 ---
 
@@ -332,7 +361,8 @@ covered by regression tests:
 What it does, end to end: drops a proposal page in Confluence → PM writes a spec
 → CTO creates a Jira epic/story → SWE opens a **PR** with the validated change on
 a feature branch → QA verifies → DevOps records a green-slot canary. It **stops
-at the human PR merge** — it never merges to `main` or promotes to live.
+at the human PR merge** — it never merges. In `--loop` mode it observes that
+merge and executes promotion; it applies the human decision.
 
 **After you merge the cycle's PR**, the next cycle pulls the target as merged on
 the base branch (`live_target_source`), and the gauntlet benchmarks the
@@ -378,11 +408,14 @@ or nothing gets persisted. See `docs/BRAKE_STATE_AND_ORACLE.md`.
 
 ---
 
-## Level 3 — kernel-enforced sandbox (optional hardening)
+## Level 3 — kernel-enforced sandbox (required for a real proposer)
 
-Runs every gauntlet gate inside `docker run --network none --cap-drop ALL
---read-only`, only the temp dir mounted, no credentials. Recommended once a real
-LLM is writing code.
+Runs candidate execution inside `docker run --network none --cap-drop ALL
+--read-only`, a read-only exam mount and separate scratch mount, no credentials.
+Trusted acceptance/invariant/backtest harnesses run on the host and call the
+candidate worker; the benchmark clock and reference are also host-side. Docker
+is required for a non-stub proposer unless the explicit unsafe override from
+Level 1 is set. Serve remains refused for that proposer even with Docker.
 
 > **✅ Validated end-to-end (2026-07-28).** A full real cycle (`claude-opus-4-8` +
 > real adapters + this sandbox) proposed and verified an O(√n) optimisation on the
@@ -418,12 +451,12 @@ This is development work, not configuration. Currently missing:
   (`--canary serve` / `SIS_CANARY=serve`); the in-memory recording stays the
   default. The **atomic actor swap**, for internal never-served actors, is
   still unbuilt — a different mechanism (DESIGN.md §4), no design doc yet.
-- ~~**AWS provisioning.**~~ **Written in OpenTofu (OMNI-29), not yet applied** —
+- ~~**AWS provisioning.**~~ **Implemented and exercised (OMNI-29)** —
   `infra/aws/` stands up
   the one-node run box (no-ingress SG, SSM-only access, instance role + one
   Secrets Manager secret, artifacts bucket, budget alarm), and
-  `docs/AWS_RUN.md` is the design note + runbook for a *supervised* few-cycle
-  run. Deliberately not this Level's autonomous server: a human starts it,
+  `docs/AWS_RUN.md` records seven *supervised* runs and their operating procedure.
+  Deliberately not this Level's autonomous server: a human starts it,
   watches it, stops it. The DevOps "provisions AWS" *role* (the actor doing it
   itself) remains a stub.
 - **Error-driven cycles.** Fixing exceptions (vs. optimizing speed) isn't wired;

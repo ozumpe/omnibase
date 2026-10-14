@@ -1,6 +1,6 @@
 <svg width="100%" viewBox="0 0 860 622" xmlns="http://www.w3.org/2000/svg" role="img">
-<title>Actor org and interaction map</title>
-<desc>Spawn hierarchy from CEO down through PM/CTO to the worker roles, each role's real-world subsystem touchpoints, and a report bus feeding the central SelfModel digital twin, above a band of the five external subsystems.</desc>
+<title>Conceptual actor organization and interaction map</title>
+<desc>Intended role hierarchy and original subsystem overview. Current bootstrap centrally creates all seven roles as named, detached actors; these arrows do not represent implemented child-actor ownership. Notifier and Sensor are additional ports. See ACTORS.md and docs/DIAGRAMS.md for the implemented organization and adapter boundaries.</desc>
 <defs>
 <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1 L9 5 L1 9 z" fill="context-stroke"/></marker>
 <style>
@@ -111,7 +111,7 @@ text { font-family: 'Helvetica Neue', Arial, sans-serif; }
 
 <!-- legend -->
 <line x1="150" y1="590" x2="184" y2="590" stroke="#5F5E5A" stroke-width="1.6" marker-end="url(#ar)"/>
-<text class="leg" x="190" y="594" text-anchor="start" fill="#444441">spawns</text>
+<text class="leg" x="190" y="594" text-anchor="start" fill="#444441">role design</text>
 <line x1="300" y1="590" x2="334" y2="590" stroke="#534AB7" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#ar)"/>
 <text class="leg" x="340" y="594" text-anchor="start" fill="#444441">reports state to SelfModel</text>
 <text class="leg" x="560" y="594" text-anchor="start" fill="#5F5E5A">C·Confluence  J·Jira  Git·GitHub  T·Telemetry</text>

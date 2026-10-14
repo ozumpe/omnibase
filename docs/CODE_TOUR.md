@@ -31,13 +31,14 @@ Two layers, deliberately kept apart:
 
 ```
 omnibase/                # repo root
-├── sis/                 # THE ENGINE — immutable code. ("sis" = the omnibase engine)
+├── sis/                 # THE ENGINE — STRICT/FORBIDDEN under the change policy
 └── runtime/             # MUTABLE STATE the engine reads/writes at run time
 ```
 
-The engine never edits itself; it edits files under `runtime/`. That split is
-the whole reason the project can "rewrite its own code" without the rewrite
-touching the rewriter.
+The shipped loop writes designated target modules under `runtime/`. Guardrails
+are FORBIDDEN; other engine code is STRICT, requiring an explicit policy opt-in
+and human approval. The directory split helps keep targets separate, but
+`sis/policy.py` defines what can actually change.
 
 ---
 
@@ -54,7 +55,7 @@ all of it, mapped to where you'll see it.
 | `Actor.remote(...)` | Construct an actor instance (returns a **handle**, not the object) | `org.bootstrap()` |
 | `handle.method.remote(args)` | Call a method **asynchronously** — returns an `ObjectRef` (a future), doesn't block | everywhere a role does work |
 | `ray.get(ref)` | **Block** and fetch the actual return value from an `ObjectRef` | everywhere we need the result |
-| named + `lifetime="detached"` | Register an actor under a cluster-wide **name** so any process can look it up, and keep it alive independent of who created it | `Workspace`, `SelfModel`, the leadership roles |
+| named + `lifetime="detached"` | Register an actor under a cluster-wide **name** so any process can look it up, and keep it alive independent of who created it | `Workspace`, `SelfModel`, all seven roles in `org.bootstrap()` |
 | `ray.get_actor(name)` | Look up an existing named actor by name | `get_workspace()`, `get_self_model()` |
 | `ray.init(...)` | Start (or connect to) a local Ray cluster | `org.bootstrap()`, `main.py` |
 
@@ -68,11 +69,17 @@ result = ray.get(some_actor.some_method.remote(arg))
 
 constantly — that's "call this actor's method and wait for the answer."
 
-**Why named + detached for the leadership and shared state?** Because the role
+**Why named + detached for the roles and shared state?** Because the role
 actors run in *separate processes* and must all see the *same* artifacts. If
 each held its own copy of the data, there'd be no shared bus. Instead, one
 `Workspace` actor owns the data and everyone looks it up by name — see
 `sis/workspace.py`. This is the key Ray design decision in the project.
+
+`org.bootstrap()` creates the roles centrally with `get_if_exists=True`. The
+CEO/PM/CTO spawning hierarchy in the role design is not implemented as Ray
+child ownership. SelfModel stores registrations, contracts, deploy state and
+provenance; its substrate view is cluster resource totals, Python and platform,
+not per-node mailbox, disk, network or AWS inventory monitoring.
 
 > **Gotcha you'll hit when learning Ray here:** state lives *inside* an actor.
 > Mutating a Python object you passed *into* an actor doesn't change the actor's
@@ -102,10 +109,10 @@ This codebase is a tour of current Python on purpose — you said you're learnin
   magic strings.
 - **Context managers** (`with tempfile.TemporaryDirectory()`) — guaranteed
   cleanup; the gauntlet builds a throwaway sandbox dir and it's removed on exit.
-- **`importlib.util`** (`sis/gauntlet.py`) — load a Python file *by path* at
-  runtime. That's how the gauntlet executes a candidate it just wrote to disk.
-- **`subprocess`** (`sis/gauntlet.py`) — run each gate in a child process so a
-  bad candidate can't corrupt or hang the main process.
+- **`importlib.util`** — load a module by path. Candidate modules are loaded
+  inside their sandbox workers; the host loads trusted spec/oracle code.
+- **`subprocess`** (`sis/gauntlet.py`, `sis/sandbox_worker.py`) — separate trusted
+  harnesses from candidate workers, with timeouts and process/container cleanup.
 - **Lazy imports** (`import anthropic` *inside* a function) — optional
   dependencies (`anthropic`, `boto3`, `requests`, `yaml`) are imported only when
   actually used, so the default path needs none of them installed.
@@ -118,13 +125,13 @@ Read in this order — each builds on the last:
 
 1. **`runtime/target.py`** — a thing being optimised. A deliberately slow
    `sum_of_divisors`. Tiny; start here. Then `runtime/sort_target.py` (a naive
-   bubble sort) and `sis/contract.py`: there are **two** targets, and nothing in
-   `sis/` knows either by name. What each one must implement and be judged by
-   lives in its contract plus `specs/<name>/`, never in the engine.
-2. **`sis/gauntlet.py`** — `validate(code, baseline) -> Result`. The moat. Read
+   bubble sort), then `specs/roman/` (feature construction) and `sis/contract.py`.
+   The registry declares the shipped targets; the validation machinery takes a
+   contract rather than branching on a target name.
+2. **`sis/gauntlet.py`** — `validate(code, baseline, contract=...) -> Result`. The moat. Read
    this closely; it's the heart of the safety story (§5). Its sibling
    `sis/sandbox_worker.py` serves a candidate *hot* from the same sandbox, over
-   stdin/stdout, for canaries and feature tests (`docs/STAGED_DELIVERY.md`).
+   stdin/stdout, for gates and future canary isolation (`docs/STAGED_DELIVERY.md`).
 3. **`sis/proposer.py`** — `propose(...) -> code`. Stub by default; real Claude
    behind a flag. Small.
 4. **`sis/ports.py` + `sis/adapters.py`** — the ports/adapters pattern (§6).
@@ -153,79 +160,90 @@ refuses*, which is the clearest statement of the safety contract.
 
 ## 5. The gauntlet, gate by gate (`sis/gauntlet.py`)
 
-`validate()` runs cheapest-first; the first failure short-circuits.
+`validate()` follows `Contract.gate_profile()` and stops at the first failure.
+The same dispatcher handles optimization and feature construction:
 
-1. **`ast.parse`** — does it even parse? (No code runs yet.)
-2. **No-op check** — a candidate byte-identical to the baseline is rejected up
-   front as `no_change` (episodic `reject_gate="noop"`). It's *not* a failure —
-   nothing to improve — so it files no bug and doesn't count toward the breaker
-   (`run_cycle` returns a benign `no_change`; the CEO's `record_neutral` still
-   books spend). The baseline it compares against is the source the caller
-   passes (`baseline_source` — the target as merged on the base branch), not the
-   local file.
-3. **`mypy --strict`** — fully type-checked. Generated code must be annotated.
-4. **Interface** — the candidate must export the contract's `entry` function.
-   Cheap, and it fails with a statement about the *shape* of the diff instead of
-   a wall of acceptance-test errors (episodic `reject_gate="interface"`).
-5. **`pytest`** — the contract's acceptance tests must pass (fixed correctness
-   cases), run against the candidate.
-6. **Differential correctness + benchmark** — the candidate is run against the
-   contract's *independent* reference on **random** inputs (catches code that
-   special-cases the known test inputs but is wrong elsewhere — "benchmark
-   gaming"), then timed against that same `baseline_source`; it must clear the
-   contract's `max_latency_ratio` (10% faster by default). The timing is
-   *paired*: candidate and baseline run back-to-back on the same fresh input,
-   ~100 times, and `benchmark_decision` compares **total** time with a
-   bootstrap interval — accept, reject, or **inconclusive** when the candidate
-   looks faster but the machine is too noisy to prove it (OMNI-41; recorded
-   as neutral, like a no-op).
+| Order | Gate | Optimization | Feature construction |
+|---|---|---|---|
+| 1 | `ast.parse` | yes | yes |
+| 2 | byte-identical no-op | yes | skipped |
+| 3 | `mypy --strict` | yes | yes |
+| 4 | public API/interface | yes | yes |
+| 5 | trusted acceptance tests | yes | yes |
+| 6 | invariants over generated inputs | when declared | when declared |
+| 7 | recorded backtests | when declared | when declared |
+| 8 | differential correctness + benchmark | yes | skipped |
+| 8 | SLO latency budget | skipped | when declared |
 
-What "correct" and "better" mean is **not** baked into the gauntlet — it comes
-from an `OptimizationContract` (`sis/contract.py`). The declarative half (entry
-point, margin, trial count) is data; the executable half (reference
-implementation, benchmark inputs, random-input generator) is a module under
-`specs/<name>/oracle.py` that the gauntlet copies into the sandbox next to the
-candidate. Everything under `specs/` is POLICY-FORBIDDEN, so the implementer
-cannot edit its own exam. `validate()` falls back to the bootstrap contract when
-a caller doesn't name one.
+`sum_of_divisors` and `sort` are optimization contracts; `roman` is a feature
+contract. A feature has no reference implementation to beat. Its public API,
+acceptance cases and domain laws define correctness; optional backtests add
+recorded evidence and an optional SLO adds a latency budget. No shipped contract
+declares an SLO yet. See [CLASS2_CONTRACT.md](CLASS2_CONTRACT.md) for details.
 
-Two cross-cutting protections wrap every gate that runs candidate code:
+### Which process owns what
 
-- **Sandbox** (`SIS_SANDBOX`): `subprocess` (default — credential-scrubbed env +
-  an injected `sitecustomize.py` that blocks network sockets) or `docker`
-  (kernel-enforced `--network none`, no creds, only the temp dir mounted). A
-  real proposer (`SIS_PROPOSER=claude`) writes untrusted code and **requires**
-  `docker` — the loop refuses the soft sandbox otherwise (override
-  `SIS_ALLOW_UNSANDBOXED_LLM=1`).
-- **Timeout** (`SIS_GAUNTLET_TIMEOUT`) — an infinite loop is killed, not left to
-  hang.
+Candidate code never runs in the actor process that holds credentials.
+`SandboxWorker` runs it in the configured subprocess or Docker sandbox.
+Acceptance, invariant and backtest scripts run as **trusted host harnesses**
+through `_run_harness()`. Their `target` module is a proxy: each call crosses
+stdin/stdout as JSON to a candidate worker. The interface gate asks a worker
+what it exports. The benchmark's reference, clock and verdict also stay on the
+host; candidate and baseline have separate workers.
 
-Everything the gauntlet needs is written into one temp dir (the candidate, a
-copy of the baseline, the contract's oracle and acceptance tests, an injected
-`sitecustomize.py`), so the sandbox is fully self-contained — nothing reaches
-the host.
+The SLO gate is the remaining exception to process separation: it measures and
+judges its candidate in the same sandboxed process. Its fixed-workload limitation
+is recorded in [KNOWN_ISSUES.md](KNOWN_ISSUES.md), OMNI-86. Do not use its design
+as a pattern for new gates.
 
-**The invariant: the gauntlet is the *only* place *unvalidated* candidate code
-runs.** Not just `validate()` — the baseline measurement (`measure_baseline()`,
-used by the SWE before proposing) reuses the same sandbox. No role ever `exec`s
-a module in the main actor process (where credentials live). If you add a code
-path that runs a generated or target module before it has passed every gate,
-route it through the sandbox — this is the rule the whole safety model rests
-on. (Two review passes were needed to make it true everywhere: the
-candidate-execution sites *and* the baseline path.)
+The exam directory holds trusted tests, laws, fixtures and candidate source;
+Docker mounts it read-only. Scratch space is separate and off `sys.path`.
+`_GateContext.put()` records trusted-file hashes, and every gate checks for
+changed, added, missing or linked files before accepting a verdict. A process
+exit alone is insufficient: harnesses must produce the expected verdict.
 
-**One deliberate exception, added after this invariant was written: a live
-canary (§8) re-runs a candidate that has *already passed* every gate.** That is
-correct by design — DESIGN.md §4 says a canary deploys the real thing — but the
-guarantee changes shape: a Ray Serve replica is not the gauntlet's kernel- or
-subprocess-enforced sandbox. It gets a scrubbed environment (no credentials
-readable) but keeps network egress, because a replica exists to answer HTTP.
-Opt-in only (`canary_backend="serve"`); the default path still only ever
-re-plays a latency number the sandbox already measured, executing nothing.
+The worker protocol carries plain JSON values. Returned tuples arrive as lists;
+non-wireable arguments are an exam fault (`NotWireable`). The proxy mirrors
+argument mutation and represents candidate exceptions as builtin exceptions;
+`SystemExit` is a failure. Contracts must account for this wire boundary.
 
-> Learning note: read `_run()` to see the subprocess/docker branch and the
-> `TimeoutExpired` handling, `_docker_args()` for exactly how the container is
-> locked down, and `measure_baseline()` for the sandboxed baseline.
+### Benchmarking without rewarding the wrong thing
+
+Optimization correctness uses a trusted reference on randomized inputs.
+Performance uses total candidate cost divided by total baseline cost, with a
+paired-bootstrap interval. Candidate and baseline run back-to-back on the same
+unused inputs, alternating order. The verdict is accept, reject, or neutral
+**inconclusive** when the estimated gain clears the margin but its interval does
+not. A byte-identical no-op is also neutral; both record spend.
+
+`_UnusedInputs` keeps timed inputs distinct from all prior worker inputs,
+including differential and batch-sizing calls. Batches shrink when the oracle
+cannot supply enough unused inputs; an insufficient range is a harness fault.
+Timed batches use `_plain_batch()`'s C-level `itertools.starmap` path, with no
+per-call Python harness work. Docker confines the two benchmark workers to
+separate single CPUs and swaps them halfway through. The subprocess sandbox
+cannot enforce CPU confinement. See OMNI-152/153/154 in
+[KNOWN_ISSUES.md](KNOWN_ISSUES.md) for the adversarial examples behind these rules.
+
+### Sandbox and canary limits
+
+`SIS_SANDBOX` selects a soft subprocess boundary or Docker isolation. Subprocess
+scrubs credentials and injects a network guard but leaves host files readable.
+Docker uses no network, a read-only exam mount, separate scratch space, resource
+limits and the host user's non-root uid. A non-stub proposer requires Docker
+unless the explicit unsafe override `SIS_ALLOW_UNSANDBOXED_LLM=1` is set.
+Per-gate timeouts kill hangs. A failed gate triggers a trusted sandbox probe;
+if that probe fails too, the verdict is `harness:`, not a candidate defect.
+
+Passing these gates does **not** make a Ray Serve replica safe for untrusted
+code. Serve workers can reach the Ray control plane even with scrubbed
+environments. `--canary serve` is refused with any non-stub proposer, with no
+override, until OMNI-48 moves green onto the worker boundary. It is also refused
+for Class-2 contracts. The recording canary executes no candidate code.
+
+> Reading route: `_run_harness()` and `_install_proxy()` show trusted execution;
+> `SandboxWorker` shows the JSON boundary; `_docker_args()` shows container
+> isolation; `_judge()` and `_timed_work()` show the benchmark.
 
 ---
 
@@ -259,52 +277,44 @@ the agent cannot produce, precisely because `merge_pr()` always raises.
 
 ## 7. One cycle, end to end (`sis/org.py :: run_cycle`)
 
-Follow the data through a single run. Each step is `ray.get(actor.method.remote(...))`:
+The driver calls actor methods with `ray.get(actor.method.remote(...))` and
+records handoffs as artifacts. A cycle can add a feature step; it need not open
+one PR per candidate.
 
 ```mermaid
 flowchart TD
-    A["CEO.approve_budget(estimate)<br/><i>gate: is this worth the spend?</i>"]
-    B["Workspace.create_page(proposal)<br/><i>intake: a user drops a request</i>"]
-    C["PM.refine_proposal(proposal)<br/><i>→ a spec page (Confluence)</i>"]
-    D["Designer.outline(spec)<br/><i>→ a design outline</i>"]
-    E["CTO.plan(spec)<br/><i>→ a Jira epic + stories</i>"]
-    F["SWE.implement(story)<br/><i>propose() + gauntlet.validate()</i>"]
-    G["QA.review(story, pr)<br/><i>re-runs the gauntlet, verifies</i>"]
-    H["DevOps.canary(pr)<br/><i>green-slot deploy, never promotes</i>"]
-    I["PM.accept(spec)<br/>CEO.report_outcome(success, cost)<br/><i>drives the brakes</i>"]
-    J(["stops here — the human merges the PR"])
-
-    A --> B --> C --> D --> E --> F --> G --> H --> I --> J
-
-    F -. "on pass: branch + commit + PR<br/>(records the proposer's cost)" .-> F
-    K["source = live_target_source(contract.target_path)<br/>the contract's target as merged on the base branch,<br/>falling back to the local file —<br/>so cycles build on merged improvements"]
-    K -.-> F
-
-    style J fill:#e8f0e8
+    A["CEO: pause, breaker and budget gate"] --> B{"Class-2 target already built?"}
+    B -- "yes, gates pass" --> N["neutral no_gain; no new plan"]
+    B -- "no, or gates fail" --> C["reuse feature plan, or PM/Designer/CTO create one"]
+    C --> D["SWE: propose with earlier attempt feedback; validate"]
+    D -- "counted failure" --> R["record cost and rejection; file bug; apply brakes"]
+    D -- "neutral" --> N
+    D -- "accepted optimization step, unfinished" --> S["commit step; record feature_step; continue next cycle"]
+    D -- "feature finished" --> E["open fixed-head PR; QA revalidates"]
+    E --> F["DevOps canary; PM accepts; CEO records outcome"]
+    F --> G["verified_awaiting_human_merge; hold"]
+    G --> H["human merges or closes PR"]
+    H --> I["observe_merge: apply promotion or release hold"]
 ```
 
-Each step is `ray.get(actor.method.remote(...))`. The full choreography — including
-the reject and no-change branches, and which artifact each handoff writes — is the
-[sequence diagram](DIAGRAMS.md#2-sequence--one-self-improvement-cycle).
+An optimization starts from the merged base for a new feature and then its
+feature branch's accepted head. Rejected attempts feed the next prompt. A
+finished feature opens one PR whose head stops moving. A Class-2 feature is
+finished at its first step that passes every gate; an already-built feature is
+revalidated before creating any plan. See [STAGED_DELIVERY.md](STAGED_DELIVERY.md).
 
-Two things to notice:
+QA and the canary can reject a finished feature. A passing cycle ends at
+`verified_awaiting_human_merge`; `loop.serve()` watches for the human decision.
+`DevOps.observe_merge()` then executes promotion, but never merges or makes the
+approval decision. A closed or missing PR releases the hold.
 
-- **It stops at the human merge.** The validated change rides in a PR and a green
-  canary; the agent never merges to `main` or promotes to live. That's gauntlet
-  step 6 (human review) enforced structurally.
-- **Provenance is recorded at every step** in `SelfModel` (spec → epic → story →
-  branch → pr → canary → outcome). The returned dict includes the full graph.
-- **Failure is wired to an artifact, not just a log line.** If `SWE.implement`
-  fails the gauntlet (wrong/slower/untyped), or QA rejects, `run_cycle` calls
-  `DevOps.file_bug` with the story + reason. Three consecutive failures trip
-  `CEO.report_outcome`'s circuit breaker, which files a second, distinct
-  `CIRCUIT BREAKER OPEN` bug and, through the `Notifier` port, actually pages
-  a human (SNS on the AWS box, OMNI-62) — the "page a human" from `ACTORS.md`
-  made concrete rather than left as dead code. The bug is the audit trail; the
-  page is what reaches a person. (A `no_change` no-op is *not* a failure — no
-  bug, no breaker increment.)
-  `org.bootstrap()` also has the CEO call `set_charter` once, so provenance
-  roots at a goal instead of starting cold at the first spec.
+Counted failures file bugs and contribute to the breaker. Neutral `no_change`,
+`no_gain` and `inconclusive` outcomes record spend without a bug or breaker
+increment. Exceptions inside a cycle are charged and recorded as `error`, with
+any canary set by that cycle retired. A trip pages through the Notifier as well
+as filing a breaker bug. Provenance roots at the CEO's idempotent charter and
+links the feature's specs, issues, accepted commits, PR and outcome.
+
 
 `CEO` holds three brakes (`sis/roles.py`): a hard spend cap, a consecutive-failure
 breaker, and a cost-per-accepted-improvement SLO. The brake decision is a *pure
@@ -437,8 +447,8 @@ which masks them in `repr()` (§3).
 Everything through §7 answers "is the candidate correct and faster, measured
 once, offline, in a quiet sandbox?" This layer answers a harder question: is it
 *still* faster once real, concurrent traffic is queuing for it? The offline
-benchmark times one call at a time — it structurally cannot see GIL contention,
-queueing, or real input variety. Measured field example: a merge-sort candidate
+benchmark times serial batches in isolated workers; it does not measure Serve
+queueing or concurrent endpoint dispatch. Measured field example: a merge-sort candidate
 was **~5x faster in isolation** (0.88ms → 0.17ms) but only **~30% faster at p95
 under 8-way concurrent load** (237.90ms → 167.78ms) — both versions become
 queue-bound under real concurrency. That gap is this whole layer's reason to
@@ -485,9 +495,9 @@ fails closed** (a predicate that raises counts as a violation, not an
 exception that propagates):
 
 1. Evidence floor — enough samples to say anything at all.
-2. Correctness (hard) — zero invariant violations (Class 2 — no invariants
-   exist for either shipped target yet, so this gate is vacuously satisfied
-   until that lands; response agreement is the live correctness check today).
+2. Correctness (hard) — zero violations of declared, bound invariants. The
+   two shipped optimization contracts declare none, so response agreement is
+   their live correctness signal. `roman` has laws but is refused by Serve.
 3. Response agreement (hard, `SHADOW` only) — blue and green must have
    answered every sampled request identically.
 4. Performance (graded) — candidate p95 *and* p99 within a configurable ratio
@@ -500,8 +510,10 @@ the real-adapters placeholder, needing only `ray[serve]` (no credentials). Its
 fakes. `promote()` does not raise — it is gated by `DevOps.observe_merge()`
 reading a PR back as *already* merged, the same human-approval invariant
 enforced one layer up instead of by the adapter refusing outright (see §6).
-Green's replica runs with a scrubbed `runtime_env` — see the §5 sandbox note
-above for exactly what that boundary does and doesn't guarantee.
+Green's replica runs with a scrubbed `runtime_env`, but remains a Ray worker
+with control-plane access. The non-stub-proposer refusal in §5 is mandatory.
+The live latency/error-rate decision also has open defects (OMNI-50); these
+mechanics are not certification for production use.
 
 **Where this plugs into the cycle you already read in §7:** `DevOps.canary()`
 takes an optional `canary_backend`. Left unset, it's exactly what §7 described
@@ -511,7 +523,7 @@ it runs the real flow instead: deploy behind `ServeCloud`, drive a bounded
 `loadgen` burst through the router to fill the window (the real target has no
 traffic of its own yet — same bootstrap problem `loadgen` exists to solve),
 then `evaluate_canary()` decides. **Forced to `SHADOW` regardless of
-configuration** — neither shipped contract has invariants yet, so a weighted
+configuration** — the shipped optimization contracts have no invariants, so a weighted
 split would have zero live correctness signal, only a speed comparison, which
 could silently wave a fast-but-wrong candidate through.
 
@@ -527,12 +539,11 @@ reduces to exactly the old behaviour.
 ## 8a. The loop as a server (`sis/loop.py`)
 
 `main.py` on its own runs **one** cycle and exits — useful for reading the
-trace in §7, useless as a server. `sis/loop.py` is the difference: `serve()`
+trace in §7. `sis/loop.py` is the difference: `serve()`
 runs cycles continuously, gated by a pure `decide()` (same pure/impure split as
 everywhere else — `poll()` does the I/O, `decide()` is the testable policy).
 
-Two gates worth understanding, both read off `SelfModel`'s deployment state
-rather than adding anything new:
+Two review gates worth understanding:
 
 - **`canary_in_flight()`** — while green is occupied, the loop holds the next
   cycle rather than stacking a second proposal on an unmerged predecessor
@@ -553,13 +564,46 @@ gate" — but permanently, not just until a human acts.
 
 ---
 
+### Persistence, convergence and operator control
+
+Pending PR state is persisted and real-adapter runs also recover outstanding
+loop PRs from GitHub. Accepted feature steps and plans are persisted separately,
+so a restart can resume unfinished work. Neutral convergence stops the loop
+politely; OMNI-145 records the remaining limitation that inconclusive results
+also count toward that stop. `main.py` holds `runtime/loop.lock` for its entire
+run; a second start exits 3 naming the holder.
+
+`python -m sis.admin` inspects or pauses/resumes the live CEO and resets the
+breaker with a written reason. Reset preserves spend. Unreadable stored brake
+state opens the breaker at boot and is not overwritten. Real-adapter or
+non-stub-proposer runs require a persistent episodic backend.
+
+## 8b. Sensor input and replay
+
+`Sensor` is passed explicitly to its consumer, separate from the artifact bus.
+Each `Reading` has `event_time` and `known_at`; every read names `TimeAxis`.
+`SimSensor` replays readings. `EIASensor` captures a bounded set of EIA series
+and reads them from an append-only local trace. Neither selecting the backend
+nor running the control loop automatically captures observations or builds a
+domain model.
+
+`sis/sensor_input.py` is the untrusted-data boundary: every fetched record
+becomes a reading, an explicit `Absent`, or a counted rejection. Free text uses
+`UntrustedText`, never raw interpolation. `sis/sensor_trace.py` records capture
+provenance, readings, absences, revisions and reconstructed timestamps, and
+checks them again on read. Capture is staging; a human-approved fixture is the
+exam. See [SENSOR_RUNBOOK.md](SENSOR_RUNBOOK.md) for commands and limitations.
+
+---
+
 ## 9. How to run and poke at it
 
 ```bash
 poetry install
 poetry run python main.py        # one full org cycle (in-memory, no creds)
 poetry run python main.py --show-config          # every setting + where it came from
-poetry run pytest                # the full suite
+poetry run pytest                # fast suite; excludes Serve
+poetry run pytest -m serve -n 0   # Serve integration; serial
 poetry run mypy --strict sis/ main.py scripts/   # the type gate
 ```
 

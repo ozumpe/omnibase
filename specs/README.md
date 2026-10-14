@@ -25,11 +25,10 @@ specs/
     comparators.py            # shared marking scheme for the backtest gate
     <contract-name>/
         oracle.py             # trusted reference impl + benchmark inputs + input
-                              # generator; copied into the sandbox next to the
-                              # candidate. Class 1 only — a Class-2 feature has
-                              # no reference by definition (it may still ship a
-                              # module here for contract-local comparators).
-        tests.py              # acceptance tests the candidate must pass (run in-sandbox)
+                              # generator for Class 1. Class 2 may use this
+                              # module for laws, strategies, workloads and
+                              # comparators, but has no reference to differ against.
+        tests.py              # trusted host harness calls the candidate worker
         backtests/            # recorded episodes, when the target has history
             q1_fixture.json
             q1_expect.json
@@ -44,8 +43,8 @@ specs/
 |---|---|---|
 | The task | make a working function faster | build what a spec describes |
 | Correct = | agrees with `oracle.reference` | passes `tests.py`, reproduces history |
-| Better = | faster by `max_latency_ratio` | *not a thing* — correct and slow has passed |
-| Gates | ast · no-op · mypy · interface · acceptance · backtest · differential+benchmark | ast · mypy · interface · acceptance · backtest |
+| Better = | faster by `max_latency_ratio` | spec conformance; an optional SLO can reject correct code over its latency budget |
+| Gates | ast · no-op · mypy · interface · acceptance · invariant · backtest · differential+benchmark | ast · mypy · interface · acceptance · invariant · backtest · optional SLO |
 
 The Class-2 profile drops two gates on purpose. **No-op** has nothing to compare
 against — a feature built for the first time has no prior version to be
@@ -57,16 +56,21 @@ not a correctness gate.
 `specs/roman/` is the first Class-2 contract: `to_roman` / `from_roman` built
 from a spec, with no implementation to differ against.
 
-These modules run **inside the sandbox** alongside untrusted candidate code, so
-they must be self-contained: standard library only, no imports from `sis/`.
+Keep spec modules self-contained and independent of `sis/`. The acceptance,
+invariant and backtest harnesses run trusted code on the host, calling a proxy
+`target` whose methods execute in the candidate's sandbox worker. The benchmark
+reference is host-side too. SLO remains an in-process sandboxed gate. Only JSON
+crosses the worker boundary: returned tuples become lists and non-wireable
+arguments are an exam fault. See [the code tour](../docs/CODE_TOUR.md#5-the-gauntlet-gate-by-gate-sisgauntletpy).
 
 ## Backtest fixtures
 
 A backtest asks *did the candidate reproduce what actually happened?* — the
 Class-2 analogue of the benchmark, with history as the reference
-(`sis/backtest.py`). Neither shipped target declares any: `sum_of_divisors` and
-`sort` are pure functions with no history to reproduce, and inventing some would
-make the gate look exercised while testing nothing.
+(`sis/backtest.py`). None of the shipped contracts (`sum_of_divisors`, `sort`,
+`roman`) declares recorded backtests. They are pure functions with no historical
+episodes to reproduce; inventing some would make the gate look exercised while
+testing nothing.
 
 Two files per episode, and the split is the reason:
 
@@ -88,8 +92,9 @@ outcome lets it reproduce history without modelling anything. Keeping them apart
 makes "show the inputs, never the answers" a file-level rule rather than
 something a prompt author has to remember.
 
-`event_time` stays optional — no adapter records traces yet, so requiring it
-would block every fixture on a recorder that does not exist. When present it is
+`event_time` stays optional for existing non-domain fixtures. Real sensor capture
+now exists, but promoting that staging trace into an approved domain fixture is
+separate work (OMNI-35; [sensor runbook](../docs/SENSOR_RUNBOOK.md)). When present it is
 **parsed and validated** (`sis/clock.py`), not carried around as whatever string
 was in the file:
 
@@ -105,7 +110,7 @@ possibly after the window to re-record has closed — is exactly the failure the
 field exists to prevent. `ReplayClock.at()` drives a replay straight off it.
 
 Each backtest names a **comparator** (default `within_tolerance`) resolved
-inside the sandbox: the contract's own `oracle.py` first, then
+by the trusted harness: the contract's own `oracle.py` first, then
 `specs/comparators.py`. That is where a domain supplies a comparison the shared
 set has no business knowing about — and where non-determinism will enter, since
 a stochastic contract names a proper scoring rule instead and nothing else about

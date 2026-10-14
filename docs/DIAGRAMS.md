@@ -20,9 +20,11 @@ Contents:
 ## 1. Class — ports, adapters and the contract
 
 The hexagonal core. Every external capability is a `Protocol` in `sis/ports.py`
-with two implementations: in-memory (the credential-free default) and real
-(Confluence / Jira / GitHub / AWS). Roles never touch an adapter directly — they
-go through the `Workspace` actor, which is the shared artifact bus.
+with recording/default and real adapters. `Workspace` is the shared artifact
+bus for document/tracker/version-control operations. `ServeCloud` is a separate
+opt-in traffic backend owned by DevOps. Sensor consumers receive their sensor
+explicitly; they do not read it through Workspace. All seven roles and shared
+actors are centrally bootstrapped as named, detached actors.
 
 ```mermaid
 classDiagram
@@ -73,6 +75,32 @@ classDiagram
     class JiraWorkTracker
     class GitHubVersionControl
     class RealCloud
+    class ServeCloud
+    class Notifier {
+        <<Protocol>>
+        +notify(severity, title, body) str
+    }
+    class Sensor {
+        <<Protocol>>
+        +read(start, end, by) list~Reading~
+    }
+    class Reading {
+        +str source
+        +str series
+        +float value
+        +str unit
+        +datetime event_time
+        +datetime known_at
+    }
+    class SimSensor
+    class EIASensor
+    class InMemoryNotifier
+    class SNSNotifier
+    Sensor <|.. SimSensor
+    Sensor <|.. EIASensor
+    Sensor ..> Reading
+    Notifier <|.. InMemoryNotifier
+    Notifier <|.. SNSNotifier
 
     DocumentStore <|.. InMemoryDocumentStore
     DocumentStore <|.. ConfluenceDocumentStore
@@ -82,6 +110,7 @@ classDiagram
     VersionControl <|.. GitHubVersionControl
     Cloud <|.. InMemoryCloud
     Cloud <|.. RealCloud
+    Cloud <|.. ServeCloud
 
     class Workspace {
         <<Ray actor, detached>>
@@ -96,16 +125,31 @@ classDiagram
     Workspace o-- VersionControl
     Workspace o-- Cloud
     Workspace o-- Telemetry
+    Workspace o-- Notifier
 
     class SelfModel {
         <<Ray actor, detached>>
         +register(name, role, parent)
         +set_slot(slot, version)
         +register_contract(c)
-        +contract_for(target_path) OptimizationContract
+        +contract_for(target_path) Contract
         +record(kind, ref) None
     }
 
+    class Contract {
+        <<abstract>>
+        +gate_profile() tuple~GateName~
+    }
+    class FeatureContract {
+        <<frozen dataclass>>
+        +str name
+        +str entry
+        +str target_path
+        +tuple public_api
+        +tuple invariants
+        +tuple backtests
+        +DomainSLO slo
+    }
     class OptimizationContract {
         <<frozen dataclass>>
         +str name
@@ -134,14 +178,16 @@ classDiagram
         +float latency_seconds
     }
 
-    SelfModel "1" o-- "*" OptimizationContract : registry
+    Contract <|-- OptimizationContract
+    Contract <|-- FeatureContract
+    SelfModel "1" o-- "*" Contract : registry
     OptimizationContract "1" --> "1" Oracle : oracle_path
-    gauntlet ..> OptimizationContract : reads
-    gauntlet ..> Oracle : copies into sandbox
+    gauntlet ..> Contract : selects gates
+    gauntlet ..> Oracle : trusted reference and laws
     gauntlet --> Result
 
     note for Oracle "POLICY-FORBIDDEN. The implementer cannot edit its own exam."
-    note for RealCloud "shift_traffic and live_metrics raise NotImplementedError until ServeCloud lands."
+    note for RealCloud "Recording placeholder; ServeCloud is the separate traffic backend."
 ```
 
 The canary types are the online mirror of the same idea — the contract's
@@ -194,113 +240,128 @@ classDiagram
 
 ## 2. Sequence — one self-improvement cycle
 
-`org.run_cycle()`, the happy path. The point ACTORS.md makes in prose and this
-makes visible: **roles do not chat.** Every handoff is a state change on a
-durable artifact, which is simultaneously the work queue, the message bus and
-the audit trail.
+`org.run_cycle()` can finish a feature or add one accepted optimization step.
+Plans are reused across steps and rejected attempts feed the next prompt. The
+sequence below compresses artifact calls; actors coordinate through Workspace,
+with SelfModel retaining contract/deploy/provenance links.
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor Human
+    participant Driver as org / loop
     participant CEO
-    participant PM
-    participant CTO
     participant SWE
     participant G as gauntlet
+    participant WS as Workspace
     participant QA
     participant Ops as DevOps
-    participant WS as Workspace
     participant SM as SelfModel
 
-    Human->>WS: drop proposal into the intake space
-    Note over CEO: brakes first — no spend before the gate
-    CEO->>CEO: breaker_open? approve_budget(estimate)
-    alt breaker open or over budget
-        CEO-->>Human: circuit_breaker_open / budget_denied
+    Driver->>CEO: pause / breaker / budget checks
+    Driver->>SWE: already_built(contract)
+    alt Class-2 target already passes
+        SWE-->>Driver: already built
+        Driver->>CEO: record_neutral(cost=0)
+    else build or improve
+        Driver->>WS: reuse feature plan, or create spec and plan via PM/Designer/CTO
+        Driver->>SWE: implement(story, contract)
+        SWE->>WS: source from feature head or merged base
+        SWE->>G: validate(proposed source, contract)
+        G-->>SWE: result
+        alt rejected or neutral
+            SWE-->>Driver: reason and proposal cost
+            Driver->>CEO: record outcome or neutral spend
+            Note over Driver,WS: Counted failures file bugs, neutral outcomes do not.
+        else accepted optimization, unfinished
+            SWE->>WS: commit accepted step to feature branch
+            SWE-->>Driver: feature_step
+            Driver->>CEO: record outcome and cost
+            Note over Driver,SWE: Continue with the same feature next cycle.
+        else feature finished
+            SWE->>WS: commit and open fixed-head PR
+            Driver->>QA: review(story, PR)
+            QA->>G: validate again
+            QA-->>Driver: verdict
+            Driver->>Ops: canary(PR), if approved
+            Ops->>SM: green slot / pending PR
+            Driver->>CEO: record outcome and cost
+            Note over Driver,Human: Passing result holds for human review.
+            Human->>WS: merge or close PR externally
+            Driver->>Ops: observe_merge(PR)
+            Ops->>WS: read PR state
+            alt merged
+                Ops->>WS: promote recording backend (or ServeCloud directly)
+                Ops->>SM: live version, clear green and pending PR
+            else closed or missing
+                Ops->>SM: release hold
+            end
+        end
     end
-
-    PM->>WS: refine_proposal() → spec page
-    CTO->>WS: plan() → epic + stories
-
-    SWE->>SM: contract_for(target_path)
-    SM-->>SWE: OptimizationContract
-    SWE->>WS: live_target_source(contract.target_path)
-    Note right of SWE: baseline from the MERGED target,<br/>never the stale local file (H1)
-    SWE->>G: measure_baseline(source, contract)
-    SWE->>SWE: propose(source, baseline)
-    SWE->>G: validate(candidate, contract)
-    G-->>SWE: Result(passed, reason, latency)
-
-    alt gauntlet rejected the candidate
-        SWE->>WS: transition(story, TBD)
-        Ops->>WS: file_bug()
-        CEO->>CEO: report_outcome(success=False)
-    else candidate passed
-        SWE->>SWE: policy.authorize_change(target)
-        SWE->>WS: create_branch, commit, open_pr
-        SWE->>WS: transition(story, Ready for Review)
-        QA->>G: validate() again, same merged baseline
-        QA->>WS: transition(story, Done)
-        Ops->>WS: deploy_canary(version) → green slot
-        Ops->>SM: set_slot("green", version)
-        PM->>WS: accept(spec)
-        CEO->>CEO: report_outcome(success=True)
-    end
-
-    Note over Human,SM: the loop stops here.<br/>Merging the PR and promoting to live are human acts.
-    CEO->>SM: provenance: charter → spec → epic → story → PR → outcome
 ```
+
+`merge_pr()` always raises `RequiresHumanApproval` in the engine adapters.
+Promotion executes only after observing the human merge. A Class-2 feature
+finishes at its first passing step; optimization completion follows the feature
+step limit or no further gain. See [STAGED_DELIVERY.md](STAGED_DELIVERY.md).
 
 ---
 
 ## 3. Activity — the validation gauntlet
 
-`gauntlet.validate()`. Cheapest and safest checks first; the first failure
-short-circuits, so an expensive gate never runs on a candidate a cheap one
-already rejected. Everything inside the dashed boundary executes **candidate
-code**, and therefore runs in the sandbox — never in the actor process, which
-holds credentials.
+`Contract.gate_profile()` chooses the path. Undeclared invariants/backtests and
+an absent SLO have no work to run. Candidate execution stays in the sandbox;
+trusted acceptance/invariant/backtest harnesses and the benchmark judge run on
+the host. SLO is the remaining in-process sandboxed gate.
 
 ```mermaid
 flowchart TD
-    A[/"candidate source + contract"/] --> B{"ast.parse"}
-    B -- "SyntaxError" --> RJ["reject: ast"]
-    B -- ok --> C{"identical to baseline?"}
-    C -- "yes" --> NC["no_change: benign.<br/>No bug filed, breaker untouched."]
-    C -- "no" --> S
-
-    subgraph S["sandbox: scrubbed env, no network, per-gate timeout"]
-        direction TB
-        D{"mypy --strict"} -- "fail" --> RJ2["reject: mypy"]
-        D -- ok --> E{"exports contract.entry?"}
-        E -- "no" --> RJ3["reject: interface"]
-        E -- ok --> F{"contract acceptance tests"}
-        F -- "fail" --> RJ4["reject: pytest"]
-        F -- ok --> G{"agrees with oracle.reference<br/>on random inputs?"}
-        G -- "no" --> RJ5["reject: correctness<br/>possible benchmark gaming"]
-        G -- ok --> H["time candidate and baseline in pairs<br/>on fresh random inputs + BENCH_INPUTS once"]
-    end
-
-    H --> I{"total-time ratio + interval vs<br/>contract.max_latency_ratio"}
-    I -- "estimate misses" --> RJ6["reject: benchmark"]
-    I -- "looks faster, unproven" --> NI["inconclusive (neutral — no bug, no breaker)"]
-    I -- "clears" --> P["pass → PR opened → human review"]
-
-    style NC fill:#e8f0e8
-    style P fill:#e8f0e8
+    A["source + contract"] --> B{"syntax valid?"}
+    B -- no --> R["reject"]
+    B -- yes --> C{"optimization?"}
+    C -- yes --> N{"byte-identical to baseline?"}
+    N -- yes --> Z["neutral no_change"]
+    N -- no --> T["strict types"]
+    C -- no --> T
+    T --> I["interface via candidate worker"]
+    I --> H["trusted host harnesses: acceptance, invariant, backtest"]
+    H --> K{"optimization?"}
+    K -- yes --> D["host reference checks candidate answers"]
+    D --> W["host times isolated candidate and baseline workers"]
+    W --> V{"paired total cost + interval"}
+    V -- clears --> P["pass"]
+    V -- misses --> R
+    V -- unproven --> U["neutral inconclusive"]
+    K -- no --> S["optional SLO inside sandbox"]
+    S --> P
+    T -. failure .-> R
+    I -. failure .-> R
+    H -. failure .-> R
+    D -. failure .-> R
+    S -. failure .-> R
 ```
 
-Two cross-cutting protections wrap every gate that runs candidate code: the
-sandbox (`SIS_SANDBOX=subprocess` by default, or kernel-enforced `docker` —
-mandatory for a real LLM proposer) and a per-gate timeout, so an infinite loop
-is killed rather than left to hang. A gate that *cannot run* — a missing oracle
-or acceptance suite — fails closed with a `harness:` reason, so a broken harness
-is never recorded as a verdict on the candidate.
+Each gate's completion is checked for exam tampering and the required verdict.
+A failed sandboxed gate gets a trusted self-check: if that also fails, the
+reason is `harness:`. Gate timeouts kill hangs. Docker's read-only exam mount,
+no network, credential-free environment and CPU isolation protect the host;
+subprocess mode is a soft guard and cannot enforce that confinement.
+
+Only JSON crosses the worker boundary; tuples become lists and non-wireable
+arguments are an exam fault. Timed inputs are never reused after either worker
+has seen them; batches run without per-call Python harness work. Docker workers
+get distinct single CPUs, swapped halfway. See [CODE_TOUR.md](CODE_TOUR.md).
+
+Serve is outside this boundary and remains refused for non-stub proposers and
+Class-2 contracts. See [SERVE_CANARY.md](SERVE_CANARY.md).
 
 ---
 
 ## 4. State — issue workflow and deploy slots
+
+The issue diagram is the current engine workflow: QA verification marks a story
+Done before the human PR merge. Repository contributor Jira stories are moved
+Done on merge; that convention is separate from the engine's issue transitions.
 
 **Issue lifecycle** (`sis.ports.IssueStatus`). QA bouncing a story to `TBD`
 rather than failing it outright is what makes the SWE↔QA loop an artifact
@@ -333,7 +394,7 @@ stateDiagram-v2
     [*] --> BlueOnly : bootstrap
     BlueOnly --> GreenDeployed : DevOps.canary()
     GreenDeployed --> BlueOnly : DevOps.retire_canary()
-    GreenDeployed --> BlueOnly : DevOps.observe_merge() reads<br/>the verdict as a live rejection
+    GreenDeployed --> BlueOnly : observe_merge reads PR closed or missing
     GreenDeployed --> Promoted : DevOps.observe_merge() reads<br/>the PR back as merged
     Promoted --> BlueOnly : green becomes the new blue
 

@@ -24,6 +24,14 @@ objects returned by the contract (so gate code stays concentrated in one
 POLICY-FORBIDDEN file), and the backtest gate runs *before* differential
 correctness rather than after, on cheapest-first grounds.
 
+**Reading this document:** the motivation, pseudocode and proposed sequence
+below preserve the original design. The implemented API is
+`Contract.gate_profile()` with `GateName` dispatch, not `contract.gates()`;
+`DomainSLO` is latency-only. Current execution and the shipped profiles are in
+[CODE_TOUR.md](CODE_TOUR.md#5-the-gauntlet-gate-by-gate-sisgauntletpy) and
+[the specs guide](../specs/README.md). The build-loop section below records the
+later Class-2 integration (OMNI-147/149).
+
 **The SLO gate as built (OMNI-24)** differs from the sketch below in four
 deliberate ways. (1) **Latency only**: `DomainSLO(budget_ms, inputs | workload,
 percentile=95, max_repeats=3)` — accuracy is already decided by the acceptance,
@@ -47,9 +55,8 @@ is `slo_error` and counts in full. Class 1 contracts have no SLO. Code:
 
 ## Motivation: two task classes, one gauntlet built for the first
 
-The bootstrap gauntlet (`sis/gauntlet.py`) is tuned for one class of problem, and
-the whole "server that models a slice of the world" thesis rests on a second class
-it does not yet verify.
+The original bootstrap gauntlet was tuned for optimization. Feature construction
+required a second definition of correctness, now implemented by `FeatureContract`.
 
 - **Class 1 — Optimization** (the bootstrap target, `runtime/target.py`). *"Here is a
   function that already works but is slow. Make it faster without breaking it."*
@@ -83,8 +90,9 @@ invariants?"***
 
 ## Design: make the *contract* the pluggable part
 
-Today `validate()` hardcodes the optimization pipeline. Generalize so the contract
-selects the gate profile; both classes flow through one entry point.
+The original proposal was to replace a hardcoded optimization pipeline with
+contract-selected gates. This is implemented; the following pseudocode preserves
+the proposed object-based API rather than the shipped `GateName` dispatch.
 
 ```python
 # sis/gauntlet.py
@@ -146,7 +154,7 @@ class Backtest:
 | 4 | **acceptance** | run the **trusted-authored** pytest module; example-based spec conformance | pytest gate |
 | 5 | **invariant** | for each invariant, generate N random *valid* inputs, run candidate, assert the predicate (conservation, capacity, non-negativity, monotonicity) | **differential correctness** — same anti-gaming role, invariants instead of a reference |
 | 6 | **backtest** | run over historical fixtures; assert output within tolerance of recorded reality | **benchmark**, but "reference = history" |
-| 7 | **SLO** (optional) | latency/accuracy budget from the spec | benchmark margin |
+| 7 | **SLO** (optional) | latency budget from the spec (the original accuracy proposal was dropped) | benchmark margin |
 | 8 | QA + human PR | unchanged, mandatory | same |
 
 Gates 5 and 6 are where the *"check against an independent source of truth the
@@ -247,9 +255,10 @@ provenance: spec page → contract module → branch/PR → gauntlet verdict →
    criteria and invariants; the SWE implements. Separation of concerns = separation
    of trust — the anti-gaming property, made structural.
 
-Everything runs in the existing subprocess/docker sandbox — generated feature code
-is untrusted, so invariants and backtests execute *inside* the sandbox, never the
-main process. New `reject_gate` values (`interface`, `acceptance`, `invariant`,
+Generated feature code runs in the existing subprocess/docker sandbox. Trusted
+acceptance, invariant and backtest harnesses run on the host and call the candidate
+through a `SandboxWorker` proxy (OMNI-146); they no longer share its interpreter.
+SLO remains in-process within the sandbox. New `reject_gate` values (`interface`, `acceptance`, `invariant`,
 `backtest`, `slo`) slot alongside the existing
 `ast/noop/mypy/pytest/correctness/benchmark/policy/timeout` in the episodic log.
 
