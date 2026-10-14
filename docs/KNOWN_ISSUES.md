@@ -639,6 +639,13 @@ any long-lived cluster exists.
   would hold up the answer. Regression tests, in both sandboxes: 4 MB of
   stderr before the handshake still names its last line with never more than
   the tail held; 2 MB written during a call does not stop the answer.
+  The review of the fix found a second copy: docker's default `json-file`
+  log driver kept every byte a container wrote, on the host, until `--rm`
+  removed it (not a regression: it predates the fix). Every sandbox
+  container now runs with `--log-driver none` (`gauntlet._docker_args`);
+  attached output still arrives, only `docker logs` is gone. Not covered
+  here: the worker's directory is mounted read-write, so a candidate can
+  still write files there.
 
 - [OMNI-157] **H12 — A failed brake-state save let a restart undo spend that was
   charged** *(found 2026-10-14 by a review of the OMNI-33 push; reproduced by

@@ -193,6 +193,9 @@ def _docker_args(tmpdir: str, env: dict[str, str], image: str, name: str,
     ``HOME == tmpdir`` (the contract author's discrimination check, the sandbox
     worker) keep the single read-write mount.
 
+    ``--log-driver none``: the daemon keeps no copy of what the candidate
+    writes, on the host's disk (OMNI-156, H11).
+
     ``--name`` lets the timeout handler kill the container by name (SIGKILL to
     the ``docker run`` client does not stop the container). ``--memory`` /
     ``--cpus`` bound a runaway candidate's resource use (override via
@@ -213,6 +216,11 @@ def _docker_args(tmpdir: str, env: dict[str, str], image: str, name: str,
         "--security-opt", "no-new-privileges",
         "--read-only",
         "--pids-limit", "256",
+        # The daemon would otherwise keep every byte the candidate writes to
+        # stdout or stderr in a log on the host's disk, for as long as the
+        # container lives, outside --memory (OMNI-156, H11). Attached output
+        # still reaches the caller; only `docker logs` is lost.
+        "--log-driver", "none",
         "--memory", str(config.get("sandbox.memory")),
         "--cpus", str(config.get("sandbox.cpus")),
         *(("--cpuset-cpus", cpuset) if cpuset is not None else ()),

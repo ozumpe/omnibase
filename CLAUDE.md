@@ -115,7 +115,8 @@ internal target before it models anything external.
   covers sending a request and reading its answer, so a worker that stops
   reading its input is killed like one that never answers (OMNI-155, H10).
   Its stderr is drained as it comes and only an 8 KiB tail is kept, never a
-  host-side file (OMNI-156, H11). OMNI-48 moves
+  host-side file; sandbox containers run with `--log-driver none`, so docker
+  keeps no copy either (OMNI-156, H11). OMNI-48 moves
   the canary onto it; until then the refusal above stands.
   **A broken sandbox is never blamed on the candidate** (OMNI-37): when a
   sandboxed gate fails, the gauntlet first runs a trusted self-check in the
