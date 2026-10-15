@@ -609,6 +609,21 @@ any long-lived cluster exists.
 
 ## Resolved
 
+- [OMNI-161] **M30 — The backfilled `known_at` of a retail price was a day early in a
+  holiday week** *(found 2026-10-15 while planning OMNI-35, from EIA's
+  published schedules)* — `EIASensor` reconstructed a retail price's
+  `known_at` as its Monday plus one day, Tuesday 17:00 ET. EIA now releases
+  the Gasoline and Diesel Fuel Update on Tuesday at about 10:00 ET and **on
+  Wednesday after a government holiday** (eia.gov/petroleum/gasdiesel/
+  schedule.php), so every holiday week from 2025 on was a day early: a replay
+  by `known_at` handed a model a price before it was published. 2022 was not
+  affected: ALFRED's vintage dates (release 183) show Monday releases, Tuesday
+  after Labor Day and Columbus Day. **Fixed 2026-10-15 (OMNI-161), before any
+  trace was captured:** Wednesday 17:00 ET, after both rules, so `known_at`
+  stays an upper bound; backfilled history costs a day of lag. Irregular
+  delays remain the release-calendar check's job (OMNI-35). Regression test:
+  the Columbus Day 2026 price is reconstructed for Wednesday 14 October.
+
 - [OMNI-155] **H10 — A candidate could block the host past the worker timeout by not
   reading its input** *(found 2026-10-14 by a review of the OMNI-33 push;
   reproduced by the reviewer, and here: a host still writing after 20 s
@@ -1764,3 +1779,4 @@ any long-lived cluster exists.
 [OMNI-158]: https://olafzumpe.atlassian.net/browse/OMNI-158
 [OMNI-159]: https://olafzumpe.atlassian.net/browse/OMNI-159
 [OMNI-160]: https://olafzumpe.atlassian.net/browse/OMNI-160
+[OMNI-161]: https://olafzumpe.atlassian.net/browse/OMNI-161

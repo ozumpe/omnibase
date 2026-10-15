@@ -54,7 +54,10 @@ internal target before it models anything external.
   for, so a value it later blanks is visible as withdrawn. A changed value is
   a new line with a later `known_at`, never an overwrite. The first capture of a series backfills
   it, each `known_at` reconstructed from EIA's release schedule and marked
-  `reconstructed`. That schedule is wrong for an irregular delay: the stocks
+  `reconstructed`: Thursday 17:00 ET for Friday stocks, Wednesday 17:00 ET for
+  Monday prices, after both the 2022 rule (Monday, Tuesday after a holiday) and
+  today's (Tuesday, Wednesday after a holiday; Tuesday was a day early, OMNI-161).
+  That schedule is wrong for an irregular delay: the stocks
   for the week ending 2022-06-17 came out 12 days later, and the prices for
   Monday 2022-06-20 on the same day (2022-06-29). So OMNI-35 checks its window
   against EIA's release archive. Later values are known at the fetch that

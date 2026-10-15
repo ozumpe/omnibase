@@ -103,9 +103,12 @@ series describe a week ending Friday; retail-price series use Monday dates.
 The first capture of a series backfills its available history. Those values
 receive `reconstructed: true`, with `known_at` estimated from the series'
 publication schedule and capped at fetch time. The implementation uses Thursday
-17:00 Eastern for the prior Friday's stocks and Tuesday 17:00 Eastern for
-Monday retail prices. These are assumptions covering regular releases and
-ordinary holiday shifts, not verified release timestamps.
+17:00 Eastern for the prior Friday's stocks and Wednesday 17:00 Eastern for
+Monday retail prices. Retail prices came out on Monday in 2022 (Tuesday after a
+Monday holiday) and come out on Tuesday now (Wednesday after a government
+holiday), so Wednesday is after both; Tuesday was a day early in a holiday week
+(OMNI-161). These are assumptions covering regular releases and ordinary holiday
+shifts, not verified release timestamps.
 
 Irregular delays can still make reconstruction too early. The week ending
 2022-06-17 was released on 2022-06-29, for example. Also, a current bulk file

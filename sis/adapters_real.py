@@ -784,10 +784,13 @@ def _weekly_stocks() -> EIASeries:
 
 
 def _weekly_retail() -> EIASeries:
-    # Gasoline and Diesel Fuel Update: Monday's price, out on Monday, or Tuesday
-    # after a Monday holiday. The hour is not verified; the bulk file had the
-    # 2026-10-05 prices by Tuesday 13:46 ET. Taken as Tuesday 5 p.m.
-    return EIASeries(SeriesRule("Dollars per Gallon", 0.5, 15.0), 1, datetime.time(17))
+    # Gasoline and Diesel Fuel Update: Monday's price. In 2022 it was out on
+    # Monday, or Tuesday after a Monday holiday (ALFRED's vintage dates, release
+    # 183). Now it is out on Tuesday at about 10:00 ET, or Wednesday after a
+    # government holiday (eia.gov/petroleum/gasdiesel/schedule.php). Taken as
+    # Wednesday 5 p.m., after both: Tuesday was a day early in a holiday week
+    # (OMNI-161, M30).
+    return EIASeries(SeriesRule("Dollars per Gallon", 0.5, 15.0), 2, datetime.time(17))
 
 
 # EIA's own ids, as the bulk file writes them. A human adds a series here, with
