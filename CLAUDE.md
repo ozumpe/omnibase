@@ -303,7 +303,10 @@ internal target before it models anything external.
 - **The one write path into `specs/` is human-approved** (`sis/contract_author.py`,
   OMNI-21/26): a spec drafts into `runtime/contract_staging/` (loop-writable, no
   gate reads it), and `promote()` raises `RequiresHumanApproval` with no
-  override. Worked examples stated in a spec transcribe into real assertions
+  override. **What is promoted is what was reviewed** (OMNI-68): staging writes
+  a manifest of every file's sha256, and a human runs `python -m
+  sis.contract_author review <name>`, then `promote <name> --digest <digest>
+  --reason "..."` (audited); a digest or file that changed is refused. Worked examples stated in a spec transcribe into real assertions
   (values only, `ast.literal_eval` never `eval`); prose criteria and domain laws
   draft as `NotImplementedError` stubs, because the system cannot invent
   domain laws. A discrimination check runs the drafted exam against a null
@@ -882,11 +885,10 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   previously-documented 616/678 stale); `ruff`/`mypy --strict`/`pytest` clean;
   CI green; `feature → develop → main` enforced by both the client-side
   pre-push hook and active server-side rulesets.
-- **Two known test flakes** — re-run before chasing either:
-  `test_a_drafted_skeleton_stages_without_touching_specs` (under `-n auto`)
-  is **test-only** — [OMNI-42](https://olafzumpe.atlassian.net/browse/OMNI-42)
-  (Low). It compares two `specs/` listings and races another worker creating
-  `specs/__pycache__`; `stage()` never writes into `specs/`.
+- **One known test flake** — re-run before chasing it. (The other,
+  `test_a_drafted_skeleton_stages_without_touching_specs`, OMNI-42, is fixed:
+  it raced `specs/__pycache__` and two tests that promoted into the real
+  `specs/`.)
   `test_correct_but_not_faster_is_rejected` is **not** test-only: on a heavily
   loaded machine the benchmark can accept its candidate, which is a few
   percent slower than the baseline (M7,

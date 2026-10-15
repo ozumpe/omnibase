@@ -210,10 +210,6 @@ reference with no link target below.
 - [OMNI-67] **L18** — `policy.classify()` is case-sensitive, so on a case-insensitive
   filesystem a different-case path to guardrail code classifies as STRICT
   rather than FORBIDDEN. Fix: normalise case via the resolved path.
-- [OMNI-68] **L19** — `contract_author.promote()` copies whatever is currently in the
-  loop-writable staging directory at promotion time, not necessarily the
-  content a human reviewed if the draft was rewritten in between. Fix: hash
-  the draft at review time and refuse `promote()` on a mismatch.
 - [OMNI-69] **L20** — The operator audit log (`runtime/operator_audit.jsonl`) path
   depends on the process's working directory, and entries don't record which
   operator made the edit. Fix: resolve the path against a fixed root; add the
@@ -267,11 +263,6 @@ reference with no link target below.
   `poetry.lock` (and thus from what CI and the subprocess sandbox actually
   run) whenever the image is rebuilt. Fix: pin from an exported, hash-locked
   requirements file; check the pin at `ensure_sandbox_ready()` time.
-- [OMNI-42] **L39** — `tests/test_contract_author.py::
-  test_a_drafted_skeleton_stages_without_touching_specs` (OMNI-42) has a
-  second, independent cause beyond the `specs/__pycache__` race already
-  ticketed: another test in the suite writes a real directory into `specs/`
-  during the run. Fix: locate and fix that test alongside OMNI-42.
 - [OMNI-84] **L40** — CI never installs the `analytics` (duckdb) or `ui` (panel)
   dependency groups, so the tests behind those groups are silently skipped
   rather than run and reported. Fix: install both groups in CI.
@@ -338,6 +329,27 @@ reference with no link target below.
   consider one bounded re-measurement with a fresh seed before discarding.
 
 ## Resolved (Low)
+
+- [OMNI-68] **L19** — `contract_author.promote()` copied whatever was in the
+  loop-writable staging directory at promotion time, not necessarily the
+  content a human reviewed if the draft was rewritten in between. Fix: hash
+  the draft at review time and refuse `promote()` on a mismatch.
+  **Fixed 2026-10-15 (OMNI-68), before the first spec written this way
+  (OMNI-35):** `stage()` writes a `MANIFEST.json` with every file's sha256 and
+  returns its digest. `promote()` needs `approved=True` **and** the digest the
+  human reviewed; it reads the manifest again, refuses a different digest or
+  a file that no longer matches its hash (`StagedChanged`), and copies the
+  bytes it checked. A human promotes with `python -m sis.contract_author
+  review <name>`, then `promote <name> --digest … --reason …`, audited to
+  `runtime/operator_audit.jsonl`; `load_staged()` finds a staged contract
+  again from its manifest, which nothing could before.
+
+- [OMNI-42] **L39** — `tests/test_contract_author.py::
+  test_a_drafted_skeleton_stages_without_touching_specs` had a second cause
+  beyond the `specs/__pycache__` race: two tests promoted a contract into the
+  real `specs/` during the run. **Fixed 2026-10-15 (OMNI-42):** `promote()`
+  takes `specs_dir=`, both tests promote into a temporary directory, and the
+  listing comparison ignores `__pycache__`.
 
 - [OMNI-55] **L30** — An exception after the green deploy during a live canary leaves
   green attached and the PR pending with no verdict, bug, or spend recorded

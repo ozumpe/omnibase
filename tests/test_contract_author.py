@@ -12,7 +12,10 @@ import pathlib
 import pytest
 
 from sis.contract_author import (
+    MANIFEST,
     ContractDraft,
+    StagedChanged,
+    load_staged,
     parse_spec,
     pending,
     promote,
@@ -87,24 +90,83 @@ def test_there_is_no_force_argument() -> None:
     import inspect
 
     params = inspect.signature(promote).parameters
-    assert set(params) == {"staged", "approved"}
+    assert set(params) == {"staged", "approved", "digest", "specs_dir"}
     assert params["approved"].default is False
     assert params["approved"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert params["digest"].default is None   # approval of unnamed content is none
 
 
 def test_an_approved_promotion_writes_into_specs(tmp_path: pathlib.Path) -> None:
+    # Into a temporary specs/: a test that wrote the real one raced the
+    # listing test below (OMNI-42, L39).
     draft = _draft(name="_promotion_probe", files={"tests.py": "# approved\n"})
-    staged = stage(draft, staging_dir=tmp_path)
-    target = staged.target
-    try:
-        assert promote(staged, approved=True) == target
-        assert (target / "tests.py").read_text(encoding="utf-8") == "# approved\n"
-    finally:
-        if target.exists():
-            for child in target.rglob("*"):
-                if child.is_file():
-                    child.unlink()
-            target.rmdir()
+    staged = stage(draft, staging_dir=tmp_path / "staging")
+    specs = tmp_path / "specs"
+    assert promote(staged, approved=True, digest=staged.digest,
+                   specs_dir=specs) == specs / "_promotion_probe"
+    assert (specs / "_promotion_probe" / "tests.py").read_text(encoding="utf-8") == "# approved\n"
+    assert not (specs / "_promotion_probe" / MANIFEST).exists()   # staging's, not the exam's
+
+
+# --- OMNI-68 (L19): what is promoted is what was reviewed ----------------------------
+
+
+def test_approval_without_the_reviewed_digest_is_refused(tmp_path: pathlib.Path) -> None:
+    staged = stage(_draft(), staging_dir=tmp_path / "staging")
+    with pytest.raises(RequiresHumanApproval, match="digest"):
+        promote(staged, approved=True, specs_dir=tmp_path / "specs")
+    assert not (tmp_path / "specs").exists()
+
+
+def test_a_file_rewritten_after_review_is_not_promoted(tmp_path: pathlib.Path) -> None:
+    # Staging is loop-writable: the draft a human read may not be the one there now.
+    staged = stage(_draft(files={"tests.py": "# reviewed\n"}), staging_dir=tmp_path / "staging")
+    (staged.directory / "tests.py").write_text("# rewritten\n", encoding="utf-8")
+    with pytest.raises(StagedChanged, match="changed after review"):
+        promote(staged, approved=True, digest=staged.digest, specs_dir=tmp_path / "specs")
+    assert not (tmp_path / "specs").exists()
+
+
+def test_a_restaged_draft_needs_a_new_review(tmp_path: pathlib.Path) -> None:
+    first = stage(_draft(files={"tests.py": "# first\n"}), staging_dir=tmp_path / "staging")
+    second = stage(_draft(files={"tests.py": "# second\n"}), staging_dir=tmp_path / "staging")
+    assert first.digest != second.digest
+    with pytest.raises(StagedChanged, match="not the one reviewed"):
+        promote(second, approved=True, digest=first.digest, specs_dir=tmp_path / "specs")
+
+
+def test_a_staged_contract_is_found_again_from_its_manifest(tmp_path: pathlib.Path) -> None:
+    staged = stage(_draft(files={"tests.py": "# t\n", "backtests/q1_fixture.json": "{}"}),
+                   staging_dir=tmp_path)
+    again = load_staged(staged.name, staging_dir=tmp_path)
+    assert (again.name, again.spec_ref, again.files, again.digest) == (
+        staged.name, staged.spec_ref, staged.files, staged.digest)
+
+
+def test_a_human_reviews_then_promotes_from_the_command_line(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    from sis import contract_author, operator
+
+    monkeypatch.setattr(contract_author, "CONTRACT_STAGING_DIR", tmp_path / "staging")
+    monkeypatch.setattr(contract_author, "SPECS_DIR", tmp_path / "specs")
+    monkeypatch.setattr(operator, "OPERATOR_AUDIT_JSONL", tmp_path / "audit.jsonl")
+    staged = stage(_draft(), staging_dir=tmp_path / "staging")
+
+    assert contract_author.main(["pending"]) == 0
+    assert contract_author.main(["review", staged.name]) == 0
+    shown = capsys.readouterr().out
+    assert f"digest: {staged.digest}" in shown and "tests.py" in shown
+    assert contract_author.main(["promote", staged.name, "--digest", "0" * 64,
+                                 "--reason", "the digest is wrong, on purpose"]) == 1
+    assert not (tmp_path / "specs").exists()
+    assert contract_author.main(["promote", staged.name, "--digest", staged.digest,
+                                 "--reason", "short"]) == 1
+    assert contract_author.main(["promote", staged.name, "--digest", staged.digest,
+                                 "--reason", "read every file; the exam I approve"]) == 0
+    assert (tmp_path / "specs" / staged.name / "tests.py").exists()
+    audit = (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
+    assert staged.digest in audit and "the exam I approve" in audit
 
 
 def test_promoting_something_never_staged_fails_clearly(tmp_path: pathlib.Path) -> None:
@@ -313,14 +375,21 @@ def test_generated_identifiers_are_valid_python() -> None:
 def test_a_drafted_skeleton_stages_without_touching_specs(
     tmp_path: pathlib.Path,
 ) -> None:
-    before = sorted(p.name for p in SPECS_DIR.iterdir())
+    # __pycache__ is left out: another xdist worker importing specs/ creates it
+    # whenever it likes (OMNI-42). No test promotes into the real specs/ any
+    # more, the second cause (L39).
+    def listing() -> list[str]:
+        return sorted(p.name for p in SPECS_DIR.iterdir() if p.name != "__pycache__")
+
+    before = listing()
     draft = skeleton_from_spec(
         name="planner", spec_ref="CONF-1487", body=SPEC_BODY,
         entry="plan", public_api=("plan",),
     )
     staged = stage(draft, staging_dir=tmp_path)
     assert staged.directory.is_dir()
-    assert sorted(p.name for p in SPECS_DIR.iterdir()) == before
+    assert listing() == before
+    assert not (SPECS_DIR / "planner").exists()
 
 
 def test_every_path_that_runs_generated_code_takes_the_sandbox_preconditions() -> None:
