@@ -378,6 +378,24 @@ aws s3 sync runtime/ "s3://$ARTIFACTS_BUCKET/runs/$(date +%Y%m%d-%H%M)/" \
   --include "loop*.log"
 ```
 
+**e. Capture the sensor, when a run calls for it** (OMNI-35; a release that
+has `scripts/capture_sensor.py`, so after `v0.3.7`). Not part of the loop, and
+independent of its cycles. The first capture downloads EIA's public
+`PET.zip` (about 56 MB, no key) and backfills every declared series; it prints
+what it received, appended and refused (exit 1 can still have appended, see
+`docs/SENSOR_RUNBOOK.md`). Then copy the trace off the box, since the box
+does not outlive the run:
+
+```bash
+poetry run python scripts/capture_sensor.py
+aws s3 cp runtime/sensor_traces/eia.jsonl \
+  "s3://$ARTIFACTS_BUCKET/traces/eia-$(date +%Y%m%d-%H%M).jsonl"
+```
+
+On the laptop, fetch it into `runtime/sensor_traces/eia.jsonl` and build the
+fixture there ("From a trace to a fixture" in `docs/SENSOR_RUNBOOK.md`). The
+instance role may already write anywhere in the artifacts bucket.
+
 ### 6. While it runs (box, a second session)
 
 Open a second session ([step 4](#4-open-a-session-laptop--box)), become

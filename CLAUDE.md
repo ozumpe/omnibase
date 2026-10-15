@@ -1096,7 +1096,20 @@ the KNOWN_ISSUES backfill, see "Known issues" above):
    - [OMNI-35](https://olafzumpe.atlassian.net/browse/OMNI-35) (High) — the first
      recorded fixture, California autumn 2022, plus the clock-cadence check
      carried over from OMNI-25 (Friday stocks vs Monday prices; replay ordered
-     by when a value became known).
+     by when a value became known). **Tooling built 2026-10-15:** a replay runs
+     on `known_at` (`sis/replay.py`, `as_of`); `sis/fixture_builder.py` +
+     `scripts/build_fixture.py` build 17 held-out episodes ("given everything
+     known when a week's California price became known, next week's price")
+     after checking every reconstructed `known_at` against a release calendar a
+     human verified (`scripts/data/eia_release_calendar_2021_2022.json`), and
+     stage them for `python -m sis.contract_author promote` (OMNI-68). Data
+     only: no contract gates on it (persistence would fail it). **The real
+     fixture waits for the box's first capture** (Olaf's call), then a human
+     checks the calendar, reviews and promotes. Fixed first: OMNI-161 (M30),
+     OMNI-162 (M31), OMNI-68/54/42.
+   - [OMNI-163](https://olafzumpe.atlassian.net/browse/OMNI-163) (High) — the
+     PADD 5 inventory fixture and **the first gated omnitrack contract**,
+     after OMNI-35.
    - [OMNI-36](https://olafzumpe.atlassian.net/browse/OMNI-36) (Medium) —
      prediction error computed and reported against a persistence baseline: the
      Phase-A milestone, with nothing acting on it yet.

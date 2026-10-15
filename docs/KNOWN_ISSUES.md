@@ -46,7 +46,7 @@ reference with no link target below.
 > | M15 | [OMNI-51](https://olafzumpe.atlassian.net/browse/OMNI-51) — **fixed** |
 > | M12 | [OMNI-52](https://olafzumpe.atlassian.net/browse/OMNI-52) |
 > | M13 | [OMNI-53](https://olafzumpe.atlassian.net/browse/OMNI-53) |
-> | M14 | [OMNI-54](https://olafzumpe.atlassian.net/browse/OMNI-54) |
+> | M14 | [OMNI-54](https://olafzumpe.atlassian.net/browse/OMNI-54) — **fixed** (2026-10-15) |
 > | M16 (and L30) | [OMNI-55](https://olafzumpe.atlassian.net/browse/OMNI-55) — **fixed** (2026-10-08) |
 > | M17 | [OMNI-56](https://olafzumpe.atlassian.net/browse/OMNI-56) — **fixed** (2026-09-29) |
 > | M18 | [OMNI-57](https://olafzumpe.atlassian.net/browse/OMNI-57) — **fixed** (with OMNI-126) |

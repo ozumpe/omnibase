@@ -193,10 +193,13 @@ def test_every_contract_artifact_lives_where_the_loop_cannot_write_it() -> None:
     fixed for the reference oracle, and it is worth pinning rather than trusting
     that whoever adds the next contract remembers.
     """
-    from sis.contract import DEFAULT_CONTRACTS
+    from sis.contract import REGISTERED_CONTRACTS
 
-    for contract in DEFAULT_CONTRACTS:
-        assert classify(contract.oracle_path) is ChangeTier.FORBIDDEN
+    # Every registered contract, Class 2 included: the first gated fixtures
+    # will belong to a feature (OMNI-163), not to an optimisation target.
+    for contract in REGISTERED_CONTRACTS:
+        if contract.oracle_path is not None:
+            assert classify(contract.oracle_path) is ChangeTier.FORBIDDEN
         assert classify(contract.tests_path) is ChangeTier.FORBIDDEN
         for backtest in contract.backtests:
             assert classify(backtest.fixture) is ChangeTier.FORBIDDEN
