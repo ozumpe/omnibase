@@ -281,6 +281,11 @@ def build_script(
                 ok, detail = False, str(exc)
             else:
                 ok, detail = compare(actual, expected, bt["tolerance"])
+                if not ok and bt["split"] == "holdout":
+                    # A comparator's detail names the recorded outcome, and a
+                    # rejection reason reaches the next proposer prompt through
+                    # the feature's notes: a held-out answer must not (M31).
+                    detail = "outside the comparator's tolerance (held out: no values shown)"
             if not ok:
                 print("MISMATCH", json.dumps({{
                     "backtest": bt["name"],

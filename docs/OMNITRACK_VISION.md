@@ -487,6 +487,18 @@ replay are impossible without it, and it is nearly free at the start and painful
 
 Decided as recommended: event time behind a Clock port with wall-clock as one adapter
 
+**Replay order, decided with OMNI-35 (2026-10-15), before the first fixture was
+recorded.** A replay runs on `known_at`, the order in which the world revealed itself,
+and `event_time` is data. At decision time `t` a model sees the readings with
+`known_at <= t`: per period the latest vintage as of `t`, and nothing a later
+withdrawal hid (`sis/replay.py`, `as_of`). Mixed anchors (Friday-dated stocks,
+Monday-dated prices) are not aligned; resampling is a model's choice. By `event_time`, a
+model asked on Monday 3 October 2022 would see the stocks for the week ending Friday 30
+September, published the Wednesday after. Within a period no two lines share a
+`known_at` (OMNI-160), so no tie decides an order. Backfilled history carries schedule
+times, which an irregular delay makes too early, so a fixture's readings are checked
+against a release calendar a human verified (`sis/fixture_builder.py`).
+
 **D7 — Is the simulator part of the exam or a target the loop may improve?**
 Tension: you want the simulator to get better, but it generates the test inputs.
 *Recommend splitting it* — the generator mechanism is FORBIDDEN, the scenario library is
@@ -662,3 +674,15 @@ the domain's actual data cadence before a fixture is recorded — now a merge of
 series with different anchor days, plus monthly and five-minute ones. The second
 application, Iowa's spirits supply chain, is filed as
 [OMNI-39](https://olafzumpe.atlassian.net/browse/OMNI-39).
+
+**The first gated contract is the PADD 5 inventory twin** (decided with Olaf 2026-10-13
+and 2026-10-15, [OMNI-163](https://olafzumpe.atlassian.net/browse/OMNI-163)). The backtest
+gate asks whether a candidate reproduces recorded reality within a tolerance, and its
+comparator sees only the answer and the record. A balance over West Coast gasoline
+stocks and flows can reproduce next week's stock closely; a price forecaster cannot, and
+persistence would fail its own exam in the jump week of autumn 2022. PADD 5 is mostly
+closed (about 16% of its supply comes from outside, against about 77% for PADD 1), so
+little of the balance is left unexplained. The sensor itself stays outside the loop's
+reach (§7: sensors are not SOFT targets); the twin is the target. So the California
+price fixture (OMNI-35) is recorded first, as data the persistence baseline's error is
+computed on (OMNI-36), and is not a gate for it.

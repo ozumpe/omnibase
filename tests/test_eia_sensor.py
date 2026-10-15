@@ -125,7 +125,7 @@ def test_a_first_capture_backfills_every_value_with_a_reconstructed_known_at(
     assert _at(week["event_time"]) == datetime.datetime(2022, 9, 30, tzinfo=EASTERN)
     assert _at(week["known_at"]) == datetime.datetime(2022, 10, 6, 17, tzinfo=EASTERN)
     price = next(line for line in lines[1:] if line["series"] == CA)
-    assert _at(price["known_at"]) == datetime.datetime(2022, 10, 4, 17, tzinfo=EASTERN)
+    assert _at(price["known_at"]) == datetime.datetime(2022, 10, 5, 17, tzinfo=EASTERN)
 
 
 def test_the_autumn_2022_values_read_back_as_eia_published_them(tmp_path: pathlib.Path) -> None:
@@ -686,7 +686,11 @@ def test_the_release_schedule_is_after_the_regular_release() -> None:
     friday = datetime.datetime(2022, 9, 2, tzinfo=EASTERN)     # Labor Day week: out Thu 8 Sep
     assert eia.eia_published(STOCKS, friday) == datetime.datetime(2022, 9, 8, 17, tzinfo=EASTERN)
     monday = datetime.datetime(2022, 10, 3, tzinfo=EASTERN)
-    assert eia.eia_published(CA, monday) == datetime.datetime(2022, 10, 4, 17, tzinfo=EASTERN)
+    assert eia.eia_published(CA, monday) == datetime.datetime(2022, 10, 5, 17, tzinfo=EASTERN)
+    # Columbus Day 2026: the price for Monday 12 Oct came out Wednesday 14 Oct.
+    # Tuesday 5 p.m., the rule before OMNI-161 (M30), was a day early.
+    holiday = datetime.datetime(2026, 10, 12, tzinfo=EASTERN)
+    assert eia.eia_published(CA, holiday) == datetime.datetime(2026, 10, 14, 17, tzinfo=EASTERN)
 
 
 # --- the download ---------------------------------------------------------------------

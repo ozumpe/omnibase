@@ -54,7 +54,10 @@ internal target before it models anything external.
   for, so a value it later blanks is visible as withdrawn. A changed value is
   a new line with a later `known_at`, never an overwrite. The first capture of a series backfills
   it, each `known_at` reconstructed from EIA's release schedule and marked
-  `reconstructed`. That schedule is wrong for an irregular delay: the stocks
+  `reconstructed`: Thursday 17:00 ET for Friday stocks, Wednesday 17:00 ET for
+  Monday prices, after both the 2022 rule (Monday, Tuesday after a holiday) and
+  today's (Tuesday, Wednesday after a holiday; Tuesday was a day early, OMNI-161).
+  That schedule is wrong for an irregular delay: the stocks
   for the week ending 2022-06-17 came out 12 days later, and the prices for
   Monday 2022-06-20 on the same day (2022-06-29). So OMNI-35 checks its window
   against EIA's release archive. Later values are known at the fetch that
@@ -300,7 +303,10 @@ internal target before it models anything external.
 - **The one write path into `specs/` is human-approved** (`sis/contract_author.py`,
   OMNI-21/26): a spec drafts into `runtime/contract_staging/` (loop-writable, no
   gate reads it), and `promote()` raises `RequiresHumanApproval` with no
-  override. Worked examples stated in a spec transcribe into real assertions
+  override. **What is promoted is what was reviewed** (OMNI-68): staging writes
+  a manifest of every file's sha256, and a human runs `python -m
+  sis.contract_author review <name>`, then `promote <name> --digest <digest>
+  --reason "..."` (audited); a digest or file that changed is refused. Worked examples stated in a spec transcribe into real assertions
   (values only, `ast.literal_eval` never `eval`); prose criteria and domain laws
   draft as `NotImplementedError` stubs, because the system cannot invent
   domain laws. A discrimination check runs the drafted exam against a null
@@ -879,11 +885,10 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   previously-documented 616/678 stale); `ruff`/`mypy --strict`/`pytest` clean;
   CI green; `feature → develop → main` enforced by both the client-side
   pre-push hook and active server-side rulesets.
-- **Two known test flakes** — re-run before chasing either:
-  `test_a_drafted_skeleton_stages_without_touching_specs` (under `-n auto`)
-  is **test-only** — [OMNI-42](https://olafzumpe.atlassian.net/browse/OMNI-42)
-  (Low). It compares two `specs/` listings and races another worker creating
-  `specs/__pycache__`; `stage()` never writes into `specs/`.
+- **One known test flake** — re-run before chasing it. (The other,
+  `test_a_drafted_skeleton_stages_without_touching_specs`, OMNI-42, is fixed:
+  it raced `specs/__pycache__` and two tests that promoted into the real
+  `specs/`.)
   `test_correct_but_not_faster_is_rejected` is **not** test-only: on a heavily
   loaded machine the benchmark can accept its candidate, which is a few
   percent slower than the baseline (M7,
@@ -1091,7 +1096,20 @@ the KNOWN_ISSUES backfill, see "Known issues" above):
    - [OMNI-35](https://olafzumpe.atlassian.net/browse/OMNI-35) (High) — the first
      recorded fixture, California autumn 2022, plus the clock-cadence check
      carried over from OMNI-25 (Friday stocks vs Monday prices; replay ordered
-     by when a value became known).
+     by when a value became known). **Tooling built 2026-10-15:** a replay runs
+     on `known_at` (`sis/replay.py`, `as_of`); `sis/fixture_builder.py` +
+     `scripts/build_fixture.py` build 17 held-out episodes ("given everything
+     known when a week's California price became known, next week's price")
+     after checking every reconstructed `known_at` against a release calendar a
+     human verified (`scripts/data/eia_release_calendar_2021_2022.json`), and
+     stage them for `python -m sis.contract_author promote` (OMNI-68). Data
+     only: no contract gates on it (persistence would fail it). **The real
+     fixture waits for the box's first capture** (Olaf's call), then a human
+     checks the calendar, reviews and promotes. Fixed first: OMNI-161 (M30),
+     OMNI-162 (M31), OMNI-68/54/42.
+   - [OMNI-163](https://olafzumpe.atlassian.net/browse/OMNI-163) (High) — the
+     PADD 5 inventory fixture and **the first gated omnitrack contract**,
+     after OMNI-35.
    - [OMNI-36](https://olafzumpe.atlassian.net/browse/OMNI-36) (Medium) —
      prediction error computed and reported against a persistence baseline: the
      Phase-A milestone, with nothing acting on it yet.

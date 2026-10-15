@@ -46,7 +46,7 @@ reference with no link target below.
 > | M15 | [OMNI-51](https://olafzumpe.atlassian.net/browse/OMNI-51) — **fixed** |
 > | M12 | [OMNI-52](https://olafzumpe.atlassian.net/browse/OMNI-52) |
 > | M13 | [OMNI-53](https://olafzumpe.atlassian.net/browse/OMNI-53) |
-> | M14 | [OMNI-54](https://olafzumpe.atlassian.net/browse/OMNI-54) |
+> | M14 | [OMNI-54](https://olafzumpe.atlassian.net/browse/OMNI-54) — **fixed** (2026-10-15) |
 > | M16 (and L30) | [OMNI-55](https://olafzumpe.atlassian.net/browse/OMNI-55) — **fixed** (2026-10-08) |
 > | M17 | [OMNI-56](https://olafzumpe.atlassian.net/browse/OMNI-56) — **fixed** (2026-09-29) |
 > | M18 | [OMNI-57](https://olafzumpe.atlassian.net/browse/OMNI-57) — **fixed** (with OMNI-126) |
@@ -127,23 +127,6 @@ reference with no link target below.
   `pn.serve`; enable signed sessions; add a test asserting the built server's
   `auth_provider` is not `NullAuth`.
 
-- [OMNI-54] **M14 — A worked example in a spec page can name any callable, so spec
-  prose becomes executed code** *(found 2026-09-26; reproduced)* —
-  `_worked_example_source` (`sis/contract_author.py`) emits
-  `` assert {entry}(*args) == expected `` for any `\w+` identifier, never
-  checking `entry` against the contract's `public_api`; builtins such as
-  `exec`, `eval`, `open` and `__import__` resolve in the generated test
-  module. Reproduced: a spec bullet `` `exec("...")` -> `None` `` produces a
-  test that executes the quoted string, and `untranscribed_examples` reports
-  nothing wrong with it. `check_discrimination` runs this draft before any
-  human sees it; under the default (stub proposer) configuration that runs in
-  the subprocess sandbox, which leaves the host filesystem readable (M1 only
-  requires docker for a non-stub *proposer*, not for staging a document-store
-  draft). Fix: transcribe an example only when `entry in public_api` (the
-  caller already has `public_api` in hand); report anything else through
-  `untranscribed_examples` as "names a function outside the contract's public
-  API".
-
 - [OMNI-50] **M20 — The live canary's p95/p99 gate is close to a coin flip for targets
   where dispatch overhead dominates compute** *(found 2026-09-26; simulated
   through the real `evaluate_canary`)* — Gate 4 compares nearest-rank p95/p99
@@ -210,10 +193,6 @@ reference with no link target below.
 - [OMNI-67] **L18** — `policy.classify()` is case-sensitive, so on a case-insensitive
   filesystem a different-case path to guardrail code classifies as STRICT
   rather than FORBIDDEN. Fix: normalise case via the resolved path.
-- [OMNI-68] **L19** — `contract_author.promote()` copies whatever is currently in the
-  loop-writable staging directory at promotion time, not necessarily the
-  content a human reviewed if the draft was rewritten in between. Fix: hash
-  the draft at review time and refuse `promote()` on a mismatch.
 - [OMNI-69] **L20** — The operator audit log (`runtime/operator_audit.jsonl`) path
   depends on the process's working directory, and entries don't record which
   operator made the edit. Fix: resolve the path against a fixed root; add the
@@ -267,11 +246,6 @@ reference with no link target below.
   `poetry.lock` (and thus from what CI and the subprocess sandbox actually
   run) whenever the image is rebuilt. Fix: pin from an exported, hash-locked
   requirements file; check the pin at `ensure_sandbox_ready()` time.
-- [OMNI-42] **L39** — `tests/test_contract_author.py::
-  test_a_drafted_skeleton_stages_without_touching_specs` (OMNI-42) has a
-  second, independent cause beyond the `specs/__pycache__` race already
-  ticketed: another test in the suite writes a real directory into `specs/`
-  during the run. Fix: locate and fix that test alongside OMNI-42.
 - [OMNI-84] **L40** — CI never installs the `analytics` (duckdb) or `ui` (panel)
   dependency groups, so the tests behind those groups are silently skipped
   rather than run and reported. Fix: install both groups in CI.
@@ -338,6 +312,27 @@ reference with no link target below.
   consider one bounded re-measurement with a fresh seed before discarding.
 
 ## Resolved (Low)
+
+- [OMNI-68] **L19** — `contract_author.promote()` copied whatever was in the
+  loop-writable staging directory at promotion time, not necessarily the
+  content a human reviewed if the draft was rewritten in between. Fix: hash
+  the draft at review time and refuse `promote()` on a mismatch.
+  **Fixed 2026-10-15 (OMNI-68), before the first spec written this way
+  (OMNI-35):** `stage()` writes a `MANIFEST.json` with every file's sha256 and
+  returns its digest. `promote()` needs `approved=True` **and** the digest the
+  human reviewed; it reads the manifest again, refuses a different digest or
+  a file that no longer matches its hash (`StagedChanged`), and copies the
+  bytes it checked. A human promotes with `python -m sis.contract_author
+  review <name>`, then `promote <name> --digest … --reason …`, audited to
+  `runtime/operator_audit.jsonl`; `load_staged()` finds a staged contract
+  again from its manifest, which nothing could before.
+
+- [OMNI-42] **L39** — `tests/test_contract_author.py::
+  test_a_drafted_skeleton_stages_without_touching_specs` had a second cause
+  beyond the `specs/__pycache__` race: two tests promoted a contract into the
+  real `specs/` during the run. **Fixed 2026-10-15 (OMNI-42):** `promote()`
+  takes `specs_dir=`, both tests promote into a temporary directory, and the
+  listing comparison ignores `__pycache__`.
 
 - [OMNI-55] **L30** — An exception after the green deploy during a live canary leaves
   green attached and the PR pending with no verdict, bug, or spend recorded
@@ -608,6 +603,59 @@ any long-lived cluster exists.
   front.
 
 ## Resolved
+
+- [OMNI-54] **M14 — A worked example in a spec page can name any callable, so spec
+  prose becomes executed code** *(found 2026-09-26; reproduced)* —
+  `_worked_example_source` (`sis/contract_author.py`) emits
+  `` assert {entry}(*args) == expected `` for any `\w+` identifier, never
+  checking `entry` against the contract's `public_api`; builtins such as
+  `exec`, `eval`, `open` and `__import__` resolve in the generated test
+  module. Reproduced: a spec bullet `` `exec("...")` -> `None` `` produces a
+  test that executes the quoted string, and `untranscribed_examples` reports
+  nothing wrong with it. `check_discrimination` runs this draft before any
+  human sees it; under the default (stub proposer) configuration that runs in
+  the subprocess sandbox, which leaves the host filesystem readable (M1 only
+  requires docker for a non-stub *proposer*, not for staging a document-store
+  draft). Fix: transcribe an example only when `entry in public_api` (the
+  caller already has `public_api` in hand); report anything else through
+  `untranscribed_examples` as "names a function outside the contract's public
+  API".
+  **Fixed 2026-10-15 (OMNI-54), before the first spec written through
+  contract-author (OMNI-35):** `skeleton_from_spec` transcribes an example
+  only when it calls a name in the contract's `public_api`;
+  `untranscribed_examples(body, public_api=...)` reports any other as "names a
+  function outside the contract's public API", and the staged README lists it.
+  Regression test: `exec("...")` and `open(...)` examples never reach
+  `tests.py`.
+
+- [OMNI-162] **M31 — A held-out backtest's recorded answer reached the next proposer
+  prompt through the rejection reason** *(found 2026-10-15 while planning
+  OMNI-35, by reading the code; latent: no shipped contract declares a
+  backtest)* — on a mismatch the backtest script printed the comparator's
+  detail, and `within_tolerance` writes `expected <recorded value>, got …`.
+  That became the gate's reason, a rejected Class-2 attempt keeps its reason
+  as a note on the feature, and `proposer._history_section` prints the notes
+  into the next prompt. The prompt itself says the episodes are "held out and
+  not shown here". **Fixed 2026-10-15 (OMNI-162):** for a `holdout` episode
+  the reason names the episode, its split and comparator, and says it was
+  outside tolerance, with no values; a `train` episode keeps the comparator's
+  detail. Regression test: a holdout rejection and the prompt built from it
+  carry no recorded value, and fail without the fix.
+
+- [OMNI-161] **M30 — The backfilled `known_at` of a retail price was a day early in a
+  holiday week** *(found 2026-10-15 while planning OMNI-35, from EIA's
+  published schedules)* — `EIASensor` reconstructed a retail price's
+  `known_at` as its Monday plus one day, Tuesday 17:00 ET. EIA now releases
+  the Gasoline and Diesel Fuel Update on Tuesday at about 10:00 ET and **on
+  Wednesday after a government holiday** (eia.gov/petroleum/gasdiesel/
+  schedule.php), so every holiday week from 2025 on was a day early: a replay
+  by `known_at` handed a model a price before it was published. 2022 was not
+  affected: ALFRED's vintage dates (release 183) show Monday releases, Tuesday
+  after Labor Day and Columbus Day. **Fixed 2026-10-15 (OMNI-161), before any
+  trace was captured:** Wednesday 17:00 ET, after both rules, so `known_at`
+  stays an upper bound; backfilled history costs a day of lag. Irregular
+  delays remain the release-calendar check's job (OMNI-35). Regression test:
+  the Columbus Day 2026 price is reconstructed for Wednesday 14 October.
 
 - [OMNI-155] **H10 — A candidate could block the host past the worker timeout by not
   reading its input** *(found 2026-10-14 by a review of the OMNI-33 push;
@@ -1764,3 +1812,5 @@ any long-lived cluster exists.
 [OMNI-158]: https://olafzumpe.atlassian.net/browse/OMNI-158
 [OMNI-159]: https://olafzumpe.atlassian.net/browse/OMNI-159
 [OMNI-160]: https://olafzumpe.atlassian.net/browse/OMNI-160
+[OMNI-161]: https://olafzumpe.atlassian.net/browse/OMNI-161
+[OMNI-162]: https://olafzumpe.atlassian.net/browse/OMNI-162

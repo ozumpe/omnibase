@@ -392,9 +392,11 @@ def replay(
     """Yield a window's readings in *by*'s order, moving *clock* to each one first.
 
     Event time comes from the trace, not from the machine: whoever consumes a
-    reading sees ``clock.now()`` at that reading's time. Which axis a replay
-    should run on, and how series of different cadence merge, is OMNI-35's
-    decision. The axis is named here so that it is always a decision.
+    reading sees ``clock.now()`` at that reading's time. The axis is named here
+    so that it is always a decision; the one OMNI-35 made for a model is
+    ``TimeAxis.KNOWN``, and series of different cadence are not merged onto a
+    grid. What a model may see at a moment, revisions and withdrawals resolved,
+    is :func:`sis.replay.as_of`.
     """
     for reading in sensor.read(start, end, by=by):
         clock.advance_to(reading.at(by))

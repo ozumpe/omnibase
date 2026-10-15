@@ -94,6 +94,32 @@ published and later blanked appears in `read()` at its first `known_at`, and in
 `absent()` from the moment it was blanked. An as-of view that should drop
 withdrawn values must take both.
 
+**What a model may see at a moment** is `sis.replay.as_of(readings, absent, t)`,
+the rule OMNI-35 decided before the first fixture: a replay runs on `known_at`;
+at `t` a model sees, per period, the latest vintage known by `t`, and no value a
+later withdrawal hid. Mixed anchors are not aligned. Two vintages of one period
+known at the same instant are refused (`AmbiguousVintage`).
+
+## From a trace to a fixture
+
+A fixture is the exam, so it reaches `specs/` only through a human:
+
+1. **Check the release calendar.** `scripts/data/eia_release_calendar_2021_2022.json`
+   records when each period was really released (WPSR archive for stocks, ALFRED's
+   release dates for retail prices). Compare it with the sources it names, then fill
+   in `checked_by` and `checked_on`. An unchecked calendar refuses every build.
+2. **Build and stage:** `poetry run python scripts/build_fixture.py`. It reads the
+   trace back through the door, gives every reconstructed reading it shows a
+   `known_at` no earlier than the end of its release day, refuses a reading the
+   calendar does not cover, and stages the draft under
+   `runtime/contract_staging/ca_price_next_week/` with its digest.
+3. **Review:** `poetry run python -m sis.contract_author review ca_price_next_week`
+   lists every file with its hash and the manifest digest.
+4. **Promote:** `poetry run python -m sis.contract_author promote ca_price_next_week
+   --digest <digest> --reason "..."`. It refuses a different digest or a file changed
+   since review, and audits to `runtime/operator_audit.jsonl`. Commit the new
+   `specs/` directory through a pull request.
+
 ## Times and historical limits
 
 `event_time` places EIA's period date at midnight in `America/New_York`. That is
@@ -103,9 +129,12 @@ series describe a week ending Friday; retail-price series use Monday dates.
 The first capture of a series backfills its available history. Those values
 receive `reconstructed: true`, with `known_at` estimated from the series'
 publication schedule and capped at fetch time. The implementation uses Thursday
-17:00 Eastern for the prior Friday's stocks and Tuesday 17:00 Eastern for
-Monday retail prices. These are assumptions covering regular releases and
-ordinary holiday shifts, not verified release timestamps.
+17:00 Eastern for the prior Friday's stocks and Wednesday 17:00 Eastern for
+Monday retail prices. Retail prices came out on Monday in 2022 (Tuesday after a
+Monday holiday) and come out on Tuesday now (Wednesday after a government
+holiday), so Wednesday is after both; Tuesday was a day early in a holiday week
+(OMNI-161). These are assumptions covering regular releases and ordinary holiday
+shifts, not verified release timestamps.
 
 Irregular delays can still make reconstruction too early. The week ending
 2022-06-17 was released on 2022-06-29, for example. Also, a current bulk file

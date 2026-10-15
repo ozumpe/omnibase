@@ -767,13 +767,16 @@ def test_a_forger_fails_the_backtest_gate(tmp_path: pathlib.Path, sandbox: str) 
     import json
     from dataclasses import replace
 
-    from sis.backtest import FIXTURE_SCHEMA, Backtest
+    from sis.backtest import FIXTURE_SCHEMA, Backtest, Split
 
     fixture, expect = tmp_path / "six.json", tmp_path / "six_expect.json"
     fixture.write_text(json.dumps({"schema": FIXTURE_SCHEMA, "args": [6]}), encoding="utf-8")
     expect.write_text(json.dumps({"schema": FIXTURE_SCHEMA, "value": 12}), encoding="utf-8")
     spec = replace(gauntlet.default_contract(), backtests=(
-        Backtest(name="six", fixture=str(fixture), expect=str(expect), compare="exact"),))
+        # TRAIN: a holdout rejection shows no values (OMNI-162), and this test
+        # reads the comparator's own detail.
+        Backtest(name="six", fixture=str(fixture), expect=str(expect), compare="exact",
+                 split=Split.TRAIN),))
     exam = tmp_path / "exam"
     exam.mkdir()
     result = gauntlet._gate_backtest(_gate_ctx(exam, spec, _FORGING_SUM))

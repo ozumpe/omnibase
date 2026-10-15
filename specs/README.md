@@ -92,11 +92,17 @@ outcome lets it reproduce history without modelling anything. Keeping them apart
 makes "show the inputs, never the answers" a file-level rule rather than
 something a prompt author has to remember.
 
-`event_time` stays optional for existing non-domain fixtures. Real sensor capture
-now exists, but promoting that staging trace into an approved domain fixture is
-separate work (OMNI-35; [sensor runbook](../docs/SENSOR_RUNBOOK.md)). When present it is
-**parsed and validated** (`sis/clock.py`), not carried around as whatever string
-was in the file:
+`event_time` stays optional for existing non-domain fixtures. A **domain
+fixture** built from a sensor trace (`sis/fixture_builder.py`, OMNI-35) sets it to
+the moment the question is asked, and carries everything a model may know at that
+moment in `args[0]`: `{"as_of": ..., "readings": [...], "absent": [...]}`, the
+as-of view of `sis/replay.py`. The gate never reads `event_time` itself, so what a
+model may use has to be in `args`. Such a fixture arrives here only through
+`python -m sis.contract_author promote` with the digest a human reviewed
+([sensor runbook](../docs/SENSOR_RUNBOOK.md), "From a trace to a fixture").
+
+When `event_time` is present it is **parsed and validated** (`sis/clock.py`), not
+carried around as whatever string was in the file:
 
 - it must be ISO-8601, and
 - it must carry a timezone. A naive timestamp means "23:59, somewhere";

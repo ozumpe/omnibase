@@ -85,6 +85,10 @@ GUARDRAIL_PATHS: tuple[str, ...] = (
     # backfilled history. A loop able to edit it could shape what its own
     # models are later judged against.
     "sis/sensor_trace.py",
+    # What a model is shown at each moment of a replay, and the fixtures built
+    # from it (OMNI-35): a loop able to edit either could choose its own exam.
+    "sis/replay.py",
+    "sis/fixture_builder.py",
     "sis/cost.py",            # spend accounting that feeds the brakes
     "sis/settings.py",        # secret loading + masking
     "sis/adapters.py",        # RequiresHumanApproval guardrails (in-memory)
