@@ -553,18 +553,25 @@ def parse_worked_examples(body: str) -> list[WorkedExample]:
     return [e for e, _ in _transcribe(body) if e is not None]
 
 
-def untranscribed_examples(body: str) -> list[str]:
+def untranscribed_examples(body: str, *, public_api: tuple[str, ...] | None = None) -> list[str]:
     """Worked-example lines that could not be transcribed, with the reason.
 
     Returned rather than discarded because "the draft contains no rejection
     tests" and "the spec stated four rejection cases and none of them could be
     read" look identical from the outside, and only one of them is fine. The
     README reports these so a reviewer sees what the draft is missing.
+
+    Given *public_api*, an example calling anything else is one of them
+    (OMNI-54, M14): `exec("...")` is a well-formed call, and transcribed it
+    would run whatever the spec page quoted.
     """
     out: list[str] = []
     for example, reason in _transcribe(body):
         if example is None:
             out.append(reason)
+        elif public_api is not None and example.entry not in public_api:
+            out.append(f"{example.entry}(...) (names a function outside the contract's "
+                       "public API)")
         elif not _is_emittable(example):
             why = ("names a non-builtin exception" if example.is_rejection
                    else "value has no literal repr")
@@ -811,7 +818,10 @@ def skeleton_from_spec(
             f'    raise NotImplementedError("write this case from the spec")\n'
         )
 
-    tests.append(_worked_example_source(parse_worked_examples(body)))
+    # Only calls into the contract's own API (OMNI-54, M14): a spec page is prose
+    # an outsider may influence, and stage() runs the drafted tests.
+    examples = [e for e in parse_worked_examples(body) if e.entry in public_api]
+    tests.append(_worked_example_source(examples))
     files = {"tests.py": "".join(tests)}
 
     if laws:
@@ -838,9 +848,8 @@ def skeleton_from_spec(
             )
         files["oracle.py"] = "".join(oracle)
 
-    examples = parse_worked_examples(body)
     emitted = [e for e in examples if _is_emittable(e)]
-    dropped = untranscribed_examples(body)
+    dropped = untranscribed_examples(body, public_api=public_api)
     files["README.md"] = (
         f"# `{name}` contract\n\n"
         f"Drafted from **{spec_ref}** by the contract-author step, and **not yet "

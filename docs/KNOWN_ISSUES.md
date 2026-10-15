@@ -127,23 +127,6 @@ reference with no link target below.
   `pn.serve`; enable signed sessions; add a test asserting the built server's
   `auth_provider` is not `NullAuth`.
 
-- [OMNI-54] **M14 — A worked example in a spec page can name any callable, so spec
-  prose becomes executed code** *(found 2026-09-26; reproduced)* —
-  `_worked_example_source` (`sis/contract_author.py`) emits
-  `` assert {entry}(*args) == expected `` for any `\w+` identifier, never
-  checking `entry` against the contract's `public_api`; builtins such as
-  `exec`, `eval`, `open` and `__import__` resolve in the generated test
-  module. Reproduced: a spec bullet `` `exec("...")` -> `None` `` produces a
-  test that executes the quoted string, and `untranscribed_examples` reports
-  nothing wrong with it. `check_discrimination` runs this draft before any
-  human sees it; under the default (stub proposer) configuration that runs in
-  the subprocess sandbox, which leaves the host filesystem readable (M1 only
-  requires docker for a non-stub *proposer*, not for staging a document-store
-  draft). Fix: transcribe an example only when `entry in public_api` (the
-  caller already has `public_api` in hand); report anything else through
-  `untranscribed_examples` as "names a function outside the contract's public
-  API".
-
 - [OMNI-50] **M20 — The live canary's p95/p99 gate is close to a coin flip for targets
   where dispatch overhead dominates compute** *(found 2026-09-26; simulated
   through the real `evaluate_canary`)* — Gate 4 compares nearest-rank p95/p99
@@ -620,6 +603,30 @@ any long-lived cluster exists.
   front.
 
 ## Resolved
+
+- [OMNI-54] **M14 — A worked example in a spec page can name any callable, so spec
+  prose becomes executed code** *(found 2026-09-26; reproduced)* —
+  `_worked_example_source` (`sis/contract_author.py`) emits
+  `` assert {entry}(*args) == expected `` for any `\w+` identifier, never
+  checking `entry` against the contract's `public_api`; builtins such as
+  `exec`, `eval`, `open` and `__import__` resolve in the generated test
+  module. Reproduced: a spec bullet `` `exec("...")` -> `None` `` produces a
+  test that executes the quoted string, and `untranscribed_examples` reports
+  nothing wrong with it. `check_discrimination` runs this draft before any
+  human sees it; under the default (stub proposer) configuration that runs in
+  the subprocess sandbox, which leaves the host filesystem readable (M1 only
+  requires docker for a non-stub *proposer*, not for staging a document-store
+  draft). Fix: transcribe an example only when `entry in public_api` (the
+  caller already has `public_api` in hand); report anything else through
+  `untranscribed_examples` as "names a function outside the contract's public
+  API".
+  **Fixed 2026-10-15 (OMNI-54), before the first spec written through
+  contract-author (OMNI-35):** `skeleton_from_spec` transcribes an example
+  only when it calls a name in the contract's `public_api`;
+  `untranscribed_examples(body, public_api=...)` reports any other as "names a
+  function outside the contract's public API", and the staged README lists it.
+  Regression test: `exec("...")` and `open(...)` examples never reach
+  `tests.py`.
 
 - [OMNI-162] **M31 — A held-out backtest's recorded answer reached the next proposer
   prompt through the rejection reason** *(found 2026-10-15 while planning
