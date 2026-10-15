@@ -2,8 +2,8 @@
  "schema": 1,
  "description": "When each EIA weekly period of June 2021 to December 2022 was actually released, for the OMNI-35 fixture's release check (sis/fixture_builder.py). Keys are the period's date (Friday week-ending for stocks, Monday for retail prices); values the release date, both in America/New_York. Drafted 2026-10-15 from the sources below by an agent; a human checks them against the sources and fills in checked_by and checked_on before any fixture is built.",
  "timezone": "America/New_York",
- "checked_by": "",
- "checked_on": "",
+ "checked_by": "Olaf Zumpe",
+ "checked_on": "2026-10-15",
  "reports": {
   "wpsr": {
    "name": "Weekly Petroleum Status Report",
