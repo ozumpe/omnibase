@@ -30,6 +30,7 @@ GEMINI.md
 runtime/target.py.bak
 runtime/episodic.jsonl
 runtime/episodic_state.json
+runtime/episodic_state.lock
 runtime/episodic.duckdb
 # Who changed which config key, when, and why (OMNI-28) — a local operational
 # record of this machine's console, not source.

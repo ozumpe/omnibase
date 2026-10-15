@@ -609,6 +609,139 @@ any long-lived cluster exists.
 
 ## Resolved
 
+- [OMNI-155] **H10 — A candidate could block the host past the worker timeout by not
+  reading its input** *(found 2026-10-14 by a review of the OMNI-33 push;
+  reproduced by the reviewer, and here: a host still writing after 20 s
+  against a 1 s timeout)* — `SandboxWorker.call` wrote and flushed the request,
+  blocking, before its timed read began. The candidate owns the worker
+  process, so it can stop reading stdin (moving fd 0 aside at import is
+  enough), and a request larger than the pipe then held the host for ever.
+  Neither the call's timeout nor the benchmark's deadline could interrupt the
+  write. **Fixed 2026-10-14 (OMNI-155):** stdin is non-blocking, and one
+  deadline covers sending the request and reading its answer
+  (`SandboxWorker._send`). A worker that has not taken the whole request by
+  then is killed with `WorkerTimeout`. The first write is tried at once, so a
+  request that fits the pipe costs no extra system call on the timed path.
+  Regression test, in both sandboxes: a candidate that stops reading, sent
+  8 MB.
+
+- [OMNI-156] **H11 — A candidate's stderr was stored and read back without a bound,
+  on the host** *(found 2026-10-14 by a review of the OMNI-33 push; the
+  unrestricted read confirmed with a probe, exhaustion not attempted)* — the
+  worker's stderr went to a host-side temporary file, written in docker by
+  the docker client, past the container's limits; `_stderr_tail` read it all,
+  decoded and split it to keep 300 characters of the last line. **Fixed
+  2026-10-14 (OMNI-156):** stderr is a pipe, drained in the same select loops
+  that send a request and wait for its answer, and only its last
+  `STDERR_TAIL_BYTES` (8 KiB) are kept. After a worker stops, at most 1 MiB
+  more is read. Draining while waiting also matters for liveness: in docker
+  the client forwards stdout and stderr in order, so an undrained stderr
+  would hold up the answer. Regression tests, in both sandboxes: 4 MB of
+  stderr before the handshake still names its last line with never more than
+  the tail held; 2 MB written during a call does not stop the answer.
+  The review of the fix found a second copy: docker's default `json-file`
+  log driver kept every byte a container wrote, on the host, until `--rm`
+  removed it (not a regression: it predates the fix). Every sandbox
+  container now runs with `--log-driver none` (`gauntlet._docker_args`);
+  attached output still arrives, only `docker logs` is gone. Not covered
+  here: the worker's directory is mounted read-write, so a candidate can
+  still write files there.
+
+- [OMNI-157] **H12 — A failed brake-state save let a restart undo spend that was
+  charged** *(found 2026-10-14 by a review of the OMNI-33 push; reproduced by
+  the reviewer with a disk-full probe: $0.70 live, $0.10 on disk)* —
+  `run_cycle`'s `_record` caught a failed `save_state("ceo", …)`, warned and
+  returned normally, so the loop went on spending. The previous snapshot
+  stayed readable, so a restart restored it without opening the breaker
+  (OMNI-61 only fails closed on state it cannot read). **Fixed 2026-10-14
+  (OMNI-157):** a cycle's spend is reserved before anything is spent:
+  `CEO.reserve(estimate)` after the budget gate, and the state, reservation
+  included (`reserved_usd`), is saved before the cycle goes on. If that save
+  fails, nothing is spent. The cycle's outcome replaces the reservation with
+  what it really cost. A save that fails, before the cycle or after it, opens
+  the breaker with the reason (`CEO.trip`), files a bug and pages a human, so
+  nothing more is spent. A CEO started from saved state that still holds a
+  reservation counts it as spent: that cycle's outcome was never saved
+  (`bootstrap` says so). So a restart never sees less than was spent, as long
+  as a cycle costs no more than the estimate the budget gate approved (one
+  proposal, `max_tokens` 8000, against the default $0.50). Regression tests:
+  `tests/test_brake_persistence.py`.
+  An adversarial review of the fix the same day closed four gaps in it. A
+  reservation with no outcome is settled as a failure too, not only as spend,
+  so an unknown outcome can still trip a brake (`CEO._settle_unknown_outcome`).
+  It is settled when a new CEO starts from the state, and also at the next
+  reservation of a detached CEO that outlived its driver, which used to
+  overwrite it; `approve_budget` counts an outstanding one. An SWE whose
+  process dies during its step (not a raise of its own, which by OMNI-55
+  comes before any proposal) is charged the reservation, not $0. And a save
+  that fails pages even when the breaker was already open: that page had not
+  said the state was no longer saved.
+
+- [OMNI-158] **H13 — An admin command could overwrite newer brake state with an
+  older snapshot** *(found 2026-10-14 by a review of the OMNI-33 push;
+  reproduced by the reviewer: a $0.70 snapshot overwritten by an older $0.10
+  one)* — the loop (after every cycle) and `python -m sis.admin` (after every
+  action) each take a snapshot of the live CEO and save it later.
+  `JsonlEpisodicStore.save_state` replaced the file atomically, but neither
+  serialised writers nor knew which snapshot was newer, so an admin snapshot
+  taken before a cycle and written after the loop saved it put the old spend
+  back on disk. **Fixed 2026-10-14 (OMNI-158):** the CEO numbers its state
+  (`version`, incremented by every change; its methods run one at a time, so
+  the order is its own), and the store never replaces a saved state with a
+  lower version (`episodic.superseded`). `save_state` returns False when it
+  kept the later one, which is no failure: that version includes this one,
+  and `sis.admin` says so. The check and the write are one step: under an
+  exclusive lock on `episodic_state.lock` for the jsonl store (which also
+  stops two keys' saves from losing one another), in one transaction for
+  DuckDB. A lock alone would not have done: the stale snapshot is taken
+  before the lock. A state without a version, saved before this, still saves.
+  Versions are compared only within one `lineage`, carried in the state: a
+  CEO started from saved state continues it, one that could not read its
+  state begins a new one at version 0. Without that (found by the review of
+  the fix), a file repaired during the documented OMNI-61 recovery kept its
+  higher numbers and silently blocked every save of the new CEO.
+  Regression tests: `tests/test_brake_state.py` (two processes, the lock,
+  DuckDB) and `tests/test_brake_persistence.py` (the reviewer's sequence with
+  the real CEO).
+
+- [OMNI-159] **M29 — Reading a sensor trace while a capture appended to it reported
+  the trace as corrupt** *(found 2026-10-14 by a review of the OMNI-33 push;
+  reproduced by the reviewer, and here)* — `sensor_trace.append` holds an
+  exclusive `flock` for a capture's whole block, but `sensor_trace.load`
+  (`EIASensor.read`, `check_connections --deep`) read without it. A read in
+  the middle of a multi-MB block saw half of it: "cut short or edited", a
+  false tamper alarm, or a block shorter than its capture line says.
+  **Fixed 2026-10-14 (OMNI-159):** `load` reads under a shared lock, so it
+  sees the trace before a block or after it. Regression test: a read started
+  while a writer holds the lock halfway through a block waits for it and
+  returns the whole trace.
+
+- [OMNI-160] **L54 — Two captures at the same instant left a restored sensor value
+  looking withdrawn** *(found 2026-10-14 by a review of the OMNI-33 push;
+  confirmed by reading the code)* — `sensor_trace._latest` picks each
+  period's latest state by `known_at`, and listed readings before absences,
+  so on equal `known_at` an absence won whatever the order of the captures.
+  With a fixed `ReplayClock`, a value withdrawn and then restored stayed
+  "absent" in the trace's own view, and every later capture appended the
+  restored value again. A clock that stepped back did the same, and let a
+  later capture write a `known_at` earlier than one already in the trace.
+  **Fixed 2026-10-14 (OMNI-160):** ambiguous revision times are refused, not
+  broken by a tie. A capture whose fetch time is not after the trace's last
+  capture is refused and appends nothing (`capture_lines`), and a trace whose
+  captures are out of fetch-time order fails the read (`_check_blocks`). Then
+  no period has two lines at one `known_at`, and capture order is `known_at`
+  order. Regression tests: a capture at the same instant and one with a
+  clock stepped back are refused; an edited trace out of order fails the
+  read. A control, which passes without the fix too: withdrawn then restored
+  over captures at distinct times reads as restored, and a fourth appends
+  nothing. The review of the fix found that a capture was stamped after its
+  download but before the trace's lock, so of two captures at once, one
+  stamped earlier that reached the lock second was refused as if the clock
+  had gone back. Captures are now stamped under the lock (a later stamp is
+  still an upper bound on when the values were known). A clock that was ahead
+  for one capture stops captures until real time passes it; the runbook says
+  what to do.
+
 - [OMNI-55] **M16 — Any exception after the LLM call loses that call's spend from the
   CEO ledger and the episodic log, strands the branch/PR, and can kill
   `--loop`** *(found 2026-09-26; confirmed by reading the code — the
@@ -1114,6 +1247,9 @@ any long-lived cluster exists.
   is refused with a real proposer or real adapters
   (`roles.brake_persistence_problem`, at bootstrap and per cycle, no
   override). Tests: `tests/test_brake_state.py`, `tests/test_ceo_fail_closed.py`.
+  **What it missed** (found 2026-10-14, H12, OMNI-157): state that was saved
+  and stays readable, but stops being saved. A failed save only warned, so a
+  restart restored the last saved spend and forgot the rest. See H12.
 
 - [OMNI-61] **L23** — `CEO.reset_breaker()` has no caller anywhere outside tests; in
   practice the only reset is deleting the state file, which also zeroes
@@ -1622,3 +1758,9 @@ any long-lived cluster exists.
 [OMNI-152]: https://olafzumpe.atlassian.net/browse/OMNI-152
 [OMNI-153]: https://olafzumpe.atlassian.net/browse/OMNI-153
 [OMNI-154]: https://olafzumpe.atlassian.net/browse/OMNI-154
+[OMNI-155]: https://olafzumpe.atlassian.net/browse/OMNI-155
+[OMNI-156]: https://olafzumpe.atlassian.net/browse/OMNI-156
+[OMNI-157]: https://olafzumpe.atlassian.net/browse/OMNI-157
+[OMNI-158]: https://olafzumpe.atlassian.net/browse/OMNI-158
+[OMNI-159]: https://olafzumpe.atlassian.net/browse/OMNI-159
+[OMNI-160]: https://olafzumpe.atlassian.net/browse/OMNI-160

@@ -315,6 +315,14 @@ def bootstrap() -> dict[str, Any]:
         ceo_state = unreadable_brake_state(str(exc))
         held_open = str(ceo_state["trip_reason"])
         print(f"[sis] BRAKES HELD OPEN: {held_open}", file=sys.stderr)
+    reserved = float((ceo_state or {}).get("reserved_usd") or 0.0)
+    if reserved > 0:
+        # The last run stopped mid-cycle, or could not save its outcome
+        # (OMNI-157, H12). A new CEO settles it at once; a live one that
+        # outlived its driver, at its next reservation.
+        print(f"[sis] the last saved brake state has a cycle in flight: its reservation of "
+              f"${reserved:.4f} is counted as spent, and the cycle as a failure",
+              file=sys.stderr)
 
     handles = {
         "Workspace": workspace,
@@ -410,6 +418,9 @@ def cycle_summary(result: Mapping[str, Any]) -> str:
             detail = f"{gate}: {' '.join(reason.split())}"
         else:
             detail = "no reason recorded"
+    if result.get("brakes_unpersisted"):
+        detail += (f"; brake state NOT saved ({result['brakes_unpersisted']}), "
+                   "so the breaker is open")
     money = []
     cost, econ = result.get("cost_usd"), result.get("economics")
     if isinstance(cost, int | float):
@@ -579,16 +590,44 @@ def run_cycle(
                 res, cost_usd=cost, proposer=proposer, model=res["model"]))
         except Exception:  # noqa: BLE001
             pass
+        # Persist the CEO's brake/spend state so it survives a restart (L9). A
+        # failure opens the breaker (OMNI-157, H12); the cycle's outcome stands.
+        if not seen.get("unpersisted") and (unsaved := _persist_brakes()) is not None:
+            res["breaker_bug_id"] = _stop_unpersisted(unsaved) or res.get("breaker_bug_id")
+            res["brakes_unpersisted"] = str(unsaved)
+        return res
+
+    def _persist_brakes() -> Exception | None:
+        """Save the CEO's state; the exception if it could not be saved.
+
+        A store that keeps a later version instead (``sis.admin`` saved one
+        first, OMNI-158) is no failure: that version includes this one."""
         try:
-            # Persist the CEO's brake/spend state so it survives a restart (L9).
             store.save_state("ceo", ray.get(ceo.state_snapshot.remote()))
         except Exception as exc:  # noqa: BLE001
-            # Still never breaks the cycle — but never silent either. A refused
-            # save is usually the store declining to overwrite state it could
-            # not read, which the next bootstrap turns into an open breaker.
-            print(f"[sis] WARNING: brake state not persisted: {exc}", file=sys.stderr)
-            ws.emit.remote("brake_state.save_failed", error=str(exc))
-        return res
+            return exc
+        return None
+
+    def _stop_unpersisted(exc: Exception) -> str | None:
+        """The brake state cannot be saved: open the breaker, file a bug, page.
+
+        A loop that cannot record its spend must not go on spending (OMNI-157,
+        H12). It used to warn and go on, so a restart restored the last state
+        that had been saved and forgot every dollar since. The state on disk
+        still holds the reservation of the last cycle that was saved, which a
+        restart counts as spent. A refused save is often the store declining
+        to overwrite state it could not read (OMNI-61), which a restart turns
+        into an open breaker anyway."""
+        seen["unpersisted"] = True
+        print(f"[sis] WARNING: brake state not persisted: {exc}", file=sys.stderr)
+        ws.emit.remote("brake_state.save_failed", error=str(exc))
+        reason = (f"brake state not persisted ({exc}); a restart would not see the spend "
+                  "counted since the last save. Make the store writable, then run "
+                  "`python -m sis.admin reset-breaker`.")
+        ray.get(ceo.trip.remote(reason))
+        # Paged even when the breaker was already open (this cycle's outcome
+        # may have tripped it): that page did not say the state was not saved.
+        return _breaker_alarm(reason)
 
     def _breaker_alarm(trip: str | None) -> str | None:
         """File the breaker bug and page a human — on a fresh trip only.
@@ -625,6 +664,14 @@ def run_cycle(
                  f"spent ${econ['spent_usd']:.4f} of ${econ['budget_usd']:.2f}. No cycle "
                  "runs until the budget (brakes.budget_usd) is raised.")
             return _record({"status": "budget_denied"})
+        # Reserved and saved before anything is spent (OMNI-157, H12): if this
+        # process dies, or a later save fails, a restart still counts the cycle.
+        # If the reservation cannot be saved, nothing is spent at all.
+        ray.get(ceo.reserve.remote(estimate_usd))
+        if (unsaved := _persist_brakes()) is not None:
+            bug_id = _stop_unpersisted(unsaved)
+            return _record({"status": "circuit_breaker_open", "breaker_bug_id": bug_id,
+                            "brakes_unpersisted": str(unsaved)})
 
         # A Class-2 feature already built has nothing to plan (OMNI-149, L52): the
         # check costs nothing, so it comes before any page or issue is filed.
@@ -661,7 +708,13 @@ def run_cycle(
         seen.update(spec_id=spec_id, story_id=story_id)
 
         # 5. Implement (SWE → validated change on a feature branch + PR).
-        impl = ray.get(swe.implement.remote(story_id, contract_name))
+        pending = swe.implement.remote(story_id, contract_name)
+        # From here the SWE may pay for a proposal. Its step reports the cost
+        # even when it fails (OMNI-55), unless its process dies: then the
+        # cost is unknown, and _failed charges the reservation (OMNI-157).
+        seen["implementing"] = True
+        impl = ray.get(pending)
+        seen["implementing"] = False
         cost_usd = float(impl.get("cost_usd", 0.0))
         known_contract["name"] = impl.get("contract", contract_name)
         called["model"] = impl.get("model")
@@ -819,6 +872,12 @@ def run_cycle(
         traceback.print_exception(exc, file=sys.stderr)
         trip = None
         retired = None
+        if seen.get("implementing") and not isinstance(exc, ray.exceptions.RayTaskError):
+            # The SWE's process ended during its step (OMNI-157). A raise of
+            # its own arrives as a RayTaskError and, by its contract, before
+            # any proposal; anything else may have come after one. What it
+            # spent is unknown, so it is charged what was reserved for it.
+            seen["cost_usd"] = estimate_usd
         if not seen["charged"]:
             # Charged and counted first. If the CEO cannot be told, this raises,
             # and the loop stops: it must not run on without its brakes.

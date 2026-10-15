@@ -59,7 +59,11 @@ internal target before it models anything external.
   Monday 2022-06-20 on the same day (2022-06-29). So OMNI-35 checks its window
   against EIA's release archive. Later values are known at the fetch that
   first saw them. Read-back also checks each value line against its capture
-  (in its block, known no later than the fetch, the block whole). It cannot
+  (in its block, known no later than the fetch, the block whole), under a
+  shared lock, so a read never sees half a capture (OMNI-159). Each capture
+  must be fetched after the last, or it is refused: two at one instant, or a
+  clock stepped back, would leave revisions a replay cannot order (OMNI-160).
+  It cannot
   catch a forgery consistent with itself; the human promotion into `specs/`
   is the guard there. No trace is written under `specs/` (checked by inode,
   so `SPECS/` on a Mac is caught too). EIA's terms were
@@ -107,7 +111,12 @@ internal target before it models anything external.
   **Hot deploys go through the sandbox worker** (`sis/sandbox_worker.py`,
   OMNI-129): the candidate is served from the gauntlet's own sandbox over
   stdin/stdout, so it needs no network. The host times each exchange and
-  JSON-decodes each answer, so neither can be faked from inside. OMNI-48 moves
+  JSON-decodes each answer, so neither can be faked from inside. One deadline
+  covers sending a request and reading its answer, so a worker that stops
+  reading its input is killed like one that never answers (OMNI-155, H10).
+  Its stderr is drained as it comes and only an 8 KiB tail is kept, never a
+  host-side file; sandbox containers run with `--log-driver none`, so docker
+  keeps no copy either (OMNI-156, H11). OMNI-48 moves
   the canary onto it; until then the refusal above stands.
   **A broken sandbox is never blamed on the candidate** (OMNI-37): when a
   sandboxed gate fails, the gauntlet first runs a trusted self-check in the
@@ -316,6 +325,18 @@ internal target before it models anything external.
   refused with a real proposer or real adapters (no override — `jsonl` costs
   nothing). Operators pause/resume/reset through `python -m sis.admin`, each
   change with a written `--reason`, audited; a reset never touches spend.
+  **Spend is reserved and saved before it is spent** (OMNI-157, H12): after
+  the budget gate the CEO reserves the cycle's estimate, and the state is
+  saved before the cycle goes on; the outcome replaces the reservation with
+  the real cost. A save that fails, before or after, opens the breaker and
+  pages, and a reservation no outcome replaced (found at boot, or still
+  outstanding at the next reservation) counts as spent and as a failure. A failed save used to warn and go on, so a restart forgot the
+  spend since the last save. **An older snapshot never replaces a newer one**
+  (OMNI-158, H13): the loop and `sis.admin` both save the CEO's state, so the
+  CEO numbers it (`version`, one more per change, within a `lineage` that a
+  CEO started from unreadable state begins afresh) and the store keeps the
+  higher version, checking and writing under one lock (jsonl) or transaction
+  (DuckDB).
   **An exception inside a cycle is an outcome, and its spend is charged**
   (OMNI-55, M16 fixed 2026-10-08). The cost of a proposal used to reach the
   driver only in `SWE.implement`'s return value, so a 403 at `open_pr` lost

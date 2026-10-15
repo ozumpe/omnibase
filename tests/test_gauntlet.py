@@ -146,6 +146,7 @@ def test_docker_args_are_locked_down(ordinary_user: None) -> None:
     assert "--read-only" in joined               # immutable rootfs
     assert "--name sis-gauntlet-abc123" in joined   # killable by name on timeout
     assert "--memory" in joined and "--cpus" in joined  # bounded resources
+    assert "--log-driver none" in joined         # no daemon-side copy of its output (H11)
     assert "-v /tmp/sandbox123:/tmp/sandbox123:rw" in joined  # only the temp dir
     assert args[-1] == "sis-gauntlet:latest"
     # PATH is left to the image; PYTHONPATH is forwarded for sitecustomize.

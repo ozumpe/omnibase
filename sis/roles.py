@@ -17,6 +17,7 @@ import contextlib
 import hashlib
 import pathlib
 import sys
+import uuid
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
@@ -357,6 +358,20 @@ class CEO(Role):
         # An operator's pause (sis.admin): refuses new cycles without tripping
         # the breaker or touching any counter. The reason, or None.
         self._paused: str | None = None
+        # What the cycle in flight may spend, reserved before it spends anything
+        # and persisted with the rest (OMNI-157, H12). Its outcome replaces it
+        # with what it really cost.
+        self._reserved = 0.0
+        # Counts every change to the state below, in the order this actor made
+        # them (its methods run one at a time). The store never replaces a
+        # saved state with an older one of the same lineage (OMNI-158, H13):
+        # the loop and `sis.admin` both save snapshots, each taken before it is
+        # written. A lineage is one line of states, each grown from the last; a
+        # CEO started from saved state continues its lineage, one started from
+        # nothing, or from state it could not read, begins a new one, and its
+        # numbers say nothing about the old one's.
+        self._version = 0
+        self._lineage = uuid.uuid4().hex
         self._charter_id: str | None = None
         # Rehydrate persisted brake/spend state (L9) — only on a *fresh* actor.
         # A detached CEO that already exists (get_if_exists) keeps its live state;
@@ -369,18 +384,66 @@ class CEO(Role):
             self._tripped = bool(state.get("tripped", False))
             self._trip_reason = state.get("trip_reason")
             self._paused = state.get("paused")
+            self._version = int(state.get("version", 0))
+            self._lineage = str(state.get("lineage") or self._lineage)
+            self._reserved = float(state.get("reserved_usd", 0.0))
+            self._settle_unknown_outcome()
+
+    def _settle_unknown_outcome(self) -> None:
+        """Count a reservation whose cycle never reported an outcome (OMNI-157).
+
+        It stopped mid-cycle, or its outcome could not be saved: found in saved
+        state at boot, or still outstanding at the next reservation on a CEO
+        that outlived its driver. What it spent is unknown, so it is counted as
+        spent up to what was reserved, and, its result unknown too, as a
+        failure. Either can trip a brake, as a reported outcome would.
+        """
+        if not self._reserved:
+            return
+        self._spent += self._reserved
+        self._reserved = 0.0
+        self._consecutive_failures += 1
+        self._version += 1
+        self._evaluate_brakes()
 
     def approve_budget(self, estimate_usd: float) -> bool:
         """Goal/cost gate: refuse if this attempt would breach the hard cap."""
         if self._tripped:
             return False
-        if self._spent + estimate_usd > self._budget:
+        # An outstanding reservation is spend, until an outcome says otherwise.
+        if self._spent + self._reserved + estimate_usd > self._budget:
             ray.get(self._ws.emit.remote("budget.denied", estimate=estimate_usd,
                                          spent=self._spent, budget=self._budget))
             return False
         ray.get(self._ws.emit.remote("budget.approved", estimate=estimate_usd,
                                      spent=self._spent, budget=self._budget))
         return True
+
+    def reserve(self, estimate_usd: float) -> None:
+        """Reserve what an approved cycle may spend, before it spends anything
+        (OMNI-157, H12). The driver persists the state with the reservation in
+        it before the cycle goes on, so a restart that finds no outcome counts
+        the reservation as spent rather than forgetting the cycle. One still
+        outstanding is a cycle that never reported: it is settled first."""
+        self._settle_unknown_outcome()
+        self._reserved = float(estimate_usd)
+        self._version += 1
+
+    def trip(self, reason: str) -> str | None:
+        """Open the breaker for a reason found outside the brakes, and release
+        any reservation (nothing more will be spent). Returns *reason* on a
+        fresh trip, like :meth:`report_outcome`, so the caller pages once.
+
+        Used when the brake state cannot be persisted (OMNI-157, H12): a loop
+        that cannot record its spend must not go on spending."""
+        self._reserved = 0.0
+        self._version += 1
+        if self._tripped:
+            return None
+        self._tripped = True
+        self._trip_reason = reason
+        ray.get(self._ws.emit.remote("breaker.tripped", reason=reason, **self.economics()))
+        return reason
 
     def report_outcome(
         self, *, success: bool, cost_usd: float = 0.0, reject_gate: str | None = None,
@@ -397,6 +460,8 @@ class CEO(Role):
         "pages a human".
         """
         self._spent += cost_usd
+        self._reserved = 0.0   # what the cycle really cost replaces its reservation
+        self._version += 1
         if success:
             self._consecutive_failures = 0.0
             self._accepted += 1
@@ -417,6 +482,8 @@ class CEO(Role):
         catches. Returns the brake reason on a fresh trip, else None.
         """
         self._spent += cost_usd
+        self._reserved = 0.0
+        self._version += 1
         return self._evaluate_brakes()
 
     def _evaluate_brakes(self) -> str | None:
@@ -464,6 +531,9 @@ class CEO(Role):
             "tripped": self._tripped,
             "trip_reason": self._trip_reason,
             "paused": self._paused,
+            "reserved_usd": self._reserved,
+            "version": self._version,
+            "lineage": self._lineage,
         }
 
     def pause_reason(self) -> str | None:
@@ -480,12 +550,14 @@ class CEO(Role):
         away from the cluster rather than trusting this method to.
         """
         self._paused = reason
+        self._version += 1
         ray.get(self._ws.emit.remote("loop.paused", reason=reason))
         return self.state_snapshot()
 
     def resume(self) -> dict[str, Any]:
         """Undo :meth:`pause`. The breaker, if open, stays open."""
         self._paused = None
+        self._version += 1
         ray.get(self._ws.emit.remote("loop.resumed"))
         return self.state_snapshot()
 
@@ -498,6 +570,7 @@ class CEO(Role):
         self._tripped = False
         self._trip_reason = None
         self._consecutive_failures = 0.0
+        self._version += 1
         ray.get(self._ws.emit.remote("breaker.reset", **self.economics()))
         return True
 

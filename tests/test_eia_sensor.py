@@ -9,6 +9,7 @@ later ones are made up for the test.
 from __future__ import annotations
 
 import datetime
+import fcntl
 import hashlib
 import importlib.util
 import json
@@ -236,6 +237,72 @@ def test_a_value_the_source_later_blanks_shows_as_withdrawn(tmp_path: pathlib.Pa
         sensor.absent(datetime.datetime(2022, 1, 1), everything[1], by=TimeAxis.KNOWN)
 
 
+def test_a_capture_not_after_the_last_one_is_refused_and_appends_nothing(
+        tmp_path: pathlib.Path) -> None:
+    # OMNI-160 (L54): at one instant, a withdrawal and a restoration could not be
+    # ordered, and the trace's own view of the period was decided by a tie.
+    withdrawn = [_stocks(["20220930", None])]
+    sensor, clock = _sensor(tmp_path, [_stocks(["20220930", 24675])], withdrawn, withdrawn)
+    sensor.capture()
+    before = sensor.trace.read_bytes()
+    with pytest.raises(TraceRefused, match="not after the trace's last capture"):
+        sensor.capture()                                        # the same instant
+    assert sensor.trace.read_bytes() == before
+    earlier = EIASensor(sensor.trace, clock=ReplayClock(FIRST - datetime.timedelta(hours=1)),
+                        fetch=_fetch(_bulk_lines([_stocks(["20220930", None])])))
+    with pytest.raises(TraceRefused, match="clock is behind"):
+        earlier.capture()                                       # a clock stepped back
+    assert sensor.trace.read_bytes() == before
+    clock.advance_to(SECOND)
+    assert sensor.capture().appended == 1                       # later is fine
+
+
+def test_a_capture_is_stamped_under_the_traces_lock(tmp_path: pathlib.Path) -> None:
+    # Stamped before the lock, a capture that downloaded first but reached the
+    # lock second was refused as if the clock had gone back (OMNI-160).
+    trace = tmp_path / "eia.jsonl"
+    held: list[bool] = []
+
+    class _Probe:
+        def now(self) -> datetime.datetime:
+            with open(trace, "rb") as probe:
+                try:
+                    fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    held.append(False)
+                except BlockingIOError:
+                    held.append(True)
+            return FIRST
+
+    EIASensor(trace, fetch=_fetch(_bulk_lines(_AUTUMN)), clock=_Probe()).capture()
+    assert held == [True]
+
+
+def test_a_trace_whose_captures_are_out_of_order_fails_the_read(tmp_path: pathlib.Path) -> None:
+    sensor, clock = _sensor(tmp_path, _AUTUMN, _AUTUMN)
+    sensor.capture()
+    clock.advance_to(SECOND)
+    sensor.capture()                                            # nothing new: its line alone
+    second = len(sensor.trace.read_text(encoding="utf-8").splitlines()) - 1
+    _edit(sensor, lambda lines: _with(lines, second, fetched_at=FIRST.isoformat()))
+    with pytest.raises(TraceRefused, match="not after the one before it"):
+        sensor.read(*AUTUMN_2022, by=TimeAxis.EVENT)
+
+
+def test_a_value_withdrawn_and_restored_reads_as_restored(tmp_path: pathlib.Path) -> None:
+    third, fourth = SECOND + datetime.timedelta(days=1), SECOND + datetime.timedelta(days=2)
+    sensor, clock = _sensor(tmp_path, *([_stocks(["20220930", value])]
+                                        for value in (24675, None, 24675, 24675)))
+    for when in (None, SECOND, third, fourth):
+        if when is not None:
+            clock.advance_to(when)
+        report = sensor.capture()
+    assert report.appended == 0                     # the restored value, unchanged
+    everything = (datetime.datetime(2022, 1, 1, tzinfo=UTC),
+                  datetime.datetime(2027, 1, 1, tzinfo=UTC))
+    assert [r.known_at for r in sensor.read(*everything, by=TimeAxis.KNOWN)] == [
+        datetime.datetime(2022, 10, 6, 17, tzinfo=EASTERN), third]
+
+
 # --- what the door refuses ----------------------------------------------------------
 
 
@@ -450,6 +517,43 @@ def test_two_captures_at_once_backfill_once(tmp_path: pathlib.Path) -> None:
     sensor_trace.append(trace, first)
     worker.join(5)
     assert seen == [1]                    # it read the first block, not an empty file
+
+
+def test_a_read_during_a_capture_waits_for_its_whole_block(tmp_path: pathlib.Path) -> None:
+    # OMNI-159 (M29): load() read without the writer's lock, so a read that
+    # landed mid-block saw a cut-short trace and called it edited.
+    later = [_stocks(["20221202", 30001], ["20221125", 29943], ["20220930", 24700],
+                     ["20220805", 29192]), _ca(["20221003", 6.213])]
+    whole, clock = _sensor(tmp_path / "whole", _AUTUMN, later)
+    whole.capture()
+    first = whole.trace.read_bytes()
+    clock.advance_to(SECOND)
+    whole.capture()
+    block = whole.trace.read_bytes()[len(first):]
+    expected = whole.read(*AUTUMN_2022, by=TimeAxis.KNOWN)
+
+    sensor = EIASensor(tmp_path / "eia.jsonl")
+    sensor.trace.write_bytes(first)
+    outcome: list[object] = []
+
+    def read() -> None:
+        try:
+            outcome.append(sensor.read(*AUTUMN_2022, by=TimeAxis.KNOWN))
+        except Exception as exc:  # noqa: BLE001 - the test inspects it
+            outcome.append(exc)
+
+    reader = threading.Thread(target=read)
+    with open(sensor.trace, "ab") as writer:     # a capture, halfway through its block
+        fcntl.flock(writer, fcntl.LOCK_EX)
+        writer.write(block[:len(block) // 2])
+        writer.flush()
+        reader.start()
+        time.sleep(0.3)
+        assert outcome == [], "the read went ahead of a capture still writing"
+        writer.write(block[len(block) // 2:])
+        writer.flush()
+    reader.join(10)
+    assert outcome == [expected]
 
 
 def test_a_series_larger_than_one_batch_is_captured_and_read_in_batches(

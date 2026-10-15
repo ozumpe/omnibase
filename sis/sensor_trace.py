@@ -167,11 +167,19 @@ def _decode(raw: bytes, where: pathlib.Path) -> list[dict[str, Any]]:
 
 
 def load(path: pathlib.Path) -> list[dict[str, Any]]:
-    """Every line of the trace at *path*, oldest first. None if nothing was captured yet."""
+    """Every line of the trace at *path*, oldest first. None if nothing was captured yet.
+
+    Read under a shared lock (OMNI-159, M29): :func:`append` holds an
+    exclusive one for a capture's whole block, so a read sees the trace before
+    the block or after it, never half of it, which would read as cut short.
+    """
     try:
-        raw = path.read_bytes()
+        handle = open(path, "rb")  # noqa: SIM115 - closed below, and with it the lock
     except FileNotFoundError:
         return []
+    with handle:
+        fcntl.flock(handle, fcntl.LOCK_SH)
+        raw = handle.read()
     return _decode(raw, path)
 
 
@@ -244,7 +252,8 @@ def _instant(raw: object, what: str) -> datetime.datetime:
 
 def _check_blocks(lines: Sequence[Mapping[str, Any]]) -> None:
     """Every value line sits in the block of the capture it names, and says no
-    more than that capture could know; every block is as long as it says."""
+    more than that capture could know; every block is as long as it says; and
+    every capture was fetched after the one before it (OMNI-160, L54)."""
     head: Mapping[str, Any] | None = None
     fetched_at = datetime.datetime.min.replace(tzinfo=datetime.UTC)
     expected = held = 0
@@ -257,8 +266,12 @@ def _check_blocks(lines: Sequence[Mapping[str, Any]]) -> None:
     for number, line in enumerate(lines, start=1):
         if line["kind"] == "capture":
             block_is_whole()
+            previous = fetched_at if head is not None else None
             head, held = line, 0
             fetched_at = _instant(line.get("fetched_at"), f"line {number}: fetched_at")
+            if previous is not None and fetched_at <= previous:
+                raise TraceRefused(f"line {number}: a capture fetched at {fetched_at.isoformat()}, "
+                                   f"not after the one before it ({previous.isoformat()})")
             counts = line.get("counts")
             if not isinstance(counts, dict) or not all(
                     isinstance(c, dict) and isinstance(c.get("appended"), int)
@@ -325,7 +338,12 @@ _State = tuple[str, float | str]   # ("value", 24675.0) or ("absent", "W")
 
 def _latest(readings: Iterable[Reading], absent: Iterable[Absent]) -> tuple[
         dict[tuple[str, datetime.datetime], _State], set[str]]:
-    """The latest state of every (series, period), and the series the trace holds."""
+    """The latest state of every (series, period), and the series the trace holds.
+
+    By known_at, which never ties for one period: captures are in increasing
+    fetch time (OMNI-160, L54), each holds a period at most once, and only a
+    series' first capture reconstructs a known_at, never later than its fetch.
+    """
     latest: dict[tuple[str, datetime.datetime], tuple[datetime.datetime, _State]] = {}
     states: list[tuple[datetime.datetime, tuple[str, datetime.datetime], _State]] = [
         *((r.known_at, (r.series, r.event_time), ("value", r.value)) for r in readings),
@@ -382,6 +400,19 @@ def capture_lines(
     "fetched, and nothing was new" is a fact a later reader needs.
     """
     readings, absent = read_back(prior, rules)
+    # Each capture is after the last (OMNI-160, L54). The known_at of a new or
+    # changed value is the fetch time, so a capture at the same instant, or
+    # earlier (a clock stepped back), would make the order of two revisions of
+    # one period ambiguous: a replay by known_at could not tell which came
+    # first, and the latest state below would be decided by a tie.
+    last = next((line for line in reversed(prior) if line["kind"] == "capture"), None)
+    if last is not None:
+        before = _instant(last.get("fetched_at"), "the last capture's fetched_at")
+        if fetched_at <= before:
+            raise TraceRefused(
+                f"a capture fetched at {fetched_at.isoformat()} is not after the trace's "
+                f"last capture ({before.isoformat()}): this host's clock is behind, or was "
+                "ahead when that capture was taken. Nothing is appended")
     state, watched = _latest(readings, absent)
     counts: dict[str, dict[str, int]] = {}
     kept: list[dict[str, Any]] = []

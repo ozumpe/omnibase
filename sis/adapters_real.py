@@ -1021,16 +1021,25 @@ class EIASensor:
         """Fetch the bulk file once, and append to the trace what is new or changed."""
         with tempfile.TemporaryDirectory(prefix="sis-eia-") as scratch:
             bulk = self._fetch(pathlib.Path(scratch))
-            fetched_at = self._clock.now()
             fetched, updated = read_eia_bulk(bulk.path)
-        capture = f"eia-{fetched_at.astimezone(datetime.UTC):%Y%m%dT%H%M%S.%fZ}-{bulk.sha256[:8]}"
-        provenance = {"url": bulk.url, "sha256": bulk.sha256, "bytes": bulk.size,
-                      "member": _EIA_MEMBER, "last_updated": updated,
-                      "attribution": eia_attribution(updated, fetched_at)}
-        lines = sensor_trace.append(self.trace, lambda prior: sensor_trace.capture_lines(
-            prior, fetched, EIA_RULES, capture=capture, fetched_at=fetched_at,
-            published=eia_published, provenance=provenance))
-        return sensor_trace.CaptureReport.of(lines)
+
+        def block(prior: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            # Stamped under the trace's lock, after the download: a later stamp
+            # is still an upper bound on when the values were known, and two
+            # captures at once then append in the order they were stamped. An
+            # earlier stamp that reached the lock second was refused as if the
+            # clock had gone back (OMNI-160).
+            fetched_at = self._clock.now()
+            stamp = fetched_at.astimezone(datetime.UTC)
+            provenance = {"url": bulk.url, "sha256": bulk.sha256, "bytes": bulk.size,
+                          "member": _EIA_MEMBER, "last_updated": updated,
+                          "attribution": eia_attribution(updated, fetched_at)}
+            return sensor_trace.capture_lines(
+                prior, fetched, EIA_RULES,
+                capture=f"eia-{stamp:%Y%m%dT%H%M%S.%fZ}-{bulk.sha256[:8]}",
+                fetched_at=fetched_at, published=eia_published, provenance=provenance)
+
+        return sensor_trace.CaptureReport.of(sensor_trace.append(self.trace, block))
 
     def read(
         self, start: datetime.datetime, end: datetime.datetime, *, by: TimeAxis,
