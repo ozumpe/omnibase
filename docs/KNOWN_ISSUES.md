@@ -609,6 +609,20 @@ any long-lived cluster exists.
 
 ## Resolved
 
+- [OMNI-162] **M31 — A held-out backtest's recorded answer reached the next proposer
+  prompt through the rejection reason** *(found 2026-10-15 while planning
+  OMNI-35, by reading the code; latent: no shipped contract declares a
+  backtest)* — on a mismatch the backtest script printed the comparator's
+  detail, and `within_tolerance` writes `expected <recorded value>, got …`.
+  That became the gate's reason, a rejected Class-2 attempt keeps its reason
+  as a note on the feature, and `proposer._history_section` prints the notes
+  into the next prompt. The prompt itself says the episodes are "held out and
+  not shown here". **Fixed 2026-10-15 (OMNI-162):** for a `holdout` episode
+  the reason names the episode, its split and comparator, and says it was
+  outside tolerance, with no values; a `train` episode keeps the comparator's
+  detail. Regression test: a holdout rejection and the prompt built from it
+  carry no recorded value, and fail without the fix.
+
 - [OMNI-161] **M30 — The backfilled `known_at` of a retail price was a day early in a
   holiday week** *(found 2026-10-15 while planning OMNI-35, from EIA's
   published schedules)* — `EIASensor` reconstructed a retail price's
@@ -1780,3 +1794,4 @@ any long-lived cluster exists.
 [OMNI-159]: https://olafzumpe.atlassian.net/browse/OMNI-159
 [OMNI-160]: https://olafzumpe.atlassian.net/browse/OMNI-160
 [OMNI-161]: https://olafzumpe.atlassian.net/browse/OMNI-161
+[OMNI-162]: https://olafzumpe.atlassian.net/browse/OMNI-162
