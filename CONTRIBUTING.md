@@ -139,8 +139,8 @@ Markdown must carry the `docs` marker.
 - **Serve is not a sandbox.** `--canary serve` is refused for any non-stub
   proposer, with no override, until OMNI-48 isolates its candidate. It is also
   refused for Class-2 contracts. See `docs/KNOWN_ISSUES.md` H3 and M19.
-- The operator console has known authentication and YAML-rendering defects
-  (OMNI-53 and OMNI-52). Use it only behind the loopback/SSM boundary described
+- The operator console has a known authentication defect (OMNI-53; the
+  YAML-rendering one, OMNI-52, is fixed). Use it only behind the loopback/SSM boundary described
   in `docs/OPERATOR_FRONTEND.md`; the configured OAuth mode is not currently an
   effective authentication boundary.
 

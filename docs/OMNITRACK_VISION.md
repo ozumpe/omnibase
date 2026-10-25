@@ -2,9 +2,11 @@
 
 **Status:** vision & sequencing. **E1 is partially implemented**: the `Clock`
 port (OMNI-23), `Sensor`/`SimSensor` (OMNI-31), the sanitising boundary
-(OMNI-32), and EIA capture/replay (OMNI-33, current working tree). Scenario
-generation (OMNI-34), the first approved domain fixture and prediction-error
-reporting remain planned. E2–E5 are not built. No fuel-market model is attached
+(OMNI-32), EIA capture/replay (OMNI-33, merged to `develop`), and the
+fixture tooling with its replay order (OMNI-35, in progress: the real fixture
+waits for the box's first capture and a human's promotion). Scenario
+generation (OMNI-34), the first gated contract (OMNI-163) and prediction-error
+reporting (OMNI-36) remain planned. E2–E5 are not built. No fuel-market model is attached
 to the running loop yet. See [SENSOR_RUNBOOK.md](SENSOR_RUNBOOK.md) for what the
 implemented sensor actually reads.
 

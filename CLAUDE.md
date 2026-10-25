@@ -505,6 +505,12 @@ internal target before it models anything external.
   live runs — don't put planning there.
 
 ## Current status — where to pick up
+**Unreleased on `develop`** (since v0.3.7): the omnitrack Phase-A sensor work
+(OMNI-31 `Sensor` port, OMNI-32 sanitising door, OMNI-33 `EIASensor` and its
+trace, OMNI-35's fixture tooling), the fixes from the review after v0.3.7
+(OMNI-155–162: H10–H13, M29–M31, L54), OMNI-54/68/42 (M14, L19, L39) and
+OMNI-52 (M12). The AWS box still runs v0.3.7.
+
 Released through **v0.3.7** (2026-10-08): v0.3.6 plus the hardening after the
 seventh AWS run, most of it gate integrity. OMNI-151: one loop per box.
 OMNI-152: no benchmark input is timed twice (H7). OMNI-153: a timed batch
@@ -879,10 +885,9 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   **Phase 0 is built:** `sis/sandbox_worker.py` (OMNI-129) serves a candidate
   hot from the sandbox. It is tested in both sandbox modes, including that a
   docker candidate cannot reach the network, Ray or the host's environment.
-- 1271 tests (`pytest -m "not serve" -n auto`, the default, ~50s; the 63
+- 1406 tests (`pytest -m "not serve" -n auto`, the default; the 63
   Ray-Serve-integration tests run separately, see Operational quick reference
-  above; 1334 total, recounted 2026-10-09 — corrected 2026-09-26, a multi-dimension review found the
-  previously-documented 616/678 stale); `ruff`/`mypy --strict`/`pytest` clean;
+  above; 1469 total, recounted 2026-10-25); `ruff`/`mypy --strict`/`pytest` clean;
   CI green; `feature → develop → main` enforced by both the client-side
   pre-push hook and active server-side rulesets.
 - **One known test flake** — re-run before chasing it. (The other,
@@ -920,7 +925,7 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
 severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
 the IDs in commits/PRs. **Open after a 2026-09-26 multi-dimension review with
 adversarial verification: H3, M13, M20–M23,
-L16–L20, L22, L25–L29, L31, L32, L35–L43; plus L46 from the second AWS run and L48–L50
+L16–L18, L20, L22, L25–L29, L31, L32, L35–L38, L40–L43; plus L46 from the second AWS run and L48–L50
 from the fifth (OMNI-143–145)** (M7 is won't-fix for now; H4, M10, M15, M19, L21, L23
 and L24 fixed 2026-09-26, OMNI-46/47/51/49/61/62; H5, H6, M24 and L44, found
 in the first AWS run, and L45, found releasing it, fixed 2026-09-27,
@@ -933,8 +938,10 @@ OMNI-56/64/78; L34 and L51–L53, the last three from the sixth run, fixed
 H7, the benchmark's repeated inputs, H8, the worker loop a candidate could
 make cheaper, and H9, a batch spread over several cores, fixed 2026-10-08,
 OMNI-152/153/154; M16 and L30, spend lost when a cycle raises, the same day,
-OMNI-55; M12, a `soft_` config edit rewriting `forbidden_` keys, 2026-10-25,
-OMNI-52). The headline, before trusting any
+OMNI-55; H10–H13, M29 and L54, from the review of that release and the
+sensor work, fixed 2026-10-13, OMNI-155–160; M30, M31, M14, L19 and L39 fixed
+2026-10-15, OMNI-161/162/54/68/42; M12, a `soft_` config edit rewriting
+`forbidden_` keys, 2026-10-25, OMNI-52). The headline, before trusting any
 gauntlet verdict: every gate but SLO now judges its candidate from outside the
 candidate's process (H2, M8), and the exam files are protected (M9). **The SLO
 gate still runs its candidate in-process** (L42,
@@ -973,9 +980,8 @@ Two traps L5 surfaced, both worth knowing before writing similar code:
 
 **Next — the milestone plan is in Jira ([`OMNI`](https://olafzumpe.atlassian.net/browse/OMNI)),
 not here.** Check the board for current status rather than trusting this list.
-**Last reconciled against a live query on 2026-10-08** (154 issues, OMNI-1
-through OMNI-154; 99 Done, 0 In Progress, 55 To Do — most of the growth since 2026-09-26 is
-the KNOWN_ISSUES backfill, see "Known issues" above):
+**Last reconciled against a live query on 2026-10-25** (163 issues, OMNI-1
+through OMNI-163; 113 Done, 1 In Progress (OMNI-35), 49 To Do):
 
 1. ~~**[OMNI-1](https://olafzumpe.atlassian.net/browse/OMNI-1) — L5 target
    contract** (Class 1)~~ — **done 2026-08-06** (OMNI-4/5/6/7). Two targets ship
@@ -1079,8 +1085,8 @@ the KNOWN_ISSUES backfill, see "Known issues" above):
    adapter, not later hardening** — public statistics carry free text,
    non-numeric markers and moving endpoints, and the second application's
    store names are written by outsiders; all of it can reach scenario
-   libraries, backtest fixtures and potentially LLM prompts. Six stories, all
-   `To Do`:
+   libraries, backtest fixtures and potentially LLM prompts. Eight stories;
+   OMNI-31–33 Done, OMNI-35 In Progress, the rest `To Do`:
    - ~~[OMNI-31](https://olafzumpe.atlassian.net/browse/OMNI-31) (High) — `Sensor`
      port + `SimSensor` default adapter; a reading carries two times, `event_time`
      and `known_at`.~~ **Built 2026-10-09.**
@@ -1132,8 +1138,9 @@ the KNOWN_ISSUES backfill, see "Known issues" above):
 10. **[OMNI-128](https://olafzumpe.atlassian.net/browse/OMNI-128) — staged
     delivery** (epic, High, filed 2026-09-27). This is where work continues;
     see `docs/STAGED_DELIVERY.md`. In order:
-    - OMNI-129 (phase 0), the sandbox worker. **Done:** built, not yet used
-      by the canary or the gates.
+    - OMNI-129 (phase 0), the sandbox worker. **Done.** The benchmark and the
+      interface, acceptance, invariant and backtest gates use it (OMNI-45,
+      OMNI-146); the Serve canary does not yet (OMNI-48).
     - OMNI-130 (phase 1), feature branches. **Built:**
       - each passing step is committed to an agent-owned branch;
       - after `loop.feature_max_steps` steps (default 3), or when a step finds
@@ -1157,11 +1164,11 @@ the KNOWN_ISSUES backfill, see "Known issues" above):
         [OMNI-142](https://olafzumpe.atlassian.net/browse/OMNI-142) (Low):
         holds per contract. The single green slot still holds every contract,
         which matters only once two contracts run at the same time.
-    - Olaf's `testrun` preparation: a `develop` branch and a re-seeded naive
-      `sum_of_divisors`. Then v0.3.0 and **AWS run #3**.
-    - Then OMNI-48 (the canary onto the worker), OMNI-133 (`develop`
-      blue/green), OMNI-131 (the agent's own review), OMNI-45, OMNI-132 (AI
-      approval, blocked by OMNI-45) and OMNI-134 (dynamic feature size).
+    - Done since: Olaf's `testrun` preparation, v0.3.0 and AWS runs #3–#7,
+      and OMNI-45 (gate isolation, which unblocked OMNI-132).
+    - Next: OMNI-48 (the canary onto the worker), OMNI-133 (`develop`
+      blue/green), OMNI-131 (the agent's own review), OMNI-132 (AI
+      approval) and OMNI-134 (dynamic feature size).
 
 Also on the board, outside the numbered epics:
 - [OMNI-37](https://olafzumpe.atlassian.net/browse/OMNI-37) — **Done
@@ -1174,9 +1181,12 @@ Also on the board, outside the numbered epics:
   2026-09-26**: the Class-1 benchmark gate decides from paired samples over
   fresh inputs, with an *inconclusive* verdict; it also closed a memoisation
   gaming hole (see Hard rules and the flake note above).
-- [OMNI-42](https://olafzumpe.atlassian.net/browse/OMNI-42) (Low, `To Do`,
-  filed 2026-09-26) — the `specs/` listing race in a contract-author test.
-  The review found a second cause (L39).
+- [OMNI-42](https://olafzumpe.atlassian.net/browse/OMNI-42) — **Done
+  2026-10-15** (with OMNI-68): the `specs/` listing race in a
+  contract-author test, and its second cause (L39).
+- [OMNI-141](https://olafzumpe.atlassian.net/browse/OMNI-141) (Low, `To Do`)
+  — `test_fast_on_typical_inputs_but_slower_in_total_is_rejected` can come
+  out inconclusive under `-n auto`.
 
 Filed 2026-09-26 from the multi-dimension review, all `To Do`. KNOWN_ISSUES
 has the defect write-ups and the ID → ticket table:
