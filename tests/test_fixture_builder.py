@@ -172,6 +172,42 @@ def test_a_delayed_release_is_known_late_whatever_the_schedule_said() -> None:
     assert shown == []
 
 
+def _revised_trace() -> list[dict[str, Any]]:
+    """The trace plus a later capture that revises the 3 Oct CA price."""
+    first = _trace()
+    revised = dict(CA_PRICES, **{"2022-10-03": 6.25})
+    second = capture_lines(
+        first, [Fetched(STOCKS, "Thousand Barrels", _series(FRIDAYS, STOCK_LEVELS, 27000.0)),
+                Fetched(CA, "Dollars per Gallon", _series(MONDAYS, revised, 4.60)),
+                Fetched(US, "Dollars per Gallon", _series(MONDAYS, US_PRICES, 3.90))],
+        EIA_RULES, capture="eia-20261016T020000.000000Z-abcdef02",
+        fetched_at=FETCHED + datetime.timedelta(days=1), published=eia_published,
+        provenance={"url": "https://www.eia.gov/opendata/bulk/PET.zip", "sha256": "cd" * 32,
+                    "attribution": "Source: U.S. Energy Information Administration (Oct 2026)"})
+    return [*first, *second]
+
+
+def test_an_earlier_vintage_of_the_predicted_week_refuses_the_build() -> None:
+    # M32 (OMNI-164): the 26 Sep price released late, on Wed 5 Oct, after the
+    # 3 Oct price's first vintage (5 Oct 17:00). The answer is the revision,
+    # known in 2026, so a check on the latest vintage alone passed, and the
+    # inputs carried 6.213 for the very week the model must predict.
+    late = _calendar(gdu={"2022-09-26": "2022-10-05"})
+    with pytest.raises(FixtureRefused, match="2022-10-03: known before"):
+        build(_revised_trace(), EIA_RULES, late, QUESTION,
+              name="ca_price_next_week", spec_ref="OMNI-35")
+
+
+def test_a_revision_known_after_the_question_still_builds() -> None:
+    # Released on schedule, the 3 Oct price's first vintage comes after the
+    # question; the answer is the revised value, and no input shows that week.
+    state, answer = _episode(build(_revised_trace(), EIA_RULES, _calendar(), QUESTION,
+                                   name="ca_price_next_week", spec_ref="OMNI-35").files,
+                             "2022-10-03")
+    assert answer == 6.25
+    assert all(r["event_time"] < "2022-10-03" for r in state["readings"] if r["series"] == CA)
+
+
 def test_a_reading_the_calendar_does_not_cover_refuses_the_build() -> None:
     with pytest.raises(FixtureRefused, match="does not cover"):
         _build(_calendar(drop="2022-09-12"))

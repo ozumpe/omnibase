@@ -202,10 +202,11 @@ def build(lines: Sequence[Mapping[str, Any]], rules: SourceRules, calendar: Rele
                                  "the trace; the window has a gap")
         # When the value for the week before became known (its first vintage),
         # the question is asked; the answer is the value for this week as the
-        # trace holds it now (its latest vintage).
+        # trace holds it now (its latest vintage). No vintage of this week may
+        # be known by then: the view would show it (M32, OMNI-164).
         at = by_week[asked][0].known_at
         answer = by_week[week][-1]
-        if answer.known_at <= at:
+        if by_week[week][0].known_at <= at:
             raise FixtureRefused(f"{question.target} {week}: known before the question "
                                  "about it was asked")
         view = as_of([r for r in adjusted if isinstance(r, Reading)],
