@@ -44,6 +44,15 @@ internal target before it models anything external.
   (`sensor.backend`, a `forbidden_` key: a loop that could pick the simulator
   would pick its own exam). A consumer is given its sensor as an argument,
   never looks it up inside an actor.
+  **Scenarios are generated, seeded and refute only** (OMNI-34): a supply
+  shock, an outage, a national price move, a demand shock, plus a missing
+  week, a re-publication and a withdrawal, from `specs/scenarios.py` (the
+  pinned copy; `runtime/scenarios.py` is the SOFT working copy nothing judges
+  with, D7). `sis.scenarios.sensor(kind, seed=...)` replays one through
+  `SimSensor` like a trace; the invariant gate draws them
+  (`fuel_scenario_states`). Their readings carry source `sim`, which a
+  backtest fixture refuses: simulation may reject a candidate, never promote
+  one (D4).
   **The real sensor is `EIASensor`** (OMNI-33, `sis/adapters_real.py`): EIA's
   bulk file `PET.zip` (no key), five weekly series (PADD 5 gasoline stocks;
   California, Los Angeles, San Francisco and US retail prices).
@@ -284,7 +293,8 @@ internal target before it models anything external.
     through (`sis/sensor_input.py`, OMNI-32), the capture trace
     (`sis/sensor_trace.py`, OMNI-33), what a replay shows a model and the
     fixtures built from it (`sis/replay.py`, `sis/fixture_builder.py`,
-    OMNI-35), the contract-author approval gate
+    OMNI-35), which scenario generator drives a twin (`sis/scenarios.py`,
+    OMNI-34; the generator itself is `specs/scenarios.py`), the contract-author approval gate
     (`sis/contract_author.py`),
     `specs/` (the exam itself — oracles, acceptance tests, domain laws, backtest
     fixtures), cost accounting (`sis/cost.py` — the breaker/threshold logic
@@ -297,7 +307,8 @@ internal target before it models anything external.
     passing checks): all other engine code.
   - SOFT (optimisable; checks + review): the designated target(s) —
     `runtime/target.py`, `runtime/sort_target.py`, `runtime/roman.py` (Class 2,
-    deliberately absent until an implementer writes it), extendable via
+    deliberately absent until an implementer writes it), `runtime/scenarios.py`
+    (the scenario generator's working copy, OMNI-34, D7), extendable via
     `policy.target_paths` / `SIS_TARGET_PATHS`. **Guardrail classification always
     wins** — and that ordering is now load-bearing rather than tidy, because the
     target list is itself a config key: "name the config as a target, then
@@ -510,7 +521,7 @@ internal target before it models anything external.
 ## Current status — where to pick up
 **Unreleased on `develop`** (since v0.3.7): the omnitrack Phase-A sensor work
 (OMNI-31 `Sensor` port, OMNI-32 sanitising door, OMNI-33 `EIASensor` and its
-trace, OMNI-35's fixture tooling), the fixes from the review after v0.3.7
+trace, OMNI-35's fixture tooling, OMNI-34's scenario generator), the fixes from the review after v0.3.7
 (OMNI-155–162: H10–H13, M29–M31, L54), OMNI-54/68/42 (M14, L19, L39) and
 OMNI-52 (M12). The AWS box still runs v0.3.7.
 
@@ -888,9 +899,9 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   **Phase 0 is built:** `sis/sandbox_worker.py` (OMNI-129) serves a candidate
   hot from the sandbox. It is tested in both sandbox modes, including that a
   docker candidate cannot reach the network, Ray or the host's environment.
-- 1406 tests (`pytest -m "not serve" -n auto`, the default; the 63
+- 1450 tests (`pytest -m "not serve" -n auto`, the default; the 63
   Ray-Serve-integration tests run separately, see Operational quick reference
-  above; 1469 total, recounted 2026-10-25); `ruff`/`mypy --strict`/`pytest` clean;
+  above; 1513 total, recounted 2026-10-25 with OMNI-34); `ruff`/`mypy --strict`/`pytest` clean;
   CI green; `feature → develop → main` enforced by both the client-side
   pre-push hook and active server-side rulesets.
 - **One known test flake** — re-run before chasing it. (The other,
@@ -1103,6 +1114,11 @@ through OMNI-163; 113 Done, 1 In Progress (OMNI-35), 49 To Do):
    - [OMNI-34](https://olafzumpe.atlassian.net/browse/OMNI-34) (Medium) —
      `SimSensor` scenario generation (supply, outage, demand and data-event
      scenarios): refutation inputs, and the gauntlet's input generator (D7).
+     **Built 2026-10-25, in review:** seeded scenarios in `specs/scenarios.py`
+     (the pinned copy, FORBIDDEN) and `runtime/scenarios.py` (the working
+     copy, SOFT); `sis/scenarios.py` drives a `SimSensor` from one; the
+     invariant gate draws them through `fuel_scenario_states`; a fixture
+     holding source `sim` is refused (D4). Driving the twin is OMNI-36's.
    - [OMNI-35](https://olafzumpe.atlassian.net/browse/OMNI-35) (High) — the first
      recorded fixture, California autumn 2022, plus the clock-cadence check
      carried over from OMNI-25 (Friday stocks vs Monday prices; replay ordered

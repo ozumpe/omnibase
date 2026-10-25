@@ -58,7 +58,7 @@ policy:
   # Repo-relative paths in the SOFT tier — the designated optimisation targets.
   # Guardrail paths always win over this list.
   # env: SIS_TARGET_PATHS   flag: --policy-target-paths
-  forbidden_target_paths: ["runtime/target.py", "runtime/sort_target.py", "runtime/roman.py"]
+  forbidden_target_paths: ["runtime/target.py", "runtime/sort_target.py", "runtime/roman.py", "runtime/scenarios.py"]
   # Let the loop propose changes to STRICT engine code (still requires human approval
   # and a justification).
   # env: SIS_ALLOW_STRICT_CHANGES   flag: --policy-allow-strict-changes

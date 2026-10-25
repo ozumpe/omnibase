@@ -47,3 +47,7 @@ COMPARATORS_PATH = SPECS_DIR / "comparators.py"
 # the comparators for the same reason: one set for every contract, overridable
 # per contract from its own oracle.
 INVARIANTS_PATH = SPECS_DIR / "invariants.py"
+# The pinned fuel-market scenario generator (OMNI-34): the gauntlet's input
+# generator, loaded by the shared strategies from beside them. Its improvable
+# working copy is runtime/scenarios.py, a SOFT target nothing judges with (D7).
+SCENARIOS_PATH = SPECS_DIR / "scenarios.py"

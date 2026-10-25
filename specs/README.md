@@ -23,6 +23,10 @@ property. See `docs/CLASS2_CONTRACT.md`.
 ```
 specs/
     comparators.py            # shared marking scheme for the backtest gate
+    invariants.py             # shared laws and strategies for the invariant gate
+    scenarios.py              # pinned fuel-market scenario generator (OMNI-34):
+                              # the gauntlet's inputs; runtime/scenarios.py is
+                              # the loop's working copy (D7). Refutes only (D4).
     <contract-name>/
         oracle.py             # trusted reference impl + benchmark inputs + input
                               # generator for Class 1. Class 2 may use this

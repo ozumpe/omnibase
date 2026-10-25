@@ -172,6 +172,10 @@ DEFAULT_TARGET_PATHS: tuple[str, ...] = (
     # file does not exist yet — that is the point of feature construction, and
     # the tier has to be declared before the implementer may write it.
     "runtime/roman.py",
+    # The working copy of the scenario generator (OMNI-34, D7): the simulator
+    # the loop may improve. The pinned copy that generates gauntlet inputs is
+    # specs/scenarios.py, FORBIDDEN with the rest of specs/.
+    "runtime/scenarios.py",
 )
 
 SCHEMA: tuple[Key, ...] = (

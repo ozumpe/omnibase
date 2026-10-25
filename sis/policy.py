@@ -89,6 +89,10 @@ GUARDRAIL_PATHS: tuple[str, ...] = (
     # from it (OMNI-35): a loop able to edit either could choose its own exam.
     "sis/replay.py",
     "sis/fixture_builder.py",
+    # Which scenario generator drives a twin (OMNI-34): the pinned one in
+    # specs/, never the SOFT working copy. A loop able to point it elsewhere
+    # would generate the inputs it is graded on (D7).
+    "sis/scenarios.py",
     "sis/cost.py",            # spend accounting that feeds the brakes
     "sis/settings.py",        # secret loading + masking
     "sis/adapters.py",        # RequiresHumanApproval guardrails (in-memory)

@@ -95,7 +95,7 @@ from sis.invariant import (
 from sis.invariant import EXIT_NO_ENTRY as EXIT_NO_ENTRY_INV
 from sis.invariant import build_script as invariant_script
 from sis.invariant import plan_entry as invariant_plan_entry
-from sis.paths import COMPARATORS_PATH, INVARIANTS_PATH, PROJECT_ROOT
+from sis.paths import COMPARATORS_PATH, INVARIANTS_PATH, PROJECT_ROOT, SCENARIOS_PATH
 from sis.slo import EXIT_BAD_WORKLOAD, EXIT_NO_WORKLOAD, EXIT_RAISED, evaluate_slo
 from sis.slo import EXIT_NO_ENTRY as EXIT_NO_ENTRY_SLO
 from sis.slo import build_script as slo_script
@@ -805,6 +805,12 @@ def _gate_invariant(ctx: _GateContext) -> Result | None:
                    "— the invariant gate cannot run",
         )
     shared_mod = ctx.put("invariants.py", shared_src.read_text(encoding="utf-8"))
+    # The pinned scenario generator (OMNI-34, D7), which the shared strategies
+    # load from beside themselves. Recorded like every exam file, so a gate
+    # that rewrote it to shape its own inputs is caught as tampering.
+    scenarios_src = pathlib.Path(SCENARIOS_PATH)
+    if scenarios_src.exists():
+        ctx.put("scenarios.py", scenarios_src.read_text(encoding="utf-8"))
 
     seed = ctx.seed
     nonce = secrets.token_hex(8)
