@@ -586,6 +586,21 @@ any long-lived cluster exists.
 
 ## Resolved
 
+- [OMNI-164] **M32 — A fixture episode could show the model an earlier vintage of the
+  week it must predict** *(found 2026-10-25 by the weekly code review;
+  reproduced on `develop` @ 92e1076; latent: no fixture has been promoted)* —
+  `fixture_builder.build()` refused an episode only when the *latest* vintage
+  of the predicted week was known by the time the question was asked, but the
+  as-of view shows every reading known by then. When the week asked about was
+  released late (EIA's June 2022 delays) and the predicted week was revised by
+  a later capture, the first vintage was in the inputs while the answer, the
+  revision, passed the check: a model that returned the latest reading scored
+  almost exactly. **Fixed 2026-10-25 (OMNI-164):** the build refuses when the
+  *first* vintage of the predicted week is known by then, which also covers
+  the old check. Regression test: a late release plus a revision refuses the
+  build, and fails without the fix; on schedule, the revision builds and no
+  input shows the predicted week.
+
 - [OMNI-52] **M12 — A `soft_` operator config edit can rewrite `forbidden_` keys through
   unescaped YAML rendering** *(found 2026-09-26; reproduced end to end
   through the real `operator.save_edits`)* — `_render_scalar`
@@ -1828,3 +1843,4 @@ any long-lived cluster exists.
 [OMNI-160]: https://olafzumpe.atlassian.net/browse/OMNI-160
 [OMNI-161]: https://olafzumpe.atlassian.net/browse/OMNI-161
 [OMNI-162]: https://olafzumpe.atlassian.net/browse/OMNI-162
+[OMNI-164]: https://olafzumpe.atlassian.net/browse/OMNI-164
