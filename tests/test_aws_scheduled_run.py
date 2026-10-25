@@ -70,6 +70,9 @@ def test_the_runner_reads_the_key_on_the_box_and_never_prints_it() -> None:
     script = sr.runner_script(_cfg())
     assert "jq -r .anthropic.api_key" in script
     assert "echo $ANTHROPIC_API_KEY" not in script and 'echo "$ANTHROPIC_API_KEY' not in script
+    # A secret the box cannot read says why (the CLI's error carries no value),
+    # rather than looking like a secret with no key in it.
+    assert "could not read the secret" in script and "unset secret" in script
 
 
 def test_the_start_refuses_a_second_loop_and_writes_a_valid_script(tmp_path: pathlib.Path) -> None:
