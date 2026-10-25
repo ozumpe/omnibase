@@ -11,15 +11,15 @@ See [OMNI-28](https://olafzumpe.atlassian.net/browse/OMNI-28). **Depends on OMNI
 `sis.config.effective()` (already exercised by `main.py --show-config`) are what
 this UI renders and edits.
 
-**Current operating boundary (2026-10-13):** keep the console on loopback,
+**Current operating boundary (2026-10-25):** keep the console on loopback,
 accessed locally or through SSM port forwarding. GitHub OAuth configuration is
 not installed as Panel's server auth provider (OMNI-53); an unsigned websocket
-session can bypass the intended login boundary. Config scalar rendering also
-permits YAML injection through string-valued edits (OMNI-52), potentially
-changing forbidden keys indirectly. These are open defects in
-[KNOWN_ISSUES.md](KNOWN_ISSUES.md), not guarantees fixed by this documentation.
-Do not deploy publicly on the strength of the OAuth settings or use
-string-valued UI edits until those defects are fixed. The deployment/auth design
+session can bypass the intended login boundary. That is an open defect in
+[KNOWN_ISSUES.md](KNOWN_ISSUES.md), not a guarantee fixed by this
+documentation. Do not deploy publicly on the strength of the OAuth settings
+until it is fixed. The YAML injection through string-valued edits (OMNI-52,
+M12) is fixed: every string is escaped, a control character is refused, and a
+save that would not read back exactly as approved is refused before it writes. The deployment/auth design
 below describes the intended boundary.
 
 ## What it needs to do

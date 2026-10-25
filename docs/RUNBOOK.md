@@ -57,10 +57,10 @@ poetry run python main.py --contract roman  # build to_roman/from_roman from the
 ## Level 0a — the operator console (Panel)
 
 **Current limits:** OMNI-53 means configured GitHub OAuth is not installed as
-the Panel server's authentication provider; OMNI-52 permits YAML injection
-through string-valued config edits. Keep the console on loopback and use SSM
-port forwarding for remote access. Do not expose it on the strength of OAuth
-settings, and avoid string-valued UI edits until the renderer is fixed. See
+the Panel server's authentication provider. Keep the console on loopback and
+use SSM port forwarding for remote access. Do not expose it on the strength of
+OAuth settings. (The YAML injection through string-valued edits, OMNI-52, is
+fixed.) See
 [OPERATOR_FRONTEND.md](OPERATOR_FRONTEND.md) and
 [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
 

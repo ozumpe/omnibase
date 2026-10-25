@@ -255,13 +255,17 @@ sis/                        # the engine (STRICT/FORBIDDEN to the loop — polic
   proposer.py  llm.py       # propose a candidate: offline stub, or any LLM via a provider port
   contract.py               # what "correct" and "better" mean per target; picks the gates
   gauntlet.py               # contract-selected gates; host harnesses + isolated workers
+  canonical.py              # rebuild candidate output from plain builtins before ==
   sandbox_worker.py         # host side of the candidate's JSON/stdio boundary
   sandbox_worker_main.py    # candidate-side worker; trusted timed batch loop
   feature.py                # accepted steps, attempt feedback and fixed-head feature PRs
   invariant.py  backtest.py # domain laws over generated inputs; replay of recorded episodes
+  slo.py                    # an optional latency budget from the spec (not correctness)
   clock.py                  # event time behind a port, so history can be replayed
   sensor_input.py           # untrusted observations → readings, absences or refusals
   sensor_trace.py           # append-only sensor captures and revisions
+  replay.py                 # what a model may see at a moment of a replay (known_at)
+  fixture_builder.py        # held-out backtest episodes built from a sensor trace
   contract_author.py        # the one (human-approved) write path into specs/
   policy.py                 # change-authorization tiers (FORBIDDEN/STRICT/SOFT)
   serving.py  serve_cloud.py  # a target behind Ray Serve; the Cloud port on real Serve
@@ -271,6 +275,10 @@ sis/                        # the engine (STRICT/FORBIDDEN to the loop — polic
   settings.py               # secrets: local YAML ↔ AWS Secrets Manager
   cost.py                   # LLM cost accounting for the CEO spend brakes
   episodic.py               # provenance/episodic store (jsonl | duckdb | none)
+  admin.py                  # operator pause/resume/reset-breaker on the live CEO
+  artifact_sync.py          # the run's dataset synced to S3 by the loop itself
+  atomic.py                 # replace a file all at once (brake state, config.yml)
+  version.py                # which code is running, for provenance
   run_lock.py               # one main.py loop per box
   frontend.py  operator.py  # operator console (Panel) + its tier-gated write path
   paths.py                  # single source of truth for filesystem paths
@@ -287,6 +295,8 @@ infra/aws/                  # OpenTofu for the one-node AWS run (docs/AWS_RUN.md
 scripts/                    # check_connections.py (read-only preflight); the AWS run's
                             #   aws_bootstrap.sh, aws_secret.py, rehearse_aws_run.sh
                             # capture_sensor.py (fetch EIA into the local trace)
+                            # build_fixture.py (stage held-out episodes from a trace)
+                            # ci_gate.py (which CI jobs a change needs)
 main.py                     # entry point
 secrets.example.yml         # secrets template (copy to secrets.local.yml)
 ```
@@ -445,7 +455,8 @@ Open bugs and limitations are tracked with stable IDs in
 | – | One config schema: `config.yml` + env var + CLI flag (OMNI-27) | ✅ (2026-08-16) |
 | – | Operator console: state, brakes, episodic history, tier-gated config edits (OMNI-28) | ✅ (2026-08-28) |
 | – | Supervised AWS runs: one node, real proposer, adapters and sandbox (OMNI-29) | ✅ seven runs documented |
-| – | Sensor port, sanitising boundary and EIA capture/replay (OMNI-31/32/33) | implemented in the current tree; fixtures and domain model remain planned |
+| – | Sensor port, sanitising boundary and EIA capture/replay (OMNI-31/32/33) | ✅ on `develop` (2026-10-13), unreleased |
+| – | Replay on `known_at` + fixture builder for the first recorded fixture (OMNI-35) | in progress: tooling on `develop`; the real fixture waits for the box's first capture and a human promotion |
 | 5 | Language-agnostic `ToolchainAdapter` (build/verify non-Python targets, e.g. Java) (OMNI-20) | parked |
 | 6 | Model an external slice of the real world — omnitrack; first domain the California gasoline market (Phase A: OMNI-30), second Iowa's spirits supply chain (OMNI-39) | next |
 
