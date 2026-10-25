@@ -919,7 +919,7 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
 **Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L
 severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
 the IDs in commits/PRs. **Open after a 2026-09-26 multi-dimension review with
-adversarial verification: H3, M12–M14, M20–M23,
+adversarial verification: H3, M13, M20–M23,
 L16–L20, L22, L25–L29, L31, L32, L35–L43; plus L46 from the second AWS run and L48–L50
 from the fifth (OMNI-143–145)** (M7 is won't-fix for now; H4, M10, M15, M19, L21, L23
 and L24 fixed 2026-09-26, OMNI-46/47/51/49/61/62; H5, H6, M24 and L44, found
@@ -933,7 +933,8 @@ OMNI-56/64/78; L34 and L51–L53, the last three from the sixth run, fixed
 H7, the benchmark's repeated inputs, H8, the worker loop a candidate could
 make cheaper, and H9, a batch spread over several cores, fixed 2026-10-08,
 OMNI-152/153/154; M16 and L30, spend lost when a cycle raises, the same day,
-OMNI-55). The headline, before trusting any
+OMNI-55; M12, a `soft_` config edit rewriting `forbidden_` keys, 2026-10-25,
+OMNI-52). The headline, before trusting any
 gauntlet verdict: every gate but SLO now judges its candidate from outside the
 candidate's process (H2, M8), and the exam files are protected (M9). **The SLO
 gate still runs its candidate in-process** (L42,
@@ -1190,7 +1191,7 @@ has the defect write-ups and the ID → ticket table:
   paired canary statistics and an error-rate check (M20/M21).
 - **Standalone:** ~~OMNI-51 contract target path through the VCS port (M15)~~
   — done 2026-09-26 (run day uses `sort`, so it was a hard prerequisite),
-  OMNI-52 config YAML injection (M12), OMNI-53 OAuth never
+  ~~OMNI-52 config YAML injection (M12)~~ (done 2026-10-25), OMNI-53 OAuth never
   installed (M13), OMNI-54 worked examples limited to the public API (M14),
   ~~OMNI-55 spend lost on exceptions (M16)~~ (done 2026-10-08), OMNI-56 QA-stage reject reason
   (M17), ~~OMNI-57 PR closed without merging (M18)~~ (done 2026-09-27, with

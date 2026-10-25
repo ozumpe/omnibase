@@ -511,3 +511,31 @@ def test_a_key_can_be_looked_up_and_an_unknown_one_raises() -> None:
     assert isinstance(config.key_for("sandbox.mode"), Key)
     with pytest.raises(KeyError, match="unknown config key"):
         config.key_for("sandbox.mode_typo")
+
+
+# --- strings are escaped, and are single-line text (OMNI-52, M12) ---------
+
+
+@pytest.mark.parametrize(
+    "value", ['a"b', "back\\slash", "it's", "ünïcödé", "x: y", "[1, 2]", "#hash"]
+)
+def test_a_rendered_string_reads_back_exactly(value: str) -> None:
+    """The renderer escapes; it never wraps a value in bare quotes."""
+    rendered = config.render_config_file(
+        {"contracts.default": value, "policy.target_paths": (value, "runtime/x.py")}
+    )
+    loaded = config.load_text(rendered, config.CONFIG_FILE)
+    assert loaded["contracts.default"] == value
+    # A list item reads back as the list parser normalises it (`\\` -> `/`).
+    paths = config.key_for("policy.target_paths")
+    assert loaded["policy.target_paths"] == config.parse_value(paths, [value, "runtime/x.py"])
+
+
+@pytest.mark.parametrize("bad", ["a\nb", "a\rb", "a\tb", "a\x00b", "a\x1bb", "a\u2028b"])
+def test_a_string_with_a_control_character_is_refused(bad: str) -> None:
+    key = config.key_for("contracts.default")
+    with pytest.raises(ValueError, match="control character"):
+        config.parse_value(key, bad, config.Source.FILE)
+    paths = config.key_for("policy.target_paths")
+    with pytest.raises(ValueError, match="control character"):
+        config.parse_value(paths, ["runtime/target.py", bad], config.Source.FILE)

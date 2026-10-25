@@ -44,7 +44,7 @@ reference with no link target below.
 > | M19 | [OMNI-49](https://olafzumpe.atlassian.net/browse/OMNI-49) (epic OMNI-44) — **fixed** (by refusal; isolation is H3) |
 > | M20, M21 | [OMNI-50](https://olafzumpe.atlassian.net/browse/OMNI-50) (epic OMNI-44) |
 > | M15 | [OMNI-51](https://olafzumpe.atlassian.net/browse/OMNI-51) — **fixed** |
-> | M12 | [OMNI-52](https://olafzumpe.atlassian.net/browse/OMNI-52) |
+> | M12 | [OMNI-52](https://olafzumpe.atlassian.net/browse/OMNI-52) — **fixed** (2026-10-25) |
 > | M13 | [OMNI-53](https://olafzumpe.atlassian.net/browse/OMNI-53) |
 > | M14 | [OMNI-54](https://olafzumpe.atlassian.net/browse/OMNI-54) — **fixed** (2026-10-15) |
 > | M16 (and L30) | [OMNI-55](https://olafzumpe.atlassian.net/browse/OMNI-55) — **fixed** (2026-10-08) |
@@ -89,24 +89,6 @@ reference with no link target below.
   stays open, and so does the refusal.
 
 ## Medium
-
-- [OMNI-52] **M12 — A `soft_` operator config edit can rewrite `forbidden_` keys through
-  unescaped YAML rendering** *(found 2026-09-26; reproduced end to end
-  through the real `operator.save_edits`)* — `_render_scalar`
-  (`sis/config.py`) wraps string values in `f'"{value}"'` with no escaping;
-  `contracts.default` is a `soft_` `OPT_STR` key with no `choices`, so
-  `parse_value` accepts arbitrary text for it; `save_edits` never re-parses
-  the file it just wrote to check it matches what was intended. PyYAML keeps
-  the *last* of two duplicate top-level keys. Reproduced: one
-  `contracts.default` edit containing an embedded `brakes:`/`policy:` block
-  raised the effective spend cap to $1,000,000, enabled STRICT changes, and
-  widened `target_paths` — while `runtime/operator_audit.jsonl` recorded only
-  the harmless `soft_` edit. A lone stray `"` in the value makes `config.yml`
-  fail to parse (every engine process then refuses to start). Fix: render
-  every scalar with `json.dumps` (valid YAML, escapes quotes/newlines/
-  backslashes) or `yaml.safe_dump`; in `save_edits`, re-parse the rendered
-  result and refuse the write unless it round-trips to exactly the intended
-  values; write via a temp file + `os.replace`.
 
 - [OMNI-53] **M13 — GitHub OAuth is never actually installed on the operator console;
   the server runs unauthenticated** *(found 2026-09-26; reproduced against
@@ -603,6 +585,38 @@ any long-lived cluster exists.
   front.
 
 ## Resolved
+
+- [OMNI-52] **M12 — A `soft_` operator config edit can rewrite `forbidden_` keys through
+  unescaped YAML rendering** *(found 2026-09-26; reproduced end to end
+  through the real `operator.save_edits`)* — `_render_scalar`
+  (`sis/config.py`) wraps string values in `f'"{value}"'` with no escaping;
+  `contracts.default` is a `soft_` `OPT_STR` key with no `choices`, so
+  `parse_value` accepts arbitrary text for it; `save_edits` never re-parses
+  the file it just wrote to check it matches what was intended. PyYAML keeps
+  the *last* of two duplicate top-level keys. Reproduced: one
+  `contracts.default` edit containing an embedded `brakes:`/`policy:` block
+  raised the effective spend cap to $1,000,000, enabled STRICT changes, and
+  widened `target_paths` — while `runtime/operator_audit.jsonl` recorded only
+  the harmless `soft_` edit. A lone stray `"` in the value makes `config.yml`
+  fail to parse (every engine process then refuses to start). Fix: render
+  every scalar with `json.dumps` (valid YAML, escapes quotes/newlines/
+  backslashes) or `yaml.safe_dump`; in `save_edits`, re-parse the rendered
+  result and refuse the write unless it round-trips to exactly the intended
+  values; write via a temp file + `os.replace`.
+  **Fixed 2026-10-25 (OMNI-52):** what is written is what was approved.
+  Every string, and every list item, is rendered with `json.dumps`
+  (`config._quote`), a valid YAML double-quoted scalar with its quotes and
+  backslashes escaped, so a lone `"` is a (wrong) value and no longer an
+  unloadable file. `parse_value` refuses a string with a control character,
+  a lone surrogate or a Unicode line separator in any layer, which refuses
+  the M12 payload outright. Independently of both, `save_edits` parses the
+  rendered text (`config.load_text`) before writing and refuses
+  (`EditRefused`, naming only key paths) unless every key reads back exactly
+  as intended, then writes through `sis.atomic.write_text_atomic`. A refused
+  or failed save writes and audits nothing. Regression tests in
+  `tests/test_operator.py` (the M12 payload, a renderer forced to leak a
+  section, a rendered file that does not parse, a failed replace) and
+  `tests/test_config.py`.
 
 - [OMNI-54] **M14 — A worked example in a spec page can name any callable, so spec
   prose becomes executed code** *(found 2026-09-26; reproduced)* —

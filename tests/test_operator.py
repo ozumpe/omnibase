@@ -246,6 +246,121 @@ def test_an_operator_edit_can_never_move_a_guardrail(
             assert saved[key.path] == key.default, key.path
 
 
+# --- a value cannot escape its quotes (OMNI-52, M12) ----------------------
+
+# The reproduction from KNOWN_ISSUES M12: one `soft_` edit whose value closes
+# its own quotes and opens new sections. PyYAML keeps the last of two duplicate
+# keys, so with unescaped rendering these `brakes:`/`policy:` blocks won.
+_INJECTION = (
+    'sort"\n'
+    "brakes:\n"
+    "  forbidden_budget_usd: 1000000.0\n"
+    "policy:\n"
+    '  forbidden_target_paths: ["runtime/target.py", "config.yml"]\n'
+    '  forbidden_allow_strict_changes: "true'
+)
+
+
+def _forbidden_values(path: pathlib.Path) -> dict[str, object]:
+    loaded = config.load_file(path)
+    return {
+        k.path: loaded.get(k.path) for k in config.SCHEMA
+        if k.tier is ConfigTier.FORBIDDEN
+    }
+
+
+def test_a_soft_edit_cannot_inject_forbidden_sections(
+    config_file: pathlib.Path,
+) -> None:
+    """The M12 payload is refused, and nothing is written or audited."""
+    before_text = config_file.read_text(encoding="utf-8")
+    before = _forbidden_values(config_file)
+
+    with pytest.raises(ValueError, match="control character"):
+        operator.save_edits([Edit("contracts.default", _INJECTION)], path=config_file)
+
+    assert config_file.read_text(encoding="utf-8") == before_text
+    assert _forbidden_values(config_file) == before
+    assert not operator.audit_path_for(config_file).exists()
+
+
+@pytest.mark.parametrize("value", ['sort"', 'a\\b', "it's", "{x: 1}", "# not a comment"])
+def test_a_quote_or_backslash_is_escaped_not_written_raw(
+    config_file: pathlib.Path, value: str
+) -> None:
+    """A lone `"` used to leave a config.yml no engine process could load.
+
+    Escaped, it is just a (wrong) contract name: the file still parses and the
+    value reads back exactly as saved.
+    """
+    operator.save_edits([Edit("contracts.default", value)], path=config_file)
+
+    assert config.load_file(config_file)["contracts.default"] == value
+    assert _forbidden_values(config_file) == _forbidden_values_of_defaults()
+
+
+def _forbidden_values_of_defaults() -> dict[str, object]:
+    return {
+        k.path: config.parse_value(k, k.default) for k in config.SCHEMA
+        if k.tier is ConfigTier.FORBIDDEN
+    }
+
+
+def test_a_rendered_file_that_does_not_read_back_is_not_written(
+    config_file: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The round-trip check is its own guard, not a consequence of escaping.
+
+    A renderer that lets a section through anyway (here, forced to) must be
+    caught before the write, whatever let it through.
+    """
+    real_render = config.render_config_file
+
+    def leaky_render(values: object = None) -> str:
+        return real_render(values) + "brakes:\n  forbidden_budget_usd: 1000000.0\n"  # type: ignore[arg-type]
+
+    monkeypatch.setattr(config, "render_config_file", leaky_render)
+    before_text = config_file.read_text(encoding="utf-8")
+
+    with pytest.raises(EditRefused, match=r"brakes\.budget_usd"):
+        operator.save_edits([Edit("loop.interval_seconds", 90.0)], path=config_file)
+
+    assert config_file.read_text(encoding="utf-8") == before_text
+    assert not operator.audit_path_for(config_file).exists()
+
+
+def test_a_rendered_file_that_does_not_parse_is_not_written(
+    config_file: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(config, "render_config_file", lambda values=None: 'loop: "\n')
+    before_text = config_file.read_text(encoding="utf-8")
+
+    with pytest.raises(EditRefused, match="does not parse"):
+        operator.save_edits([Edit("loop.interval_seconds", 90.0)], path=config_file)
+
+    assert config_file.read_text(encoding="utf-8") == before_text
+
+
+def test_a_failed_write_leaves_the_old_file_whole(
+    config_file: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Written by replace, so a crash mid-write cannot leave half a config.yml."""
+    import sis.atomic
+
+    def no_replace(src: object, dst: object) -> None:
+        raise OSError("disk went away")
+
+    monkeypatch.setattr(sis.atomic.os, "replace", no_replace)
+    before_text = config_file.read_text(encoding="utf-8")
+
+    with pytest.raises(OSError, match="disk went away"):
+        operator.save_edits([Edit("loop.interval_seconds", 90.0)], path=config_file)
+
+    assert config_file.read_text(encoding="utf-8") == before_text
+    assert not operator.audit_path_for(config_file).exists()
+    assert sorted(p.name for p in config_file.parent.iterdir()) == [config_file.name]
+
+
 # --- the audit log --------------------------------------------------------
 
 
