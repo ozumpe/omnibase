@@ -446,3 +446,6 @@ def test_the_runner_policy_can_build_the_box_but_grants_no_iam_or_secret() -> No
             assert "sis-first-run" in json.dumps(st["Condition"])   # only the tagged box
         if "s3:PutObject" in st["Action"]:
             assert st["Resource"].endswith("/tofu/*")              # state, never the runs
+        if "image/*" in str(st["Resource"]):
+            # Canonical's AMIs are aliased `amazon`, which is what ec2:Owner sees.
+            assert "amazon" in st["Condition"]["StringEquals"]["ec2:Owner"]

@@ -505,7 +505,10 @@ stays yours, the box becomes the task's.
    egress-only group, and terminate only that tagged box. It can pass the box
    its one role and write the box stack's state under `tofu/` in the
    artifacts bucket. It can create no role or user, and it cannot read the
-   secret itself.
+   secret itself. Canonical's Ubuntu AMIs carry the owner alias `amazon`, and
+   IAM evaluates `ec2:Owner` as that alias, so the image statement allows
+   `amazon` as well as Canonical's account id: with the account id alone,
+   the first trial's `RunInstances` was denied on the image (2026-10-25).
 
 An ephemeral run downloads OpenTofu 1.10.6 and refuses it unless its sha256 is
 the one pinned in the script. It keeps the box stack's state at
