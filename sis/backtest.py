@@ -50,7 +50,7 @@ from pathlib import Path
 from typing import Any
 
 from sis.clock import parse_event_time
-from sis.sensor_input import SIMULATED_SOURCE
+from sis.sensor_input import SIMULATED_SOURCE, is_simulated
 
 # Fixture schema version. Bumped only for a breaking layout change; the gate
 # refuses a version it does not know rather than guessing at the shape and
@@ -137,7 +137,7 @@ class Fixture:
 def _simulated(value: Any) -> bool:
     """Whether *value* holds a record whose ``source`` is the simulated one, at any depth."""
     if isinstance(value, dict):
-        return value.get("source") == SIMULATED_SOURCE or any(
+        return is_simulated(value.get("source")) or any(
             _simulated(item) for item in value.values())
     if isinstance(value, list):
         return any(_simulated(item) for item in value)

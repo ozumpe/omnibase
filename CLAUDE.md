@@ -52,7 +52,8 @@ internal target before it models anything external.
   `SimSensor` like a trace; the invariant gate draws them
   (`fuel_scenario_states`). Their readings carry source `sim`, which a
   backtest fixture refuses: simulation may reject a candidate, never promote
-  one (D4).
+  one (D4). No adapter may declare it (`SourceRules` refuses it in any case,
+  OMNI-167).
   **Prediction error is computed and reported, never acted on** (OMNI-36,
   `sis/prediction_error.py`, POLICY-FORBIDDEN). At the moment each week's
   California price first became known, the predictor is shown the as-of view
@@ -979,7 +980,7 @@ sensor work, fixed 2026-10-13, OMNI-155–160; M30, M31, M14, L19 and L39 fixed
 `forbidden_` keys, 2026-10-25, OMNI-52; M32, a fixture showing an earlier
 vintage of the week it predicts, the same day, OMNI-164; M33, a staged
 manifest's name placing a promoted exam outside `specs/<name>/`, the same day,
-OMNI-165). The headline, before trusting any
+OMNI-165; L56, an adapter declaring the simulated source, the same day, OMNI-167). The headline, before trusting any
 gauntlet verdict: every gate but SLO now judges its candidate from outside the
 candidate's process (H2, M8), and the exam files are protected (M9). **The SLO
 gate still runs its candidate in-process** (L42,

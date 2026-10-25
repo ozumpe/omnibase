@@ -21,6 +21,7 @@ from sis.sensor_input import (
     SourceRules,
     UntrustedText,
     clean_text,
+    is_simulated,
     parse_number,
     sanitise,
 )
@@ -327,3 +328,20 @@ def test_a_real_adapter_makes_no_reading_of_its_own(module: str) -> None:
             node.func.attr in ("from_record", "from_records")
             or (isinstance(node.func.value, ast.Name) and node.func.value.id == "Reading"))))]
     assert built == [], f"sis/{module} builds a Reading itself at line(s) {built}"
+
+
+# --- OMNI-167 (L56): only the pinned generator writes the simulated source ---------
+
+
+@pytest.mark.parametrize("source", ["sim", "SIM", "Sim", "sIm"])
+def test_no_adapter_may_declare_the_simulated_source(source: str) -> None:
+    # D4 tells simulated data from real by this one source; an adapter that
+    # declared it, in any case, would have its readings judged as the other kind.
+    with pytest.raises(ValueError, match="simulated"):
+        SourceRules(source, {"price": SeriesRule("USD/gal", 0.5, 20.0)})
+
+
+@pytest.mark.parametrize("source", ["sim", "SIM", " sim", "sim\n", "Sim "])
+def test_the_simulated_source_is_recognised_in_any_case_or_padding(source: str) -> None:
+    assert is_simulated(source)
+    assert not is_simulated("simulator") and not is_simulated("eia") and not is_simulated(None)
