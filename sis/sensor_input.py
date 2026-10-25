@@ -136,6 +136,11 @@ class SourceRules:
         for name in (self.source, *self.series):
             if not _ID.match(name):
                 raise ValueError(f"{name!r} is not an id (letters, digits and _ . : -)")
+        if is_simulated(self.source):
+            # Only the pinned generator writes it, and it builds no SourceRules
+            # (OMNI-167, L56): D4 tells simulated data from real by this source.
+            raise ValueError(f"{self.source!r} is the simulated source; no adapter may "
+                             "declare it, or its readings would be judged as simulation")
         if self.thousands not in (None, ",", ".", " ", "'"):
             raise ValueError(f"{self.thousands!r} is not a digit-group separator")
 
@@ -144,8 +149,17 @@ class SourceRules:
 # Simulation is for refutation, real data is for acceptance (D4): a reading
 # from this source may reject a candidate through the invariant gate, and is
 # refused as a backtest's evidence (``sis.backtest.parse_fixture``,
-# ``sis.fixture_builder.build``). No real adapter may declare it.
+# ``sis.fixture_builder.build``). No adapter may declare it (``SourceRules``).
 SIMULATED_SOURCE = "sim"
+
+
+def is_simulated(source: object) -> bool:
+    """Whether *source* is the simulated one, in any case or padding (OMNI-167).
+
+    An exact match let ``"SIM"`` pass as real data; every check that tells the
+    two apart goes through here.
+    """
+    return isinstance(source, str) and source.strip().casefold() == SIMULATED_SOURCE
 
 
 @dataclass(frozen=True)
@@ -450,5 +464,6 @@ def sanitise(
 __all__ = [
     "NO_VALUE_MARKERS", "SIMULATED_SOURCE", "Absent", "Limits", "Refused", "Rejection",
     "Sanitised",
-    "SeriesRule", "SourceRules", "UntrustedText", "clean_text", "parse_number", "sanitise",
+    "SeriesRule", "SourceRules", "UntrustedText", "clean_text", "is_simulated", "parse_number",
+    "sanitise",
 ]

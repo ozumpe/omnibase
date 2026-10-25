@@ -47,7 +47,7 @@ from sis.clock import parse_event_time
 from sis.contract_author import ContractDraft
 from sis.ports import Reading
 from sis.replay import as_of
-from sis.sensor_input import SIMULATED_SOURCE, Absent, SourceRules
+from sis.sensor_input import SIMULATED_SOURCE, Absent, SourceRules, is_simulated
 from sis.sensor_trace import read_back
 
 CALENDAR_SCHEMA = 1
@@ -171,7 +171,7 @@ def build(lines: Sequence[Mapping[str, Any]], rules: SourceRules, calendar: Rele
     The trace is read back through the door first (:func:`sis.sensor_trace.read_back`),
     so a trace that was edited or cut short refuses here, not in a gate.
     """
-    if rules.source == SIMULATED_SOURCE:
+    if is_simulated(rules.source):
         # D4: a fixture is acceptance evidence, a scenario only refutes (OMNI-34).
         raise FixtureRefused(f"source {SIMULATED_SOURCE!r} is a generated scenario; a "
                              "backtest fixture is built from recorded data only")

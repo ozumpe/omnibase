@@ -308,11 +308,20 @@ def test_a_backtest_fixture_holding_a_scenario_is_refused() -> None:
         parse_fixture(raw, where="sim.json")
     real = json.loads(raw.replace(f'"source": "{SIMULATED_SOURCE}"', '"source": "eia"'))
     assert parse_fixture(json.dumps(real), where="eia.json").args == real["args"]
+    # OMNI-167 (L56): the check was an exact match, so "SIM" passed as real.
+    shouted = raw.replace(f'"source": "{SIMULATED_SOURCE}"', '"source": "SIM"')
+    with pytest.raises(ValueError, match="never be the evidence"):
+        parse_fixture(shouted, where="SIM.json")
 
 
 def test_the_fixture_builder_refuses_a_simulated_source() -> None:
-    rules = SourceRules(SIMULATED_SOURCE, {GEN.CALIFORNIA: SeriesRule("Dollars per Gallon",
-                                                                        0.5, 15.0)})
+    # SourceRules refuses the source itself (OMNI-167); the builder's own check
+    # stays as a second line, reached here by setting the field past it.
+    with pytest.raises(ValueError, match="simulated"):
+        SourceRules(SIMULATED_SOURCE, {GEN.CALIFORNIA: SeriesRule("Dollars per Gallon",
+                                                                    0.5, 15.0)})
+    rules = SourceRules("eia", {GEN.CALIFORNIA: SeriesRule("Dollars per Gallon", 0.5, 15.0)})
+    object.__setattr__(rules, "source", "SIM")
     calendar = ReleaseCalendar.parse(json.dumps({
         "schema": 1, "timezone": "America/New_York", "checked_by": "a human",
         "checked_on": "2026-10-25", "releases": {}}))

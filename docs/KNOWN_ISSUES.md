@@ -295,6 +295,18 @@ reference with no link target below.
 
 ## Resolved (Low)
 
+- [OMNI-167] **L56** — "no real adapter may declare source `sim`" was
+  documented on `SIMULATED_SOURCE` but not enforced: `SourceRules("sim", …)`
+  constructed and `sanitise` accepted its records. D4 tells simulated data
+  from real by that one source, and the checks in `sis.backtest` and
+  `sis.fixture_builder` were an exact `== "sim"`, so `"SIM"` passed as real.
+  *(Found 2026-10-25 by the weekly code review.)* **Fixed 2026-10-25
+  (OMNI-167):** `SourceRules` refuses the simulated source in any case, and
+  every check that tells the two apart goes through
+  `sensor_input.is_simulated` (case and padding ignored). Regression tests:
+  `SourceRules("SIM", …)` is refused, and a fixture whose readings say `"SIM"`
+  is refused as backtest evidence; both fail without the fix.
+
 - [OMNI-68] **L19** — `contract_author.promote()` copied whatever was in the
   loop-writable staging directory at promotion time, not necessarily the
   content a human reviewed if the draft was rewritten in between. Fix: hash
@@ -1866,3 +1878,4 @@ any long-lived cluster exists.
 [OMNI-162]: https://olafzumpe.atlassian.net/browse/OMNI-162
 [OMNI-164]: https://olafzumpe.atlassian.net/browse/OMNI-164
 [OMNI-165]: https://olafzumpe.atlassian.net/browse/OMNI-165
+[OMNI-167]: https://olafzumpe.atlassian.net/browse/OMNI-167
