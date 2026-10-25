@@ -7,6 +7,8 @@ gate, the inertness of staging, and the fact that no path around either exists.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import pathlib
 
 import pytest
@@ -15,6 +17,7 @@ from sis.contract_author import (
     MANIFEST,
     ContractDraft,
     StagedChanged,
+    StagedContract,
     load_staged,
     parse_spec,
     pending,
@@ -167,6 +170,59 @@ def test_a_human_reviews_then_promotes_from_the_command_line(
     assert (tmp_path / "specs" / staged.name / "tests.py").exists()
     audit = (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
     assert staged.digest in audit and "the exam I approve" in audit
+
+
+# --- OMNI-165 (M33): the manifest's name cannot place the exam elsewhere -------------
+
+
+def _forged(staging: pathlib.Path, directory: str, name: str) -> None:
+    """A staged directory whose loop-writable manifest names *name*."""
+    root = staging / directory
+    root.mkdir(parents=True)
+    data = b"# payload\n"
+    (root / "payload.py").write_bytes(data)
+    (root / MANIFEST).write_text(json.dumps(
+        {"name": name, "spec_ref": "X",
+         "files": {"payload.py": hashlib.sha256(data).hexdigest()}}), encoding="utf-8")
+
+
+@pytest.mark.parametrize("name", ["../escaped", ".", "..", "other", "a/b", ""])
+def test_a_manifest_name_that_is_not_its_directory_is_refused(
+    tmp_path: pathlib.Path, name: str,
+) -> None:
+    # "../escaped" wrote <tmp>/escaped/payload.py, outside specs/; "." wrote
+    # into specs/ itself, over the shared invariants or comparators.
+    _forged(tmp_path / "staging", "innocent", name)
+    with pytest.raises(ValueError, match="innocent"):
+        load_staged("innocent", staging_dir=tmp_path / "staging")
+
+
+@pytest.mark.parametrize("name", ["../escaped", ".", "a/b"])
+def test_promote_never_writes_outside_a_direct_child_of_specs(
+    tmp_path: pathlib.Path, name: str,
+) -> None:
+    # A StagedContract built some other way than load_staged gets the same answer.
+    _forged(tmp_path / "staging", "innocent", name)
+    raw = (tmp_path / "staging" / "innocent" / MANIFEST).read_bytes()
+    staged = StagedContract(name=name, spec_ref="X", directory=tmp_path / "staging" / "innocent",
+                            files=("payload.py",), digest=hashlib.sha256(raw).hexdigest())
+    with pytest.raises(ValueError, match="single directory name"):
+        promote(staged, approved=True, digest=staged.digest, specs_dir=tmp_path / "specs")
+    assert not (tmp_path / "escaped").exists()
+    assert not (tmp_path / "specs").exists()
+
+
+def test_a_forged_manifest_is_refused_on_the_command_line(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    from sis import contract_author
+
+    monkeypatch.setattr(contract_author, "CONTRACT_STAGING_DIR", tmp_path / "staging")
+    monkeypatch.setattr(contract_author, "SPECS_DIR", tmp_path / "specs")
+    _forged(tmp_path / "staging", "innocent", "../escaped")
+    assert contract_author.main(["review", "innocent"]) == 1
+    assert "refused" in capsys.readouterr().err
+    assert not (tmp_path / "escaped").exists()
 
 
 def test_promoting_something_never_staged_fails_clearly(tmp_path: pathlib.Path) -> None:

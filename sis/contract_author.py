@@ -100,12 +100,7 @@ class ContractDraft:
     files: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if not self.name or "/" in self.name or self.name.startswith("."):
-            raise ValueError(
-                f"contract name {self.name!r} must be a single directory name — it "
-                "becomes specs/<name>/, and a name with a separator would place the "
-                "exam somewhere the gates do not look"
-            )
+        _check_name(self.name)
         if not self.spec_ref:
             raise ValueError(
                 f"contract {self.name!r} has no spec_ref: provenance roots at the spec "
@@ -121,7 +116,21 @@ class ContractDraft:
             _reject_unsafe_path(relative, contract=self.name)
 
 
-def _reject_unsafe_path(relative: str, *, contract: str) -> None:
+def _check_name(name: str) -> None:
+    """Refuse a contract name that is not one plain directory under specs/.
+
+    Checked wherever a name arrives, not only on a draft: a staged manifest is
+    loop-writable, and its name is where promote() writes (M33, OMNI-165).
+    """
+    if not name or "/" in name or "\\" in name or name.startswith("."):
+        raise ValueError(
+            f"contract name {name!r} must be a single directory name — it "
+            "becomes specs/<name>/, and a name with a separator would place the "
+            "exam somewhere the gates do not look"
+        )
+
+
+def _reject_unsafe_path(relative: str, *, contract: str, specs_dir: Path | None = None) -> None:
     """Refuse anything that could escape the contract's own directory.
 
     Traversal is checked on the *resolved* path rather than by looking for
@@ -143,7 +152,7 @@ def _reject_unsafe_path(relative: str, *, contract: str) -> None:
             f"contract {contract!r}: {relative!r} has suffix {suffix!r}; the gates read "
             f"only {sorted(ALLOWED_SUFFIXES)} and anything else would sit there unread"
         )
-    root = (SPECS_DIR / contract).resolve()
+    root = ((specs_dir or SPECS_DIR) / contract).resolve()
     resolved = (root / relative).resolve()
     if not resolved.is_relative_to(root):
         raise ValueError(
@@ -361,12 +370,22 @@ def load_staged(name: str, *, staging_dir: Path | None = None) -> StagedContract
 
     For a later process, a human's: :func:`stage` returns this to its caller,
     and a reviewer running ``python -m sis.contract_author`` is not that caller.
+
+    The manifest is loop-writable, and its name is where promote() writes, so
+    a name that is not its own directory's is refused (M33, OMNI-165): a human
+    who ran ``promote innocent`` must not promote ``../sis``.
     """
+    _check_name(name)
     directory = (staging_dir or CONTRACT_STAGING_DIR) / name
     raw = (directory / MANIFEST).read_bytes()
     manifest = json.loads(raw)
+    if manifest.get("name") != name:
+        raise ValueError(
+            f"the staged manifest under {name!r} names the contract "
+            f"{manifest.get('name')!r}; promotion writes where the name says, so a "
+            "name that is not its own directory's is refused: stage it again")
     return StagedContract(
-        name=str(manifest["name"]), spec_ref=str(manifest["spec_ref"]),
+        name=name, spec_ref=str(manifest["spec_ref"]),
         directory=directory, files=tuple(sorted(manifest["files"])), digest=_sha256(raw))
 
 
@@ -475,16 +494,20 @@ def promote(staged: StagedContract, *, approved: bool = False, digest: str | Non
         raise StagedChanged(
             f"the staged manifest of {staged.name!r} is not the one reviewed "
             f"(digest {_sha256(raw)[:12]}…, reviewed {digest[:12]}…): review it again")
+    _check_name(staged.name)
+    specs = specs_dir or SPECS_DIR
+    target = specs / staged.name
+    if target.resolve().parent != specs.resolve():
+        raise ValueError(f"contract {staged.name!r} would not land directly under {specs}")
     hashes: dict[str, str] = json.loads(raw)["files"]
     content: dict[str, bytes] = {}
     for relative, expected in sorted(hashes.items()):
-        _reject_unsafe_path(relative, contract=staged.name)
+        _reject_unsafe_path(relative, contract=staged.name, specs_dir=specs)
         data = (staged.directory / relative).read_bytes()
         if _sha256(data) != expected:
             raise StagedChanged(f"{relative} of {staged.name!r} changed after review; "
                                 "stage and review it again")
         content[relative] = data
-    target = (specs_dir or SPECS_DIR) / staged.name
     target.mkdir(parents=True, exist_ok=True)
     for relative, data in content.items():
         destination = target / relative
@@ -922,6 +945,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"no staged contract {args.name!r} with a manifest under "
               f"{CONTRACT_STAGING_DIR}; stage it first", file=sys.stderr)
         return 2
+    except ValueError as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 1
     if args.action == "review":
         print(f"{staged.name}  (spec {staged.spec_ref})  in {staged.directory}")
         for relative in staged.files:

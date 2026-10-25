@@ -956,7 +956,9 @@ OMNI-55; H10–H13, M29 and L54, from the review of that release and the
 sensor work, fixed 2026-10-13, OMNI-155–160; M30, M31, M14, L19 and L39 fixed
 2026-10-15, OMNI-161/162/54/68/42; M12, a `soft_` config edit rewriting
 `forbidden_` keys, 2026-10-25, OMNI-52; M32, a fixture showing an earlier
-vintage of the week it predicts, the same day, OMNI-164). The headline, before trusting any
+vintage of the week it predicts, the same day, OMNI-164; M33, a staged
+manifest's name placing a promoted exam outside `specs/<name>/`, the same day,
+OMNI-165). The headline, before trusting any
 gauntlet verdict: every gate but SLO now judges its candidate from outside the
 candidate's process (H2, M8), and the exam files are protected (M9). **The SLO
 gate still runs its candidate in-process** (L42,
