@@ -14,7 +14,10 @@ target/oracle contract this builds on.
 no-gain outcomes neutral and added a convergence stop; they no longer trip a
 separate goal-exhaustion breaker. No oracle-hash auto-reset is implemented.
 OMNI-61 adds audited `python -m sis.admin` control, unreadable-state fail-closed
-boot and a reset that preserves spend. See [CODE_TOUR.md](CODE_TOUR.md) and
+boot and a reset that preserves spend. OMNI-157 reserves a cycle's spend and
+saves it before the cycle goes on (a failed save opens the breaker), and
+OMNI-158 versions the CEO's state so an older snapshot never replaces a newer
+one; the record now carries `version` and `lineage` besides the fields below. See [CODE_TOUR.md](CODE_TOUR.md) and
 [AWS_RUN.md](AWS_RUN.md) for operation. Parts 3–5 are retained as historical
 alternatives, not an active delivery plan or available configuration.
 

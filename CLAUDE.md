@@ -281,7 +281,10 @@ internal target before it models anything external.
     worker (`sis/sandbox_worker.py`, `sis/sandbox_worker_main.py`), the contract layer (`sis/contract.py`, `sis/backtest.py`, `sis/invariant.py`,
     `sis/slo.py`, `sis/clock.py`), the ports with the `Sensor` and the shape
     of a reading (`sis/ports.py`, OMNI-31), the door sensor data comes in
-    through (`sis/sensor_input.py`, OMNI-32), the contract-author approval gate
+    through (`sis/sensor_input.py`, OMNI-32), the capture trace
+    (`sis/sensor_trace.py`, OMNI-33), what a replay shows a model and the
+    fixtures built from it (`sis/replay.py`, `sis/fixture_builder.py`,
+    OMNI-35), the contract-author approval gate
     (`sis/contract_author.py`),
     `specs/` (the exam itself — oracles, acceptance tests, domain laws, backtest
     fixtures), cost accounting (`sis/cost.py` — the breaker/threshold logic
