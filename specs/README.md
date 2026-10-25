@@ -59,6 +59,9 @@ not a correctness gate.
 
 `specs/roman/` is the first Class-2 contract: `to_roman` / `from_roman` built
 from a spec, with no implementation to differ against.
+`specs/ca_price_persistence/` is the second (OMNI-36): `predict_next_week`, the
+persistence baseline whose prediction error `sis/prediction_error.py` reports.
+Its laws run over generated fuel scenarios (`fuel_scenario_states`).
 
 Keep spec modules self-contained and independent of `sis/`. The acceptance,
 invariant and backtest harnesses run trusted code on the host, calling a proxy
@@ -72,7 +75,10 @@ arguments are an exam fault. See [the code tour](../docs/CODE_TOUR.md#5-the-gaun
 A backtest asks *did the candidate reproduce what actually happened?* — the
 Class-2 analogue of the benchmark, with history as the reference
 (`sis/backtest.py`). None of the shipped contracts (`sum_of_divisors`, `sort`,
-`roman`) declares recorded backtests. They are pure functions with no historical
+`roman`, `ca_price_persistence`) declares recorded backtests. Persistence would
+fail the California price fixture in its jump week, which is why that fixture is
+data its error is computed on, not a gate (OMNI-163 is the first gated one).
+The others are pure functions with no historical
 episodes to reproduce; inventing some would make the gate look exercised while
 testing nothing.
 

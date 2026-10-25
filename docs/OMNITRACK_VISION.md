@@ -5,9 +5,10 @@ port (OMNI-23), `Sensor`/`SimSensor` (OMNI-31), the sanitising boundary
 (OMNI-32), EIA capture/replay (OMNI-33, merged to `develop`), and the
 fixture tooling with its replay order (OMNI-35, in progress: the real fixture
 waits for the box's first capture and a human's promotion), and scenario
-generation (OMNI-34, in review: `specs/scenarios.py` pinned, `runtime/scenarios.py`
-the working copy). The first gated contract (OMNI-163) and prediction-error
-reporting (OMNI-36) remain planned. E2–E5 are not built. No fuel-market model is attached
+generation (OMNI-34, merged: `specs/scenarios.py` pinned, `runtime/scenarios.py`
+the working copy), and prediction-error reporting against a persistence baseline
+(OMNI-36, in review: `sis/prediction_error.py`, `scripts/prediction_error.py`;
+nothing acts on the error yet). The first gated contract (OMNI-163) remains planned. E2–E5 are not built. No fuel-market model is attached
 to the running loop yet. See [SENSOR_RUNBOOK.md](SENSOR_RUNBOOK.md) for what the
 implemented sensor actually reads.
 
