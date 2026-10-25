@@ -227,4 +227,222 @@ def test_a_loop_that_never_stops_is_abandoned_and_the_box_still_stops() -> None:
 
 def test_the_report_says_when_the_box_was_not_stopped() -> None:
     out = sr.Outcome(started=True, instance_stopped=False)
-    assert "NO, stop it by hand" in sr.report(_cfg(), out)
+    assert "instance stopped: NO, take it down by hand" in sr.report(_cfg(), out)
+
+
+# --- an ephemeral box: built with tofu, destroyed after (OMNI-169) -------------
+
+def test_box_vars_check_every_value_that_reaches_tofu() -> None:
+    assert sr.BoxVars(run_id=RUN).args() == ["-var=region=us-east-1",
+                                             "-var=name_prefix=sis-first-run",
+                                             f"-var=run_id={RUN}"]
+    v = sr.BoxVars(run_id=RUN, repo_ref="develop", allow_branch_ref=True)
+    assert "-var=repo_ref=develop" in v.args() and "-var=allow_branch_ref=true" in v.args()
+    assert "-var=repo_ref=v0.3.8" in sr.BoxVars(run_id=RUN, repo_ref="v0.3.8").args()
+    for bad in [{"repo_ref": "develop"},  # a branch, not said out loud (OMNI-63)
+                {"repo_ref": "v1 -var=x=y", "allow_branch_ref": True},
+                {"repo_ref": "../x", "allow_branch_ref": True},
+                {"region": "us-east-1 -x"}, {"name_prefix": "A b"}, {"run_id": "now"}]:
+        with pytest.raises(ValueError):
+            sr.BoxVars(**{"run_id": RUN, **bad})
+
+
+def test_tofu_keeps_its_state_in_the_bucket_and_never_asks() -> None:
+    cmds = sr.tofu_commands(sr.BoxVars(run_id=RUN), "sis-first-run-artifacts-123456789012")
+    assert "-backend-config=bucket=sis-first-run-artifacts-123456789012" in cmds["init"]
+    assert f"-backend-config=key={sr.STATE_KEY}" in cmds["init"]
+    for step in ("apply", "destroy"):
+        assert "-auto-approve" in cmds[step] and "-input=false" in cmds[step]
+    with pytest.raises(ValueError):
+        sr.tofu_commands(sr.BoxVars(run_id=RUN), "Bad Bucket")
+
+
+def _zip_with_tofu(tmp_path: pathlib.Path) -> bytes:
+    import zipfile
+
+    z = tmp_path / "t.zip"
+    with zipfile.ZipFile(z, "w") as zf:
+        zf.writestr("tofu", "#!/bin/sh\necho tofu\n")
+    return z.read_bytes()
+
+
+def test_tofu_is_installed_only_with_the_pinned_checksum(tmp_path: pathlib.Path,
+                                                          monkeypatch: pytest.MonkeyPatch) -> None:
+    import hashlib
+
+    data = _zip_with_tofu(tmp_path)
+    arch = sr.tofu_arch()
+    with pytest.raises(RuntimeError, match="is not the pinned"):
+        sr.install_tofu(tmp_path / "cache", fetch=lambda url: data)
+    assert not (tmp_path / "cache" / f"tofu-{sr.TOFU_VERSION}-{arch}" / "tofu").exists()
+    monkeypatch.setitem(sr.TOFU_SHA256, arch, hashlib.sha256(data).hexdigest())
+    urls: list[str] = []
+    path = sr.install_tofu(tmp_path / "cache", fetch=lambda url: urls.append(url) or data)
+    assert path.read_text().startswith("#!/bin/sh") and path.stat().st_mode & 0o100
+    assert urls == [f"https://github.com/opentofu/opentofu/releases/download/"
+                    f"v{sr.TOFU_VERSION}/tofu_{sr.TOFU_VERSION}_linux_{arch}.zip"]
+    assert sr.install_tofu(tmp_path / "cache", fetch=lambda url: b"never") == path  # cached
+
+
+def test_the_bootstrap_check_is_valid_shell_and_reads_three_states(tmp_path: pathlib.Path) -> None:
+    path = tmp_path / "boot.sh"
+    path.write_text("\n".join(sr.bootstrap_commands()) + "\n")
+    assert subprocess.run(["bash", "-n", str(path)], check=False).returncode == 0
+    assert sr.boot_state("SIS_BOOT done\n") == "done"
+    assert sr.boot_state("SIS_BOOT failed\nE: apt") == "failed"
+    assert sr.boot_state("") == "running"
+
+
+class _EphemeralEC2:
+    """No box until tofu applies; the box is gone again once tofu destroys."""
+
+    def __init__(self, exists: bool = False) -> None:
+        self.exists = exists
+
+    def describe_instances(self, **_: Any) -> dict[str, Any]:
+        inst = [{"InstanceId": "i-new", "State": {"Name": "running"}}] if self.exists else []
+        return {"Reservations": [{"Instances": inst}]}
+
+
+class _BootSSM(_FakeSSM):
+    def __init__(self, logs: list[str], boot: str = "SIS_BOOT done") -> None:
+        super().__init__(logs)
+        self.boot = boot
+
+    def send_command(self, **kw: Any) -> dict[str, Any]:
+        out = super().send_command(**kw)
+        if "cloud-init status" in "\n".join(kw["Parameters"]["commands"]):
+            self._out = self.boot
+        return out
+
+
+class _FakeTofu:
+    def __init__(self, ec2: _EphemeralEC2, *, fail: tuple[str, ...] = ()) -> None:
+        self.ec2, self.fail, self.calls = ec2, fail, []
+
+    def apply(self) -> None:
+        self.calls.append("apply")
+        self.ec2.exists = True
+        if "apply" in self.fail:
+            raise RuntimeError("tofu apply failed (1)")
+
+    def destroy(self) -> None:
+        self.calls.append("destroy")
+        if "destroy" in self.fail:
+            raise RuntimeError("tofu destroy failed (1)")
+        self.ec2.exists = False
+
+
+def _ephemeral(ec2: _EphemeralEC2, ssm: _FakeSSM, tofu: _FakeTofu, **kw: Any) -> Any:
+    box = sr.Box(ec2, ssm, sleep=lambda s: None)
+    ticks = iter(range(0, 10**6, 60))
+    return sr.run_once(box, _cfg(), clock=lambda: float(next(ticks)), say=lambda m: None,
+                       lifecycle=sr.EphemeralBox(tofu), **kw)  # type: ignore[arg-type]
+
+
+_DONE = [_log("[loop] stopped after 2 cycle(s): x", "[sis] artifacts synced to s3://b/r",
+              f"[scheduled] {RUN} exit 0")]
+
+
+def test_an_ephemeral_run_builds_its_box_and_destroys_it() -> None:
+    ec2 = _EphemeralEC2()
+    tofu = _FakeTofu(ec2)
+    out = _ephemeral(ec2, _BootSSM(list(_DONE)), tofu)
+    assert tofu.calls == ["apply", "destroy"] and not ec2.exists
+    assert out.started and out.instance_stopped and out.error is None
+    assert out.state.phase is sr.Phase.EXITED and "instance destroyed: yes" in sr.report(_cfg(),
+                                                                                        out)
+
+
+def test_an_existing_box_is_never_adopted_and_tofu_never_runs() -> None:
+    ec2 = _EphemeralEC2(exists=True)
+    tofu = _FakeTofu(ec2)
+    with pytest.raises(sr.Refused, match="never adopts"):
+        _ephemeral(ec2, _BootSSM(list(_DONE)), tofu)
+    assert tofu.calls == [] and ec2.exists
+
+
+@pytest.mark.parametrize(("fail", "boot"), [(("apply",), "SIS_BOOT done"),
+                                            ((), "SIS_BOOT failed\nE: apt")])
+def test_a_box_that_fails_to_come_up_is_still_destroyed(fail: tuple[str, ...], boot: str) -> None:
+    ec2 = _EphemeralEC2()
+    tofu = _FakeTofu(ec2, fail=fail)
+    out = _ephemeral(ec2, _BootSSM(list(_DONE), boot=boot), tofu)
+    assert not out.started and out.error
+    assert tofu.calls[-1] == "destroy" and not ec2.exists and out.instance_stopped
+
+
+def test_a_destroy_that_fails_twice_is_reported_loudly() -> None:
+    ec2 = _EphemeralEC2()
+    tofu = _FakeTofu(ec2, fail=("destroy",))
+    out = _ephemeral(ec2, _BootSSM(list(_DONE)), tofu)
+    assert tofu.calls == ["apply", "destroy", "destroy"] and ec2.exists
+    assert not out.instance_stopped and "destroy failed twice" in (out.error or "")
+    assert "instance destroyed: NO, take it down by hand" in sr.report(_cfg(), out)
+
+
+class _Done:
+    def __init__(self, code: int) -> None:
+        self.returncode, self.stdout, self.stderr = code, "Apply complete!", ""
+
+
+def test_tofu_runs_the_box_stack_in_its_own_data_dir(tmp_path: pathlib.Path) -> None:
+    seen: list[tuple[list[str], dict[str, str]]] = []
+
+    def run(argv: list[str], **kw: Any) -> _Done:
+        seen.append((argv, kw["env"]))
+        return _Done(0)
+
+    tofu = sr.Tofu(pathlib.Path("/bin/tofu"), sr.BoxVars(run_id=RUN), "b-artifacts-1",
+                   data_dir=tmp_path, run=run, say=lambda m: None)
+    tofu.apply()
+    tofu.destroy()
+    steps = [argv[2] for argv, _ in seen]
+    assert steps == ["init", "apply", "destroy"]   # init once
+    assert all(argv[1] == f"-chdir={sr.BOX_STACK}" for argv, _ in seen)
+    assert seen[0][1]["TF_DATA_DIR"] == str(tmp_path) and seen[0][1]["TF_INPUT"] == "0"
+    with pytest.raises(RuntimeError, match="tofu init failed"):
+        sr.Tofu(pathlib.Path("/bin/tofu"), sr.BoxVars(run_id=RUN), "b-artifacts-1",
+                data_dir=tmp_path, run=lambda argv, **kw: _Done(1), say=lambda m: None).apply()
+
+
+# --- the two stacks build one box (OMNI-169) ------------------------------------
+
+_INFRA = _PATH.parent.parent / "infra" / "aws"
+
+
+def test_both_stacks_build_the_box_from_one_module() -> None:
+    base = (_INFRA / "main.tf").read_text()
+    box = (_INFRA / "box" / "main.tf").read_text()
+    assert 'source = "./modules/box"' in base and 'source = "../modules/box"' in box
+    assert 'resource "aws_instance"' not in base + box
+    assert "from = aws_instance.sis" in base   # the human's existing state moves, not replaces
+    assert "default     = true" in (_INFRA / "variables.tf").read_text().split(
+        'variable "create_instance"')[1]
+
+
+def test_the_box_stack_keeps_locked_state_in_s3() -> None:
+    versions = (_INFRA / "box" / "versions.tf").read_text()
+    assert 'backend "s3"' in versions and "use_lockfile = true" in versions
+    assert (_INFRA / "box" / ".terraform.lock.hcl").exists()
+
+
+def test_the_runner_policy_can_build_the_box_but_grants_no_iam_or_secret() -> None:
+    import json
+
+    policy = json.loads((_INFRA / "scheduled_runner_policy.json").read_text())
+    actions = [a for st in policy["Statement"] for a in
+               ([st["Action"]] if isinstance(st["Action"], str) else st["Action"])]
+    assert "ec2:RunInstances" in actions and "ec2:TerminateInstances" in actions
+    assert all(st["Effect"] == "Allow" for st in policy["Statement"])
+    # No role or user can be made, and the run's secret stays the box's to read.
+    assert {a for a in actions if a.startswith("iam:")} == {"iam:PassRole",
+                                                             "iam:GetInstanceProfile"}
+    assert not [a for a in actions if a.startswith(("secretsmanager:", "sns:"))]
+    assert not [a for a in actions if a.endswith("*") and a != "ec2:Describe*"]
+    for st in policy["Statement"]:
+        if set(st["Action"]) & {"ec2:TerminateInstances", "ec2:RunInstances"} and \
+                "instance/*" in str(st["Resource"]):
+            assert "sis-first-run" in json.dumps(st["Condition"])   # only the tagged box
+        if "s3:PutObject" in st["Action"]:
+            assert st["Resource"].endswith("/tofu/*")              # state, never the runs

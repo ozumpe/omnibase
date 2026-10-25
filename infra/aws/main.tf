@@ -1,16 +1,11 @@
 # One instance, one secret, one bucket, one budget. Design: docs/AWS_RUN.md.
+# The instance itself is modules/box; box/ applies it alone (OMNI-169).
 
 data "aws_vpc" "default" {
   default = true
 }
 
 data "aws_caller_identity" "current" {}
-
-# Canonical publishes the current Ubuntu 24.04 AMI id as a public SSM
-# parameter, so nothing here pins a stale AMI by hand.
-data "aws_ssm_parameter" "ubuntu_ami" {
-  name = "/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id"
-}
 
 # --------------------------------------------------------------------------
 # Network: zero ingress. Shell access is SSM Session Manager (outbound from
@@ -137,70 +132,32 @@ resource "aws_s3_bucket_public_access_block" "artifacts" {
 }
 
 # --------------------------------------------------------------------------
-# The box.
+# The box. Its definition is the module in modules/box, shared with the
+# box-only stack in box/ that a scheduled run applies and destroys (OMNI-169).
+# With create_instance = false this stack is the long-lived base only: the
+# secret keeps its value and the pager its confirmed subscription between
+# scheduled runs, and no second box carries the same Name tag.
 # --------------------------------------------------------------------------
 
-resource "aws_instance" "sis" {
-  ami                    = data.aws_ssm_parameter.ubuntu_ami.value
-  instance_type          = var.instance_type
-  vpc_security_group_ids = [aws_security_group.egress_only.id]
-  iam_instance_profile   = aws_iam_instance_profile.instance.name
+module "box" {
+  source = "./modules/box"
+  count  = var.create_instance ? 1 : 0
 
-  # IMDSv2 only. Candidate code is kept away from the credential endpoint by
-  # the gauntlet's --network none, not by this — but v1 has no business here.
-  metadata_options {
-    http_endpoint = "enabled"
-    http_tokens   = "required"
-  }
+  name_prefix       = var.name_prefix
+  instance_type     = var.instance_type
+  root_volume_gb    = var.root_volume_gb
+  repo_url          = var.repo_url
+  repo_ref          = var.repo_ref
+  allow_branch_ref  = var.allow_branch_ref
+  security_group_id = aws_security_group.egress_only.id
+  instance_profile  = aws_iam_instance_profile.instance.name
+  alerts_topic_arn  = aws_sns_topic.alerts.arn
+  artifacts_bucket  = aws_s3_bucket.artifacts.bucket
+}
 
-  root_block_device {
-    volume_size = var.root_volume_gb
-    volume_type = "gp3"
-    encrypted   = true
-  }
-
-  # Six lines on purpose; the real bootstrap lives in the repo where it is
-  # versioned and reviewed (scripts/aws_bootstrap.sh).
-  #
-  # DPkg::Lock::Timeout is not a nicety: Ubuntu's cloud images run
-  # unattended-upgrades on the apt-daily timer at boot, which is exactly when
-  # user_data runs. Without it, apt loses the race, `set -e` aborts, and the
-  # box comes up with no repo and a truncated log — the classic user_data
-  # failure. Waiting is the whole fix; apt >= 2.1.10 (24.04 ships 2.7) honours
-  # this for its own locks as well as dpkg's.
-  user_data = <<-EOT
-    #!/bin/bash
-    set -euo pipefail
-    exec > /var/log/sis-bootstrap.log 2>&1
-    apt-get -o DPkg::Lock::Timeout=600 update
-    apt-get -o DPkg::Lock::Timeout=600 install -y git
-    git clone --branch ${var.repo_ref} ${var.repo_url} /home/ubuntu/omnibase
-    chown -R ubuntu:ubuntu /home/ubuntu/omnibase
-    echo 'export SIS_NOTIFY_SNS_TOPIC_ARN=${aws_sns_topic.alerts.arn}' > /etc/profile.d/sis-run.sh
-    echo 'export ARTIFACTS_BUCKET=${aws_s3_bucket.artifacts.bucket}' >> /etc/profile.d/sis-run.sh
-    echo 'export SIS_ARTIFACTS_BUCKET=${aws_s3_bucket.artifacts.bucket}' >> /etc/profile.d/sis-run.sh
-    bash /home/ubuntu/omnibase/scripts/aws_bootstrap.sh
-  EOT
-
-  # A new repo_ref (every release bumps its default) must build a new box from
-  # the new tag. Without this, a changed user_data only stops and starts the
-  # same instance; cloud-init runs user_data on first boot only, so the box came
-  # back on the old tag, its loop killed, and `apply` reported success
-  # (OMNI-137). Replacing it loses runtime/ — sync the artifacts first
-  # (docs/AWS_RUN.md, step 5d); open PRs are re-read from GitHub (OMNI-136).
-  user_data_replace_on_change = true
-
-  tags = { Name = var.name_prefix }
-
-  lifecycle {
-    # OMNI-63: a release tag unless someone says otherwise, out loud. A
-    # precondition rather than a variable validation so the rule can read both
-    # variables, and so it fails at plan time — before anything is created.
-    precondition {
-      condition     = can(regex("^v[0-9]+\\.[0-9]+\\.[0-9]+$", var.repo_ref)) || var.allow_branch_ref
-      error_message = "repo_ref must be a release tag (vX.Y.Z); to run a branch, also set allow_branch_ref = true."
-    }
-  }
+moved {
+  from = aws_instance.sis
+  to   = module.box[0].aws_instance.sis
 }
 
 # --------------------------------------------------------------------------

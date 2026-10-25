@@ -21,7 +21,16 @@ tofu plan
 tofu apply
 ```
 
-State is local and gitignored, like `terraform.tfvars`. The Secrets Manager
+State is local and gitignored, like `terraform.tfvars`.
+
+**Two stacks, one box** (OMNI-169). The instance is `modules/box`. This stack
+builds it while `create_instance` is true, the default and the human runbook.
+`box/` builds it alone, for scheduled runs: `scripts/aws_scheduled_run.py
+--box ephemeral` applies and destroys it, with its state and lock in the
+artifacts bucket, under keys limited to `scheduled_runner_policy.json`. Set
+`create_instance = false` here before using `box/`, so this stack keeps only
+the base (secret, pager, bucket, role, group, budget) and two boxes never share
+a Name tag. See `docs/AWS_RUN.md` "Scheduled runs". The Secrets Manager
 secret is created empty on purpose: put the value in with
 `scripts/aws_secret.py --upload` (see the `put_secret_hint` output), never
 through the config, so it never enters state. The whole run-day sequence is at

@@ -1114,8 +1114,13 @@ through OMNI-163; 113 Done, 1 In Progress (OMNI-35), 49 To Do):
    starts, watches, and stops it, or (OMNI-168) a scheduled task does, through
    `scripts/aws_scheduled_run.py`: it starts only a *stopped* box, interrupts
    a loop that holds for a PR or passes its time limit, and always stops the
-   instance. Merges, `tofu` and re-seeding stay human (AWS_RUN.md
-   "Scheduled runs").
+   instance. With `--box ephemeral` (OMNI-169) it builds the box itself with
+   `tofu apply` on `infra/aws/box` (state and lock in the artifacts bucket)
+   and always destroys it; the base (`infra/aws`, `create_instance = false`:
+   secret, pager, bucket, role, budget) stays human, so the task's keys
+   (`infra/aws/scheduled_runner_policy.json`) launch and terminate one tagged
+   box and create no IAM. Merges, the base's `tofu` and re-seeding stay human
+   (AWS_RUN.md "Scheduled runs").
 
 8. **[OMNI-30](https://olafzumpe.atlassian.net/browse/OMNI-30) — omnitrack
    Phase A: the `Sensor` port.** `To Do`, filed 2026-08-27 — the first epic of

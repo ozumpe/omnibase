@@ -474,45 +474,81 @@ everything else is gone, and the bucket keeps its logs unless you empty it
 deliberately. It deletes the secret immediately, so re-upload it
 ([step 2](#2-upload-the-secret-laptop)) after the next `apply`.
 
-### Scheduled runs (OMNI-168)
+### Scheduled runs (OMNI-168, OMNI-169)
 
-A scheduled Claude task can do step 5 on a box that already exists and is
-**stopped**, through AWS APIs only (no SSH, no SSM plugin):
+A scheduled Claude task can do step 5 through AWS APIs only (no SSH, no SSM
+plugin), on one of two kinds of box (`--box`):
+
+- **`ephemeral`** (OMNI-169): the run builds its own box with `tofu apply` on
+  `infra/aws/box`, and destroys it afterwards on every way out.
+- **`stopped`** (the default, OMNI-168): a box that you built with step 1 and
+  left **stopped**. The run starts it and stops it again.
 
 ```bash
-python scripts/aws_scheduled_run.py run --contract roman --breaker-threshold 5
-python scripts/aws_scheduled_run.py run --contract sum_of_divisors --dry-run   # what the box gets
+python scripts/aws_scheduled_run.py run --contract roman --box ephemeral --breaker-threshold 5
+python scripts/aws_scheduled_run.py run --contract roman --breaker-threshold 5     # a stopped box
+python scripts/aws_scheduled_run.py run --contract sum_of_divisors --box ephemeral --dry-run
 ```
 
-It starts the instance, waits for SSM, and starts step 5c's loop in a tmux
+**Setting up ephemeral runs (once, laptop).** Split the stack in two: the base
+stays yours, the box becomes the task's.
+
+1. Add `create_instance = false` to `infra/aws/terraform.tfvars`, then run
+   `tofu -chdir=infra/aws apply`. This builds the base (group, role, secret,
+   bucket, pager, budget) without a box. If a box from step 1 still exists,
+   this apply destroys it, so sync its `runtime/` first (step 5d).
+2. Upload the secret (step 2) and confirm the pager subscription (step 3).
+   Both now survive every scheduled run, because no run destroys the base.
+3. Give the task's IAM user `infra/aws/scheduled_runner_policy.json`. It can
+   launch an instance only with the tags `Name=sis-first-run` and
+   `sis:created-by=scheduled-run`, only from Canonical's images and into the
+   egress-only group, and terminate only that tagged box. It can pass the box
+   its one role and write the box stack's state under `tofu/` in the
+   artifacts bucket. It can create no role or user, and it cannot read the
+   secret itself.
+
+An ephemeral run downloads OpenTofu 1.10.6 and refuses it unless its sha256 is
+the one pinned in the script. It keeps the box stack's state at
+`s3://sis-first-run-artifacts-<account>/tofu/box.tfstate`, with S3's own lock
+beside it, so a second run cannot apply at the same time. It refuses to start
+if any instance already carries the Name tag: it never adopts a box it did not
+build. Then it waits up to 40 minutes for the bootstrap's last line
+(`sis bootstrap complete`), and a failed bootstrap ends the run before any
+spend. `--repo-ref vX.Y.Z` picks the release the box clones (a branch needs
+`--allow-branch-ref`, OMNI-63). A `tofu destroy` that fails twice is reported
+as `instance destroyed: NO, take it down by hand`, and the script exits 1.
+
+On either kind of box it waits for SSM, and starts step 5c's loop in a tmux
 session `sis` with one `ssm send-command`: the environment of step 5a, then
 `check_connections.py --deep` (a failure ends the run before any spend), then
 `main.py … --loop --loop-max-cycles 10`, teed to `runtime/loop.log` between a
 `[scheduled] <run id> start` and `exit` line. It reads this run's part of the
 log every minute, presses Ctrl-C in the pane once when the loop holds for a PR
 (it would only wait for you) or after `--limit-minutes` (60), gives the loop 15
-minutes to finish its cycle and sync (step 5d), and **stops the instance on
-every way out**, an error included. It prints the run's `[cycle]`, `[loop]`
-and sync lines, and exits 0 only for a run that ended, with the box stopped.
+minutes to finish its cycle and sync (step 5d), and **stops (or destroys) the
+instance on every way out**, an error included. It prints the run's `[cycle]`, `[loop]`
+and sync lines, and exits 0 only for a run that ended, with the box stopped
+or destroyed.
 
 What it will not do:
 
-- **Touch a box that is not stopped.** A running box may be yours; the run is
-  refused (exit 3) and nothing changes. A second loop on the box is refused
-  too (M28).
+- **Touch a box that is not stopped** (`stopped`), or **any box at all that it
+  did not build** (`ephemeral`). That box may be yours, so the run is refused
+  (exit 3) and nothing changes. A second loop on the box is refused too (M28).
 - **Handle the run's credentials.** The box reads the Anthropic key from the
   secret with its instance role, inside tmux, as in step 5a.
-- **Merge or close a PR, run `tofu`, or re-seed a target.** Those stay yours:
-  a new release still needs [step 1](#1-stand-up-the-box-laptop), and the
-  OpenTofu state lives on the laptop.
+- **Merge or close a PR, apply or destroy the base, or re-seed a target.**
+  Those stay yours. The base's OpenTofu state lives on the laptop. A new
+  release needs only `--repo-ref` on an ephemeral run, and step 1 on a stopped
+  box.
 
-The caller needs AWS keys that can do only this, scoped to the one instance
-(tag `Name=sis-first-run`): `ec2:DescribeInstances`, `ec2:StartInstances`,
-`ec2:StopInstances`, `ssm:SendCommand` (that instance and the
-`AWS-RunShellScript` document), `ssm:GetCommandInvocation`,
-`ssm:DescribeInstanceInformation`, and read access to the artifacts bucket.
-`ssm:SendCommand` is a root shell on a box that can read the run's secret, so
-keep the key scoped to it. Nobody watches a scheduled run as it happens: the
+The caller's AWS keys get `infra/aws/scheduled_runner_policy.json` and
+nothing else. Everything in it is scoped to the one tagged instance, its role,
+its group and the artifacts bucket, apart from the read-only describes.
+`ssm:SendCommand` is a root shell on a box that can read the run's secret,
+and so is launching a box with that role. So keep the keys scoped to these
+grants, and do not add `ec2:ModifyInstanceAttribute`, which could rewrite a
+box's user data. Nobody watches a scheduled run as it happens: the
 pager ([step 3](#3-confirm-the-pager-laptop--dont-click-the-link)) and the
 brakes (spend cap, breaker, max cycles, time limit) do, and every PR still
 waits for your merge.
@@ -579,7 +615,7 @@ not clone it. The box will never recover by itself: `user_data` runs on first
 boot only, and a plain `apply` finds nothing to change. Push the tag
 ([step 1](#1-stand-up-the-box-laptop)), then replace the instance:
 ```bash
-tofu -chdir=infra/aws apply -replace=aws_instance.sis
+tofu -chdir=infra/aws apply -replace='module.box[0].aws_instance.sis'
 ```
 The same command replaces any box whose bootstrap failed part-way. It loses
 `runtime/`, so if the box ran a cycle first, sync it
