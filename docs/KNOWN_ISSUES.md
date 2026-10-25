@@ -586,6 +586,27 @@ any long-lived cluster exists.
 
 ## Resolved
 
+- [OMNI-165] **M33 — `contract_author promote` trusted the loop-writable manifest's
+  name and could write outside `specs/<name>/`** *(found 2026-10-25 by the
+  weekly code review; reproduced on `develop` @ 92e1076)* — `load_staged(name)`
+  took the contract's name from `MANIFEST.json` and never checked it, nor that
+  it matched the directory it was loaded from. `promote()` wrote to
+  `specs_dir / staged.name`, and `_reject_unsafe_path` resolved file paths
+  against that same unchecked root. Staging is loop-writable, so a manifest
+  under `staging/innocent/` naming `../sis` would write `.py` files into
+  `sis/`, and one naming `.` would overwrite `specs/invariants.py`,
+  `specs/scenarios.py` or `specs/comparators.py`, while the human ran
+  `promote innocent`. The digest covers the name, but nothing pointed out that
+  it differed from the directory. **Fixed 2026-10-25 (OMNI-165):** one name
+  rule (`_check_name`: a single directory name, no separator, no leading `.`)
+  is applied to a draft, to the name `load_staged` is given, and again in
+  `promote`; `load_staged` refuses a manifest whose name is not its
+  directory's; `promote` refuses a target that is not a direct child of the
+  specs directory, and checks file paths against the directory it actually
+  writes. The CLI prints `refused:` and exits 1. Regression tests: `../x`,
+  `.`, `..`, `a/b`, an empty name and a mismatched name are refused by
+  `load_staged`, by `promote` and on the command line, and fail without the fix.
+
 - [OMNI-164] **M32 — A fixture episode could show the model an earlier vintage of the
   week it must predict** *(found 2026-10-25 by the weekly code review;
   reproduced on `develop` @ 92e1076; latent: no fixture has been promoted)* —
@@ -1844,3 +1865,4 @@ any long-lived cluster exists.
 [OMNI-161]: https://olafzumpe.atlassian.net/browse/OMNI-161
 [OMNI-162]: https://olafzumpe.atlassian.net/browse/OMNI-162
 [OMNI-164]: https://olafzumpe.atlassian.net/browse/OMNI-164
+[OMNI-165]: https://olafzumpe.atlassian.net/browse/OMNI-165
