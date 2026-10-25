@@ -93,6 +93,9 @@ GUARDRAIL_PATHS: tuple[str, ...] = (
     # specs/, never the SOFT working copy. A loop able to point it elsewhere
     # would generate the inputs it is graded on (D7).
     "sis/scenarios.py",
+    # How a predictor is shown a replay and how its error is computed
+    # (OMNI-36): a loop able to edit it could grade its own forecasts.
+    "sis/prediction_error.py",
     "sis/cost.py",            # spend accounting that feeds the brakes
     "sis/settings.py",        # secret loading + masking
     "sis/adapters.py",        # RequiresHumanApproval guardrails (in-memory)

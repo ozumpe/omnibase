@@ -2,9 +2,9 @@
 
 The sensor implementation reads observations, not a fuel-market model. The
 current EIA adapter captures five weekly series into a local trace, and
-generated scenarios (OMNI-34) replay through the simulated sensor; approved
-domain fixtures (OMNI-35) and prediction-error reporting (OMNI-36) remain
-separate work. No control-loop consumer uses the
+generated scenarios (OMNI-34) replay through the simulated sensor, and a
+predictor's error can be computed on either (OMNI-36); approved domain
+fixtures (OMNI-35) remain separate work. No control-loop consumer uses the
 sensor automatically. This guide describes the current working-tree
 implementation of OMNI-33, not its availability in older release tags.
 
@@ -150,6 +150,39 @@ backtest fixture's argument. `runtime/scenarios.py` is the working copy the
 loop may improve; nothing reads it to judge anything (D7). Every scenario
 reading has source `sim`, and a backtest fixture holding one is refused:
 a scenario may reject a candidate, never be the evidence that promotes one (D4).
+
+## Prediction error
+
+How wrong a predictor is, week by week (OMNI-36). Nothing acts on the number
+yet: an error budget and skill against climatology are Phase B's triggers (D9),
+and this starts no cycle.
+
+```bash
+poetry run python scripts/prediction_error.py                    # autumn 2022, from the EIA trace
+poetry run python scripts/prediction_error.py --from 2022-06-01 --to 2023-01-01
+poetry run python scripts/prediction_error.py --scenario supply_shock --seed 7
+poetry run python scripts/prediction_error.py --scenario outage --seed 3 --events missing_week withdrawn
+```
+
+The question is the fixture builder's: at the moment California's price for a
+week first became known, given everything known then (`replay.as_of`), what is
+next week's price? So the predictor never sees a value before its `known_at`.
+Its answer is compared with next week's value as the trace holds it now, the
+latest vintage; a week whose next value is missing or withdrawn is skipped,
+never scored. The error is signed, predicted minus actual in $/gal, and the
+summary gives bias, MAE and RMSE. A persistence forecast in a rising market
+shows a negative bias.
+
+The predictor is `runtime/ca_price_persistence.py` once the loop has built it
+(the Class-2 contract `ca_price_persistence`), and until then the shipped
+persistence stub; `--predictor PATH` names another. It runs in the sandbox
+worker, never in the script's process. From code,
+`sis.prediction_error.publish(report, telemetry, ref=..., record=self_model.record.remote)`
+emits one `prediction.error` event per week and a `prediction.summary`, and
+records the summary in the SelfModel's provenance.
+
+A trace replay needs a capture first (`scripts/capture_sensor.py`); without
+one the script exits 1 and says so.
 
 ## Times and historical limits
 

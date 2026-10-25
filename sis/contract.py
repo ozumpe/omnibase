@@ -543,10 +543,35 @@ ROMAN = FeatureContract(
     ),
 )
 
+# The first omnitrack predictor (OMNI-36): persistence, next week's California
+# retail price equals the latest one shown. Phase A's climatology baseline (D9),
+# which any later model must beat to be said to have skill. It declares no
+# backtest on purpose (decided with Olaf, 2026-10-15): persistence misses the
+# autumn-2022 jump week by 8-9%, so a gate would fail its own baseline. Its
+# error is computed and reported instead (``sis.prediction_error``). The
+# predictor's input is a backtest fixture's argument: the as-of state.
+CA_PRICE_PERSISTENCE = FeatureContract(
+    name="ca_price_persistence",
+    spec_ref="OMNI-36",
+    entry="predict_next_week",
+    entry_module="runtime/ca_price_persistence.py",
+    acceptance_tests="specs/ca_price_persistence/tests.py",
+    public_api=("predict_next_week",),
+    oracle_path="specs/ca_price_persistence/oracle.py",
+    stub_candidate_path="runtime/candidates/ca_price_persistence.py",
+    invariants=(
+        # Generated fuel-market states (OMNI-34): refutation only, never
+        # evidence of skill (D4).
+        Invariant(name="plausible", strategy="fuel_scenario_states", check="plausible_price"),
+        Invariant(name="deterministic", strategy="fuel_scenario_states",
+                  check="deterministic"),
+    ),
+)
+
 # Kept apart from DEFAULT_CONTRACTS, which are the served (Class-1) targets:
 # the Serve canary, the load generator and ``serve_cloud`` need a reference
 # oracle and a benchmark, and a feature has neither.
-FEATURE_CONTRACTS: tuple[FeatureContract, ...] = (ROMAN,)
+FEATURE_CONTRACTS: tuple[FeatureContract, ...] = (ROMAN, CA_PRICE_PERSISTENCE)
 
 # Every contract the loop can run (OMNI-147): what ``bootstrap`` registers and
 # ``--contract`` selects from. The SWE builds a feature where it optimises a

@@ -176,6 +176,9 @@ DEFAULT_TARGET_PATHS: tuple[str, ...] = (
     # the loop may improve. The pinned copy that generates gauntlet inputs is
     # specs/scenarios.py, FORBIDDEN with the rest of specs/.
     "runtime/scenarios.py",
+    # The persistence predictor (OMNI-36), a Class-2 target like roman: absent
+    # until an implementer writes it from specs/ca_price_persistence/.
+    "runtime/ca_price_persistence.py",
 )
 
 SCHEMA: tuple[Key, ...] = (
