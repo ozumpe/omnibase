@@ -41,6 +41,7 @@ from sis.ports import (
     Severity,
     TimeAxis,
 )
+from sis.sensor_input import Absent
 
 
 class InMemoryTelemetry:
@@ -361,12 +362,14 @@ class SimSensor:
 
     The simulated half of the Sensor port. What it holds is given to it, so it
     is as good as that trace and no better: simulation is for refutation, real
-    data is for acceptance (docs/OMNITRACK_VISION.md, D4). Generating scenarios
-    is OMNI-34; this only replays.
+    data is for acceptance (docs/OMNITRACK_VISION.md, D4). A generated scenario
+    (OMNI-34, :func:`sis.scenarios.sensor`) is replayed through it like any
+    other trace, its stated absences included.
     """
 
-    def __init__(self, readings: Iterable[Reading] = ()) -> None:
+    def __init__(self, readings: Iterable[Reading] = (), absent: Iterable[Absent] = ()) -> None:
         self._readings = tuple(readings)
+        self._absent = tuple(absent)
 
     @classmethod
     def from_records(cls, records: Iterable[Mapping[str, Any]]) -> SimSensor:
@@ -383,6 +386,20 @@ class SimSensor:
             (reading for reading in self._readings if start <= reading.at(by) < end),
             key=lambda reading: (reading.at(by), reading.at(other),
                                  reading.source, reading.series))
+
+    def absent(
+        self, start: datetime.datetime, end: datetime.datetime, *, by: TimeAxis,
+    ) -> list[Absent]:
+        """The periods the trace states no value for, ordered as :meth:`read` orders
+        readings: the same answer ``EIASensor.absent`` gives for a capture."""
+        start, end = _aware(start, "SimSensor.absent start"), _aware(end, "SimSensor.absent end")
+
+        def at(item: Absent, axis: TimeAxis) -> datetime.datetime:
+            return item.known_at if axis is TimeAxis.KNOWN else item.event_time
+
+        other = TimeAxis.EVENT if by is TimeAxis.KNOWN else TimeAxis.KNOWN
+        return sorted((item for item in self._absent if start <= at(item, by) < end),
+                      key=lambda item: (at(item, by), at(item, other), item.source, item.series))
 
 
 def replay(

@@ -140,6 +140,14 @@ class SourceRules:
             raise ValueError(f"{self.thousands!r} is not a digit-group separator")
 
 
+# The source every generated scenario writes (``specs/scenarios.py``, OMNI-34).
+# Simulation is for refutation, real data is for acceptance (D4): a reading
+# from this source may reject a candidate through the invariant gate, and is
+# refused as a backtest's evidence (``sis.backtest.parse_fixture``,
+# ``sis.fixture_builder.build``). No real adapter may declare it.
+SIMULATED_SOURCE = "sim"
+
+
 @dataclass(frozen=True)
 class Rejection:
     """One record refused, or the whole batch (``index`` -1).
@@ -440,6 +448,7 @@ def sanitise(
 
 
 __all__ = [
-    "NO_VALUE_MARKERS", "Absent", "Limits", "Refused", "Rejection", "Sanitised",
+    "NO_VALUE_MARKERS", "SIMULATED_SOURCE", "Absent", "Limits", "Refused", "Rejection",
+    "Sanitised",
     "SeriesRule", "SourceRules", "UntrustedText", "clean_text", "parse_number", "sanitise",
 ]

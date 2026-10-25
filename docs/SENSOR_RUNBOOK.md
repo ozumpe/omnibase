@@ -1,9 +1,10 @@
 # Sensor capture and replay
 
 The sensor implementation reads observations, not a fuel-market model. The
-current EIA adapter captures five weekly series into a local trace; scenario
-generation (OMNI-34), approved domain fixtures (OMNI-35) and prediction-error
-reporting (OMNI-36) remain separate work. No control-loop consumer uses the
+current EIA adapter captures five weekly series into a local trace, and
+generated scenarios (OMNI-34) replay through the simulated sensor; approved
+domain fixtures (OMNI-35) and prediction-error reporting (OMNI-36) remain
+separate work. No control-loop consumer uses the
 sensor automatically. This guide describes the current working-tree
 implementation of OMNI-33, not its availability in older release tags.
 
@@ -119,6 +120,36 @@ A fixture is the exam, so it reaches `specs/` only through a human:
    --digest <digest> --reason "..."`. It refuses a different digest or a file changed
    since review, and audits to `runtime/operator_audit.jsonl`. Commit the new
    `specs/` directory through a pull request.
+
+## Generated scenarios
+
+Scenarios drive a twin into situations the record does not hold (OMNI-34). Each
+is a pure function of its kind and seed, so a failure it finds reproduces byte
+for byte:
+
+```python
+from sis import scenarios
+from sis.ports import TimeAxis
+
+generated = scenarios.generate("supply_shock", seed=7,
+                               data_events=("missing_week", "republished", "withdrawn"))
+sensor = generated.sensor()                    # a SimSensor, read like a trace
+at = generated.decision_times()[5]             # when a California price became known
+```
+
+The kinds are `supply_shock`, `outage`, `national_move` and `demand_shock`; the
+data events a missing week (stated `NA`), a value re-published a week later and
+a value withdrawn a week later (`W`). Stocks keep their Friday anchor and prices
+their Monday one, with the EIA sensor's reconstructed release times. Magnitudes
+stay inside what the real series have shown (`OBSERVED` in the generator)
+unless a caller passes `stress=True`, and the scenario then says so.
+
+The generator is `specs/scenarios.py`, the pinned copy the gauntlet uses: the
+invariant gate's `fuel_scenario_states` strategy draws a state shaped as a
+backtest fixture's argument. `runtime/scenarios.py` is the working copy the
+loop may improve; nothing reads it to judge anything (D7). Every scenario
+reading has source `sim`, and a backtest fixture holding one is refused:
+a scenario may reject a candidate, never be the evidence that promotes one (D4).
 
 ## Times and historical limits
 

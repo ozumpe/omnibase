@@ -50,6 +50,7 @@ from pathlib import Path
 from typing import Any
 
 from sis.clock import parse_event_time
+from sis.sensor_input import SIMULATED_SOURCE
 
 # Fixture schema version. Bumped only for a breaking layout change; the gate
 # refuses a version it does not know rather than guessing at the shape and
@@ -133,6 +134,16 @@ class Fixture:
     event_time: datetime | None = None
 
 
+def _simulated(value: Any) -> bool:
+    """Whether *value* holds a record whose ``source`` is the simulated one, at any depth."""
+    if isinstance(value, dict):
+        return value.get("source") == SIMULATED_SOURCE or any(
+            _simulated(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_simulated(item) for item in value)
+    return False
+
+
 def parse_fixture(raw: str, *, where: str) -> Fixture:
     """Parse a fixture document, or raise ValueError naming *where* it came from.
 
@@ -157,6 +168,13 @@ def parse_fixture(raw: str, *, where: str) -> Fixture:
     args = data.get("args")
     if not isinstance(args, list):
         raise ValueError(f"{where}: 'args' must be a list of entry-point arguments")
+    if _simulated(args):
+        # D4, in the code: a backtest is acceptance evidence, and a generated
+        # scenario is for refutation only (OMNI-34). A fixture built from one
+        # would let the simulator vouch for the model it drives.
+        raise ValueError(f"{where}: holds simulated readings (source {SIMULATED_SOURCE!r}); "
+                         "a scenario may reject a candidate, never be the evidence that "
+                         "promotes one")
 
     raw_event_time = data.get("event_time")
     if raw_event_time is None:

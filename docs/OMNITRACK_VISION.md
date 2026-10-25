@@ -4,8 +4,9 @@
 port (OMNI-23), `Sensor`/`SimSensor` (OMNI-31), the sanitising boundary
 (OMNI-32), EIA capture/replay (OMNI-33, merged to `develop`), and the
 fixture tooling with its replay order (OMNI-35, in progress: the real fixture
-waits for the box's first capture and a human's promotion). Scenario
-generation (OMNI-34), the first gated contract (OMNI-163) and prediction-error
+waits for the box's first capture and a human's promotion), and scenario
+generation (OMNI-34, in review: `specs/scenarios.py` pinned, `runtime/scenarios.py`
+the working copy). The first gated contract (OMNI-163) and prediction-error
 reporting (OMNI-36) remain planned. E2–E5 are not built. No fuel-market model is attached
 to the running loop yet. See [SENSOR_RUNBOOK.md](SENSOR_RUNBOOK.md) for what the
 implemented sensor actually reads.
@@ -81,8 +82,12 @@ run in event time, not wall-clock.
 carries two times, `event_time` and `known_at`, and every read names which one it means.
 The real adapter is built as well (OMNI-33): `EIASensor` in `sis/adapters_real.py`
 captures EIA's bulk file into an append-only trace (`sis/sensor_trace.py`, D12's capture
-format) through the sanitising boundary (OMNI-32). What remains of E1 is scenario
-generation (OMNI-34).
+format) through the sanitising boundary (OMNI-32). Scenario generation is built as
+well (OMNI-34): seeded supply-shock, outage, national-move and demand-shock episodes
+with missing, re-published and withdrawn weeks, D7's two copies (`specs/scenarios.py`
+pinned and FORBIDDEN, `runtime/scenarios.py` SOFT), wired into the invariant gate as
+`fuel_scenario_states`, and D4 in code: a backtest fixture holding source `sim` is
+refused.
 
 **The clock half is already built** — `sis/clock.py` (OMNI-23) ships `WallClock`,
 `ReplayClock`, and timezone-required `event_time` parsing, so what remains of E1 is the
