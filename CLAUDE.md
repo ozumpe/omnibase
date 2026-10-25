@@ -1111,7 +1111,11 @@ through OMNI-163; 113 Done, 1 In Progress (OMNI-35), 49 To Do):
    three tokens (Atlassian, GitHub PAT, Anthropic), `tofu apply`,
    `scripts/aws_secret.py --upload`, the supervised cycles, `tofu destroy`.
    Explicitly **not** RUNBOOK Level 4: no autostart, no autonomy — a human
-   starts, watches, and stops it.
+   starts, watches, and stops it, or (OMNI-168) a scheduled task does, through
+   `scripts/aws_scheduled_run.py`: it starts only a *stopped* box, interrupts
+   a loop that holds for a PR or passes its time limit, and always stops the
+   instance. Merges, `tofu` and re-seeding stay human (AWS_RUN.md
+   "Scheduled runs").
 
 8. **[OMNI-30](https://olafzumpe.atlassian.net/browse/OMNI-30) — omnitrack
    Phase A: the `Sensor` port.** `To Do`, filed 2026-08-27 — the first epic of

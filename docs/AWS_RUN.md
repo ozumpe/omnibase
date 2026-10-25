@@ -13,7 +13,8 @@ opposite on purpose: no systemd unit, no autostart, no autoscaling.
 
 This document has four parts:
 
-1. [Run day](#run-day): the steps, in order. Start here.
+1. [Run day](#run-day): the steps, in order. Start here. A run can also be
+   started and stopped by a scheduled task: [Scheduled runs](#scheduled-runs).
 2. [Troubleshooting](#troubleshooting): everything that has gone wrong before.
 3. [How the box is built](#how-the-box-is-built): why each piece is the way it is.
 4. [History](#history): what each run and rehearsal found.
@@ -472,6 +473,49 @@ tofu -chdir=infra/aws destroy
 everything else is gone, and the bucket keeps its logs unless you empty it
 deliberately. It deletes the secret immediately, so re-upload it
 ([step 2](#2-upload-the-secret-laptop)) after the next `apply`.
+
+### Scheduled runs (OMNI-168)
+
+A scheduled Claude task can do step 5 on a box that already exists and is
+**stopped**, through AWS APIs only (no SSH, no SSM plugin):
+
+```bash
+python scripts/aws_scheduled_run.py run --contract roman --breaker-threshold 5
+python scripts/aws_scheduled_run.py run --contract sum_of_divisors --dry-run   # what the box gets
+```
+
+It starts the instance, waits for SSM, and starts step 5c's loop in a tmux
+session `sis` with one `ssm send-command`: the environment of step 5a, then
+`check_connections.py --deep` (a failure ends the run before any spend), then
+`main.py … --loop --loop-max-cycles 10`, teed to `runtime/loop.log` between a
+`[scheduled] <run id> start` and `exit` line. It reads this run's part of the
+log every minute, presses Ctrl-C in the pane once when the loop holds for a PR
+(it would only wait for you) or after `--limit-minutes` (60), gives the loop 15
+minutes to finish its cycle and sync (step 5d), and **stops the instance on
+every way out**, an error included. It prints the run's `[cycle]`, `[loop]`
+and sync lines, and exits 0 only for a run that ended, with the box stopped.
+
+What it will not do:
+
+- **Touch a box that is not stopped.** A running box may be yours; the run is
+  refused (exit 3) and nothing changes. A second loop on the box is refused
+  too (M28).
+- **Handle the run's credentials.** The box reads the Anthropic key from the
+  secret with its instance role, inside tmux, as in step 5a.
+- **Merge or close a PR, run `tofu`, or re-seed a target.** Those stay yours:
+  a new release still needs [step 1](#1-stand-up-the-box-laptop), and the
+  OpenTofu state lives on the laptop.
+
+The caller needs AWS keys that can do only this, scoped to the one instance
+(tag `Name=sis-first-run`): `ec2:DescribeInstances`, `ec2:StartInstances`,
+`ec2:StopInstances`, `ssm:SendCommand` (that instance and the
+`AWS-RunShellScript` document), `ssm:GetCommandInvocation`,
+`ssm:DescribeInstanceInformation`, and read access to the artifacts bucket.
+`ssm:SendCommand` is a root shell on a box that can read the run's secret, so
+keep the key scoped to it. Nobody watches a scheduled run as it happens: the
+pager ([step 3](#3-confirm-the-pager-laptop--dont-click-the-link)) and the
+brakes (spend cap, breaker, max cycles, time limit) do, and every PR still
+waits for your merge.
 
 ---
 
