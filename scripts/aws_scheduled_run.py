@@ -80,8 +80,20 @@ _SECRET_ID = re.compile(r"^[A-Za-z0-9/_+=.@-]{1,512}$")
 _RELEASE_TAG = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
 _GIT_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$")
 
-# SSM keeps 24,000 characters of a command's output; stay under it.
+# SSM keeps 24,000 characters of a command's output; stay under it: the
+# status lines (at most 300 characters each) and the tail together.
 _TAIL_BYTES = 20_000
+_STATUS_CHARS = 300
+
+# The lines read_log decides on. A tail alone loses them once the run's part
+# of the log passes _TAIL_BYTES (M35, OMNI-171), so the last of each kind is
+# printed apart from the tail, wherever it is.
+_SYNCED = "[sis] artifacts synced to"
+_CRASHED = "[loop] crashed:"
+_STOPPED = "[loop] stopped after"
+_HOLDING = "[sis] HOLDING"
+# Between the status lines and the tail in tail_commands' output.
+TAIL_SEPARATOR = "----- SIS_TAIL -----"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -195,15 +207,36 @@ def start_commands(cfg: RunConfig) -> list[str]:
 
 
 def tail_commands(run_id: str) -> list[str]:
-    """Print this run's part of the log: everything after its start marker."""
+    """Print this run's part of the log: its status lines, then its tail.
+
+    The status lines are the start marker and the last line of each kind
+    :func:`read_log` decides on, found anywhere after the marker; then
+    :data:`TAIL_SEPARATOR`; then the last ``_TAIL_BYTES`` of the run's part.
+    A tail alone dropped the marker once a run's log passed it, and the
+    driver waited out its limit and grace for a loop that had stopped (M35).
+    """
     if not _RUN_ID.match(run_id):
         raise ValueError(f"run id {run_id!r} is not YYYYMMDDTHHMMSSZ")
-    # index(), not a regex: the marker's brackets would need escaping.
+    keys = "|".join([exit_marker(run_id), _STOPPED, _HOLDING, _SYNCED, _CRASHED])
+    # index(), not a regex: the markers' brackets would need escaping.
+    status = (f"awk -v m='{start_marker(run_id)}' -v ks='{keys}' "
+              "'BEGIN {n = split(ks, k, \"|\")} "
+              f"index($0, m) == 1 {{p = 1; print substr($0, 1, {_STATUS_CHARS}); next}} "
+              "p {for (i = 1; i <= n; i++) if (index($0, k[i])) last[i] = $0} "
+              f"END {{for (i = 1; i <= n; i++) if (i in last) "
+              f"print substr(last[i], 1, {_STATUS_CHARS})}}' {LOG_PATH}")
+    tail = (f"awk -v m='{start_marker(run_id)}' 'index($0, m) == 1 {{p = 1}} p' {LOG_PATH}"
+            f" | tail -c {_TAIL_BYTES}")
     return [
         f"test -f {LOG_PATH} || exit 0",
-        f"awk -v m='{start_marker(run_id)}' 'index($0, m) == 1 {{p = 1}} p' {LOG_PATH}"
-        f" | tail -c {_TAIL_BYTES}",
+        f"{status}; echo '{TAIL_SEPARATOR}'; {tail}",
     ]
+
+
+def log_tail(text: str) -> str:
+    """The tail part of :func:`tail_commands`' output, for the report's lines."""
+    head, sep, tail = text.partition(TAIL_SEPARATOR + "\n")
+    return tail if sep else head
 
 
 def interrupt_commands() -> list[str]:
@@ -260,14 +293,14 @@ def read_log(text: str, run_id: str) -> LogState:
     """Where the run is, from its part of ``runtime/loop.log``."""
     if start_marker(run_id) not in text:
         return LogState(Phase.STARTING)
-    synced = "[sis] artifacts synced to" in text
-    crashed = "[loop] crashed:" in text
+    synced = _SYNCED in text
+    crashed = _CRASHED in text
     end = re.search(re.escape(exit_marker(run_id)) + r" (-?\d+)", text)
     if end:
         return LogState(Phase.EXITED, int(end.group(1)), synced, crashed)
-    if "[loop] stopped after" in text:
+    if _STOPPED in text:
         return LogState(Phase.STOPPED, None, synced, crashed)
-    if "[sis] HOLDING" in text:
+    if _HOLDING in text:
         return LogState(Phase.HOLDING, None, synced, crashed)
     return LogState(Phase.RUNNING, None, synced, crashed)
 
@@ -649,7 +682,7 @@ def run_once(box: Box, cfg: RunConfig, *, limit_s: float = 3600, grace_s: float 
                 say(f"[scheduled] stopping the loop ({why})")
                 box.run(interrupt_commands(), timeout_s=60)
                 out.interrupted, interrupted_at = True, elapsed
-        out.lines = summary_lines(text)
+        out.lines = summary_lines(log_tail(text))
         return out
     except Exception as exc:  # noqa: BLE001 - reported, and the box is still stopped below
         out.error = f"{type(exc).__name__}: {exc}"
