@@ -40,7 +40,7 @@ variable "repo_ref" {
     needs allow_branch_ref = true as well.
   EOT
   type        = string
-  default     = "v0.3.7"
+  default     = "v0.4.0"
 }
 
 variable "allow_branch_ref" {
@@ -73,4 +73,15 @@ variable "monthly_budget_usd" {
 variable "alert_email" {
   description = "Where the budget alarm and the loop's pages (SNS) go. Set it in terraform.tfvars (gitignored)."
   type        = string
+}
+
+variable "create_instance" {
+  description = <<-EOT
+    true: this stack builds the box too (the human runbook). false: the base
+    only, for scheduled runs, whose box is infra/aws/box, created and destroyed
+    by scripts/aws_scheduled_run.py (OMNI-169). Never both: two boxes would
+    share one Name tag, and the scheduled run refuses to start beside one.
+  EOT
+  type        = bool
+  default     = true
 }

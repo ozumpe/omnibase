@@ -1,14 +1,25 @@
 # Brake state & the oracle-versioned circuit breaker (design)
 
-**Status:** **Parts 1–2 & 6 implemented (2026-07-29)** — the `sis` namespace +
+**Status:** historical design. **Parts 1–2 & 6 implemented (2026-07-29)** — the `sis` namespace +
 `get_if_exists` (M2) and CEO brake/spend state persisted to the episodic store and
-rehydrated on restart (L9), with a `reset_breaker()` RPC. **Parts 3–5 remain a
-design sketch — unblocked but unscheduled:** the breaker-cause split and the
+rehydrated on restart (L9), with a `reset_breaker()` RPC. **Parts 3–5 remain an
+unimplemented historical design sketch:** the breaker-cause split and the
 oracle-versioned auto-reset needed the L5 target contract to hash against, and L5
 closed on 2026-08-06 (OMNI-1: `sis/contract.py` + the FORBIDDEN
 `specs/<name>/oracle.py` modules). No Jira story exists for them yet. See
 `docs/KNOWN_ISSUES.md` for the issue IDs and `docs/CLASS2_CONTRACT.md` for the
 target/oracle contract this builds on.
+
+**Current behavior supersedes the convergence proposal below:** OMNI-138 made
+no-gain outcomes neutral and added a convergence stop; they no longer trip a
+separate goal-exhaustion breaker. No oracle-hash auto-reset is implemented.
+OMNI-61 adds audited `python -m sis.admin` control, unreadable-state fail-closed
+boot and a reset that preserves spend. OMNI-157 reserves a cycle's spend and
+saves it before the cycle goes on (a failed save opens the breaker), and
+OMNI-158 versions the CEO's state so an older snapshot never replaces a newer
+one; the record now carries `version` and `lineage` besides the fields below. See [CODE_TOUR.md](CODE_TOUR.md) and
+[AWS_RUN.md](AWS_RUN.md) for operation. Parts 3–5 are retained as historical
+alternatives, not an active delivery plan or available configuration.
 
 > Mirrored in Confluence (SD space) as a child of **Guardrails & Operations**:
 > <https://olafzumpe.atlassian.net/wiki/spaces/SD/pages/6946818>. This repo copy is
@@ -154,7 +165,7 @@ The episodic store (`sis/episodic.py`) is the natural home — it's already the
 durable substrate behind a port. It is append-only, so a small **latest-wins
 `CEO state` record** was added (`save_state` / `load_state`), holding
 `{ spent_usd, consecutive_failures, accepted, tripped }` today
-(`CEO.state_snapshot()`). When Parts 3–5 land it extends to `{ oracle_hash,
+(`CEO.state_snapshot()` at the original milestone). The original Parts 3–5 proposal extended it to `{ oracle_hash,
 spent_usd, consecutive_failures, convergence_tripped, safety_tripped, accepted }`:
 on bootstrap the CEO compares the stored `oracle_hash` to the freshly-computed one
 and clears the convergence breaker on mismatch while carrying spend forward.

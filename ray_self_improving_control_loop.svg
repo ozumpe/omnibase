@@ -1,6 +1,6 @@
 <svg width="100%" viewBox="0 0 680 630" xmlns="http://www.w3.org/2000/svg" role="img">
-<title>Self-improving server control loop, Ray version</title>
-<desc>The cycle adapted for Python and Ray: Ray worker actors emit metrics, supervisor actors gate on budget, an LLM actor proposes Python code, which must clear a validation gauntlet where type-checking and sandboxed execution replace the compiler, then Ray Serve does a weighted canary rollout before promote or rollback. Outcomes feed episodic memory and a circuit breaker.</desc>
+<title>Conceptual self-improving server control loop</title>
+<desc>Original intended control loop, not the current runtime sequence. The implemented contract-selected gates, staged feature PRs and observed human merge promotion are shown in docs/DIAGRAMS.md. Serve remains refused with non-stub proposers and Class-2 contracts; main.py uses demo intake rather than a monitor trigger.</desc>
 <defs>
 <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#5F5E5A" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
 <style>

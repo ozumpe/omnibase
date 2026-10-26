@@ -13,7 +13,8 @@ opposite on purpose: no systemd unit, no autostart, no autoscaling.
 
 This document has four parts:
 
-1. [Run day](#run-day): the steps, in order. Start here.
+1. [Run day](#run-day): the steps, in order. Start here. A run can also be
+   started and stopped by a scheduled task: [Scheduled runs](#scheduled-runs).
 2. [Troubleshooting](#troubleshooting): everything that has gone wrong before.
 3. [How the box is built](#how-the-box-is-built): why each piece is the way it is.
 4. [History](#history): what each run and rehearsal found.
@@ -22,7 +23,7 @@ This document has four parts:
 
 | | |
 |---|---|
-| Code | release tag **`v0.3.7`** (`var.repo_ref`), never a branch — see [Which code runs](#which-code-runs) |
+| Code | release tag **`v0.4.0`** (`var.repo_ref`), never a branch — see [Which code runs](#which-code-runs) |
 | Box | one `m7i.xlarge`, `us-east-1`, **no inbound ports**; shell via SSM only |
 | Contract | Class 1, one with room left: `sort` and `sum_of_divisors` have both converged, so re-seed a naive one on `ozumpe/testrun`'s `develop` first ([Before every run](#before-every-run-a-target-with-room-left)). Or Class 2, `roman`: built from its spec, no re-seed (from `v0.3.5`) |
 | Where artifacts land | Jira `TES`, GitHub `ozumpe/testrun` (PRs against `develop`) |
@@ -378,6 +379,24 @@ aws s3 sync runtime/ "s3://$ARTIFACTS_BUCKET/runs/$(date +%Y%m%d-%H%M)/" \
   --include "loop*.log"
 ```
 
+**e. Capture the sensor, when a run calls for it** (OMNI-35; a release that
+has `scripts/capture_sensor.py`, so from `v0.4.0`). Not part of the loop, and
+independent of its cycles. The first capture downloads EIA's public
+`PET.zip` (about 56 MB, no key) and backfills every declared series; it prints
+what it received, appended and refused (exit 1 can still have appended, see
+`docs/SENSOR_RUNBOOK.md`). Then copy the trace off the box, since the box
+does not outlive the run:
+
+```bash
+poetry run python scripts/capture_sensor.py
+aws s3 cp runtime/sensor_traces/eia.jsonl \
+  "s3://$ARTIFACTS_BUCKET/traces/eia-$(date +%Y%m%d-%H%M).jsonl"
+```
+
+On the laptop, fetch it into `runtime/sensor_traces/eia.jsonl` and build the
+fixture there ("From a trace to a fixture" in `docs/SENSOR_RUNBOOK.md`). The
+instance role may already write anywhere in the artifacts bucket.
+
 ### 6. While it runs (box, a second session)
 
 Open a second session ([step 4](#4-open-a-session-laptop--box)), become
@@ -455,6 +474,88 @@ everything else is gone, and the bucket keeps its logs unless you empty it
 deliberately. It deletes the secret immediately, so re-upload it
 ([step 2](#2-upload-the-secret-laptop)) after the next `apply`.
 
+### Scheduled runs (OMNI-168, OMNI-169)
+
+A scheduled Claude task can do step 5 through AWS APIs only (no SSH, no SSM
+plugin), on one of two kinds of box (`--box`):
+
+- **`ephemeral`** (OMNI-169): the run builds its own box with `tofu apply` on
+  `infra/aws/box`, and destroys it afterwards on every way out.
+- **`stopped`** (the default, OMNI-168): a box that you built with step 1 and
+  left **stopped**. The run starts it and stops it again.
+
+```bash
+python scripts/aws_scheduled_run.py run --contract roman --box ephemeral --breaker-threshold 5
+python scripts/aws_scheduled_run.py run --contract roman --breaker-threshold 5     # a stopped box
+python scripts/aws_scheduled_run.py run --contract sum_of_divisors --box ephemeral --dry-run
+```
+
+**Setting up ephemeral runs (once, laptop).** Split the stack in two: the base
+stays yours, the box becomes the task's.
+
+1. Add `create_instance = false` to `infra/aws/terraform.tfvars`, then run
+   `tofu -chdir=infra/aws apply`. This builds the base (group, role, secret,
+   bucket, pager, budget) without a box. If a box from step 1 still exists,
+   this apply destroys it, so sync its `runtime/` first (step 5d).
+2. Upload the secret (step 2) and confirm the pager subscription (step 3).
+   Both now survive every scheduled run, because no run destroys the base.
+3. Give the task's IAM user `infra/aws/scheduled_runner_policy.json`. It can
+   launch an instance only with the tags `Name=sis-first-run` and
+   `sis:created-by=scheduled-run`, only from Canonical's images and into the
+   egress-only group, and terminate only that tagged box. It can pass the box
+   its one role and write the box stack's state under `tofu/` in the
+   artifacts bucket. It can create no role or user, and it cannot read the
+   secret itself. Canonical's Ubuntu AMIs carry the owner alias `amazon`, and
+   IAM evaluates `ec2:Owner` as that alias, so the image statement allows
+   `amazon` as well as Canonical's account id: with the account id alone,
+   the first trial's `RunInstances` was denied on the image (2026-10-25).
+
+An ephemeral run downloads OpenTofu 1.10.6 and refuses it unless its sha256 is
+the one pinned in the script. It keeps the box stack's state at
+`s3://sis-first-run-artifacts-<account>/tofu/box.tfstate`, with S3's own lock
+beside it, so a second run cannot apply at the same time. It refuses to start
+if any instance already carries the Name tag: it never adopts a box it did not
+build. Then it waits up to 40 minutes for the bootstrap's last line
+(`sis bootstrap complete`), and a failed bootstrap ends the run before any
+spend. `--repo-ref vX.Y.Z` picks the release the box clones (a branch needs
+`--allow-branch-ref`, OMNI-63). A `tofu destroy` that fails twice is reported
+as `instance destroyed: NO, take it down by hand`, and the script exits 1.
+
+On either kind of box it waits for SSM, and starts step 5c's loop in a tmux
+session `sis` with one `ssm send-command`: the environment of step 5a, then
+`check_connections.py --deep` (a failure ends the run before any spend), then
+`main.py … --loop --loop-max-cycles 10`, teed to `runtime/loop.log` between a
+`[scheduled] <run id> start` and `exit` line. It reads this run's part of the
+log every minute, presses Ctrl-C in the pane once when the loop holds for a PR
+(it would only wait for you) or after `--limit-minutes` (60), gives the loop 15
+minutes to finish its cycle and sync (step 5d), and **stops (or destroys) the
+instance on every way out**, an error included. It prints the run's `[cycle]`, `[loop]`
+and sync lines, and exits 0 only for a run that ended, with the box stopped
+or destroyed.
+
+What it will not do:
+
+- **Touch a box that is not stopped** (`stopped`), or **any box at all that it
+  did not build** (`ephemeral`). That box may be yours, so the run is refused
+  (exit 3) and nothing changes. A second loop on the box is refused too (M28).
+- **Handle the run's credentials.** The box reads the Anthropic key from the
+  secret with its instance role, inside tmux, as in step 5a.
+- **Merge or close a PR, apply or destroy the base, or re-seed a target.**
+  Those stay yours. The base's OpenTofu state lives on the laptop. A new
+  release needs only `--repo-ref` on an ephemeral run, and step 1 on a stopped
+  box.
+
+The caller's AWS keys get `infra/aws/scheduled_runner_policy.json` and
+nothing else. Everything in it is scoped to the one tagged instance, its role,
+its group and the artifacts bucket, apart from the read-only describes.
+`ssm:SendCommand` is a root shell on a box that can read the run's secret,
+and so is launching a box with that role. So keep the keys scoped to these
+grants, and do not add `ec2:ModifyInstanceAttribute`, which could rewrite a
+box's user data. Nobody watches a scheduled run as it happens: the
+pager ([step 3](#3-confirm-the-pager-laptop--dont-click-the-link)) and the
+brakes (spend cap, breaker, max cycles, time limit) do, and every PR still
+waits for your merge.
+
 ---
 
 ## Troubleshooting
@@ -517,7 +618,7 @@ not clone it. The box will never recover by itself: `user_data` runs on first
 boot only, and a plain `apply` finds nothing to change. Push the tag
 ([step 1](#1-stand-up-the-box-laptop)), then replace the instance:
 ```bash
-tofu -chdir=infra/aws apply -replace=aws_instance.sis
+tofu -chdir=infra/aws apply -replace='module.box[0].aws_instance.sis'
 ```
 The same command replaces any box whose bootstrap failed part-way. It loses
 `runtime/`, so if the box ran a cycle first, sync it
@@ -578,7 +679,7 @@ human, one box: a remote state backend is ceremony this doesn't need yet.
 
 ### Which code runs
 
-The box runs the **release tag** in `var.repo_ref` — `v0.3.7` by default
+The box runs the **release tag** in `var.repo_ref` — `v0.4.0` by default
 (OMNI-63). A tag, not `develop`: a run's results are only worth something if
 they name the code that produced them, and a branch names whatever it pointed
 at when the box booted. `tofu plan` refuses a branch unless

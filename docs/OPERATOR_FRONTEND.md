@@ -11,6 +11,17 @@ See [OMNI-28](https://olafzumpe.atlassian.net/browse/OMNI-28). **Depends on OMNI
 `sis.config.effective()` (already exercised by `main.py --show-config`) are what
 this UI renders and edits.
 
+**Current operating boundary (2026-10-25):** keep the console on loopback,
+accessed locally or through SSM port forwarding. GitHub OAuth configuration is
+not installed as Panel's server auth provider (OMNI-53); an unsigned websocket
+session can bypass the intended login boundary. That is an open defect in
+[KNOWN_ISSUES.md](KNOWN_ISSUES.md), not a guarantee fixed by this
+documentation. Do not deploy publicly on the strength of the OAuth settings
+until it is fixed. The YAML injection through string-valued edits (OMNI-52,
+M12) is fixed: every string is escaped, a control character is refused, and a
+save that would not read back exactly as approved is refused before it writes. The deployment/auth design
+below describes the intended boundary.
+
 ## What it needs to do
 
 View system state; edit config gated by each key's `ConfigTier`
@@ -18,11 +29,12 @@ View system state; edit config gated by each key's `ConfigTier`
 `strict_` keys are editable behind a justified confirmation, `soft_` keys are
 editable freely.
 
-**The gate lives in the write path, not in the UI.** `sis/operator.py` refuses
+**The direct tier gate lives in the write path, not in the UI.** `sis/operator.py` refuses
 a `forbidden_` edit, and an unjustified `strict_` edit, no matter what the
 browser sends — a widget that is merely disabled is not a gate, it is a
 suggestion. The Panel layer renders that same tier information, but nothing
-depends on it doing so.
+depends on it doing so. This direct check does not contain the YAML-rendering
+defect above: a permitted string value can alter other keys in the rendered file.
 
 ## What the read side shows
 
@@ -146,11 +158,11 @@ Single-operator tool, so identity reduces to "is this GitHub account on a
 short allowlist" — checked once per session, not per key. No password store to
 secure or rotate; MFA is inherited from GitHub's side.
 
-Three rules make that allowlist meaningful rather than decorative, all enforced
-in `sis/operator.py` and unit-tested:
+Three policy checks are implemented in `sis/operator.py` and unit-tested, but
+they do not establish server authentication while OMNI-53 is open:
 
 - **The allowlist is a `forbidden_` config key.** `frontend.allowed_logins`
-  cannot be edited through the UI it governs, because an operator who could
+  cannot be edited directly through the UI it governs, because an operator who could
   append a login to it could grant access to anyone — privilege escalation
   through the tool's own front door. Same for `frontend.auth` and
   `frontend.bind`: turning off authentication, or moving what interface the app

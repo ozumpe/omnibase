@@ -1,7 +1,15 @@
 # Actors, Roles & External Subsystems
 
 This is the authoritative spec for the actor org and how it touches the outside
-world. `CLAUDE.md` and `DESIGN.md` reference this file.
+world. `CLAUDE.md` and `DESIGN.md` reference this file. Role mandates describe
+the intended organization; the current implementation boundary is stated below.
+
+**Current runtime:** `org.bootstrap()` centrally creates all seven roles plus
+`Workspace` and `SelfModel` as named, detached actors in the `sis` namespace,
+using `get_if_exists=True`. CEO/PM/CTO do not currently create or own Ray child
+actors. The spawning relationships in the role descriptions are design goals.
+Real artifact adapters use REST/SDK calls; MCP connectors are tools used by
+contributors, not the engine's transport.
 
 > **Diagrams:** [`docs/DIAGRAMS.md`](docs/DIAGRAMS.md) has the UML views —
 > a [sequence diagram of one cycle](docs/DIAGRAMS.md#2-sequence--one-self-improvement-cycle)
@@ -44,6 +52,13 @@ are the actors' shared coordination + memory substrate.
 | Cloud / Infra             | AWS                        | Compute, networking, deploy targets |
 | Telemetry                 | cluster + cloud metrics    | Logs, metrics, traces |
 | Notifier                  | AWS SNS                    | Pages a human: breaker trip, spend-cap hit, broken sandbox, a loop that stopped (OMNI-62) |
+| Sensor                    | `SimSensor`, a canned trace; the real one is `EIASensor`, EIA's bulk petroleum file (OMNI-33) | Readings of the modelled world, each with a unit and two times: the period it describes and when it became known (OMNI-31) |
+
+Sensor consumers receive their adapter explicitly; sensor reads do not go
+through `Workspace`. Capture and replay operations are in
+[`docs/SENSOR_RUNBOOK.md`](docs/SENSOR_RUNBOOK.md). Cloud defaults are recording
+adapters; `ServeCloud` is the opt-in traffic backend, with the non-stub and
+Class-2 refusals documented in [`docs/SERVE_CANARY.md`](docs/SERVE_CANARY.md).
 
 Same adapter mechanism later connects **domain** actors to the modeled world's APIs
 (traffic sensors, building systems, etc.) — the "real world" connection is uniform.
@@ -53,28 +68,21 @@ Same adapter mechanism later connects **domain** actors to the modeled world's A
 A dedicated Ray **named, detached** actor (the **Registry / SelfModel**) maintains a
 live, queryable model of the system itself and its substrate. This is the **first
 piece of the world the server models**, using the same machinery it will later point
-at traffic / a building / a factory. Bootstrapping = the system modeling itself;
-pointing it outward is then a configuration change, not a rewrite.
+at traffic / a building / a factory. External modeling requires contracts,
+fixtures and consumers; choosing a sensor backend alone does not build a twin.
 
-Tracks (software / self):
-- Actor registry: each actor's role, state, parent/child, mailbox depth, restart
-  count, node placement
-- Deployment state: blue/green slots, which version is live, in-flight canaries
-- Goals, SLOs, budgets, active self-improvement cycles
-- Provenance graph: spec -> epic/story -> branch/PR -> deploy -> outcome
+Implemented (`sis/self_model.py`):
+- Actor registrations with name, role, parent, state and a recorded restart
+  counter. These are application records, not automatic Ray lifecycle probes.
+- Deployment slots, live version, pending PR, contract registry and PR-contract links.
+- Provenance events linking specs, plans, commits, PRs and outcomes.
+- A substrate snapshot containing Ray cluster resource totals, Python version
+  and platform. Budget/brake state is owned by CEO, not duplicated here.
 
-Tracks (hardware / runtime):
-- Ray cluster nodes; CPU/RAM/GPU/disk/network headroom per node
-- AWS substrate: instance types, region/AZ, autoscaling state
-- OS / runtime versions
-
-Why it is load-bearing:
-- **Error collection** — map an exception to the exact actor, node, and code version
-- **Blue/green handling** — know which slot is live and whether there is capacity to
-  stand up a green environment
-- **Building additional roles** — reason over its own org chart to decide it needs a
-  new actor (e.g., a SecurityReviewer) and where to place it
-- **Starting/monitoring actors** — the source of truth for supervision and placement
+Planned observability includes mailbox depth, actor placement, automatic restart
+tracking, per-node CPU/RAM/GPU/disk/network headroom and AWS instance/region/
+autoscaling inventory. Dynamic role creation and placement based on that
+inventory are also planned; they are not capabilities of the current registry.
 
 ## Roles
 
@@ -85,7 +93,7 @@ Ray form.**
 - **Mandate:** hold the project's goals and budget; decide what is worth doing.
 - **Owns:** top-level objectives, the hard cost cap, the budget gate in the control
   loop, and kill-switch / circuit-breaker authority.
-- **Spawns:** PM and CTO.
+- **Planned spawning relationship:** PM and CTO.
 - **Talks to:** PM (value/scope), CTO (cost/progress; receives reports). Brokers
   goal-vs-feasibility-vs-cost between them.
 - **Real world:** reads roll-up status (Jira) and cost telemetry; writes rarely —
@@ -96,20 +104,20 @@ Ray form.**
 - **Mandate:** own the product/UX and the correctness of specifications.
 - **Owns:** Confluence design docs; final acceptance of behavior vs spec; spec
   change requests.
-- **Spawns:** Designer actors (UI, higher-level outline).
+- **Planned spawning relationship:** Designer actors (UI, higher-level outline).
 - **Talks to:** CEO (value/scope); CTO (negotiates epics — reads & comments on
   epics/stories in Jira; signals when epics/stories must change -> CTO executes or
   delegates); reviews QA outcomes against intended UX.
 - **Real world:** primary author/reader of Confluence (from templates); comments on
   Jira. **Intake point:** non-technical users drop new designs into a Confluence
   proposal space; the PM refines them into specs the system then builds.
-- **Ray:** named, detached actor; spawns Designer children as needed.
+- **Ray:** named, detached actor; Designer is currently created by bootstrap.
 
 ### CTO — technical execution
 - **Mandate:** turn designs into a buildable, costed plan and drive delivery.
 - **Owns:** translation of Confluence designs -> Jira epics; the technical
   architecture; the initial infra stories per epic; cost/progress coordination.
-- **Spawns/instructs:** DevOps, SWE (incl. SWE leads), QA.
+- **Planned spawning relationship:** DevOps, SWE (incl. SWE leads), QA.
 - **Talks to:** PM (negotiate epics; absorb spec changes), CEO (report cost &
   progress), and down to the engineering roles. Engineers may correct/push back but
   coordinate changes through the CTO.
@@ -126,8 +134,8 @@ Ray form.**
 - **Real world:** reads Jira stories + Confluence designs; writes code on **feature
   branches** in Git; opens PRs; moves a story to "Ready for Review" only after a
   clean commit/test. **Never commits to main.**
-- **Ray:** actors spawned by the CTO; shorter-lived per task; under supervision
-  (restart/retry).
+- **Ray:** currently one named, detached SWE actor, created by bootstrap.
+  Per-task workers and SWE leads remain planned.
 
 ### QA — verification
 - **Mandate:** verify that what was built matches the Jira stories and Confluence
@@ -139,7 +147,7 @@ Ray form.**
   implementation; writes Jira state changes/comments. In the control loop, QA + the
   deterministic gauntlet (tests/benchmark) are the review gate — QA **augments**, it
   does not replace, the deterministic checks.
-- **Ray:** actors spawned by the CTO.
+- **Ray:** currently one named, detached QA actor, created by bootstrap.
 
 ### DevOps — infrastructure & operations
 - **Mandate:** provide minimal-but-scalable infra and CI/CD; keep the system
@@ -152,11 +160,12 @@ Ray form.**
 - **Real world:** provisions AWS; runs GitHub Actions/CI; executes canary deploys via
   Ray Serve; monitors logs/metrics; files bug/defect Jiras (exceptions, missing or
   insufficient functionality) and feeds the SelfModel's error collection.
-- **Ray:** actors spawned by the CTO; some long-lived (monitors).
+- **Ray:** currently one named, detached DevOps actor, created by bootstrap.
+  Autonomous infrastructure provisioning and dedicated monitor actors remain planned.
 
 ### Designer — UI / higher-level outline
-- Spawned by the PM for UI and high-level project outlines; writes/illustrates in
-  Confluence.
+- Currently a named, detached actor created by bootstrap; writes a spec outline.
+  PM-owned Designer children and richer UI design work remain planned.
 
 ## Roles mapped onto the self-improvement control loop
 

@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Any
 
 from sis import config
+from sis.atomic import write_text_atomic
 from sis.config import ConfigTier, Key, Source
 from sis.policy import Justification
 
@@ -308,13 +309,23 @@ def save_edits(
 
     The audit log is appended after the config file is written, so a failed
     write leaves no record of a change that did not happen.
+
+    **What is written is what was approved** (OMNI-52, M12). The rendered text
+    is parsed again before it is written, and the write is refused unless every
+    key comes back exactly as intended: a value that escaped its quotes once
+    wrote a second ``brakes:`` section and raised the spend cap, while the
+    audit recorded only a harmless ``soft_`` edit. The write itself replaces
+    the file atomically (:func:`sis.atomic.write_text_atomic`), so a crash
+    cannot leave a half-written ``config.yml`` that no engine process can load.
     """
     target = config.CONFIG_FILE if path is None else path
     # Read the file being written, not the process-wide one: otherwise a caller
     # pointed at another path would merge this repo's values into it.
     before = config.load_file(target)
     values = plan_edits(edits, approval=approval, current=before)
-    target.write_text(config.render_config_file(values), encoding="utf-8")
+    rendered = config.render_config_file(values)
+    _check_round_trip(rendered, values, target)
+    write_text_atomic(target, rendered)
     config.reset_config_cache()
 
     at = _audit_now()
@@ -334,6 +345,42 @@ def save_edits(
         audit_path_for(target, audit_path),
     )
     return values
+
+
+def _check_round_trip(rendered: str, values: Mapping[str, Any], target: Path) -> None:
+    """Refuse *rendered* unless parsing it gives back exactly *values*.
+
+    Keys absent from *values* are rendered at their default, so that is what
+    they must parse back to. Only key paths are named in the refusal, never
+    values: a value that did not survive rendering is the one not to echo.
+    """
+    intended = {
+        key.path: values[key.path]
+        if key.path in values
+        else config.parse_value(key, key.default)
+        for key in config.SCHEMA
+    }
+    try:
+        reparsed = config.load_text(rendered, target)
+    # Broad on purpose: PyYAML's errors are not ValueErrors, and whatever the
+    # reason, a file that does not load is one every engine process refuses.
+    except Exception as exc:
+        raise EditRefused(
+            f"refusing to write {target}: the rendered file does not parse "
+            f"({type(exc).__name__})"
+        ) from None
+    differ = sorted(
+        path
+        for path in intended.keys() | reparsed.keys()
+        if path not in intended
+        or path not in reparsed
+        or reparsed[path] != intended[path]
+    )
+    if differ:
+        raise EditRefused(
+            f"refusing to write {target}: the rendered file would not read back "
+            f"as saved for {differ}"
+        )
 
 
 # --------------------------------------------------------------------------

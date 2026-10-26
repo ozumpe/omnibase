@@ -58,7 +58,7 @@ policy:
   # Repo-relative paths in the SOFT tier — the designated optimisation targets.
   # Guardrail paths always win over this list.
   # env: SIS_TARGET_PATHS   flag: --policy-target-paths
-  forbidden_target_paths: ["runtime/target.py", "runtime/sort_target.py", "runtime/roman.py"]
+  forbidden_target_paths: ["runtime/target.py", "runtime/sort_target.py", "runtime/roman.py", "runtime/scenarios.py", "runtime/ca_price_persistence.py"]
   # Let the loop propose changes to STRICT engine code (still requires human approval
   # and a justification).
   # env: SIS_ALLOW_STRICT_CHANGES   flag: --policy-allow-strict-changes
@@ -136,6 +136,13 @@ loop:
   # many. 0 syncs only when the loop stops (OMNI-140).
   # env: SIS_LOOP_ARTIFACT_SYNC_EVERY   flag: --loop-artifact-sync-every
   soft_artifact_sync_every: 1
+
+sensor:
+  # 'sim' replays a canned trace, with no network; 'real' reads EIA's petroleum data as
+  # scripts/capture_sensor.py captured it (OMNI-33). Passed to a consumer as an
+  # argument, never read from the environment inside an actor.
+  # env: SIS_SENSOR   flag: --sensor-backend
+  forbidden_backend: "sim"
 
 contracts:
   # Default contract name; --contract still overrides it per cycle.

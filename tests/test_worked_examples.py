@@ -150,6 +150,23 @@ def test_transcribed_examples_become_real_assertions() -> None:
     assert "MCMLXXXVII" in tests
 
 
+def test_an_example_calling_outside_the_public_api_is_never_transcribed() -> None:
+    # OMNI-54 (M14): any identifier used to become a call in tests.py, and
+    # stage() runs tests.py. A spec page is prose an outsider may influence.
+    body = SPEC.replace("- to_roman(0) -> raises ValueError",
+                        '- `exec("open(\'/tmp/pwned\', \'w\')")` -> `None`\n'
+                        "- open(\"/etc/passwd\") -> None\n"
+                        "- to_roman(0) -> raises ValueError")
+    draft = skeleton_from_spec(name="roman", spec_ref="CONF-R", body=body,
+                               entry="to_roman", public_api=("to_roman", "from_roman"))
+    tests = draft.files["tests.py"]
+    assert "exec" not in tests and "open(" not in tests and "pwned" not in tests
+    assert "to_roman(*args) == expected" in tests       # the API's own still are
+    dropped = untranscribed_examples(body, public_api=("to_roman", "from_roman"))
+    assert sum("outside the contract's public API" in d for d in dropped) == 2
+    assert "outside the contract's public API" in draft.files["README.md"]
+
+
 def test_the_generated_test_module_is_valid_python() -> None:
     compile(_draft().files["tests.py"], "tests.py", "exec")
 
@@ -494,16 +511,10 @@ def test_the_verdict_survives_promotion(tmp_path: pathlib.Path) -> None:
         name="_verdict_probe", spec_ref="C-1",
         files={"tests.py": "def test_a() -> None:\n    assert True\n"},
     )
-    staged = stage(vacuous, staging_dir=tmp_path, public_api=("f",))
+    staged = stage(vacuous, staging_dir=tmp_path / "staging", public_api=("f",))
     assert "README.md" in staged.files
-    target = staged.target
-    try:
-        from sis.contract_author import promote
+    from sis.contract_author import promote
 
-        promote(staged, approved=True)
-        assert "DOES NOT REJECT" in (target / "README.md").read_text(encoding="utf-8")
-    finally:
-        if target.exists():
-            for child in sorted(target.rglob("*"), reverse=True):
-                child.unlink() if child.is_file() else child.rmdir()
-            target.rmdir()
+    # Into a temporary specs/, never the real one (OMNI-42, L39).
+    target = promote(staged, approved=True, digest=staged.digest, specs_dir=tmp_path / "specs")
+    assert "DOES NOT REJECT" in (target / "README.md").read_text(encoding="utf-8")

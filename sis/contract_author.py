@@ -50,11 +50,16 @@ here in guardrail code rather than in a role actor's method.
 
 from __future__ import annotations
 
+import argparse
 import ast
 import builtins
+import hashlib
+import json
 import re
 import shutil
+import sys
 import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from xml.etree import ElementTree
@@ -76,6 +81,10 @@ ALLOWED_SUFFIXES = frozenset({".py", ".json", ".md"})
 # short enough that a runaway draft is an inconvenience rather than an outage.
 DISCRIMINATION_TIMEOUT_SECONDS = 30.0
 
+# Written beside a staged draft: every file's sha256, so what a human reviewed
+# is what gets promoted (OMNI-68, L19). Not itself promoted.
+MANIFEST = "MANIFEST.json"
+
 
 @dataclass(frozen=True)
 class ContractDraft:
@@ -91,12 +100,7 @@ class ContractDraft:
     files: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if not self.name or "/" in self.name or self.name.startswith("."):
-            raise ValueError(
-                f"contract name {self.name!r} must be a single directory name — it "
-                "becomes specs/<name>/, and a name with a separator would place the "
-                "exam somewhere the gates do not look"
-            )
+        _check_name(self.name)
         if not self.spec_ref:
             raise ValueError(
                 f"contract {self.name!r} has no spec_ref: provenance roots at the spec "
@@ -105,11 +109,28 @@ class ContractDraft:
             )
         if not self.files:
             raise ValueError(f"contract {self.name!r} drafts no files")
+        if MANIFEST in self.files:
+            raise ValueError(f"contract {self.name!r}: {MANIFEST} is written by stage(), "
+                             "not drafted")
         for relative in self.files:
             _reject_unsafe_path(relative, contract=self.name)
 
 
-def _reject_unsafe_path(relative: str, *, contract: str) -> None:
+def _check_name(name: str) -> None:
+    """Refuse a contract name that is not one plain directory under specs/.
+
+    Checked wherever a name arrives, not only on a draft: a staged manifest is
+    loop-writable, and its name is where promote() writes (M33, OMNI-165).
+    """
+    if not name or "/" in name or "\\" in name or name.startswith("."):
+        raise ValueError(
+            f"contract name {name!r} must be a single directory name — it "
+            "becomes specs/<name>/, and a name with a separator would place the "
+            "exam somewhere the gates do not look"
+        )
+
+
+def _reject_unsafe_path(relative: str, *, contract: str, specs_dir: Path | None = None) -> None:
     """Refuse anything that could escape the contract's own directory.
 
     Traversal is checked on the *resolved* path rather than by looking for
@@ -131,7 +152,7 @@ def _reject_unsafe_path(relative: str, *, contract: str) -> None:
             f"contract {contract!r}: {relative!r} has suffix {suffix!r}; the gates read "
             f"only {sorted(ALLOWED_SUFFIXES)} and anything else would sit there unread"
         )
-    root = (SPECS_DIR / contract).resolve()
+    root = ((specs_dir or SPECS_DIR) / contract).resolve()
     resolved = (root / relative).resolve()
     if not resolved.is_relative_to(root):
         raise ValueError(
@@ -325,11 +346,47 @@ class StagedContract:
     # Recorded rather than enforced: a human may still approve a vacuous exam —
     # they are sovereign over their own contract — but never unknowingly.
     discrimination: Discrimination | None = None
+    # The sha256 of the staged MANIFEST.json, which names every file's sha256:
+    # the one value a human reviews, and promote() is given back (OMNI-68).
+    digest: str = ""
 
     @property
     def target(self) -> Path:
         """Where promotion would put it. Not written until approved."""
         return SPECS_DIR / self.name
+
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _manifest_bytes(name: str, spec_ref: str, hashes: dict[str, str]) -> bytes:
+    return (json.dumps({"name": name, "spec_ref": spec_ref, "files": hashes},
+                       sort_keys=True, indent=2) + "\n").encode("utf-8")
+
+
+def load_staged(name: str, *, staging_dir: Path | None = None) -> StagedContract:
+    """The staged contract *name*, as its manifest describes it.
+
+    For a later process, a human's: :func:`stage` returns this to its caller,
+    and a reviewer running ``python -m sis.contract_author`` is not that caller.
+
+    The manifest is loop-writable, and its name is where promote() writes, so
+    a name that is not its own directory's is refused (M33, OMNI-165): a human
+    who ran ``promote innocent`` must not promote ``../sis``.
+    """
+    _check_name(name)
+    directory = (staging_dir or CONTRACT_STAGING_DIR) / name
+    raw = (directory / MANIFEST).read_bytes()
+    manifest = json.loads(raw)
+    if manifest.get("name") != name:
+        raise ValueError(
+            f"the staged manifest under {name!r} names the contract "
+            f"{manifest.get('name')!r}; promotion writes where the name says, so a "
+            "name that is not its own directory's is refused: stage it again")
+    return StagedContract(
+        name=name, spec_ref=str(manifest["spec_ref"]),
+        directory=directory, files=tuple(sorted(manifest["files"])), digest=_sha256(raw))
 
 
 def stage(
@@ -382,16 +439,25 @@ def stage(
     # leaves behind — which would drop the vacuous-exam warning on the way into
     # specs/, exactly when it matters most.
     written = set(draft.files) | ({"README.md"} if discrimination is not None else set())
+    hashes = {relative: _sha256((root / relative).read_bytes()) for relative in sorted(written)}
+    manifest = _manifest_bytes(draft.name, draft.spec_ref, hashes)
+    (root / MANIFEST).write_bytes(manifest)
     return StagedContract(
         name=draft.name,
         spec_ref=draft.spec_ref,
         directory=root,
         files=tuple(sorted(written)),
         discrimination=discrimination,
+        digest=_sha256(manifest),
     )
 
 
-def promote(staged: StagedContract, *, approved: bool = False) -> Path:
+class StagedChanged(RuntimeError):
+    """The staged contract is not what the human reviewed. Nothing was promoted."""
+
+
+def promote(staged: StagedContract, *, approved: bool = False, digest: str | None = None,
+            specs_dir: Path | None = None) -> Path:
     """Copy a staged contract into ``specs/``. Requires human approval.
 
     Deliberately a keyword with no default-true path and no ``force``: this is
@@ -399,7 +465,15 @@ def promote(staged: StagedContract, *, approved: bool = False) -> Path:
     satisfy accidentally. The agent's job is to *surface* the decision; a human
     makes it.
 
-    Returns the contract directory under ``specs/``.
+    **What is promoted is what was reviewed** (OMNI-68, L19). *digest* is the
+    manifest digest the human was shown (``python -m sis.contract_author
+    review``). Staging is loop-writable, so the manifest is read again here,
+    its digest must equal *digest*, and every file must still match its hash;
+    the bytes copied are the bytes checked. Before, whatever sat in staging at
+    promotion time went in, rewritten or not.
+
+    *specs_dir* is for tests, which must never write into the real ``specs/``
+    (OMNI-42, L39). Returns the contract directory written.
     """
     if not approved:
         raise RequiresHumanApproval(
@@ -411,13 +485,34 @@ def promote(staged: StagedContract, *, approved: bool = False) -> Path:
             f"staged contract {staged.name!r} is not at {staged.directory}; stage it "
             "again before promoting"
         )
-    target = staged.target
+    if not digest:
+        raise RequiresHumanApproval(
+            f"promoting contract {staged.name!r} needs the manifest digest the human "
+            "reviewed: approval of unnamed content is no approval")
+    raw = (staged.directory / MANIFEST).read_bytes()
+    if _sha256(raw) != digest:
+        raise StagedChanged(
+            f"the staged manifest of {staged.name!r} is not the one reviewed "
+            f"(digest {_sha256(raw)[:12]}…, reviewed {digest[:12]}…): review it again")
+    _check_name(staged.name)
+    specs = specs_dir or SPECS_DIR
+    target = specs / staged.name
+    if target.resolve().parent != specs.resolve():
+        raise ValueError(f"contract {staged.name!r} would not land directly under {specs}")
+    hashes: dict[str, str] = json.loads(raw)["files"]
+    content: dict[str, bytes] = {}
+    for relative, expected in sorted(hashes.items()):
+        _reject_unsafe_path(relative, contract=staged.name, specs_dir=specs)
+        data = (staged.directory / relative).read_bytes()
+        if _sha256(data) != expected:
+            raise StagedChanged(f"{relative} of {staged.name!r} changed after review; "
+                                "stage and review it again")
+        content[relative] = data
     target.mkdir(parents=True, exist_ok=True)
-    for relative in staged.files:
-        source = staged.directory / relative
+    for relative, data in content.items():
         destination = target / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, destination)
+        destination.write_bytes(data)
     return target
 
 
@@ -481,18 +576,25 @@ def parse_worked_examples(body: str) -> list[WorkedExample]:
     return [e for e, _ in _transcribe(body) if e is not None]
 
 
-def untranscribed_examples(body: str) -> list[str]:
+def untranscribed_examples(body: str, *, public_api: tuple[str, ...] | None = None) -> list[str]:
     """Worked-example lines that could not be transcribed, with the reason.
 
     Returned rather than discarded because "the draft contains no rejection
     tests" and "the spec stated four rejection cases and none of them could be
     read" look identical from the outside, and only one of them is fine. The
     README reports these so a reviewer sees what the draft is missing.
+
+    Given *public_api*, an example calling anything else is one of them
+    (OMNI-54, M14): `exec("...")` is a well-formed call, and transcribed it
+    would run whatever the spec page quoted.
     """
     out: list[str] = []
     for example, reason in _transcribe(body):
         if example is None:
             out.append(reason)
+        elif public_api is not None and example.entry not in public_api:
+            out.append(f"{example.entry}(...) (names a function outside the contract's "
+                       "public API)")
         elif not _is_emittable(example):
             why = ("names a non-builtin exception" if example.is_rejection
                    else "value has no literal repr")
@@ -739,7 +841,10 @@ def skeleton_from_spec(
             f'    raise NotImplementedError("write this case from the spec")\n'
         )
 
-    tests.append(_worked_example_source(parse_worked_examples(body)))
+    # Only calls into the contract's own API (OMNI-54, M14): a spec page is prose
+    # an outsider may influence, and stage() runs the drafted tests.
+    examples = [e for e in parse_worked_examples(body) if e.entry in public_api]
+    tests.append(_worked_example_source(examples))
     files = {"tests.py": "".join(tests)}
 
     if laws:
@@ -766,9 +871,8 @@ def skeleton_from_spec(
             )
         files["oracle.py"] = "".join(oracle)
 
-    examples = parse_worked_examples(body)
     emitted = [e for e in examples if _is_emittable(e)]
-    dropped = untranscribed_examples(body)
+    dropped = untranscribed_examples(body, public_api=public_api)
     files["README.md"] = (
         f"# `{name}` contract\n\n"
         f"Drafted from **{spec_ref}** by the contract-author step, and **not yet "
@@ -796,3 +900,81 @@ def pending(staging_dir: Path | None = None) -> tuple[str, ...]:
     if not root.is_dir():
         return ()
     return tuple(sorted(p.name for p in root.iterdir() if p.is_dir()))
+
+
+# --- the human's side of D12 (OMNI-68) ------------------------------------------------
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """``python -m sis.contract_author pending|review|promote``.
+
+    The only command that writes into ``specs/``. Running it is the human's
+    approval, so it is human-only **by convention**, like ``sis.admin``: the
+    loop never calls it, and the guarantee that matters is that it promotes
+    exactly what ``review`` showed, by digest. Every promotion is audited to
+    ``runtime/operator_audit.jsonl`` with its reason.
+    """
+    from sis.operator import (
+        MIN_JUSTIFICATION_CHARS,
+        OPERATOR_AUDIT_JSONL,
+        AuditEntry,
+        _audit_now,
+        append_audit,
+    )
+
+    parser = argparse.ArgumentParser(prog="python -m sis.contract_author",
+                                     description=main.__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    actions = parser.add_subparsers(dest="action", required=True)
+    actions.add_parser("pending", help="list the staged contracts awaiting a human")
+    review = actions.add_parser("review", help="show a staged contract's files and digest")
+    review.add_argument("name")
+    approve = actions.add_parser("promote", help="copy a reviewed contract into specs/")
+    approve.add_argument("name")
+    approve.add_argument("--digest", required=True, help="the digest `review` printed")
+    approve.add_argument("--reason", required=True, help="why: recorded in the audit log")
+    args = parser.parse_args(argv)
+
+    if args.action == "pending":
+        for name in pending():
+            print(name)
+        return 0
+    try:
+        staged = load_staged(args.name)
+    except FileNotFoundError:
+        print(f"no staged contract {args.name!r} with a manifest under "
+              f"{CONTRACT_STAGING_DIR}; stage it first", file=sys.stderr)
+        return 2
+    except ValueError as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 1
+    if args.action == "review":
+        print(f"{staged.name}  (spec {staged.spec_ref})  in {staged.directory}")
+        for relative in staged.files:
+            data = (staged.directory / relative).read_bytes()
+            print(f"  {_sha256(data)[:12]}  {len(data):>9} bytes  {relative}")
+        print(f"digest: {staged.digest}")
+        print("Read the files. If they are the exam you approve, run:\n"
+              f"  python -m sis.contract_author promote {staged.name} "
+              f"--digest {staged.digest} --reason \"...\"")
+        return 0
+    if len(args.reason.strip()) < MIN_JUSTIFICATION_CHARS:
+        print(f"--reason needs at least {MIN_JUSTIFICATION_CHARS} characters: it is what "
+              "the audit log will say about why this exam was approved", file=sys.stderr)
+        return 1
+    try:
+        target = promote(staged, approved=True, digest=args.digest)
+    except StagedChanged as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 1
+    append_audit([AuditEntry(
+        at=_audit_now(), path=f"specs/{staged.name}", tier="contract-author",
+        before=None, after={"digest": args.digest, "files": list(staged.files)},
+        justification=args.reason, note="sis.contract_author promote",
+    )], OPERATOR_AUDIT_JSONL)
+    print(f"promoted {staged.name} into {target}; commit it through a pull request")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -50,6 +50,7 @@ from pathlib import Path
 from typing import Any
 
 from sis.clock import parse_event_time
+from sis.sensor_input import SIMULATED_SOURCE, is_simulated
 
 # Fixture schema version. Bumped only for a breaking layout change; the gate
 # refuses a version it does not know rather than guessing at the shape and
@@ -133,6 +134,16 @@ class Fixture:
     event_time: datetime | None = None
 
 
+def _simulated(value: Any) -> bool:
+    """Whether *value* holds a record whose ``source`` is the simulated one, at any depth."""
+    if isinstance(value, dict):
+        return is_simulated(value.get("source")) or any(
+            _simulated(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_simulated(item) for item in value)
+    return False
+
+
 def parse_fixture(raw: str, *, where: str) -> Fixture:
     """Parse a fixture document, or raise ValueError naming *where* it came from.
 
@@ -157,6 +168,13 @@ def parse_fixture(raw: str, *, where: str) -> Fixture:
     args = data.get("args")
     if not isinstance(args, list):
         raise ValueError(f"{where}: 'args' must be a list of entry-point arguments")
+    if _simulated(args):
+        # D4, in the code: a backtest is acceptance evidence, and a generated
+        # scenario is for refutation only (OMNI-34). A fixture built from one
+        # would let the simulator vouch for the model it drives.
+        raise ValueError(f"{where}: holds simulated readings (source {SIMULATED_SOURCE!r}); "
+                         "a scenario may reject a candidate, never be the evidence that "
+                         "promotes one")
 
     raw_event_time = data.get("event_time")
     if raw_event_time is None:
@@ -281,6 +299,11 @@ def build_script(
                 ok, detail = False, str(exc)
             else:
                 ok, detail = compare(actual, expected, bt["tolerance"])
+                if not ok and bt["split"] == "holdout":
+                    # A comparator's detail names the recorded outcome, and a
+                    # rejection reason reaches the next proposer prompt through
+                    # the feature's notes: a held-out answer must not (M31).
+                    detail = "outside the comparator's tolerance (held out: no values shown)"
             if not ok:
                 print("MISMATCH", json.dumps({{
                     "backtest": bt["name"],

@@ -54,7 +54,8 @@ via GitHub Pro; the client-side hook above is belt-and-suspenders.)
 ## The checks (all must pass before a PR)
 
 ```bash
-poetry run pytest                       # the full suite
+poetry run pytest                       # fast suite; excludes Serve integration
+poetry run pytest -m serve -n 0          # Serve integration; serial
 poetry run mypy --strict sis/ main.py scripts/
 poetry run ruff check .
 ```
@@ -62,6 +63,10 @@ poetry run ruff check .
 `mypy --strict` and `pytest` are both CI gates *and* gauntlet gates — they hold
 generated code to the same bar as hand-written code, so keep everything fully
 type-annotated.
+
+A bare `pytest` is not full verification. CI runs both halves for code changes;
+docs-only changes run `poetry run pytest -m docs -n 0`. A test that reads repo
+Markdown must carry the `docs` marker.
 
 ## Conventions
 
@@ -74,7 +79,8 @@ type-annotated.
   function so it's testable without standing up Ray. Copy this pattern.
 - **Never weaken a guardrail silently.** Destructive/irreversible actions raise
   `RequiresHumanApproval`; the agent works on feature branches and never merges
-  to `main` or promotes a canary to live.
+  to `main`. `DevOps.observe_merge()` applies promotion only after reading a
+  PR back as already merged by a human; it never makes the merge decision.
 - **Docstrings explain *why*.** The modules are documentation; match that tone.
 
 ## Where things live
@@ -85,6 +91,7 @@ type-annotated.
 | Sandbox worker | `sis/sandbox_worker.py`, `sandbox_worker_main.py` | Serves a candidate hot from the same sandbox, over stdio. POLICY-FORBIDDEN. See `docs/STAGED_DELIVERY.md`. |
 | Proposer | `sis/proposer.py` | Stub (default) or Claude behind `SIS_PROPOSER=claude`. |
 | Ports & adapters | `sis/ports.py`, `adapters.py`, `adapters_real.py` | Add a real backend by implementing the Protocols. |
+| Sensor ingestion & traces | `sis/sensor_input.py`, `sensor_trace.py` | Untrusted data boundary and append-only capture. See `docs/SENSOR_RUNBOOK.md`. |
 | Actor org | `sis/roles.py`, `org.py` | The seven roles + the cycle. |
 | Shared state | `sis/workspace.py`, `self_model.py` | Named, detached Ray actors. |
 | Configuration | `sis/config.py`, `config.yml` | Every knob, declared once. POLICY-FORBIDDEN. |
@@ -98,8 +105,14 @@ type-annotated.
   `sis/workspace.py`. Roles don't change.
 - **A new role**: subclass `Role` in `sis/roles.py`, register it in
   `org.bootstrap()`. It coordinates through `Workspace` + `SelfModel`.
-- **A new gauntlet gate**: add it to `validate()` in cheapest-first order, run it
-  through the sandbox helper `_run()`, and add both a pass and a fail test.
+- **A new gauntlet gate**: add a `GateName`, select it in the appropriate
+  `Contract.gate_profile()`, and wire its implementation into the dispatch table
+  in `sis/gauntlet.py`. Keep candidate execution in `SandboxWorker`; trusted
+  acceptance/invariant/backtest harnesses run separately on the host through
+  `_run_harness()` and the proxy. `_run()` alone is not that separation. Add
+  both a pass and a fail test, including attribution of harness failures. The
+  existing SLO gate still judges the candidate in-process in its sandbox;
+  this limitation is recorded as OMNI-86, not a pattern for new gates.
 - **A new configuration knob**: add one `Key(...)` to `SCHEMA` in
   `sis/config.py`, then run `poetry run python -m sis.config --write` to
   regenerate `config.yml`. That gives you the typed accessor, the `SIS_*`
@@ -123,6 +136,13 @@ type-annotated.
   `SIS_SANDBOX=docker` — the loop refuses the soft subprocess sandbox otherwise
   (build the image from `Dockerfile.gauntlet`; explicit override
   `SIS_ALLOW_UNSANDBOXED_LLM=1`, unsafe).
+- **Serve is not a sandbox.** `--canary serve` is refused for any non-stub
+  proposer, with no override, until OMNI-48 isolates its candidate. It is also
+  refused for Class-2 contracts. See `docs/KNOWN_ISSUES.md` H3 and M19.
+- The operator console has a known authentication defect (OMNI-53; the
+  YAML-rendering one, OMNI-52, is fixed). Use it only behind the loopback/SSM boundary described
+  in `docs/OPERATOR_FRONTEND.md`; the configured OAuth mode is not currently an
+  effective authentication boundary.
 
 ## Reporting issues
 

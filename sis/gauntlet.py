@@ -95,7 +95,7 @@ from sis.invariant import (
 from sis.invariant import EXIT_NO_ENTRY as EXIT_NO_ENTRY_INV
 from sis.invariant import build_script as invariant_script
 from sis.invariant import plan_entry as invariant_plan_entry
-from sis.paths import COMPARATORS_PATH, INVARIANTS_PATH, PROJECT_ROOT
+from sis.paths import COMPARATORS_PATH, INVARIANTS_PATH, PROJECT_ROOT, SCENARIOS_PATH
 from sis.slo import EXIT_BAD_WORKLOAD, EXIT_NO_WORKLOAD, EXIT_RAISED, evaluate_slo
 from sis.slo import EXIT_NO_ENTRY as EXIT_NO_ENTRY_SLO
 from sis.slo import build_script as slo_script
@@ -193,6 +193,9 @@ def _docker_args(tmpdir: str, env: dict[str, str], image: str, name: str,
     ``HOME == tmpdir`` (the contract author's discrimination check, the sandbox
     worker) keep the single read-write mount.
 
+    ``--log-driver none``: the daemon keeps no copy of what the candidate
+    writes, on the host's disk (OMNI-156, H11).
+
     ``--name`` lets the timeout handler kill the container by name (SIGKILL to
     the ``docker run`` client does not stop the container). ``--memory`` /
     ``--cpus`` bound a runaway candidate's resource use (override via
@@ -213,6 +216,11 @@ def _docker_args(tmpdir: str, env: dict[str, str], image: str, name: str,
         "--security-opt", "no-new-privileges",
         "--read-only",
         "--pids-limit", "256",
+        # The daemon would otherwise keep every byte the candidate writes to
+        # stdout or stderr in a log on the host's disk, for as long as the
+        # container lives, outside --memory (OMNI-156, H11). Attached output
+        # still reaches the caller; only `docker logs` is lost.
+        "--log-driver", "none",
         "--memory", str(config.get("sandbox.memory")),
         "--cpus", str(config.get("sandbox.cpus")),
         *(("--cpuset-cpus", cpuset) if cpuset is not None else ()),
@@ -797,6 +805,12 @@ def _gate_invariant(ctx: _GateContext) -> Result | None:
                    "— the invariant gate cannot run",
         )
     shared_mod = ctx.put("invariants.py", shared_src.read_text(encoding="utf-8"))
+    # The pinned scenario generator (OMNI-34, D7), which the shared strategies
+    # load from beside themselves. Recorded like every exam file, so a gate
+    # that rewrote it to shape its own inputs is caught as tampering.
+    scenarios_src = pathlib.Path(SCENARIOS_PATH)
+    if scenarios_src.exists():
+        ctx.put("scenarios.py", scenarios_src.read_text(encoding="utf-8"))
 
     seed = ctx.seed
     nonce = secrets.token_hex(8)

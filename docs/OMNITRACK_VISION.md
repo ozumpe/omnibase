@@ -1,9 +1,16 @@
 # From Class 2 to omnitrack — building a digital twin with omnibase
 
-**Status:** vision & sequencing. **None of E1–E5 is built** — with one exception, the
-`Clock` port, which D6 pulled forward into
-[OMNI-23](https://olafzumpe.atlassian.net/browse/OMNI-23) and which shipped as
-`sis/clock.py`.
+**Status:** vision & sequencing. **E1 is partially implemented**: the `Clock`
+port (OMNI-23), `Sensor`/`SimSensor` (OMNI-31), the sanitising boundary
+(OMNI-32), EIA capture/replay (OMNI-33, merged to `develop`), and the
+fixture tooling with its replay order (OMNI-35, in progress: the real fixture
+waits for the box's first capture and a human's promotion), and scenario
+generation (OMNI-34, merged: `specs/scenarios.py` pinned, `runtime/scenarios.py`
+the working copy), and prediction-error reporting against a persistence baseline
+(OMNI-36, in review: `sis/prediction_error.py`, `scripts/prediction_error.py`;
+nothing acts on the error yet). The first gated contract (OMNI-163) remains planned. E2–E5 are not built. No fuel-market model is attached
+to the running loop yet. See [SENSOR_RUNBOOK.md](SENSOR_RUNBOOK.md) for what the
+implemented sensor actually reads.
 
 The Class-2 base this document builds on **has landed** (2026-08-11):
 `FeatureContract` with a contract-selected gate profile, `InterfaceGate`,
@@ -42,15 +49,15 @@ scalar for hundreds of components and nothing converges against it.
 
 ---
 
-## 2. What OMNI-3 provides — and what it doesn't
+## 2. What the engine provides — and what it doesn't
 
-| Capability | After OMNI-3 | Gap for omnitrack |
+| Capability | Current implementation | Gap for omnitrack |
 |---|---|---|
 | Verify a built feature offline | ✅ `FeatureContract` + invariants + backtests | assumes a **deterministic** entry point |
-| Verify on live traffic | ✅ `ServeCloud` canary, same predicates | assumes a **stateless** target |
+| Verify on live traffic | ⚠️ `ServeCloud` mechanics for stub optimization runs | stateless only; non-stub proposers and Class 2 are refused pending isolation/domain integration |
 | Any target, any language | ⚠️ contract yes; `ToolchainAdapter` **parked** (OMNI-20) — Python only today | — |
 | Spec → contract | ✅ contract-author actor (human-reviewed) | — |
-| **Read the world** | ⚠️ `Clock` port shipped (OMNI-23); no `Sensor` | no way to *read* the world — event time exists, readings don't |
+| **Read the world** | ✅ Clock, Sensor, SimSensor, sanitisation and EIA trace capture/replay | scenario generation and approved domain fixtures remain; no domain consumer is wired into the loop |
 | **Know the model is wrong** | ❌ | trigger is "code is slow", not "model disagrees with reality" |
 | **Model non-deterministic reaction** | ❌ | every gate compares values, not distributions |
 | **Hold live state across a swap** | ❌ | canary works *because* the target is stateless |
@@ -66,13 +73,26 @@ None of this is an engine rewrite.
 ## 3. The five new components
 
 ### E1 — `Sensor` port (+ a clock)
-A port like the existing five, with **two adapters from day one**: `RealSensor` (reads the
-world) and `SimSensor` (generates scenarios). Paired with a `Clock` port so the twin can
+A dedicated port with two adapters: `EIASensor` (captures and reads observations)
+and `SimSensor` (replays supplied readings; scenario generation is still planned).
+Paired with a `Clock` port so the twin can
 run in event time, not wall-clock.
+
+**The port and its simulated adapter are built too** (OMNI-31): `Sensor`, `Reading` and
+`TimeAxis` in `sis/ports.py`, `SimSensor` and `replay` in `sis/adapters.py`. A reading
+carries two times, `event_time` and `known_at`, and every read names which one it means.
+The real adapter is built as well (OMNI-33): `EIASensor` in `sis/adapters_real.py`
+captures EIA's bulk file into an append-only trace (`sis/sensor_trace.py`, D12's capture
+format) through the sanitising boundary (OMNI-32). Scenario generation is built as
+well (OMNI-34): seeded supply-shock, outage, national-move and demand-shock episodes
+with missing, re-published and withdrawn weeks, D7's two copies (`specs/scenarios.py`
+pinned and FORBIDDEN, `runtime/scenarios.py` SOFT), wired into the invariant gate as
+`fuel_scenario_states`, and D4 in code: a backtest fixture holding source `sim` is
+refused.
 
 **The clock half is already built** — `sis/clock.py` (OMNI-23) ships `WallClock`,
 `ReplayClock`, and timezone-required `event_time` parsing, so what remains of E1 is the
-`Sensor` port and its two adapters. Note what that module already settled, so E1 doesn't
+scenario generator and the approved domain fixtures. Note what that module already settled, so E1 doesn't
 relitigate it: event time is *not* used for durations (the benchmark gate keeps
 `perf_counter`) and *not* for the audit trail (`SelfModel.record` stays on the wall
 clock). Only "when did something happen out there" goes behind the port.
@@ -91,6 +111,10 @@ model you are also improving. The rule that prevents it: **simulation is for ref
 real data is for acceptance.** Sim finds failure modes and drives coverage; promotion
 requires real-trace evidence (**D4**). The simulator gets its own contract, backtested
 against recorded sensor traces, or it drifts and takes everything downstream with it.
+
+**The boundary for the second trap below is built** (OMNI-32): `sis/sensor_input.py`.
+Every record a real adapter fetches goes through `sanitise`, and free text is carried as
+`UntrustedText`, which is inert wherever it is formatted.
 
 **The second trap: sensor data is untrusted input.** The existing hard rules treat
 generated *code* as untrusted; a `RealSensor` adds untrusted *data* — readings an outside
@@ -318,7 +342,14 @@ consumer sales. Filed as
 [OMNI-39](https://olafzumpe.atlassian.net/browse/OMNI-39), not yet broken into stories.
 
 *Data sources, verified 2026-09-24.* Licence and terms of use are checked separately, by
-a human, before any adapter is written against a source.
+a human, before any adapter is written against a source. **EIA's were checked by Olaf on
+2026-10-13**: its data is public domain and may be reused and redistributed with an
+acknowledgment that dates the publication ("Source: U.S. Energy Information
+Administration (Oct 2008)"); the EIA name may not imply endorsement; and content may not
+be modified while still naming EIA as its source. So a trace keeps EIA's values and unit
+text as published, each capture records the acknowledgment, and anything derived from
+them (a sum, an interpolation, a model's output) is ours, never labelled EIA's
+(`sis/sensor_trace.py`, OMNI-33).
 
 | Source | What | Level | Cadence, latest | Access |
 |---|---|---|---|---|
@@ -463,6 +494,18 @@ replay are impossible without it, and it is nearly free at the start and painful
 → *Decided with Phase A.*
 
 Decided as recommended: event time behind a Clock port with wall-clock as one adapter
+
+**Replay order, decided with OMNI-35 (2026-10-15), before the first fixture was
+recorded.** A replay runs on `known_at`, the order in which the world revealed itself,
+and `event_time` is data. At decision time `t` a model sees the readings with
+`known_at <= t`: per period the latest vintage as of `t`, and nothing a later
+withdrawal hid (`sis/replay.py`, `as_of`). Mixed anchors (Friday-dated stocks,
+Monday-dated prices) are not aligned; resampling is a model's choice. By `event_time`, a
+model asked on Monday 3 October 2022 would see the stocks for the week ending Friday 30
+September, published the Wednesday after. Within a period no two lines share a
+`known_at` (OMNI-160), so no tie decides an order. Backfilled history carries schedule
+times, which an irregular delay makes too early, so a fixture's readings are checked
+against a release calendar a human verified (`sis/fixture_builder.py`).
 
 **D7 — Is the simulator part of the exam or a target the loop may improve?**
 Tension: you want the simulator to get better, but it generates the test inputs.
@@ -639,3 +682,15 @@ the domain's actual data cadence before a fixture is recorded — now a merge of
 series with different anchor days, plus monthly and five-minute ones. The second
 application, Iowa's spirits supply chain, is filed as
 [OMNI-39](https://olafzumpe.atlassian.net/browse/OMNI-39).
+
+**The first gated contract is the PADD 5 inventory twin** (decided with Olaf 2026-10-13
+and 2026-10-15, [OMNI-163](https://olafzumpe.atlassian.net/browse/OMNI-163)). The backtest
+gate asks whether a candidate reproduces recorded reality within a tolerance, and its
+comparator sees only the answer and the record. A balance over West Coast gasoline
+stocks and flows can reproduce next week's stock closely; a price forecaster cannot, and
+persistence would fail its own exam in the jump week of autumn 2022. PADD 5 is mostly
+closed (about 16% of its supply comes from outside, against about 77% for PADD 1), so
+little of the balance is left unexplained. The sensor itself stays outside the loop's
+reach (§7: sensors are not SOFT targets); the twin is the target. So the California
+price fixture (OMNI-35) is recorded first, as data the persistence baseline's error is
+computed on (OMNI-36), and is not a gate for it.

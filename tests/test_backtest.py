@@ -19,7 +19,8 @@ from typing import Any
 
 import pytest
 
-from sis import gauntlet
+from sis import feature as feature_mod
+from sis import gauntlet, proposer
 from sis.backtest import (
     DEFAULT_TOLERANCE,
     FIXTURE_SCHEMA,
@@ -192,10 +193,13 @@ def test_every_contract_artifact_lives_where_the_loop_cannot_write_it() -> None:
     fixed for the reference oracle, and it is worth pinning rather than trusting
     that whoever adds the next contract remembers.
     """
-    from sis.contract import DEFAULT_CONTRACTS
+    from sis.contract import REGISTERED_CONTRACTS
 
-    for contract in DEFAULT_CONTRACTS:
-        assert classify(contract.oracle_path) is ChangeTier.FORBIDDEN
+    # Every registered contract, Class 2 included: the first gated fixtures
+    # will belong to a feature (OMNI-163), not to an optimisation target.
+    for contract in REGISTERED_CONTRACTS:
+        if contract.oracle_path is not None:
+            assert classify(contract.oracle_path) is ChangeTier.FORBIDDEN
         assert classify(contract.tests_path) is ChangeTier.FORBIDDEN
         for backtest in contract.backtests:
             assert classify(backtest.fixture) is ChangeTier.FORBIDDEN
@@ -383,6 +387,24 @@ def test_a_rejection_names_the_split_it_was_judged_against(tmp_path: pathlib.Pat
     assert result is not None and "holdout" in result.reason
 
 
+def test_a_holdout_rejection_shows_no_recorded_value(tmp_path: pathlib.Path) -> None:
+    # OMNI-162 (M31): the comparator's detail ("expected 999, got 12") became
+    # the rejection reason, a note on the feature, and so the next prompt. A
+    # held-out answer is the exam's; only which episode failed may be said.
+    fixture = _write_fixture(tmp_path / "f.json", [6])
+    expect = _write_expect(tmp_path / "e.json", 999.25)
+    result = _gate(tmp_path, (Backtest(name="six", fixture=fixture, expect=expect),))
+    assert result is not None and not result.passed
+    assert "six" in result.reason and "holdout" in result.reason
+    assert "999" not in result.reason and "expected" not in result.reason
+    notes = feature_mod.with_note({"attempts": []}, f"rejected: {result.reason}")["attempts"]
+    prompt = proposer._history_section(notes, building=True)
+    assert "999" not in prompt
+    # A training episode may say how far off it was.
+    train = Backtest(name="six", fixture=fixture, expect=expect, split=Split.TRAIN)
+    assert "999.25" in (_gate(tmp_path, (train,)) or gauntlet.Result(True, "")).reason
+
+
 def test_tolerance_is_per_backtest(tmp_path: pathlib.Path) -> None:
     # sum_of_divisors(6) == 12; a recorded 12.5 is ~4% off.
     fixture = _write_fixture(tmp_path / "f.json", [6])
@@ -535,7 +557,10 @@ def test_a_comparator_never_sees_a_value_with_its_own_equality(tmp_path: pathlib
     expect = _write_expect(tmp_path / "e.json", 12)
     spec = replace(
         default_contract(),
-        backtests=(Backtest(name="six", fixture=fixture, expect=expect, compare="exact"),),
+        # TRAIN: a holdout rejection shows no values (OMNI-162), and this test
+        # reads the comparator's own detail.
+        backtests=(Backtest(name="six", fixture=fixture, expect=expect, compare="exact",
+                            split=Split.TRAIN),),
     )
     result = gauntlet._gate_backtest(_ctx(tmp_path, spec, candidate_source=liar))
     assert result is not None and not result.passed

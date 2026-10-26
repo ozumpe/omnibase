@@ -44,9 +44,9 @@ reference with no link target below.
 > | M19 | [OMNI-49](https://olafzumpe.atlassian.net/browse/OMNI-49) (epic OMNI-44) — **fixed** (by refusal; isolation is H3) |
 > | M20, M21 | [OMNI-50](https://olafzumpe.atlassian.net/browse/OMNI-50) (epic OMNI-44) |
 > | M15 | [OMNI-51](https://olafzumpe.atlassian.net/browse/OMNI-51) — **fixed** |
-> | M12 | [OMNI-52](https://olafzumpe.atlassian.net/browse/OMNI-52) |
+> | M12 | [OMNI-52](https://olafzumpe.atlassian.net/browse/OMNI-52) — **fixed** (2026-10-25) |
 > | M13 | [OMNI-53](https://olafzumpe.atlassian.net/browse/OMNI-53) |
-> | M14 | [OMNI-54](https://olafzumpe.atlassian.net/browse/OMNI-54) |
+> | M14 | [OMNI-54](https://olafzumpe.atlassian.net/browse/OMNI-54) — **fixed** (2026-10-15) |
 > | M16 (and L30) | [OMNI-55](https://olafzumpe.atlassian.net/browse/OMNI-55) — **fixed** (2026-10-08) |
 > | M17 | [OMNI-56](https://olafzumpe.atlassian.net/browse/OMNI-56) — **fixed** (2026-09-29) |
 > | M18 | [OMNI-57](https://olafzumpe.atlassian.net/browse/OMNI-57) — **fixed** (with OMNI-126) |
@@ -55,9 +55,9 @@ reference with no link target below.
 > | L21, L23 | [OMNI-61](https://olafzumpe.atlassian.net/browse/OMNI-61) (brake state fails closed; `sis.admin`) — **fixed** |
 > | L24 | [OMNI-62](https://olafzumpe.atlassian.net/browse/OMNI-62) (Notifier port) — **fixed** |
 > | M7 | [OMNI-88] — **won't fix** for now (label `wont-fix`); see the Won't fix section |
-> | L15–L20, L22, L25–L29, L31–L38, L40–L43 | one ticket each, [OMNI-64]–[OMNI-87], on each entry below (L15 and L33 **fixed** 2026-09-29). Each is linked (Relates) in Jira to the ticket it should ship with. |
+> | L15–L20, L22, L25–L29, L31–L38, L40–L43 | one ticket each, [OMNI-64]–[OMNI-87], on each entry below (L15 and L33 **fixed** 2026-09-29, L34 2026-09-30, L19 2026-10-15). Each is linked (Relates) in Jira to the ticket it should ship with. |
 > | L30 | [OMNI-55], with M16 — **fixed** (2026-10-08) |
-> | L39 | [OMNI-42] |
+> | L39 | [OMNI-42] — **fixed** (2026-10-15, with OMNI-68) |
 
 ## High
 
@@ -90,24 +90,6 @@ reference with no link target below.
 
 ## Medium
 
-- [OMNI-52] **M12 — A `soft_` operator config edit can rewrite `forbidden_` keys through
-  unescaped YAML rendering** *(found 2026-09-26; reproduced end to end
-  through the real `operator.save_edits`)* — `_render_scalar`
-  (`sis/config.py`) wraps string values in `f'"{value}"'` with no escaping;
-  `contracts.default` is a `soft_` `OPT_STR` key with no `choices`, so
-  `parse_value` accepts arbitrary text for it; `save_edits` never re-parses
-  the file it just wrote to check it matches what was intended. PyYAML keeps
-  the *last* of two duplicate top-level keys. Reproduced: one
-  `contracts.default` edit containing an embedded `brakes:`/`policy:` block
-  raised the effective spend cap to $1,000,000, enabled STRICT changes, and
-  widened `target_paths` — while `runtime/operator_audit.jsonl` recorded only
-  the harmless `soft_` edit. A lone stray `"` in the value makes `config.yml`
-  fail to parse (every engine process then refuses to start). Fix: render
-  every scalar with `json.dumps` (valid YAML, escapes quotes/newlines/
-  backslashes) or `yaml.safe_dump`; in `save_edits`, re-parse the rendered
-  result and refuse the write unless it round-trips to exactly the intended
-  values; write via a temp file + `os.replace`.
-
 - [OMNI-53] **M13 — GitHub OAuth is never actually installed on the operator console;
   the server runs unauthenticated** *(found 2026-09-26; reproduced against
   the installed Panel version, without starting Ray)* — `_install_oauth`
@@ -126,23 +108,6 @@ reference with no link target below.
   `oauth_provider`, `oauth_key`/`oauth_secret` and a `cookie_secret` to
   `pn.serve`; enable signed sessions; add a test asserting the built server's
   `auth_provider` is not `NullAuth`.
-
-- [OMNI-54] **M14 — A worked example in a spec page can name any callable, so spec
-  prose becomes executed code** *(found 2026-09-26; reproduced)* —
-  `_worked_example_source` (`sis/contract_author.py`) emits
-  `` assert {entry}(*args) == expected `` for any `\w+` identifier, never
-  checking `entry` against the contract's `public_api`; builtins such as
-  `exec`, `eval`, `open` and `__import__` resolve in the generated test
-  module. Reproduced: a spec bullet `` `exec("...")` -> `None` `` produces a
-  test that executes the quoted string, and `untranscribed_examples` reports
-  nothing wrong with it. `check_discrimination` runs this draft before any
-  human sees it; under the default (stub proposer) configuration that runs in
-  the subprocess sandbox, which leaves the host filesystem readable (M1 only
-  requires docker for a non-stub *proposer*, not for staging a document-store
-  draft). Fix: transcribe an example only when `entry in public_api` (the
-  caller already has `public_api` in hand); report anything else through
-  `untranscribed_examples` as "names a function outside the contract's public
-  API".
 
 - [OMNI-50] **M20 — The live canary's p95/p99 gate is close to a coin flip for targets
   where dispatch overhead dominates compute** *(found 2026-09-26; simulated
@@ -210,10 +175,6 @@ reference with no link target below.
 - [OMNI-67] **L18** — `policy.classify()` is case-sensitive, so on a case-insensitive
   filesystem a different-case path to guardrail code classifies as STRICT
   rather than FORBIDDEN. Fix: normalise case via the resolved path.
-- [OMNI-68] **L19** — `contract_author.promote()` copies whatever is currently in the
-  loop-writable staging directory at promotion time, not necessarily the
-  content a human reviewed if the draft was rewritten in between. Fix: hash
-  the draft at review time and refuse `promote()` on a mismatch.
 - [OMNI-69] **L20** — The operator audit log (`runtime/operator_audit.jsonl`) path
   depends on the process's working directory, and entries don't record which
   operator made the edit. Fix: resolve the path against a fixed root; add the
@@ -267,11 +228,6 @@ reference with no link target below.
   `poetry.lock` (and thus from what CI and the subprocess sandbox actually
   run) whenever the image is rebuilt. Fix: pin from an exported, hash-locked
   requirements file; check the pin at `ensure_sandbox_ready()` time.
-- [OMNI-42] **L39** — `tests/test_contract_author.py::
-  test_a_drafted_skeleton_stages_without_touching_specs` (OMNI-42) has a
-  second, independent cause beyond the `specs/__pycache__` race already
-  ticketed: another test in the suite writes a real directory into `specs/`
-  during the run. Fix: locate and fix that test alongside OMNI-42.
 - [OMNI-84] **L40** — CI never installs the `analytics` (duckdb) or `ui` (panel)
   dependency groups, so the tests behind those groups are silently skipped
   rather than run and reported. Fix: install both groups in CI.
@@ -338,6 +294,39 @@ reference with no link target below.
   consider one bounded re-measurement with a fresh seed before discarding.
 
 ## Resolved (Low)
+
+- [OMNI-167] **L56** — "no real adapter may declare source `sim`" was
+  documented on `SIMULATED_SOURCE` but not enforced: `SourceRules("sim", …)`
+  constructed and `sanitise` accepted its records. D4 tells simulated data
+  from real by that one source, and the checks in `sis.backtest` and
+  `sis.fixture_builder` were an exact `== "sim"`, so `"SIM"` passed as real.
+  *(Found 2026-10-25 by the weekly code review.)* **Fixed 2026-10-25
+  (OMNI-167):** `SourceRules` refuses the simulated source in any case, and
+  every check that tells the two apart goes through
+  `sensor_input.is_simulated` (case and padding ignored). Regression tests:
+  `SourceRules("SIM", …)` is refused, and a fixture whose readings say `"SIM"`
+  is refused as backtest evidence; both fail without the fix.
+
+- [OMNI-68] **L19** — `contract_author.promote()` copied whatever was in the
+  loop-writable staging directory at promotion time, not necessarily the
+  content a human reviewed if the draft was rewritten in between. Fix: hash
+  the draft at review time and refuse `promote()` on a mismatch.
+  **Fixed 2026-10-15 (OMNI-68), before the first spec written this way
+  (OMNI-35):** `stage()` writes a `MANIFEST.json` with every file's sha256 and
+  returns its digest. `promote()` needs `approved=True` **and** the digest the
+  human reviewed; it reads the manifest again, refuses a different digest or
+  a file that no longer matches its hash (`StagedChanged`), and copies the
+  bytes it checked. A human promotes with `python -m sis.contract_author
+  review <name>`, then `promote <name> --digest … --reason …`, audited to
+  `runtime/operator_audit.jsonl`; `load_staged()` finds a staged contract
+  again from its manifest, which nothing could before.
+
+- [OMNI-42] **L39** — `tests/test_contract_author.py::
+  test_a_drafted_skeleton_stages_without_touching_specs` had a second cause
+  beyond the `specs/__pycache__` race: two tests promoted a contract into the
+  real `specs/` during the run. **Fixed 2026-10-15 (OMNI-42):** `promote()`
+  takes `specs_dir=`, both tests promote into a temporary directory, and the
+  listing comparison ignores `__pycache__`.
 
 - [OMNI-55] **L30** — An exception after the green deploy during a live canary leaves
   green attached and the PR pending with no verdict, bug, or spend recorded
@@ -608,6 +597,260 @@ any long-lived cluster exists.
   front.
 
 ## Resolved
+
+- [OMNI-165] **M33 — `contract_author promote` trusted the loop-writable manifest's
+  name and could write outside `specs/<name>/`** *(found 2026-10-25 by the
+  weekly code review; reproduced on `develop` @ 92e1076)* — `load_staged(name)`
+  took the contract's name from `MANIFEST.json` and never checked it, nor that
+  it matched the directory it was loaded from. `promote()` wrote to
+  `specs_dir / staged.name`, and `_reject_unsafe_path` resolved file paths
+  against that same unchecked root. Staging is loop-writable, so a manifest
+  under `staging/innocent/` naming `../sis` would write `.py` files into
+  `sis/`, and one naming `.` would overwrite `specs/invariants.py`,
+  `specs/scenarios.py` or `specs/comparators.py`, while the human ran
+  `promote innocent`. The digest covers the name, but nothing pointed out that
+  it differed from the directory. **Fixed 2026-10-25 (OMNI-165):** one name
+  rule (`_check_name`: a single directory name, no separator, no leading `.`)
+  is applied to a draft, to the name `load_staged` is given, and again in
+  `promote`; `load_staged` refuses a manifest whose name is not its
+  directory's; `promote` refuses a target that is not a direct child of the
+  specs directory, and checks file paths against the directory it actually
+  writes. The CLI prints `refused:` and exits 1. Regression tests: `../x`,
+  `.`, `..`, `a/b`, an empty name and a mismatched name are refused by
+  `load_staged`, by `promote` and on the command line, and fail without the fix.
+
+- [OMNI-164] **M32 — A fixture episode could show the model an earlier vintage of the
+  week it must predict** *(found 2026-10-25 by the weekly code review;
+  reproduced on `develop` @ 92e1076; latent: no fixture has been promoted)* —
+  `fixture_builder.build()` refused an episode only when the *latest* vintage
+  of the predicted week was known by the time the question was asked, but the
+  as-of view shows every reading known by then. When the week asked about was
+  released late (EIA's June 2022 delays) and the predicted week was revised by
+  a later capture, the first vintage was in the inputs while the answer, the
+  revision, passed the check: a model that returned the latest reading scored
+  almost exactly. **Fixed 2026-10-25 (OMNI-164):** the build refuses when the
+  *first* vintage of the predicted week is known by then, which also covers
+  the old check. Regression test: a late release plus a revision refuses the
+  build, and fails without the fix; on schedule, the revision builds and no
+  input shows the predicted week.
+
+- [OMNI-52] **M12 — A `soft_` operator config edit can rewrite `forbidden_` keys through
+  unescaped YAML rendering** *(found 2026-09-26; reproduced end to end
+  through the real `operator.save_edits`)* — `_render_scalar`
+  (`sis/config.py`) wraps string values in `f'"{value}"'` with no escaping;
+  `contracts.default` is a `soft_` `OPT_STR` key with no `choices`, so
+  `parse_value` accepts arbitrary text for it; `save_edits` never re-parses
+  the file it just wrote to check it matches what was intended. PyYAML keeps
+  the *last* of two duplicate top-level keys. Reproduced: one
+  `contracts.default` edit containing an embedded `brakes:`/`policy:` block
+  raised the effective spend cap to $1,000,000, enabled STRICT changes, and
+  widened `target_paths` — while `runtime/operator_audit.jsonl` recorded only
+  the harmless `soft_` edit. A lone stray `"` in the value makes `config.yml`
+  fail to parse (every engine process then refuses to start). Fix: render
+  every scalar with `json.dumps` (valid YAML, escapes quotes/newlines/
+  backslashes) or `yaml.safe_dump`; in `save_edits`, re-parse the rendered
+  result and refuse the write unless it round-trips to exactly the intended
+  values; write via a temp file + `os.replace`.
+  **Fixed 2026-10-25 (OMNI-52):** what is written is what was approved.
+  Every string, and every list item, is rendered with `json.dumps`
+  (`config._quote`), a valid YAML double-quoted scalar with its quotes and
+  backslashes escaped, so a lone `"` is a (wrong) value and no longer an
+  unloadable file. `parse_value` refuses a string with a control character,
+  a lone surrogate or a Unicode line separator in any layer, which refuses
+  the M12 payload outright. Independently of both, `save_edits` parses the
+  rendered text (`config.load_text`) before writing and refuses
+  (`EditRefused`, naming only key paths) unless every key reads back exactly
+  as intended, then writes through `sis.atomic.write_text_atomic`. A refused
+  or failed save writes and audits nothing. Regression tests in
+  `tests/test_operator.py` (the M12 payload, a renderer forced to leak a
+  section, a rendered file that does not parse, a failed replace) and
+  `tests/test_config.py`.
+
+- [OMNI-54] **M14 — A worked example in a spec page can name any callable, so spec
+  prose becomes executed code** *(found 2026-09-26; reproduced)* —
+  `_worked_example_source` (`sis/contract_author.py`) emits
+  `` assert {entry}(*args) == expected `` for any `\w+` identifier, never
+  checking `entry` against the contract's `public_api`; builtins such as
+  `exec`, `eval`, `open` and `__import__` resolve in the generated test
+  module. Reproduced: a spec bullet `` `exec("...")` -> `None` `` produces a
+  test that executes the quoted string, and `untranscribed_examples` reports
+  nothing wrong with it. `check_discrimination` runs this draft before any
+  human sees it; under the default (stub proposer) configuration that runs in
+  the subprocess sandbox, which leaves the host filesystem readable (M1 only
+  requires docker for a non-stub *proposer*, not for staging a document-store
+  draft). Fix: transcribe an example only when `entry in public_api` (the
+  caller already has `public_api` in hand); report anything else through
+  `untranscribed_examples` as "names a function outside the contract's public
+  API".
+  **Fixed 2026-10-15 (OMNI-54), before the first spec written through
+  contract-author (OMNI-35):** `skeleton_from_spec` transcribes an example
+  only when it calls a name in the contract's `public_api`;
+  `untranscribed_examples(body, public_api=...)` reports any other as "names a
+  function outside the contract's public API", and the staged README lists it.
+  Regression test: `exec("...")` and `open(...)` examples never reach
+  `tests.py`.
+
+- [OMNI-162] **M31 — A held-out backtest's recorded answer reached the next proposer
+  prompt through the rejection reason** *(found 2026-10-15 while planning
+  OMNI-35, by reading the code; latent: no shipped contract declares a
+  backtest)* — on a mismatch the backtest script printed the comparator's
+  detail, and `within_tolerance` writes `expected <recorded value>, got …`.
+  That became the gate's reason, a rejected Class-2 attempt keeps its reason
+  as a note on the feature, and `proposer._history_section` prints the notes
+  into the next prompt. The prompt itself says the episodes are "held out and
+  not shown here". **Fixed 2026-10-15 (OMNI-162):** for a `holdout` episode
+  the reason names the episode, its split and comparator, and says it was
+  outside tolerance, with no values; a `train` episode keeps the comparator's
+  detail. Regression test: a holdout rejection and the prompt built from it
+  carry no recorded value, and fail without the fix.
+
+- [OMNI-161] **M30 — The backfilled `known_at` of a retail price was a day early in a
+  holiday week** *(found 2026-10-15 while planning OMNI-35, from EIA's
+  published schedules)* — `EIASensor` reconstructed a retail price's
+  `known_at` as its Monday plus one day, Tuesday 17:00 ET. EIA now releases
+  the Gasoline and Diesel Fuel Update on Tuesday at about 10:00 ET and **on
+  Wednesday after a government holiday** (eia.gov/petroleum/gasdiesel/
+  schedule.php), so every holiday week from 2025 on was a day early: a replay
+  by `known_at` handed a model a price before it was published. 2022 was not
+  affected: ALFRED's vintage dates (release 183) show Monday releases, Tuesday
+  after Labor Day and Columbus Day. **Fixed 2026-10-15 (OMNI-161), before any
+  trace was captured:** Wednesday 17:00 ET, after both rules, so `known_at`
+  stays an upper bound; backfilled history costs a day of lag. Irregular
+  delays remain the release-calendar check's job (OMNI-35). Regression test:
+  the Columbus Day 2026 price is reconstructed for Wednesday 14 October.
+
+- [OMNI-155] **H10 — A candidate could block the host past the worker timeout by not
+  reading its input** *(found 2026-10-14 by a review of the OMNI-33 push;
+  reproduced by the reviewer, and here: a host still writing after 20 s
+  against a 1 s timeout)* — `SandboxWorker.call` wrote and flushed the request,
+  blocking, before its timed read began. The candidate owns the worker
+  process, so it can stop reading stdin (moving fd 0 aside at import is
+  enough), and a request larger than the pipe then held the host for ever.
+  Neither the call's timeout nor the benchmark's deadline could interrupt the
+  write. **Fixed 2026-10-14 (OMNI-155):** stdin is non-blocking, and one
+  deadline covers sending the request and reading its answer
+  (`SandboxWorker._send`). A worker that has not taken the whole request by
+  then is killed with `WorkerTimeout`. The first write is tried at once, so a
+  request that fits the pipe costs no extra system call on the timed path.
+  Regression test, in both sandboxes: a candidate that stops reading, sent
+  8 MB.
+
+- [OMNI-156] **H11 — A candidate's stderr was stored and read back without a bound,
+  on the host** *(found 2026-10-14 by a review of the OMNI-33 push; the
+  unrestricted read confirmed with a probe, exhaustion not attempted)* — the
+  worker's stderr went to a host-side temporary file, written in docker by
+  the docker client, past the container's limits; `_stderr_tail` read it all,
+  decoded and split it to keep 300 characters of the last line. **Fixed
+  2026-10-14 (OMNI-156):** stderr is a pipe, drained in the same select loops
+  that send a request and wait for its answer, and only its last
+  `STDERR_TAIL_BYTES` (8 KiB) are kept. After a worker stops, at most 1 MiB
+  more is read. Draining while waiting also matters for liveness: in docker
+  the client forwards stdout and stderr in order, so an undrained stderr
+  would hold up the answer. Regression tests, in both sandboxes: 4 MB of
+  stderr before the handshake still names its last line with never more than
+  the tail held; 2 MB written during a call does not stop the answer.
+  The review of the fix found a second copy: docker's default `json-file`
+  log driver kept every byte a container wrote, on the host, until `--rm`
+  removed it (not a regression: it predates the fix). Every sandbox
+  container now runs with `--log-driver none` (`gauntlet._docker_args`);
+  attached output still arrives, only `docker logs` is gone. Not covered
+  here: the worker's directory is mounted read-write, so a candidate can
+  still write files there.
+
+- [OMNI-157] **H12 — A failed brake-state save let a restart undo spend that was
+  charged** *(found 2026-10-14 by a review of the OMNI-33 push; reproduced by
+  the reviewer with a disk-full probe: $0.70 live, $0.10 on disk)* —
+  `run_cycle`'s `_record` caught a failed `save_state("ceo", …)`, warned and
+  returned normally, so the loop went on spending. The previous snapshot
+  stayed readable, so a restart restored it without opening the breaker
+  (OMNI-61 only fails closed on state it cannot read). **Fixed 2026-10-14
+  (OMNI-157):** a cycle's spend is reserved before anything is spent:
+  `CEO.reserve(estimate)` after the budget gate, and the state, reservation
+  included (`reserved_usd`), is saved before the cycle goes on. If that save
+  fails, nothing is spent. The cycle's outcome replaces the reservation with
+  what it really cost. A save that fails, before the cycle or after it, opens
+  the breaker with the reason (`CEO.trip`), files a bug and pages a human, so
+  nothing more is spent. A CEO started from saved state that still holds a
+  reservation counts it as spent: that cycle's outcome was never saved
+  (`bootstrap` says so). So a restart never sees less than was spent, as long
+  as a cycle costs no more than the estimate the budget gate approved (one
+  proposal, `max_tokens` 8000, against the default $0.50). Regression tests:
+  `tests/test_brake_persistence.py`.
+  An adversarial review of the fix the same day closed four gaps in it. A
+  reservation with no outcome is settled as a failure too, not only as spend,
+  so an unknown outcome can still trip a brake (`CEO._settle_unknown_outcome`).
+  It is settled when a new CEO starts from the state, and also at the next
+  reservation of a detached CEO that outlived its driver, which used to
+  overwrite it; `approve_budget` counts an outstanding one. An SWE whose
+  process dies during its step (not a raise of its own, which by OMNI-55
+  comes before any proposal) is charged the reservation, not $0. And a save
+  that fails pages even when the breaker was already open: that page had not
+  said the state was no longer saved.
+
+- [OMNI-158] **H13 — An admin command could overwrite newer brake state with an
+  older snapshot** *(found 2026-10-14 by a review of the OMNI-33 push;
+  reproduced by the reviewer: a $0.70 snapshot overwritten by an older $0.10
+  one)* — the loop (after every cycle) and `python -m sis.admin` (after every
+  action) each take a snapshot of the live CEO and save it later.
+  `JsonlEpisodicStore.save_state` replaced the file atomically, but neither
+  serialised writers nor knew which snapshot was newer, so an admin snapshot
+  taken before a cycle and written after the loop saved it put the old spend
+  back on disk. **Fixed 2026-10-14 (OMNI-158):** the CEO numbers its state
+  (`version`, incremented by every change; its methods run one at a time, so
+  the order is its own), and the store never replaces a saved state with a
+  lower version (`episodic.superseded`). `save_state` returns False when it
+  kept the later one, which is no failure: that version includes this one,
+  and `sis.admin` says so. The check and the write are one step: under an
+  exclusive lock on `episodic_state.lock` for the jsonl store (which also
+  stops two keys' saves from losing one another), in one transaction for
+  DuckDB. A lock alone would not have done: the stale snapshot is taken
+  before the lock. A state without a version, saved before this, still saves.
+  Versions are compared only within one `lineage`, carried in the state: a
+  CEO started from saved state continues it, one that could not read its
+  state begins a new one at version 0. Without that (found by the review of
+  the fix), a file repaired during the documented OMNI-61 recovery kept its
+  higher numbers and silently blocked every save of the new CEO.
+  Regression tests: `tests/test_brake_state.py` (two processes, the lock,
+  DuckDB) and `tests/test_brake_persistence.py` (the reviewer's sequence with
+  the real CEO).
+
+- [OMNI-159] **M29 — Reading a sensor trace while a capture appended to it reported
+  the trace as corrupt** *(found 2026-10-14 by a review of the OMNI-33 push;
+  reproduced by the reviewer, and here)* — `sensor_trace.append` holds an
+  exclusive `flock` for a capture's whole block, but `sensor_trace.load`
+  (`EIASensor.read`, `check_connections --deep`) read without it. A read in
+  the middle of a multi-MB block saw half of it: "cut short or edited", a
+  false tamper alarm, or a block shorter than its capture line says.
+  **Fixed 2026-10-14 (OMNI-159):** `load` reads under a shared lock, so it
+  sees the trace before a block or after it. Regression test: a read started
+  while a writer holds the lock halfway through a block waits for it and
+  returns the whole trace.
+
+- [OMNI-160] **L54 — Two captures at the same instant left a restored sensor value
+  looking withdrawn** *(found 2026-10-14 by a review of the OMNI-33 push;
+  confirmed by reading the code)* — `sensor_trace._latest` picks each
+  period's latest state by `known_at`, and listed readings before absences,
+  so on equal `known_at` an absence won whatever the order of the captures.
+  With a fixed `ReplayClock`, a value withdrawn and then restored stayed
+  "absent" in the trace's own view, and every later capture appended the
+  restored value again. A clock that stepped back did the same, and let a
+  later capture write a `known_at` earlier than one already in the trace.
+  **Fixed 2026-10-14 (OMNI-160):** ambiguous revision times are refused, not
+  broken by a tie. A capture whose fetch time is not after the trace's last
+  capture is refused and appends nothing (`capture_lines`), and a trace whose
+  captures are out of fetch-time order fails the read (`_check_blocks`). Then
+  no period has two lines at one `known_at`, and capture order is `known_at`
+  order. Regression tests: a capture at the same instant and one with a
+  clock stepped back are refused; an edited trace out of order fails the
+  read. A control, which passes without the fix too: withdrawn then restored
+  over captures at distinct times reads as restored, and a fourth appends
+  nothing. The review of the fix found that a capture was stamped after its
+  download but before the trace's lock, so of two captures at once, one
+  stamped earlier that reached the lock second was refused as if the clock
+  had gone back. Captures are now stamped under the lock (a later stamp is
+  still an upper bound on when the values were known). A clock that was ahead
+  for one capture stops captures until real time passes it; the runbook says
+  what to do.
 
 - [OMNI-55] **M16 — Any exception after the LLM call loses that call's spend from the
   CEO ledger and the episodic log, strands the branch/PR, and can kill
@@ -1114,6 +1357,9 @@ any long-lived cluster exists.
   is refused with a real proposer or real adapters
   (`roles.brake_persistence_problem`, at bootstrap and per cycle, no
   override). Tests: `tests/test_brake_state.py`, `tests/test_ceo_fail_closed.py`.
+  **What it missed** (found 2026-10-14, H12, OMNI-157): state that was saved
+  and stays readable, but stops being saved. A failed save only warned, so a
+  restart restored the last saved spend and forgot the rest. See H12.
 
 - [OMNI-61] **L23** — `CEO.reset_breaker()` has no caller anywhere outside tests; in
   practice the only reset is deleting the state file, which also zeroes
@@ -1622,3 +1868,14 @@ any long-lived cluster exists.
 [OMNI-152]: https://olafzumpe.atlassian.net/browse/OMNI-152
 [OMNI-153]: https://olafzumpe.atlassian.net/browse/OMNI-153
 [OMNI-154]: https://olafzumpe.atlassian.net/browse/OMNI-154
+[OMNI-155]: https://olafzumpe.atlassian.net/browse/OMNI-155
+[OMNI-156]: https://olafzumpe.atlassian.net/browse/OMNI-156
+[OMNI-157]: https://olafzumpe.atlassian.net/browse/OMNI-157
+[OMNI-158]: https://olafzumpe.atlassian.net/browse/OMNI-158
+[OMNI-159]: https://olafzumpe.atlassian.net/browse/OMNI-159
+[OMNI-160]: https://olafzumpe.atlassian.net/browse/OMNI-160
+[OMNI-161]: https://olafzumpe.atlassian.net/browse/OMNI-161
+[OMNI-162]: https://olafzumpe.atlassian.net/browse/OMNI-162
+[OMNI-164]: https://olafzumpe.atlassian.net/browse/OMNI-164
+[OMNI-165]: https://olafzumpe.atlassian.net/browse/OMNI-165
+[OMNI-167]: https://olafzumpe.atlassian.net/browse/OMNI-167

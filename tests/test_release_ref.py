@@ -16,11 +16,13 @@ from sis.paths import PROJECT_ROOT
 from sis.version import code_version
 
 _INFRA = PROJECT_ROOT / "infra" / "aws"
+# The instance itself, built by both the base stack and box/ (OMNI-169).
+_BOX = _INFRA / "modules" / "box" / "main.tf"
 _TAG = re.compile(r"^v\d+\.\d+\.\d+$")
 
 
-def _default(variable: str) -> str:
-    text = (_INFRA / "variables.tf").read_text(encoding="utf-8")
+def _default(variable: str, stack: Path = _INFRA) -> str:
+    text = (stack / "variables.tf").read_text(encoding="utf-8")
     block = text[text.index(f'variable "{variable}"'):]
     block = block[:block.index("\n}\n")]
     match = re.search(r"^\s*default\s*=\s*(.+)$", block, re.M)
@@ -36,11 +38,14 @@ def test_the_box_defaults_to_a_release_tag_matching_the_package_version() -> Non
     assert version and ref == f"v{version.group(1)}", (
         "the box's default tag and pyproject's version disagree — bump both when "
         "cutting a release (CLAUDE.md)")
+    # The scheduled run's box stack must build the same release (OMNI-169).
+    assert _default("repo_ref", _INFRA / "box") == ref
+    assert _default("allow_branch_ref", _INFRA / "box") == "false"
 
 
 def test_running_a_branch_needs_an_explicit_opt_in() -> None:
     assert _default("allow_branch_ref") == "false"
-    main = (_INFRA / "main.tf").read_text(encoding="utf-8")
+    main = _BOX.read_text(encoding="utf-8")
     assert "precondition" in main
     assert "var.allow_branch_ref" in main
 
@@ -66,11 +71,16 @@ def test_code_version_outside_a_repository_says_unknown(tmp_path: Path) -> None:
 def test_the_box_knows_its_artifacts_bucket() -> None:
     # OMNI-124: the first run's sync took three attempts — the literal
     # <artifacts-bucket> placeholder, a guessed bucket, then the right one.
-    main = (_INFRA / "main.tf").read_text(encoding="utf-8")
-    assert "export ARTIFACTS_BUCKET=${aws_s3_bucket.artifacts.bucket}" in main
+    main = _BOX.read_text(encoding="utf-8")
+    assert "export ARTIFACTS_BUCKET=${var.artifacts_bucket}" in main
     # And the loop's own name for it (OMNI-140): the config schema's env vars
     # all start with SIS_, so the bucket it syncs to cannot be the bare one.
-    assert "export SIS_ARTIFACTS_BUCKET=${aws_s3_bucket.artifacts.bucket}" in main
+    assert "export SIS_ARTIFACTS_BUCKET=${var.artifacts_bucket}" in main
+    # Both stacks hand the module the one bucket (OMNI-169).
+    base = (_INFRA / "main.tf").read_text(encoding="utf-8")
+    assert "artifacts_bucket  = aws_s3_bucket.artifacts.bucket" in base
+    box = (_INFRA / "box" / "main.tf").read_text(encoding="utf-8")
+    assert 'artifacts_bucket  = "${var.name_prefix}-artifacts-${local.account}"' in box
     runbook = (PROJECT_ROOT / "docs" / "AWS_RUN.md").read_text(encoding="utf-8")
     assert "<artifacts-bucket>" not in runbook
     assert runbook.count("s3://$ARTIFACTS_BUCKET/runs/") == 2
@@ -81,5 +91,5 @@ def test_a_new_tag_builds_a_new_box() -> None:
     # to stop and start the same instance. cloud-init runs user_data on first
     # boot only, so `tofu apply` with a new release reported success and left
     # the box on the old tag, its loop killed.
-    main = (_INFRA / "main.tf").read_text(encoding="utf-8")
+    main = _BOX.read_text(encoding="utf-8")
     assert "user_data_replace_on_change = true" in main

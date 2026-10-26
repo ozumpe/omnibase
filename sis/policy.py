@@ -72,6 +72,30 @@ GUARDRAIL_PATHS: tuple[str, ...] = (
     # so a loop able to edit it could approve its own contract.
     "sis/contract_author.py",
     "sis/clock.py",           # event time: what a replayed gate believes "now" is
+    # The Sensor port and the shape of a reading (OMNI-31): what the twin is
+    # shown of the world. Real data is the evidence a promotion needs, so the
+    # code that reads it is not the loop's to rewrite. Its adapters are below.
+    "sis/ports.py",
+    # The one door sensor data comes in through (OMNI-32): what is refused,
+    # what counts as plausible, how outsiders' text is quoted. A loop able to
+    # edit it could widen what it trusts.
+    "sis/sensor_input.py",
+    # How a real sensor's readings are captured and read back (OMNI-33, D12):
+    # the format every fixture inherits, and the schedule-based known_at of
+    # backfilled history. A loop able to edit it could shape what its own
+    # models are later judged against.
+    "sis/sensor_trace.py",
+    # What a model is shown at each moment of a replay, and the fixtures built
+    # from it (OMNI-35): a loop able to edit either could choose its own exam.
+    "sis/replay.py",
+    "sis/fixture_builder.py",
+    # Which scenario generator drives a twin (OMNI-34): the pinned one in
+    # specs/, never the SOFT working copy. A loop able to point it elsewhere
+    # would generate the inputs it is graded on (D7).
+    "sis/scenarios.py",
+    # How a predictor is shown a replay and how its error is computed
+    # (OMNI-36): a loop able to edit it could grade its own forecasts.
+    "sis/prediction_error.py",
     "sis/cost.py",            # spend accounting that feeds the brakes
     "sis/settings.py",        # secret loading + masking
     "sis/adapters.py",        # RequiresHumanApproval guardrails (in-memory)

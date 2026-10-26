@@ -1,15 +1,17 @@
 # Self-Improving Server (Python + Ray)
 
-A server that models a slice of the real world via a Ray actor hierarchy and can
-extend itself by generating, validating, and safely deploying its own code from
-high-level specs.
+A Python + Ray engine that generates and validates target implementations from
+human-defined contracts. The goal is to extend it into omnitrack, a server that
+models a slice of the real world and simulates outcomes under specified inputs.
 
 **Bootstrap goal first:** before it models anything external, the server must be
 self-improving on a trivial *internal* target — receive a spec, generate code,
 validate it through a hard gauntlet, deploy it on a canary, and roll back on
 regression. That loop works today, driven by an actor org (CEO/PM/CTO/SWE/QA/
 DevOps/Designer) that coordinates through durable artifacts (Confluence/Jira/
-GitHub), with a SelfModel digital twin tracking the running system.
+GitHub), with a SelfModel registry tracking the running system. External-domain
+modeling is still planned; the EIA sensor captures observations but no domain
+model consumes them in the control loop yet.
 
 > **New to the code?** [`docs/CODE_TOUR.md`](docs/CODE_TOUR.md) is a reading
 > guide written for people learning Python + Ray. Want to contribute? See
@@ -17,8 +19,9 @@ GitHub), with a SelfModel digital twin tracking the running system.
 >
 > Authoritative specs: [`DESIGN.md`](DESIGN.md) (detailed brief),
 > [`ACTORS.md`](ACTORS.md) (role + subsystem spec), [`CLAUDE.md`](CLAUDE.md)
-> (working rules). Diagrams: `ray_self_improving_control_loop.svg`,
-> `actor_org_interaction_map.svg`.
+> (working rules). Current runtime diagrams: [`docs/DIAGRAMS.md`](docs/DIAGRAMS.md).
+> The SVGs `ray_self_improving_control_loop.svg` and
+> `actor_org_interaction_map.svg` illustrate the original conceptual design.
 
 ---
 
@@ -27,7 +30,7 @@ GitHub), with a SelfModel digital twin tracking the running system.
 ```bash
 poetry install
 poetry run python main.py          # run one full org cycle (in-memory, no creds)
-poetry run python main.py --loop   # run continuously as a server (Ctrl-C to stop)
+poetry run python main.py --loop   # repeat demo intake; holds for review and stops on convergence
 poetry run pytest                  # fast test suite (the Ray Serve half: see Development)
 ```
 
@@ -60,12 +63,14 @@ export SIS_BUDGET_USD=0.05                   # same key, environment layer
 ```
 
 Keys are grouped by function (`brakes`, `sandbox`, `policy`, `episodic`,
-`adapters`, `proposer`, `canary`, `loop`, `contracts`) and each is prefixed with
+`adapters`, `proposer`, `canary`, `loop`, `sensor`, `contracts`, `frontend`) and each is prefixed with
 how strongly it is protected — `forbidden_`, `strict_`, `soft_`. That prefix
 governs what a **human operator** may change (the operator console,
 `python -m sis.frontend`, shows `forbidden_` keys read-only, and its write path
-refuses them whatever the caller sends; a `strict_` edit needs a written
-justification); it grants the loop nothing, because `config.yml` and
+refuses direct edits to them; a `strict_` edit needs a written justification).
+The current console has known OAuth and YAML-rendering defects (OMNI-53/52);
+see [its deployment limits](docs/OPERATOR_FRONTEND.md). The prefix grants the
+loop nothing, because `config.yml` and
 `sis/config.py` are both POLICY-FORBIDDEN and the loop may not write either at
 any tier. Naming the config as an optimisation target doesn't help — guardrail
 classification is checked first (`tests/test_config.py`).
@@ -75,11 +80,11 @@ gitignored `secrets.local.yml`; see [Connecting to the real world](#connecting-t
 
 The three worth knowing before a real run:
 
-| Key (env var) | Default | Why it matters |
-|---|---|---|
-| `sandbox.mode` (`SIS_SANDBOX`) | `subprocess` | `docker` is kernel-enforced (`--network none`, no creds). **Required** whenever `proposer.backend` isn't `stub` — untrusted LLM code can read host files in `subprocess` mode, and the loop refuses to start without it. |
-| `proposer.backend` (`SIS_PROPOSER`) | `stub` | `stub` is offline and free. Any other value is a real LLM via `sis.llm` (needs `poetry install --with llm` + a provider key) and is treated as untrusted. |
-| `brakes.budget_usd` (`SIS_BUDGET_USD`) | `5.0` | CEO hard spend cap. Set a **tiny** value for a first real run so the brakes trip early. A bad value fails loudly rather than reverting to the permissive default. |
+| Key (env var) | Why it matters |
+|---|---|
+| `sandbox.mode` (`SIS_SANDBOX`) | `docker` is kernel-enforced (`--network none`, no creds). **Required** whenever `proposer.backend` isn't `stub` — untrusted LLM code can read host files in `subprocess` mode, and the loop refuses to start without it. |
+| `proposer.backend` (`SIS_PROPOSER`) | `stub` is offline and free. Any other value is a real LLM via `sis.llm` (needs `poetry install --with llm` + a provider key) and is treated as untrusted. |
+| `brakes.budget_usd` (`SIS_BUDGET_USD`) | CEO hard spend cap. Set a **tiny** value for a first real run so the brakes trip early. A bad value fails loudly rather than reverting to a default. |
 
 `ANTHROPIC_API_KEY` is not configuration and is not in `config.yml`: it is a
 credential, required for the `anthropic` provider. Other providers read their own key.
@@ -142,12 +147,17 @@ cycle's provenance then roots at it (`charter → spec → epic → story → ou
 
 One **cycle** (`sis/org.py :: run_cycle`):
 
-1. **CEO** gates on budget; holds circuit-breaker authority.
+1. **CEO** gates on pause, breaker and budget. A Class-2 target already built is
+   revalidated before any plan is created; passing returns neutral `no_gain`.
 2. A proposal is dropped into the Confluence *proposal* space (intake).
 3. **PM** refines it into a spec page; **Designer** adds an outline.
 4. **CTO** turns the spec into a Jira epic + stories.
-5. **SWE** implements on a feature branch — reusing the existing
-   `proposer` + `gauntlet` — and opens a PR carrying the validated change.
+5. **SWE** proposes and validates a step, committing only a passing candidate
+   to its feature branch. Optimization features can accumulate accepted steps
+   before opening one fixed-head PR. A Class-2 feature opens its PR at the first
+   passing step. An unfinished optimization returns `feature_step` and continues
+   on the next cycle; existing plans and attempt feedback are reused. See
+   [staged delivery](docs/STAGED_DELIVERY.md).
 6. **QA** re-runs the deterministic gauntlet and verifies the story.
 7. **DevOps** canary-deploys to the **green** slot.
 8. Promotion to live = the **human PR merge** — intentionally *not* done by the
@@ -158,17 +168,23 @@ One **cycle** (`sis/org.py :: run_cycle`):
 Every handoff is an artifact state change; every step is recorded in the
 **SelfModel** provenance graph.
 
-**On failure** (gauntlet rollback at step 5, or QA rejection at step 6), the
+**On a counted failure** (gauntlet rollback at step 5, or QA rejection at step 6), the
 cycle doesn't just log and stop: **DevOps files a bug** in the work tracker
 carrying the story + reason, so a rejected diff is a durable artifact, not just
-an episodic-log line. Three consecutive failures trip the circuit breaker,
-which files a second, distinct `CIRCUIT BREAKER OPEN` bug — the "page a human"
-the design calls for, made concrete.
+an episodic-log line. The configured failure threshold trips the breaker and
+files a distinct `CIRCUIT BREAKER OPEN` bug; the Notifier also pages a human.
+No-op, no-gain and inconclusive outcomes are neutral: spend is recorded without
+filing a bug or incrementing the breaker. Exceptions after a proposal are
+charged and recorded as `error` outcomes. See [known issues](docs/KNOWN_ISSUES.md)
+for the remaining inconclusive/convergence limitation (OMNI-145).
 
 ### The validation gauntlet (`sis/gauntlet.py`)
 
-Python has no compiler, so the gauntlet gates hard — cheapest checks first,
-every gate inside a sandbox so a bad diff can't hang or read the main process.
+The gauntlet checks cheapest-first and keeps candidate execution out of the
+main process. Trusted acceptance, invariant and backtest harnesses run on the
+host and call the candidate's sandbox worker over JSON; the host also owns the
+benchmark clock, reference and verdict. The SLO gate is the remaining gate
+that judges its candidate in the same sandboxed process.
 **Which gates run is chosen by the target's contract** (`Contract.gate_profile()`
 in `sis/contract.py`); both task classes flow through one `validate()`:
 
@@ -182,26 +198,28 @@ in `sis/contract.py`); both task classes flow through one `validate()`:
 | invariant (domain laws over Hypothesis-generated inputs) | ✅ | ✅ |
 | backtest (reproduces recorded episodes, held-out split) | ✅ | ✅ |
 | differential correctness on random inputs + benchmark vs a fresh baseline (paired timing on fresh inputs; accept / reject / inconclusive, OMNI-41) | ✅ (≥10% faster in total by default) | — no reference exists, and "faster" isn't correctness |
+| SLO (optional latency budget) | — | ✅ when the contract declares one; no shipped contract does yet |
 
 The exam each gate reads lives in `specs/<target>/`, which is POLICY-FORBIDDEN:
 the implementer cannot edit its own exam. After the gates, every change still
-ends in a **human PR** — the agent never merges.
+ends in a **human PR** once the feature is finished — the agent never merges.
 
 The sandbox has two modes via `SIS_SANDBOX`: `subprocess` (default — scrubbed
 env + in-process network block; host files stay readable) and `docker`
 (`--network none --cap-drop ALL --read-only`, only the temp dir mounted; build
 the image once with `docker build -t sis-gauntlet:latest -f Dockerfile.gauntlet .`).
 A real (non-stub) proposer requires `docker`. Every gate also has a wall-clock
-timeout (`SIS_GAUNTLET_TIMEOUT`, default 120s) so an infinite loop in generated
+timeout (`SIS_GAUNTLET_TIMEOUT`; see `config.yml`) so an infinite loop in generated
 code is killed, not left to hang.
 
 **Invariant:** candidate or target code never runs in the main process, where
-credentials live. The gauntlet sandbox covers every gate and the baseline
-measurement (`measure_baseline()`); the default canary only records the latency
-the sandbox measured. The one exception is opt-in: the live canary
-(`--canary serve`, OMNI-14) runs the candidate in a Ray Serve replica whose
-environment is scrubbed of credentials — a **credential boundary, not a
-sandbox**, because egress stays open (a replica must answer HTTP).
+credentials live. Candidate gates and baseline measurement use the gauntlet's
+sandbox; the recording canary only records measured latency. The Serve canary
+runs a candidate as a Ray worker and is **not a sandbox**: an environment scrub
+does not prevent access to the Ray control plane. `--canary serve` is refused
+for non-stub proposers, with no override, until OMNI-48; it is also refused for
+Class-2 contracts. Passing offline gates does not remove that restriction.
+See [the execution model](docs/CODE_TOUR.md#5-the-gauntlet-gate-by-gate-sisgauntletpy).
 
 ### Provenance / episodic store (`sis/episodic.py`)
 
@@ -214,7 +232,8 @@ dataset the system learns from, not an afterthought. It sits behind an
 - `duckdb` — embedded SQL analytics over the events (`poetry install --with
   analytics`); `summary()` rollups (reject-rate by gate, cost-per-accepted) plus
   an `sql()` escape hatch.
-- `none` — disabled.
+- `none` — disabled; refused with a real proposer or real adapters, because
+  spend/brake state must persist.
 
 Postgres + pgvector can be added as another backend later (multi-node cluster /
 embedding retrieval) without changing the loop.
@@ -232,12 +251,21 @@ sis/                        # the engine (STRICT/FORBIDDEN to the loop — polic
   self_model.py             # SelfModel/Registry digital-twin Ray actor
   ports.py                  # capability interfaces (Protocols) + artifact types
   adapters.py               # default in-memory adapters (the artifact bus)
-  adapters_real.py          # real Confluence/Jira/GitHub/AWS adapters
+  adapters_real.py          # real Confluence/Jira/GitHub/AWS adapters + EIASensor
   proposer.py  llm.py       # propose a candidate: offline stub, or any LLM via a provider port
   contract.py               # what "correct" and "better" mean per target; picks the gates
-  gauntlet.py               # validate(code) → Result, every gate sandboxed
+  gauntlet.py               # contract-selected gates; host harnesses + isolated workers
+  canonical.py              # rebuild candidate output from plain builtins before ==
+  sandbox_worker.py         # host side of the candidate's JSON/stdio boundary
+  sandbox_worker_main.py    # candidate-side worker; trusted timed batch loop
+  feature.py                # accepted steps, attempt feedback and fixed-head feature PRs
   invariant.py  backtest.py # domain laws over generated inputs; replay of recorded episodes
+  slo.py                    # an optional latency budget from the spec (not correctness)
   clock.py                  # event time behind a port, so history can be replayed
+  sensor_input.py           # untrusted observations → readings, absences or refusals
+  sensor_trace.py           # append-only sensor captures and revisions
+  replay.py                 # what a model may see at a moment of a replay (known_at)
+  fixture_builder.py        # held-out backtest episodes built from a sensor trace
   contract_author.py        # the one (human-approved) write path into specs/
   policy.py                 # change-authorization tiers (FORBIDDEN/STRICT/SOFT)
   serving.py  serve_cloud.py  # a target behind Ray Serve; the Cloud port on real Serve
@@ -247,6 +275,11 @@ sis/                        # the engine (STRICT/FORBIDDEN to the loop — polic
   settings.py               # secrets: local YAML ↔ AWS Secrets Manager
   cost.py                   # LLM cost accounting for the CEO spend brakes
   episodic.py               # provenance/episodic store (jsonl | duckdb | none)
+  admin.py                  # operator pause/resume/reset-breaker on the live CEO
+  artifact_sync.py          # the run's dataset synced to S3 by the loop itself
+  atomic.py                 # replace a file all at once (brake state, config.yml)
+  version.py                # which code is running, for provenance
+  run_lock.py               # one main.py loop per box
   frontend.py  operator.py  # operator console (Panel) + its tier-gated write path
   paths.py                  # single source of truth for filesystem paths
 specs/<target>/             # each target's exam: oracle, tests, laws, fixtures (FORBIDDEN)
@@ -254,12 +287,16 @@ runtime/                    # runtime-mutable state (kept apart from the engine)
   target.py  sort_target.py # the SOFT-tier targets (naive baselines, committed)
   candidates/               # the stub proposer's hand-written variants
   contract_staging/         # drafted exams awaiting human approval
+  sensor_traces/            # captured observations; staging, never the exam
   episodic.jsonl            # episodic store (gitignored; or episodic.duckdb)
 config.yml                  # every knob, with its default, env var and CLI flag
-tests/                      # 1162 tests: 1099 in the default run + 63 Ray Serve integration
+tests/                      # fast, Serve integration and docs-marked tests
 infra/aws/                  # OpenTofu for the one-node AWS run (docs/AWS_RUN.md)
 scripts/                    # check_connections.py (read-only preflight); the AWS run's
                             #   aws_bootstrap.sh, aws_secret.py, rehearse_aws_run.sh
+                            # capture_sensor.py (fetch EIA into the local trace)
+                            # build_fixture.py (stage held-out episodes from a trace)
+                            # ci_gate.py (which CI jobs a change needs)
 main.py                     # entry point
 secrets.example.yml         # secrets template (copy to secrets.local.yml)
 ```
@@ -322,18 +359,27 @@ export SIS_ENV=aws SIS_ADAPTERS=real SIS_AWS_SECRET_ID=sis/prod/credentials
 
 No code changes — only environment.
 
-The first AWS run (OMNI-29) — one EC2 node, zero ingress ports (SSM only), a
-few supervised cycles — is designed and written in OpenTofu under `infra/aws/`;
-[`docs/AWS_RUN.md`](docs/AWS_RUN.md) is its design note and runbook. It has not
-been applied yet.
+The supervised AWS run (OMNI-29) uses one EC2 node with zero ingress ports
+(SSM only), provisioned by OpenTofu under `infra/aws/`. Seven runs are recorded
+in [`docs/AWS_RUN.md`](docs/AWS_RUN.md), including staged optimization and
+Class-2 construction. An unattended, monitor-driven server is still planned.
+
+### Reading the modelled world
+
+`SimSensor` replays supplied readings; `EIASensor` reads a locally captured EIA
+trace. Capture and read are separate: choosing `sensor.backend=real` does not
+download data or attach a domain model to the loop. Install the `real` group and
+run `poetry run python scripts/capture_sensor.py` to populate the trace.
+See [`docs/SENSOR_RUNBOOK.md`](docs/SENSOR_RUNBOOK.md) for the declared series,
+capture reports, replay semantics and historical timestamp limitations.
 
 ---
 
 ## Guardrails (enforced in code)
 
-- **Untrusted code never runs in the main process** — every gauntlet gate runs
-  in a sandbox (`SIS_SANDBOX=subprocess` soft guard, or `docker` for
-  kernel-enforced no-egress / no-credential isolation).
+- **Untrusted code never runs in the main process** — candidate execution uses
+  `SIS_SANDBOX=subprocess` (soft guard) or `docker` (kernel-enforced no-egress /
+  no-credential isolation); trusted harnesses judge through isolated workers.
 - **Never commit to `main`**; the agent works on feature branches only.
 - Destructive/irreversible actions — merging a PR, archiving a page, deleting an
   issue — raise `RequiresHumanApproval` instead of executing.
@@ -346,9 +392,12 @@ been applied yet.
   regressed cycles, and a cost-per-accepted-improvement SLO (so low-value spend
   trips the breaker, not just regressions). Real Claude token usage is priced
   per cycle and fed into the gate. A trip files a `CIRCUIT BREAKER OPEN` bug via
-  DevOps — an artifact a human sees, not just a telemetry flag.
-- Every rolled-back or QA-rejected cycle files a bug in the work tracker
-  (`DevOps.file_bug`) — failures are durable artifacts, not just log lines.
+  DevOps and pages through the Notifier (SNS with real adapters).
+- Counted rejected/error cycles file a bug in the work tracker
+  (`DevOps.file_bug`); neutral outcomes do not.
+- `main.py` holds an exclusive lock on `runtime/loop.lock`; a second start
+  exits 3 and names the holder. Operator pause/resume/reset operations use
+  `python -m sis.admin` with a written reason; resetting a breaker preserves spend.
 - Secrets in gitignored YAML locally / Secrets Manager in cloud — never committed.
 
 ---
@@ -356,8 +405,9 @@ been applied yet.
 ## Development
 
 ```bash
-poetry run pytest                  # 1099 tests, parallel (default: -m "not serve" -n auto)
-poetry run pytest -m serve -n 0    # the 63 Ray Serve integration tests (serial)
+poetry run pytest                  # fast suite, parallel (default: -m "not serve" -n auto)
+poetry run pytest -m serve -n 0    # Ray Serve integration tests (serial)
+poetry run pytest -m docs -n 0     # documentation checks
 poetry run mypy --strict sis/ main.py scripts/
 poetry run ruff check .
 ```
@@ -404,7 +454,9 @@ Open bugs and limitations are tracked with stable IDs in
 | 4 | Target/oracle contract (L5) + Class-2 feature verification (`FeatureContract`, invariant + backtest gates, `Clock` port, contract-author) | ✅ (L5 2026-08-06; Class 2 2026-08-11) |
 | – | One config schema: `config.yml` + env var + CLI flag (OMNI-27) | ✅ (2026-08-16) |
 | – | Operator console: state, brakes, episodic history, tier-gated config edits (OMNI-28) | ✅ (2026-08-28) |
-| – | First AWS run: one node, a few supervised cycles (OMNI-29) | designed + pre-flighted, not applied |
+| – | Supervised AWS runs: one node, real proposer, adapters and sandbox (OMNI-29) | ✅ seven runs documented |
+| – | Sensor port, sanitising boundary and EIA capture/replay (OMNI-31/32/33) | ✅ on `develop` (2026-10-13), unreleased |
+| – | Replay on `known_at` + fixture builder for the first recorded fixture (OMNI-35) | in progress: tooling on `develop`; the real fixture waits for the box's first capture and a human promotion |
 | 5 | Language-agnostic `ToolchainAdapter` (build/verify non-Python targets, e.g. Java) (OMNI-20) | parked |
 | 6 | Model an external slice of the real world — omnitrack; first domain the California gasoline market (Phase A: OMNI-30), second Iowa's spirits supply chain (OMNI-39) | next |
 

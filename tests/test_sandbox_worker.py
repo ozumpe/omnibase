@@ -12,6 +12,8 @@ import functools
 import itertools
 import shutil
 import subprocess
+import threading
+import time
 from collections.abc import Iterator
 
 import pytest
@@ -19,6 +21,7 @@ import pytest
 from sis import config, gauntlet
 from sis.policy import ChangeTier, classify
 from sis.sandbox_worker import (
+    STDERR_TAIL_BYTES,
     HotSlot,
     SandboxWorker,
     WorkerDied,
@@ -164,6 +167,72 @@ def test_a_hang_is_killed_by_the_timeout(mode: str) -> None:
             assert listed == "", "the container kept running after the timeout"
     finally:
         worker.close()
+
+
+# Moves the worker's stdin aside at import: the host's pipe stays open (so its
+# writes do not fail) and nobody reads it, so a large request fills it.
+_DEAF = ("import os\n_held = os.dup(0)\n_r, _w = os.pipe()\nos.dup2(_r, 0)\n"
+         "def f(text):\n    return len(text)\n")
+
+
+def test_a_candidate_that_stops_reading_cannot_hold_the_host_past_its_timeout(
+        mode: str) -> None:
+    # OMNI-155 (H10): the request used to be written, blocking, before the
+    # timeout started, so a worker that stopped reading held the host forever.
+    # Larger than any pipe buffer, and than what docker's own copy absorbs.
+    worker = _serve(_DEAF)
+    outcome: list[object] = []
+
+    def call() -> None:
+        try:
+            outcome.append(worker.call([["x" * 8_000_000]], timeout_s=1.0))
+        except BaseException as exc:  # noqa: BLE001 - the test inspects it
+            outcome.append(exc)
+
+    caller = threading.Thread(target=call, daemon=True)
+    started = time.monotonic()
+    caller.start()
+    caller.join(timeout=20)
+    try:
+        assert not caller.is_alive(), "the host is still writing a request nobody reads"
+        assert isinstance(outcome[0], WorkerTimeout), outcome
+        assert "killed" in str(outcome[0])
+        assert time.monotonic() - started < 10
+        assert not worker.running
+    finally:
+        worker._kill()     # unblocks a stuck write, so close() can take the lock
+        caller.join(timeout=10)
+        worker.close()
+
+
+def test_a_flood_on_stderr_costs_the_host_only_a_bounded_tail(
+        mode: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    # OMNI-156 (H11): stderr was a host-side file the candidate could grow
+    # without bound, read back whole for one line. Now it is drained as it
+    # comes, and only its tail is kept.
+    peak = [0]
+    take = SandboxWorker._take_stderr
+
+    def watched(self: SandboxWorker) -> int:
+        got = take(self)
+        peak[0] = max(peak[0], len(self._stderr_tail_bytes))
+        return got
+
+    monkeypatch.setattr(SandboxWorker, "_take_stderr", watched)
+    flood = ("import os, sys\nsys.stderr.write('x' * 4_000_000 + '\\n')\n"
+             "sys.stderr.write('last words\\n')\nsys.stderr.flush()\nos._exit(1)\n")
+    with pytest.raises(WorkerStartError, match="stderr: last words"):
+        _serve(flood)
+    assert 0 < peak[0] <= STDERR_TAIL_BYTES
+
+
+def test_a_worker_that_writes_much_to_stderr_during_a_call_still_answers(mode: str) -> None:
+    # More than a pipe holds, while the host waits for the answer: unless the
+    # host drains stderr meanwhile, the worker (or docker's client) blocks.
+    chatty = "import sys\ndef f():\n    sys.stderr.write('y' * 2_000_000)\n    return 7\n"
+    with _serve(chatty) as worker:
+        assert _one(worker, timeout_s=10.0) == 7
+        assert len(worker._stderr_tail_bytes) <= STDERR_TAIL_BYTES
 
 
 def test_a_worker_that_exits_is_reported() -> None:

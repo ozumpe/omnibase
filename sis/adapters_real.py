@@ -5,6 +5,9 @@ Concrete implementations backed by:
 - **Jira Cloud REST v3** (Work Tracker)
 - **GitHub REST v3** (Version Control)
 - **AWS / Ray Serve** (Cloud) — thin placeholder; canary records only.
+- **EIA's bulk petroleum file** (Sensor, OMNI-33) — captured into an
+  append-only trace (:mod:`sis.sensor_trace`); every reading comes through
+  :func:`sis.sensor_input.sanitise`, and none is built here.
 
 They satisfy the same protocols as the in-memory adapters in
 :mod:`sis.adapters`, so the roles are unchanged — :func:`make_real_adapters`
@@ -26,12 +29,23 @@ real pages, issues, branches, and PRs.
 from __future__ import annotations
 
 import base64
+import datetime
+import hashlib
+import json
+import pathlib
 import re
+import tempfile
 import time
-from typing import TYPE_CHECKING, Any, cast
+import zipfile
+from collections.abc import Callable, Iterator, Mapping
+from dataclasses import dataclass
+from typing import IO, TYPE_CHECKING, Any, cast
+from zoneinfo import ZoneInfo
 
-from sis import config
-from sis.adapters import InMemoryTelemetry
+from sis import config, sensor_trace
+from sis.adapters import InMemoryTelemetry, SimSensor
+from sis.clock import Clock, WallClock, parse_event_time
+from sis.paths import SENSOR_TRACES_DIR
 from sis.ports import (
     Branch,
     BranchState,
@@ -42,9 +56,13 @@ from sis.ports import (
     Page,
     PullRequest,
     PullRequestNotFound,
+    Reading,
     RequiresHumanApproval,
     Severity,
+    TimeAxis,
 )
+from sis.sensor_input import Absent, SeriesRule, SourceRules
+from sis.sensor_trace import Fetched
 from sis.settings import AtlassianSettings, GitHubSettings, Settings
 
 if TYPE_CHECKING:
@@ -715,6 +733,341 @@ def sns_subject(text: str) -> str:
     """
     flat = "".join(ch if 32 <= ord(ch) < 127 else " " for ch in text)
     return " ".join(flat.split())[:99] or "sis alert"
+
+
+# --- Sensor: EIA's weekly petroleum data (OMNI-33) ---------------------------------
+#
+# Read from the bulk file, not API v2. One file holds every series' whole
+# history, needs no key, and had each week's prices and stocks within hours of
+# their release (last_updated 2026-10-06 and 2026-10-07). API v2 serves the same
+# values (compared for 2022-09-23..2026-10-02) but needs a key and pages: one
+# path suffices. EIA's terms (checked by Olaf, 2026-10-13): public domain, reuse
+# with an acknowledgment that dates the publication, no implied endorsement, and
+# no modified content presented as EIA's.
+
+EIA_BULK_URL = "https://www.eia.gov/opendata/bulk/PET.zip"
+EIA_TRACE = SENSOR_TRACES_DIR / "eia.jsonl"
+EASTERN = ZoneInfo("America/New_York")
+_EIA_HOSTS = ("https://www.eia.gov/", "https://api.eia.gov/")
+_EIA_MEMBER = "PET.txt"
+_EIA_MAX_ZIPPED = 250_000_000       # 56 MB on 2026-10-13
+_EIA_MAX_UNZIPPED = 1_500_000_000   # 368 MB unpacked
+_EIA_MAX_LINE = 4_000_000           # the longest line was 210 KB
+_SERIES_PREFIX = b'{"series_id":"'
+_PERIOD = re.compile(r"\d{8}\Z")
+
+
+@dataclass(frozen=True)
+class EIASeries:
+    """A series the EIA sensor reads, and when a value of it is taken to be out.
+
+    A value fetched long after it appeared gets a reconstructed ``known_at``:
+    its period's date plus ``release_days``, at ``release_at`` Eastern. That is
+    after the regular release and its holiday shifts, and before an irregular
+    delay: the stocks for the week ending 2022-06-17 came out on 2022-06-29, and
+    the retail prices for Monday 2022-06-20 on the same day (EIA's systems
+    outage), the stocks for the week ending 2025-12-19 on 2025-12-29 at 5 p.m. A
+    replay over a window like those checks EIA's release archive first
+    (OMNI-35); the reconstructed mark says where to look.
+    """
+
+    rule: SeriesRule
+    release_days: int
+    release_at: datetime.time
+
+
+def _weekly_stocks() -> EIASeries:
+    # Weekly Petroleum Status Report: the week ending Friday, out on Wednesday
+    # at 10:30 ET, or Thursday at noon in a holiday week. Taken as Thursday 5 p.m.
+    return EIASeries(SeriesRule("Thousand Barrels", 10_000.0, 60_000.0,
+                                period=datetime.timedelta(days=7)), 6, datetime.time(17))
+
+
+def _weekly_retail() -> EIASeries:
+    # Gasoline and Diesel Fuel Update: Monday's price. In 2022 it was out on
+    # Monday, or Tuesday after a Monday holiday (ALFRED's vintage dates, release
+    # 183). Now it is out on Tuesday at about 10:00 ET, or Wednesday after a
+    # government holiday (eia.gov/petroleum/gasdiesel/schedule.php). Taken as
+    # Wednesday 5 p.m., after both: Tuesday was a day early in a holiday week
+    # (OMNI-161, M30).
+    return EIASeries(SeriesRule("Dollars per Gallon", 0.5, 15.0), 2, datetime.time(17))
+
+
+# EIA's own ids, as the bulk file writes them. A human adds a series here, with
+# its range and its release; one the adapter did not declare is refused.
+EIA_SERIES: Mapping[str, EIASeries] = {
+    "PET.WGTSTP51.W": _weekly_stocks(),                 # West Coast (PADD 5) total gasoline stocks
+    "PET.EMM_EPMRR_PTE_SCA_DPG.W": _weekly_retail(),    # California, regular reformulated, retail
+    "PET.EMM_EPMRR_PTE_Y05LA_DPG.W": _weekly_retail(),  # Los Angeles
+    "PET.EMM_EPMRR_PTE_Y05SF_DPG.W": _weekly_retail(),  # San Francisco
+    "PET.EMM_EPMRR_PTE_NUS_DPG.W": _weekly_retail(),    # United States
+}
+EIA_RULES = SourceRules("eia", {series: spec.rule for series, spec in EIA_SERIES.items()})
+
+
+class EIAFormatError(ValueError):
+    """The bulk file is not shaped as the sensor was written for. Nothing is captured."""
+
+
+class EIAFetchError(RuntimeError):
+    """The bulk file could not be fetched, or what came back is not EIA's file."""
+
+
+class _Transient(OSError):
+    """A failure worth another attempt: a 429 or a 5xx. (Network errors are OSErrors too.)"""
+
+
+@dataclass(frozen=True)
+class EIABulk:
+    """A downloaded bulk file: where it is, where it came from, and its digest."""
+
+    path: pathlib.Path
+    url: str
+    sha256: str
+    size: int
+
+
+def eia_period(raw: object) -> object:
+    """The instant a bulk-file period names, or *raw* as sent if it names none.
+
+    EIA states a date (``20220930``), not an instant, and stocks are "as of the
+    end of the period". The sensor places a date at midnight Eastern: a choice,
+    written down here, not a fact from the source.
+    """
+    if isinstance(raw, str) and _PERIOD.match(raw):
+        try:
+            return datetime.datetime(int(raw[:4]), int(raw[4:6]), int(raw[6:]), tzinfo=EASTERN)
+        except ValueError:
+            return raw
+    return raw
+
+
+def eia_published(series: str, period: datetime.datetime) -> datetime.datetime:
+    """When a value of *series* for *period* is taken to have been out (:class:`EIASeries`)."""
+    spec = EIA_SERIES[series]
+    day = period.astimezone(EASTERN).date() + datetime.timedelta(days=spec.release_days)
+    return datetime.datetime.combine(day, spec.release_at, tzinfo=EASTERN)
+
+
+def eia_attribution(updated: Mapping[str, str | None], fetched_at: datetime.datetime) -> str:
+    """The acknowledgment EIA's reuse policy asks for, dated by the data's last update."""
+    dates = [parse_event_time(value, where="last_updated") for value in updated.values() if value]
+    when = max(dates) if dates else fetched_at
+    return f"Source: U.S. Energy Information Administration ({when:%b %Y})"
+
+
+def _instant_or_none(raw: object) -> str | None:
+    if not isinstance(raw, str) or len(raw) > 40:
+        return None
+    try:
+        return parse_event_time(raw, where="last_updated").isoformat()
+    except ValueError:
+        return None
+
+
+def _lines(stream: IO[bytes]) -> Iterator[tuple[bytes, bool]]:
+    """Each line of *stream*, and whether it was whole. One over the limit is skipped."""
+    while line := stream.readline(_EIA_MAX_LINE + 1):
+        if len(line) <= _EIA_MAX_LINE or line.endswith(b"\n"):
+            yield line, True
+            continue
+        head = line
+        while line and not line.endswith(b"\n"):
+            line = stream.readline(_EIA_MAX_LINE + 1)
+        yield head, False
+
+
+def _eia_series(series: str, line: bytes) -> tuple[Fetched, str | None]:
+    try:
+        decoded = json.loads(line)
+    except (ValueError, RecursionError):
+        raise EIAFormatError(f"{series}: its line is not JSON") from None
+    if not isinstance(decoded, dict) or decoded.get("series_id") != series \
+            or not isinstance(decoded.get("data"), list):
+        raise EIAFormatError(f"{series}: not a series with a list of values")
+    values = [(eia_period(pair[0]), pair[1]) if isinstance(pair, list) and len(pair) == 2
+              else (pair, None) for pair in decoded["data"]]
+    return (Fetched(series, decoded.get("units"), values),
+            _instant_or_none(decoded.get("last_updated")))
+
+
+def read_eia_bulk(path: pathlib.Path) -> tuple[list[Fetched], dict[str, str | None]]:
+    """The declared series in a bulk file, and when the file says each was last updated.
+
+    Streamed: only a declared series' line is decoded, and nothing over the
+    limits above is read. Values go to the door as sent; only periods are
+    placed in time here (:func:`eia_period`). A declared series the file lacks
+    is simply absent from the result, and the capture says so.
+    """
+    found: dict[str, Fetched] = {}
+    updated: dict[str, str | None] = {}
+    try:
+        with zipfile.ZipFile(path) as archive:
+            try:
+                info = archive.getinfo(_EIA_MEMBER)
+            except KeyError:
+                raise EIAFormatError(f"the bulk file has no {_EIA_MEMBER}") from None
+            # Only deflate (what EIA ships) or no compression: the other methods
+            # decompress a read without bounding its output, so a declared size
+            # that lies would be found out only after the memory was gone.
+            if info.compress_type not in (zipfile.ZIP_DEFLATED, zipfile.ZIP_STORED):
+                raise EIAFormatError(f"{_EIA_MEMBER} uses compression method "
+                                     f"{info.compress_type}, not deflate")
+            if info.file_size > _EIA_MAX_UNZIPPED:
+                raise EIAFormatError(f"{_EIA_MEMBER} would unpack to {info.file_size} bytes, "
+                                     f"over {_EIA_MAX_UNZIPPED}")
+            with archive.open(info) as member:
+                for line, whole in _lines(member):
+                    if not line.startswith(_SERIES_PREFIX):
+                        continue
+                    end = line.find(b'"', len(_SERIES_PREFIX))
+                    series = line[len(_SERIES_PREFIX):end].decode("ascii", "replace")
+                    if end < 0 or series not in EIA_SERIES:
+                        continue
+                    if not whole:
+                        raise EIAFormatError(f"{series}: its line is over {_EIA_MAX_LINE} bytes")
+                    if series in found:
+                        raise EIAFormatError(f"{series} appears twice")
+                    found[series], updated[series] = _eia_series(series, line)
+    except (zipfile.BadZipFile, EOFError) as exc:
+        raise EIAFormatError(f"the bulk file is not a readable zip archive ({exc})") from None
+    return list(found.values()), updated
+
+
+def _download(session: Any, directory: pathlib.Path) -> EIABulk:
+    with session.get(EIA_BULK_URL, stream=True, timeout=_http_timeout()) as response:
+        status = int(response.status_code)
+        if status == 429 or status >= 500:
+            raise _Transient(f"HTTP {status}")
+        if status != 200:
+            raise EIAFetchError(f"HTTP {status} for {EIA_BULK_URL}")
+        url = str(response.url)
+        if not url.startswith(_EIA_HOSTS):
+            raise EIAFetchError("the bulk file was redirected off EIA's hosts")
+        declared = str(response.headers.get("Content-Length", ""))
+        if declared.isdigit() and int(declared) > _EIA_MAX_ZIPPED:
+            raise EIAFetchError(f"the bulk file is {declared} bytes, over {_EIA_MAX_ZIPPED}")
+        digest, size = hashlib.sha256(), 0
+        path = directory / "PET.zip"
+        try:
+            out = open(path, "wb")
+        except OSError as exc:      # here, not EIA's: not worth another download
+            raise EIAFetchError(f"cannot write the download: {exc.strerror}") from exc
+        with out:
+            for chunk in response.iter_content(chunk_size=1 << 20):
+                size += len(chunk)
+                if size > _EIA_MAX_ZIPPED:
+                    raise EIAFetchError(f"the bulk file is over {_EIA_MAX_ZIPPED} bytes")
+                digest.update(chunk)
+                try:
+                    out.write(chunk)
+                except OSError as exc:
+                    raise EIAFetchError(f"cannot write the download: {exc.strerror}") from exc
+    return EIABulk(path, url, digest.hexdigest(), size)
+
+
+def fetch_eia_bulk(directory: pathlib.Path, *, session: Any = None, attempts: int = 3,
+                   sleep: Callable[[float], None] = time.sleep) -> EIABulk:
+    """Download the bulk file into *directory*, retrying what may pass on its own.
+
+    A dropped connection, a timeout, a 429 or a 5xx is tried again after 2 s,
+    then 4 s. Anything else fails at once: a 404, a redirect off EIA's hosts, a
+    file over the size limit or a local disk that will not take it will not
+    improve by waiting.
+    """
+    transient: tuple[type[BaseException], ...] = (ConnectionError, TimeoutError, _Transient)
+    try:
+        import requests
+
+        transient += (requests.ConnectionError, requests.Timeout,
+                      requests.exceptions.ChunkedEncodingError)
+    except ImportError:             # only a test's fake session gets this far without it
+        if session is None:
+            raise
+    if session is None:
+        session = requests.Session()
+    for attempt in range(1, attempts + 1):
+        try:
+            return _download(session, directory)
+        except transient as exc:
+            if attempt == attempts:
+                raise EIAFetchError(f"the EIA bulk file failed {attempts} times; last: "
+                                    f"{type(exc).__name__}: {str(exc)[:160]}") from exc
+            sleep(2.0 ** attempt)
+    raise EIAFetchError("no attempt was made")
+
+
+class EIASensor:
+    """EIA's weekly petroleum data (OMNI-33): captured from the bulk file, read from the trace.
+
+    Two steps on purpose. :meth:`capture` fetches once and appends what is new
+    or changed (``scripts/capture_sensor.py``). :meth:`read` answers from the
+    trace alone, through the door again, so a read never waits on a download
+    and a replay sees exactly what a live read saw. Nothing captured yet reads
+    as nothing: an empty answer, like a week with no release, not an error.
+
+    A read shows readings, and a reading cannot say "withdrawn": a value EIA
+    later blanks stays readable as the vintage it was. :meth:`absent` shows the
+    blanking, a stated absence with its own ``known_at``, so whoever builds an
+    as-of view (OMNI-35) takes both. A period EIA stops sending altogether is
+    counted as ``vanished`` in its capture.
+    """
+
+    def __init__(self, trace: pathlib.Path = EIA_TRACE, *,
+                 fetch: Callable[[pathlib.Path], EIABulk] = fetch_eia_bulk,
+                 clock: Clock | None = None) -> None:
+        self.trace = sensor_trace.writable(trace)
+        self._fetch = fetch
+        self._clock = clock or WallClock()
+
+    def capture(self) -> sensor_trace.CaptureReport:
+        """Fetch the bulk file once, and append to the trace what is new or changed."""
+        with tempfile.TemporaryDirectory(prefix="sis-eia-") as scratch:
+            bulk = self._fetch(pathlib.Path(scratch))
+            fetched, updated = read_eia_bulk(bulk.path)
+
+        def block(prior: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            # Stamped under the trace's lock, after the download: a later stamp
+            # is still an upper bound on when the values were known, and two
+            # captures at once then append in the order they were stamped. An
+            # earlier stamp that reached the lock second was refused as if the
+            # clock had gone back (OMNI-160).
+            fetched_at = self._clock.now()
+            stamp = fetched_at.astimezone(datetime.UTC)
+            provenance = {"url": bulk.url, "sha256": bulk.sha256, "bytes": bulk.size,
+                          "member": _EIA_MEMBER, "last_updated": updated,
+                          "attribution": eia_attribution(updated, fetched_at)}
+            return sensor_trace.capture_lines(
+                prior, fetched, EIA_RULES,
+                capture=f"eia-{stamp:%Y%m%dT%H%M%S.%fZ}-{bulk.sha256[:8]}",
+                fetched_at=fetched_at, published=eia_published, provenance=provenance)
+
+        return sensor_trace.CaptureReport.of(sensor_trace.append(self.trace, block))
+
+    def read(
+        self, start: datetime.datetime, end: datetime.datetime, *, by: TimeAxis,
+    ) -> list[Reading]:
+        readings, _ = sensor_trace.read_back(sensor_trace.load(self.trace), EIA_RULES)
+        return SimSensor(readings).read(start, end, by=by)
+
+    def absent(
+        self, start: datetime.datetime, end: datetime.datetime, *, by: TimeAxis,
+    ) -> list[Absent]:
+        """The periods EIA stated no value for, whose time on *by* is in ``[start, end)``.
+
+        Ordered as :meth:`read` orders readings. A value EIA published and later
+        blanked appears in :meth:`read` at its first ``known_at`` and here at
+        the later one: after that, there is no value.
+        """
+        _, absent = sensor_trace.read_back(sensor_trace.load(self.trace), EIA_RULES)
+        if start.utcoffset() is None or end.utcoffset() is None:
+            raise ValueError("EIASensor.absent: a window needs timezones, as the trace has")
+        other = TimeAxis.EVENT if by is TimeAxis.KNOWN else TimeAxis.KNOWN
+
+        def at(item: Absent, axis: TimeAxis) -> datetime.datetime:
+            return item.known_at if axis is TimeAxis.KNOWN else item.event_time
+        return sorted((item for item in absent if start <= at(item, by) < end),
+                      key=lambda item: (at(item, by), at(item, other), item.source, item.series))
 
 
 def make_real_adapters(

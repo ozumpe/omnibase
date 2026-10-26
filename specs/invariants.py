@@ -110,3 +110,57 @@ def idempotent(args: tuple[Any, ...], output: Any, impl: Any) -> bool:
     """
     del args
     return bool(impl.entry(output) == output)
+
+
+# --- scenarios: generated fuel-market states (OMNI-34) --------------------
+
+
+def _scenarios() -> Any:
+    """The pinned scenario generator beside this file (``scenarios.py``).
+
+    Loaded by path, not by ``import``: here in ``specs/`` and in the exam the
+    invariant gate builds, the two files sit side by side, and neither place
+    has to be on ``sys.path``. Loaded on first use, so a contract that draws no
+    scenario never needs the file.
+    """
+    import importlib.util
+    import pathlib
+    import sys
+
+    cached = sys.modules.get("_pinned_scenarios")
+    if cached is not None:
+        return cached
+    path = pathlib.Path(__file__).with_name("scenarios.py")
+    spec = importlib.util.spec_from_file_location("_pinned_scenarios", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"no scenario generator at {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["_pinned_scenarios"] = module  # dataclasses look their module up
+    spec.loader.exec_module(module)
+    return module
+
+
+def fuel_scenario_states() -> Any:
+    """What a twin is shown at a moment of a generated fuel-market scenario.
+
+    One argument, shaped as a backtest fixture's (``as_of``, ``readings``,
+    ``absent``), so an entry point reads a scenario exactly as it reads a
+    recorded episode. Every kind and data event is drawn, never a stress test;
+    the moment is when some week's California price first became known. A
+    scenario is a refutation input: it can find a law broken, never prove a
+    forecast right (D4).
+    """
+    gen = _scenarios()
+
+    def state(kind: str, seed: int, events: list[str], pick: int) -> tuple[Any, ...]:
+        scenario = gen.generate(kind, seed=seed, data_events=events)
+        moments = gen.decision_times(scenario)
+        return (gen.state_at(scenario, moments[pick % len(moments)]),)
+
+    return st.builds(
+        state,
+        st.sampled_from(gen.KINDS),
+        st.integers(min_value=0, max_value=2**32 - 1),
+        st.lists(st.sampled_from(gen.DATA_EVENTS), unique=True, max_size=len(gen.DATA_EVENTS)),
+        st.integers(min_value=0, max_value=1_000),
+    )

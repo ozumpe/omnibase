@@ -65,12 +65,14 @@ from __future__ import annotations
 
 import json
 import os
+import unicodedata
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from sis.atomic import write_text_atomic
 from sis.paths import PROJECT_ROOT
 
 # Committed, with the safe defaults, and POLICY-FORBIDDEN. Committed rather than
@@ -170,6 +172,13 @@ DEFAULT_TARGET_PATHS: tuple[str, ...] = (
     # file does not exist yet — that is the point of feature construction, and
     # the tier has to be declared before the implementer may write it.
     "runtime/roman.py",
+    # The working copy of the scenario generator (OMNI-34, D7): the simulator
+    # the loop may improve. The pinned copy that generates gauntlet inputs is
+    # specs/scenarios.py, FORBIDDEN with the rest of specs/.
+    "runtime/scenarios.py",
+    # The persistence predictor (OMNI-36), a Class-2 target like roman: absent
+    # until an implementer writes it from specs/ca_price_persistence/.
+    "runtime/ca_price_persistence.py",
 )
 
 SCHEMA: tuple[Key, ...] = (
@@ -310,6 +319,18 @@ SCHEMA: tuple[Key, ...] = (
         "adapters.artifacts_bucket; a killed process or a replaced box loses at "
         "most this many. 0 syncs only when the loop stops (OMNI-140)."),
 
+    # --- sensor: where readings of the modelled world come from (OMNI-31). ---
+    # Forbidden, like adapters.mode, and for a sharper reason: real data is the
+    # evidence a promotion needs (D4), so a loop that could switch itself to
+    # the simulator would be choosing its own exam.
+    Key("sensor", "backend", ConfigTier.FORBIDDEN, Kind.STR, "sim",
+        "SIS_SENSOR",
+        "'sim' replays a canned trace, with no network; 'real' reads EIA's "
+        "petroleum data as scripts/capture_sensor.py captured it (OMNI-33). "
+        "Passed to a consumer as an argument, never read from the environment "
+        "inside an actor.",
+        choices=("sim", "real")),
+
     # --- contracts: which target a cycle optimises. --------------------------
     Key("contracts", "default", ConfigTier.SOFT, Kind.OPT_STR, None,
         "SIS_CONTRACT",
@@ -418,12 +439,30 @@ def _parse_number(key: Key, label: str, raw: object) -> float | int:
     return number
 
 
-def _parse_str_list(raw: object) -> tuple[str, ...]:
+# Unicode categories no config string has a reason to contain: control
+# characters (newline, tab, NUL, ESC), lone surrogates, and the two Unicode
+# line/paragraph separators, which YAML treats as line breaks. A newline in a
+# value is how a `soft_` edit once grew a second `brakes:` section (OMNI-52).
+_FORBIDDEN_CHAR_CATEGORIES = frozenset({"Cc", "Cs", "Zl", "Zp"})
+
+
+def _reject_control_chars(label: str, text: str) -> str:
+    for ch in text:
+        if unicodedata.category(ch) in _FORBIDDEN_CHAR_CATEGORIES:
+            # The code point, not the value: the value is what was refused.
+            raise ValueError(
+                f"{label} contains a control character (U+{ord(ch):04X}); "
+                "config strings are single-line text"
+            )
+    return text
+
+
+def _parse_str_list(label: str, raw: object) -> tuple[str, ...]:
     parts: list[str]
     if isinstance(raw, list | tuple):
-        parts = [str(item) for item in raw]
+        parts = [_reject_control_chars(label, str(item)) for item in raw]
     else:
-        parts = str(raw).split(",")
+        parts = _reject_control_chars(label, str(raw)).split(",")
     return tuple(
         # removeprefix, not lstrip("./") — lstrip strips `.`/`/` *characters*,
         # mangling ".github/x" → "github/x" and "../x" → "x".
@@ -455,9 +494,9 @@ def parse_value(key: Key, raw: object, origin: Source = Source.DEFAULT) -> Any:
     if key.kind in (Kind.INT, Kind.OPT_INT, Kind.FLOAT):
         return _parse_number(key, label, raw)
     if key.kind is Kind.STR_LIST:
-        return _parse_str_list(raw)
+        return _parse_str_list(label, raw)
 
-    text = str(raw)
+    text = _reject_control_chars(label, str(raw))
     if key.choices is not None and text not in key.choices:
         raise ValueError(f"{label}={raw!r} is not one of {list(key.choices)}")
     return text
@@ -468,8 +507,7 @@ def parse_value(key: Key, raw: object, origin: Source = Source.DEFAULT) -> Any:
 # --------------------------------------------------------------------------
 
 
-def _read_yaml(path: Path) -> dict[str, Any]:
-    text = path.read_text(encoding="utf-8")
+def _read_yaml(path: Path, text: str) -> dict[str, Any]:
     try:
         import yaml  # lazy: an optional dep (`poetry install --with real`)
     except ModuleNotFoundError:
@@ -505,7 +543,16 @@ def load_file(path: Path | None = None) -> dict[str, Any]:
     resolved = CONFIG_FILE if path is None else path
     if not resolved.exists():
         return {}
-    raw = _read_yaml(resolved)
+    return load_text(resolved.read_text(encoding="utf-8"), resolved)
+
+
+def load_text(text: str, resolved: Path) -> dict[str, Any]:
+    """:func:`load_file` on text already in memory; *resolved* names it in errors.
+
+    Exists so a writer can parse what it is about to write *before* writing it
+    (:func:`sis.operator.save_edits`, OMNI-52).
+    """
+    raw = _read_yaml(resolved, text)
 
     by_yaml_key = {(k.section, k.yaml_key): k for k in SCHEMA}
     known_names = {(k.section, k.name): k for k in SCHEMA}
@@ -748,6 +795,11 @@ class LoopConfig:
 
 
 @dataclass(frozen=True)
+class SensorConfig:
+    backend: str
+
+
+@dataclass(frozen=True)
 class ContractsConfig:
     default: str | None
 
@@ -772,6 +824,7 @@ class Config:
     proposer: ProposerConfig
     canary: CanaryConfig
     loop: LoopConfig
+    sensor: SensorConfig
     contracts: ContractsConfig
     frontend: FrontendConfig
 
@@ -803,6 +856,7 @@ def config(*, env: Mapping[str, str] | None = None) -> Config:
         proposer=ProposerConfig(**_section("proposer", env)),
         canary=CanaryConfig(**_section("canary", env)),
         loop=LoopConfig(**_section("loop", env)),
+        sensor=SensorConfig(**_section("sensor", env)),
         contracts=ContractsConfig(**_section("contracts", env)),
         frontend=FrontendConfig(**_section("frontend", env)),
     )
@@ -818,11 +872,19 @@ def _render_scalar(value: Any) -> str:
         return "true" if value else "false"
     if value is None:
         return "null"
+    # json.dumps, never f'"{value}"': a JSON string is a valid YAML
+    # double-quoted scalar with its quotes, backslashes and control characters
+    # escaped. Unescaped, one `"` broke the file and a newline injected a whole
+    # section (OMNI-52, M12).
     if isinstance(value, list | tuple):
-        return "[" + ", ".join(f'"{item}"' for item in value) + "]"
+        return "[" + ", ".join(_quote(str(item)) for item in value) + "]"
     if isinstance(value, str):
-        return f'"{value}"'
+        return _quote(value)
     return str(value)
+
+
+def _quote(text: str) -> str:
+    return json.dumps(text, ensure_ascii=False)
 
 
 def _wrap(text: str, width: int, prefix: str) -> Iterator[str]:
@@ -891,7 +953,7 @@ def _main() -> None:
     if "--write" in sys.argv:
         # Re-render around the values already in the file, so adding a key to
         # SCHEMA does not silently reset every knob an operator has set.
-        CONFIG_FILE.write_text(render_config_file(load_file()), encoding="utf-8")
+        write_text_atomic(CONFIG_FILE, render_config_file(load_file()))
         print(f"wrote {CONFIG_FILE}")
         return
     for item in effective():
