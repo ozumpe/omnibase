@@ -163,7 +163,8 @@ if [ -z "$ANTHROPIC_API_KEY" ] || [ "$ANTHROPIC_API_KEY" = null ]; then
   echo "[scheduled] no Anthropic key in the secret" | tee -a "$log"
   echo "{end} 1" | tee -a "$log"; exit 1
 fi
-if ! poetry run python scripts/check_connections.py --deep 2>&1 | tee -a "$log"; then
+if ! poetry run python scripts/check_connections.py --deep 2>&1 | sed -u 's/^/[check] /' \\
+    | tee -a "$log"; then
   echo "[scheduled] check_connections failed; nothing was spent" | tee -a "$log"
   echo "{end} 1" | tee -a "$log"; exit 1
 fi
@@ -291,7 +292,8 @@ def next_action(state: LogState, *, elapsed_s: float, limit_s: float,
 
 
 _SUMMARY = ("[sis] contract", "[sis] running", "[sis] HOLDING", "[sis] carrying on",
-            "[cycle]", "[loop]", "[sis] artifacts", "[sis] WARNING", "[scheduled]")
+            "[cycle]", "[loop]", "[sis] artifacts", "[sis] WARNING", "[scheduled]",
+            "[check]")
 
 
 def summary_lines(text: str, limit: int = 60) -> list[str]:
