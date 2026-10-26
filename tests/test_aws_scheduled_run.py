@@ -63,6 +63,10 @@ def test_the_runner_follows_step_5_with_the_docker_sandbox_and_the_cap() -> None
     assert "tee -i -a" in script
     # check_connections comes before the loop, and its failure ends the run.
     assert script.index("check_connections.py --deep") < script.index("main.py --contract")
+    # Its lines reach the report, so a failed preflight says which check failed.
+    assert "s/^/[check] /" in script
+    assert sr.summary_lines("  noise\n[check]   ✗ Pager  no confirmed subscription\n") == [
+        "[check]   ✗ Pager  no confirmed subscription"]
     assert "SIS_ALLOW_UNSANDBOXED_LLM" not in script and "canary" not in script
 
 
