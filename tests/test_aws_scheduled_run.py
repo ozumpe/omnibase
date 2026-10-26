@@ -70,6 +70,9 @@ def test_the_runner_reads_the_key_on_the_box_and_never_prints_it() -> None:
     script = sr.runner_script(_cfg())
     assert "jq -r .anthropic.api_key" in script
     assert "echo $ANTHROPIC_API_KEY" not in script and 'echo "$ANTHROPIC_API_KEY' not in script
+    # A secret the box cannot read says why (the CLI's error carries no value),
+    # rather than looking like a secret with no key in it.
+    assert "could not read the secret" in script and "unset secret" in script
 
 
 def test_the_start_refuses_a_second_loop_and_writes_a_valid_script(tmp_path: pathlib.Path) -> None:
@@ -446,3 +449,6 @@ def test_the_runner_policy_can_build_the_box_but_grants_no_iam_or_secret() -> No
             assert "sis-first-run" in json.dumps(st["Condition"])   # only the tagged box
         if "s3:PutObject" in st["Action"]:
             assert st["Resource"].endswith("/tofu/*")              # state, never the runs
+        if "image/*" in str(st["Resource"]):
+            # Canonical's AMIs are aliased `amazon`, which is what ec2:Owner sees.
+            assert "amazon" in st["Condition"]["StringEquals"]["ec2:Owner"]

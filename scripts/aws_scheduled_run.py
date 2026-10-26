@@ -150,8 +150,14 @@ echo "{start} $(date -u +%FT%TZ) $(git describe --tags --always --dirty)" | tee 
 export SIS_ENV=aws SIS_ADAPTERS=real SIS_AWS_SECRET_ID={cfg.secret_id}
 export SIS_SANDBOX=docker SIS_PROPOSER=claude
 export SIS_BUDGET_USD={cfg.budget_usd:.2f}
-ANTHROPIC_API_KEY=$(aws secretsmanager get-secret-value --secret-id {cfg.secret_id} \\
-  --query SecretString --output text | jq -r .anthropic.api_key)
+if ! secret=$(aws secretsmanager get-secret-value --secret-id {cfg.secret_id} \\
+    --query SecretString --output text 2>"$HOME/.sis-secret.err"); then
+  why=$(tr '\\n' ' ' < "$HOME/.sis-secret.err" | tail -c 400)
+  echo "[scheduled] could not read the secret: $why" | tee -a "$log"
+  echo "{end} 1" | tee -a "$log"; exit 1
+fi
+ANTHROPIC_API_KEY=$(printf '%s' "$secret" | jq -r .anthropic.api_key)
+unset secret
 export ANTHROPIC_API_KEY
 if [ -z "$ANTHROPIC_API_KEY" ] || [ "$ANTHROPIC_API_KEY" = null ]; then
   echo "[scheduled] no Anthropic key in the secret" | tee -a "$log"
