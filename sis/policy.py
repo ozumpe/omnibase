@@ -127,6 +127,8 @@ GUARDRAIL_DIRS: tuple[str, ...] = (
     "specs",
 )
 
+_GUARDRAIL_PATHS_FOLDED: frozenset[str] = frozenset(p.casefold() for p in GUARDRAIL_PATHS)
+
 # The designated optimisation target(s) — the SOFT tier. Re-exported from
 # sis.config, which declares it alongside the `policy.target_paths` key that
 # overrides it, so the default and its override cannot drift apart. Both modules
@@ -209,14 +211,14 @@ def _rel(path: str | pathlib.Path) -> str:
 
 
 def _under_guardrail_dir(rel: str) -> bool:
-    """Is *rel* inside (or equal to) a GUARDRAIL_DIRS directory?
+    """Is *rel* (case-folded) inside (or equal to) a GUARDRAIL_DIRS directory?
 
     Compares whole path segments, never a bare string prefix: ``"specs"`` must
     protect ``specs/x.py`` without also swallowing an unrelated ``specs_draft/``
     or ``specstest.py``, which ``str.startswith("specs")`` would.
     """
     for guarded in GUARDRAIL_DIRS:
-        head = guarded.rstrip("/")
+        head = guarded.rstrip("/").casefold()
         if rel == head or rel.startswith(f"{head}/"):
             return True
     return False
@@ -226,8 +228,12 @@ def classify(path: str | pathlib.Path) -> ChangeTier:
     """Classify a path into its change tier."""
     rel = _rel(path)
     # Guardrail precedence is absolute: a path that is both listed as a target
-    # AND is guardrail code is still FORBIDDEN.
-    if rel in GUARDRAIL_PATHS or _under_guardrail_dir(rel):
+    # AND is guardrail code is still FORBIDDEN. Guardrails are matched in any
+    # case: on a case-insensitive filesystem `SIS/policy.py` is this file, and
+    # `resolve()` keeps the case it was given (L18, OMNI-67). A target is
+    # matched exactly, so a different spelling of one is STRICT; both fail closed.
+    folded = rel.casefold()
+    if folded in _GUARDRAIL_PATHS_FOLDED or _under_guardrail_dir(folded):
         return ChangeTier.FORBIDDEN
     if rel in target_paths():
         return ChangeTier.SOFT

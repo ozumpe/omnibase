@@ -55,7 +55,7 @@ reference with no link target below.
 > | L21, L23 | [OMNI-61](https://olafzumpe.atlassian.net/browse/OMNI-61) (brake state fails closed; `sis.admin`) — **fixed** |
 > | L24 | [OMNI-62](https://olafzumpe.atlassian.net/browse/OMNI-62) (Notifier port) — **fixed** |
 > | M7 | [OMNI-88] — **won't fix** for now (label `wont-fix`); see the Won't fix section |
-> | L15–L20, L22, L25–L29, L31–L38, L40–L43 | one ticket each, [OMNI-64]–[OMNI-87], on each entry below (L15 and L33 **fixed** 2026-09-29, L34 2026-09-30, L19 2026-10-15, L17 2026-10-26). Each is linked (Relates) in Jira to the ticket it should ship with. |
+> | L15–L20, L22, L25–L29, L31–L38, L40–L43 | one ticket each, [OMNI-64]–[OMNI-87], on each entry below (L15 and L33 **fixed** 2026-09-29, L34 2026-09-30, L19 2026-10-15, L17 and L18 2026-10-26). Each is linked (Relates) in Jira to the ticket it should ship with. |
 > | L30 | [OMNI-55], with M16 — **fixed** (2026-10-08) |
 > | L39 | [OMNI-42] — **fixed** (2026-10-15, with OMNI-68) |
 
@@ -168,9 +168,6 @@ reference with no link target below.
   also write to (see M9), so a candidate that wants its own rejection blamed
   on the harness can corrupt the probe too. Fix: give the probe its own
   read-only directory, not the candidate's.
-- [OMNI-67] **L18** — `policy.classify()` is case-sensitive, so on a case-insensitive
-  filesystem a different-case path to guardrail code classifies as STRICT
-  rather than FORBIDDEN. Fix: normalise case via the resolved path.
 - [OMNI-69] **L20** — The operator audit log (`runtime/operator_audit.jsonl`) path
   depends on the process's working directory, and entries don't record which
   operator made the edit. Fix: resolve the path against a fixed root; add the
@@ -290,6 +287,15 @@ reference with no link target below.
   consider one bounded re-measurement with a fresh seed before discarding.
 
 ## Resolved (Low)
+
+- [OMNI-67] **L18** — `policy.classify()` was case-sensitive, so on a
+  case-insensitive filesystem a different-case path to guardrail code
+  (`SIS/policy.py`, `Specs/…`) classified as STRICT rather than FORBIDDEN;
+  `resolve()` keeps the case it is given, so resolving did not help.
+  **Fixed 2026-10-26 (OMNI-67):** guardrail files and directories are matched
+  case-folded, on every filesystem; a SOFT target is still matched exactly, so
+  a different spelling of one is STRICT. Both directions fail closed.
+  Regression tests in `tests/test_policy.py` fail without the fix.
 
 - [OMNI-66] **L17** — `NaN` passed `config.py`'s number validation and silently
   disabled the spend cap and cost-per-accepted SLO (a threshold compared

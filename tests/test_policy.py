@@ -1,5 +1,7 @@
 """Tests for the change-authorization policy (no Ray, no network)."""
 
+import pytest
+
 from sis.policy import (
     ChangeTier,
     Justification,
@@ -160,3 +162,21 @@ def test_classification_does_not_depend_on_the_working_directory(monkeypatch, tm
     assert classify("sis/gauntlet.py") is ChangeTier.FORBIDDEN
     assert classify("runtime/target.py") is ChangeTier.SOFT
     assert classify("sis/org.py") is ChangeTier.STRICT
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["SIS/policy.py", "sis/Gauntlet.py", "sis/CONFIG.py", "Specs/roman/oracle.py",
+     "SPECS", "Config.yml", "runtime/../SIS/cost.py"],
+)
+def test_a_guardrail_path_in_another_case_is_still_forbidden(path: str) -> None:
+    # On a case-insensitive filesystem (macOS, Windows) `SIS/policy.py` *is*
+    # `sis/policy.py`, and `resolve()` keeps the case it was given, so an exact
+    # comparison classified it STRICT (L18, OMNI-67).
+    assert classify(path) is ChangeTier.FORBIDDEN
+
+
+def test_a_target_in_another_case_is_not_soft() -> None:
+    # Guardrails are matched loosely, which fails closed; a target is matched
+    # exactly, which fails closed too: a different spelling is STRICT.
+    assert classify("Runtime/Target.py") is ChangeTier.STRICT
