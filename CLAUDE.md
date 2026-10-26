@@ -539,14 +539,16 @@ internal target before it models anything external.
   live runs — don't put planning there.
 
 ## Current status — where to pick up
-**Unreleased on `develop`** (since v0.3.7): the omnitrack Phase-A sensor work
-(OMNI-31 `Sensor` port, OMNI-32 sanitising door, OMNI-33 `EIASensor` and its
-trace, OMNI-35's fixture tooling, OMNI-34's scenario generator; OMNI-36's
-prediction-error report is in review), the fixes from the review after v0.3.7
-(OMNI-155–162: H10–H13, M29–M31, L54), OMNI-54/68/42 (M14, L19, L39) and
-OMNI-52 (M12). The AWS box still runs v0.3.7.
-
-Released through **v0.3.7** (2026-10-08): v0.3.6 plus the hardening after the
+Released through **v0.4.0** (2026-10-26): the omnitrack Phase-A sensor work,
+the first code that reads the outside world. OMNI-31: the `Sensor` port.
+OMNI-32: the sanitising door. OMNI-33: `EIASensor` and its trace. OMNI-35:
+the fixture tooling. OMNI-34: the scenario generator. OMNI-36: the
+prediction-error report. With them, the fixes from the review after v0.3.7
+(OMNI-155–162: H10–H13, M29–M31, L54), OMNI-54/68/42 (M14, L19, L39),
+OMNI-52 (M12), OMNI-164/165/167 (M32, M33, L56) and the scheduled AWS runs
+(OMNI-168/169). The real fixture and the autumn-2022 errors (OMNI-35/36) wait
+for the first capture on a v0.4.0 box. Before that, **v0.3.7** (2026-10-08):
+v0.3.6 plus the hardening after the
 seventh AWS run, most of it gate integrity. OMNI-151: one loop per box.
 OMNI-152: no benchmark input is timed twice (H7). OMNI-153: a timed batch
 runs no Python per call in the worker (H8). OMNI-154: one CPU for each
@@ -1019,8 +1021,8 @@ Two traps L5 surfaced, both worth knowing before writing similar code:
 
 **Next — the milestone plan is in Jira ([`OMNI`](https://olafzumpe.atlassian.net/browse/OMNI)),
 not here.** Check the board for current status rather than trusting this list.
-**Last reconciled against a live query on 2026-10-25** (163 issues, OMNI-1
-through OMNI-163; 113 Done, 1 In Progress (OMNI-35), 49 To Do):
+**Last reconciled against a live query on 2026-10-26** (169 issues, OMNI-1
+through OMNI-169; 120 Done, 2 In Progress (OMNI-35, OMNI-36), 47 To Do):
 
 1. ~~**[OMNI-1](https://olafzumpe.atlassian.net/browse/OMNI-1) — L5 target
    contract** (Class 1)~~ — **done 2026-08-06** (OMNI-4/5/6/7). Two targets ship
@@ -1099,7 +1101,7 @@ through OMNI-163; 113 Done, 1 In Progress (OMNI-35), 49 To Do):
    instance lifecycle: `user_data` racing Ubuntu's `unattended-upgrades` for
    the dpkg lock, and SSM sessions landing as `ssm-user` rather than `ubuntu`
    (every runbook step now starts with `sudo -iu ubuntu`). The box clones
-   the release tag in `var.repo_ref` (`v0.3.7`; a branch needs
+   the release tag in `var.repo_ref` (`v0.4.0`; a branch needs
    `allow_branch_ref = true`, OMNI-63) and every run records the commit it
    ran; run day uses `--contract sort`. **Rehearsed
    2026-09-23** on a local Ubuntu 24.04 box (`scripts/rehearse_aws_run.sh`),
@@ -1148,7 +1150,7 @@ through OMNI-163; 113 Done, 1 In Progress (OMNI-35), 49 To Do):
    - [OMNI-34](https://olafzumpe.atlassian.net/browse/OMNI-34) (Medium) —
      `SimSensor` scenario generation (supply, outage, demand and data-event
      scenarios): refutation inputs, and the gauntlet's input generator (D7).
-     **Built 2026-10-25, in review:** seeded scenarios in `specs/scenarios.py`
+     **Built 2026-10-25:** seeded scenarios in `specs/scenarios.py`
      (the pinned copy, FORBIDDEN) and `runtime/scenarios.py` (the working
      copy, SOFT); `sis/scenarios.py` drives a `SimSensor` from one; the
      invariant gate draws them through `fuel_scenario_states`; a fixture
@@ -1173,8 +1175,8 @@ through OMNI-163; 113 Done, 1 In Progress (OMNI-35), 49 To Do):
      after OMNI-35.
    - [OMNI-36](https://olafzumpe.atlassian.net/browse/OMNI-36) (Medium) —
      prediction error computed and reported against a persistence baseline: the
-     Phase-A milestone, with nothing acting on it yet. **Built 2026-10-25, in
-     review:** `sis/prediction_error.py` (questions, signed error, bias/MAE/RMSE,
+     Phase-A milestone, with nothing acting on it yet. **Built 2026-10-25**
+     (PR #174, in v0.4.0): `sis/prediction_error.py` (questions, signed error, bias/MAE/RMSE,
      telemetry and SelfModel provenance), the persistence contract
      `ca_price_persistence`, and `scripts/prediction_error.py` (autumn 2022
      from a trace, or a scenario). The autumn-2022 numbers wait for the box's
