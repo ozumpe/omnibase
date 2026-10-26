@@ -291,6 +291,27 @@ def test_a_negative_or_zero_value_is_rejected_where_zero_is_broken(
         config.get("sandbox.timeout_seconds")
 
 
+@pytest.mark.parametrize("raw", ["nan", "NaN", "-nan", "inf", "Infinity", "-inf", "1e400"])
+def test_a_non_finite_number_is_rejected(monkeypatch: pytest.MonkeyPatch, raw: str) -> None:
+    """``SIS_BUDGET_USD=nan`` used to turn the spend cap off (L17, OMNI-66).
+
+    A threshold compared with NaN is never crossed, so the cap and the
+    cost-per-accepted SLO never fired; an infinite cap is the same, spelled
+    honestly. ``1e400`` overflows to infinity.
+    """
+    monkeypatch.setenv("SIS_BUDGET_USD", raw)
+    with pytest.raises(ValueError, match="SIS_BUDGET_USD.*finite"):
+        config.get("brakes.budget_usd")
+
+
+@pytest.mark.parametrize("raw", [float("nan"), float("inf")])
+def test_a_non_finite_number_from_the_file_is_rejected(raw: float) -> None:
+    """YAML's ``.nan`` and ``.inf`` arrive as floats, not strings."""
+    key = config.key_for("brakes.max_cost_per_accepted_usd")
+    with pytest.raises(ValueError, match="finite"):
+        config.parse_value(key, raw, config.Source.FILE)
+
+
 def test_a_non_boolean_flag_value_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     """``SIS_ALLOW_STRICT_CHANGES=yes`` used to mean "disabled", silently.
 

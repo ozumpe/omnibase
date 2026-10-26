@@ -55,7 +55,7 @@ reference with no link target below.
 > | L21, L23 | [OMNI-61](https://olafzumpe.atlassian.net/browse/OMNI-61) (brake state fails closed; `sis.admin`) — **fixed** |
 > | L24 | [OMNI-62](https://olafzumpe.atlassian.net/browse/OMNI-62) (Notifier port) — **fixed** |
 > | M7 | [OMNI-88] — **won't fix** for now (label `wont-fix`); see the Won't fix section |
-> | L15–L20, L22, L25–L29, L31–L38, L40–L43 | one ticket each, [OMNI-64]–[OMNI-87], on each entry below (L15 and L33 **fixed** 2026-09-29, L34 2026-09-30, L19 2026-10-15). Each is linked (Relates) in Jira to the ticket it should ship with. |
+> | L15–L20, L22, L25–L29, L31–L38, L40–L43 | one ticket each, [OMNI-64]–[OMNI-87], on each entry below (L15 and L33 **fixed** 2026-09-29, L34 2026-09-30, L19 2026-10-15, L17 2026-10-26). Each is linked (Relates) in Jira to the ticket it should ship with. |
 > | L30 | [OMNI-55], with M16 — **fixed** (2026-10-08) |
 > | L39 | [OMNI-42] — **fixed** (2026-10-15, with OMNI-68) |
 
@@ -168,10 +168,6 @@ reference with no link target below.
   also write to (see M9), so a candidate that wants its own rejection blamed
   on the harness can corrupt the probe too. Fix: give the probe its own
   read-only directory, not the candidate's.
-- [OMNI-66] **L17** — `NaN` passes `config.py`'s number validation and silently
-  disables the spend cap and cost-per-accepted SLO (a threshold compared
-  against `NaN` is never true). Fix: reject non-finite floats in
-  `parse_value`.
 - [OMNI-67] **L18** — `policy.classify()` is case-sensitive, so on a case-insensitive
   filesystem a different-case path to guardrail code classifies as STRICT
   rather than FORBIDDEN. Fix: normalise case via the resolved path.
@@ -294,6 +290,14 @@ reference with no link target below.
   consider one bounded re-measurement with a fresh seed before discarding.
 
 ## Resolved (Low)
+
+- [OMNI-66] **L17** — `NaN` passed `config.py`'s number validation and silently
+  disabled the spend cap and cost-per-accepted SLO (a threshold compared
+  against `NaN` is never true; `inf` likewise never trips). **Fixed
+  2026-10-26 (OMNI-66):** `parse_value` refuses a non-finite number from any
+  layer (`nan`, `inf`, an overflowing `1e400`, YAML's `.nan`/`.inf`), naming
+  the layer it came from. Regression tests in `tests/test_config.py`
+  (`test_a_non_finite_number_*`) fail without the fix.
 
 - [OMNI-167] **L56** — "no real adapter may declare source `sim`" was
   documented on `SIMULATED_SOURCE` but not enforced: `SourceRules("sim", …)`
