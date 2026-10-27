@@ -629,6 +629,23 @@ any long-lived cluster exists.
   `.`, `..`, `a/b`, an empty name and a mismatched name are refused by
   `load_staged`, by `promote` and on the command line, and fail without the fix.
 
+- [OMNI-170] **M34 — The prediction-error report could show a predictor the week it is
+  scored on** *(found 2026-10-26 by the weekly code review; reproduced on
+  `develop` @ 88aaaae)* — `prediction_error.questions()` asks each week at the
+  moment its value first became known, and shows the as-of view then. When a
+  weekly capture was skipped (or a release was late), week *w* and *w* + 1
+  became known at the same fetch, so the view for the question about *w* held
+  *w* + 1, its answer: persistence, returning the newest value, scored an
+  error of 0. The same pattern as M32 in the fixture builder. The autumn-2022
+  numbers (OMNI-36) were not affected: the backfill's reconstructed times are
+  all distinct, and the rerun gives the same 18 weeks, bias +0.050, MAE 0.179,
+  RMSE 0.232. **Fixed 2026-10-26 (OMNI-170):** a week whose next value has any
+  vintage known by the time it is asked is still asked, so the answers line
+  up, but skipped with the note "the next week was already known when asked",
+  never scored. Regression test: a capture that skips a week makes two weeks
+  known at once; the leaked week is skipped and no scored error is 0, and the
+  test fails without the fix.
+
 - [OMNI-164] **M32 — A fixture episode could show the model an earlier vintage of the
   week it must predict** *(found 2026-10-25 by the weekly code review;
   reproduced on `develop` @ 92e1076; latent: no fixture has been promoted)* —
@@ -1889,3 +1906,4 @@ any long-lived cluster exists.
 [OMNI-164]: https://olafzumpe.atlassian.net/browse/OMNI-164
 [OMNI-165]: https://olafzumpe.atlassian.net/browse/OMNI-165
 [OMNI-167]: https://olafzumpe.atlassian.net/browse/OMNI-167
+[OMNI-170]: https://olafzumpe.atlassian.net/browse/OMNI-170
