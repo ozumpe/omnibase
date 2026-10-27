@@ -58,6 +58,9 @@ reference with no link target below.
 > | L15–L20, L22, L25–L29, L31–L38, L40–L43 | one ticket each, [OMNI-64]–[OMNI-87], on each entry below (L15 and L33 **fixed** 2026-09-29, L34 2026-09-30, L19 2026-10-15, L17 and L18 2026-10-26). Each is linked (Relates) in Jira to the ticket it should ship with. |
 > | L30 | [OMNI-55], with M16 — **fixed** (2026-10-08) |
 > | L39 | [OMNI-42] — **fixed** (2026-10-15, with OMNI-68) |
+> | L55, L57 | [OMNI-166], [OMNI-172], from the weekly code reviews of 2026-10-25 and 2026-10-26 |
+> | L58, L59 | [OMNI-141], [OMNI-174]: tests that failed once under `-n auto` |
+> | L60 | [OMNI-173] — **fixed** (2026-10-27) |
 
 ## High
 
@@ -286,7 +289,62 @@ reference with no link target below.
   convergence. Fix: count only `no_gain`/`no_change` toward convergence, and
   consider one bounded re-measurement with a fresh seed before discarding.
 
+- [OMNI-166] **L55** — Atomic writes leave the file readable by its owner
+  only *(found 2026-10-25 by the weekly code review)*. `write_text_atomic`
+  (`sis/atomic.py`) writes through `tempfile.mkstemp`, which creates mode 0600,
+  and `os.replace` puts that file in place of the original. So the first
+  operator edit through `sis.operator.save_edits`, or `python -m sis.config
+  --write`, turns `config.yml` from 0644 into 0600, and every other file
+  written this way ends the same. Git tracks only the executable bit and does
+  not notice; a console or CI step under another uid then fails with an
+  unrelated-looking `PermissionError`. Fix: keep the destination's mode
+  (`0o666 & ~umask` for a new file), with a test that the mode survives a
+  save; whether brake state should stay 0600 is decided per caller, not by
+  `mkstemp`.
+- [OMNI-172] **L57** — The scheduled-run principal can reach every run
+  secret and launch any instance size *(found 2026-10-26 by the weekly code
+  review)*. `infra/aws/scheduled_runner_policy.json` grants
+  `ssm:SendCommand` with `AWS-RunShellScript` (root) on the tagged box, and
+  `ec2:RunInstances` plus `iam:PassRole` for the instance role, which reads
+  the run secret. So whoever holds the principal can start the box and read
+  the Atlassian, GitHub and Anthropic credentials as root, although
+  `scripts/aws_scheduled_run.py` never does and its docstring says the caller
+  never handles them. `LaunchOnlyTheTaggedRunBox` also caps neither
+  `ec2:InstanceType` nor the count; only the AWS Budget alarm would notice,
+  afterwards. Fix: a custom SSM document that accepts only the runner's
+  commands, an `ec2:InstanceType` condition matching `infra/aws`, and a check
+  that `ec2:Owner` `"amazon"` cannot boot any Amazon-owned image.
+- [OMNI-141] **L58** — `tests/test_adversarial.py::
+  test_fast_on_typical_inputs_but_slower_in_total_is_rejected` once came out
+  `benchmark inconclusive` instead of `no improvement` under `-n auto`
+  *(seen 2026-09-29; passed 5/5 alone)*. Not a false accept, but inconclusive
+  needs a point estimate that clears the margin, so under that load a
+  candidate about 2x slower in total measured as looking faster. Find out
+  whether oversubscription can move the total-cost ratio that far or the
+  pairing broke, before deciding to accept inconclusive (as its sibling
+  `test_memoised_naive_impl_cannot_game_a_replayed_workload` does) or to run
+  it serially.
+- [OMNI-174] **L59** — `tests/test_feature_cycles.py::
+  test_a_feature_is_planned_once_and_carried_on_after_a_restart` failed once
+  in a full `pytest -n auto` run *(seen 2026-10-26; the output was not
+  kept)*. It did not fail again in three full parallel runs or six runs of its
+  module with `-n 2`. Ordering and shared state are ruled out by reading the
+  code: `feature.resumable_feature` picks deterministically, the in-memory VCS
+  lists branches in insertion order, each xdist worker starts its own Ray
+  cluster, and the suite runs with `episodic.store=none`. The suspect, not
+  proven, is a sandboxed gate timing out under heavy load in the first cycle.
+  Next time it fails, keep the assertion's `reason` before changing anything.
+
 ## Resolved (Low)
+
+- [OMNI-173] **L60** — `tests/test_gauntlet.py::
+  test_docker_args_confine_to_a_cpu_only_when_asked` called
+  `gauntlet._docker_args` without the `ordinary_user` fixture its siblings
+  use, so it failed wherever the suite runs as root (a cloud session's
+  container); CI, which is not root, stayed green, and earlier PRs called the
+  failure environment noise. **Fixed 2026-10-27 (OMNI-173, PR #187):** the
+  test pins the uid, and `test_every_docker_args_test_pins_the_uid` fails on
+  any test in the module that calls `_docker_args` without doing so.
 
 - [OMNI-67] **L18** — `policy.classify()` was case-sensitive, so on a
   case-insensitive filesystem a different-case path to guardrail code
@@ -1924,3 +1982,8 @@ any long-lived cluster exists.
 [OMNI-167]: https://olafzumpe.atlassian.net/browse/OMNI-167
 [OMNI-171]: https://olafzumpe.atlassian.net/browse/OMNI-171
 [OMNI-170]: https://olafzumpe.atlassian.net/browse/OMNI-170
+[OMNI-141]: https://olafzumpe.atlassian.net/browse/OMNI-141
+[OMNI-166]: https://olafzumpe.atlassian.net/browse/OMNI-166
+[OMNI-172]: https://olafzumpe.atlassian.net/browse/OMNI-172
+[OMNI-173]: https://olafzumpe.atlassian.net/browse/OMNI-173
+[OMNI-174]: https://olafzumpe.atlassian.net/browse/OMNI-174

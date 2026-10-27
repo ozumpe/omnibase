@@ -929,10 +929,14 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   above; 1549 total, recounted 2026-10-25 with OMNI-36); `ruff`/`mypy --strict`/`pytest` clean;
   CI green; `feature → develop → main` enforced by both the client-side
   pre-push hook and active server-side rulesets.
-- **One known test flake** — re-run before chasing it. (The other,
-  `test_a_drafted_skeleton_stages_without_touching_specs`, OMNI-42, is fixed:
-  it raced `specs/__pycache__` and two tests that promoted into the real
-  `specs/`.)
+- **Known test flakes** — re-run, then file or update the ticket; never
+  call a failure environment noise. Open: L58
+  (`test_fast_on_typical_inputs_but_slower_in_total_is_rejected`, OMNI-141)
+  and L59 (`test_a_feature_is_planned_once_and_carried_on_after_a_restart`,
+  OMNI-174), each seen once under `-n auto`. (Fixed:
+  `test_a_drafted_skeleton_stages_without_touching_specs`, OMNI-42, which
+  raced `specs/__pycache__` and two tests that promoted into the real
+  `specs/`; and L60, a docker test that failed as root, OMNI-173.)
   `test_correct_but_not_faster_is_rejected` is **not** test-only: on a heavily
   loaded machine the benchmark can accept its candidate, which is a few
   percent slower than the baseline (M7,
@@ -965,7 +969,9 @@ severity) from the 2026-07-25 full review + a 2026-07-28 second pass — referen
 the IDs in commits/PRs. **Open after a 2026-09-26 multi-dimension review with
 adversarial verification: H3, M13, M20–M23,
 L16, L20, L22, L25–L29, L31, L32, L35–L38, L40–L43; plus L46 from the second AWS run and L48–L50
-from the fifth (OMNI-143–145)** (M7 is won't-fix for now; H4, M10, M15, M19, L21, L23
+from the fifth (OMNI-143–145); L55 and L57 from the weekly code reviews
+(OMNI-166/172); L58 and L59, two tests that failed once under `-n auto`
+(OMNI-141/174)** (M7 is won't-fix for now; H4, M10, M15, M19, L21, L23
 and L24 fixed 2026-09-26, OMNI-46/47/51/49/61/62; H5, H6, M24 and L44, found
 in the first AWS run, and L45, found releasing it, fixed 2026-09-27,
 OMNI-121–125; M18 and M25, the second run's duplicate PR, fixed the same day,
@@ -985,7 +991,9 @@ vintage of the week it predicts, the same day, OMNI-164; M33, a staged
 manifest's name placing a promoted exam outside `specs/<name>/`, the same day,
 OMNI-165; L56, an adapter declaring the simulated source, the same day, OMNI-167;
 L17, a `nan` spend cap, 2026-10-26, OMNI-66; L18, a guardrail path in
-another case, the same day, OMNI-67). The headline, before trusting any
+another case, the same day, OMNI-67; M34, a predictor shown the value it was
+asked for, and M35, a scheduled run losing its loop in a long log, 2026-10-27,
+OMNI-170/171; L60, a docker test that failed as root, the same day, OMNI-173). The headline, before trusting any
 gauntlet verdict: every gate but SLO now judges its candidate from outside the
 candidate's process (H2, M8), and the exam files are protected (M9). **The SLO
 gate still runs its candidate in-process** (L42,
