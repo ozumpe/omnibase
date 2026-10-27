@@ -154,7 +154,7 @@ def test_docker_args_are_locked_down(ordinary_user: None) -> None:
     assert "-e PATH=" not in joined
 
 
-def test_docker_args_confine_to_a_cpu_only_when_asked() -> None:
+def test_docker_args_confine_to_a_cpu_only_when_asked(ordinary_user: None) -> None:
     # OMNI-154: a cpuset, which cannot be left from inside. --cpus is a quota.
     env = {"HOME": "/t", "PATH": "/usr/bin"}
     plain = gauntlet._docker_args("/t", env, "image", "name")
@@ -172,6 +172,25 @@ def test_docker_args_forward_no_host_credentials(ordinary_user: None) -> None:
     env = {"PYTHONPATH": "/t", "HOME": "/t"}  # what _sandbox_env produces
     joined = " ".join(_docker_args("/t", env, "img", "sis-gauntlet-x"))
     assert "TOKEN" not in joined and "SECRET" not in joined and "KEY" not in joined
+
+
+def test_every_docker_args_test_pins_the_uid() -> None:
+    # OMNI-173: _docker_args refuses root, so a test that calls it without
+    # pinning the uid fails wherever the suite runs as root (a cloud session's
+    # container), while CI, which is not root, stays green.
+    import ast
+    import inspect
+    import sys
+
+    tree = ast.parse(inspect.getsource(sys.modules[__name__]))
+    unpinned = [
+        fn.name for fn in tree.body
+        if isinstance(fn, ast.FunctionDef) and fn.name.startswith("test_")
+        and "_docker_args" in ast.unparse(fn)
+        and "ordinary_user" not in [a.arg for a in fn.args.args]
+        and "getuid" not in ast.unparse(fn)
+    ]
+    assert unpinned == [], f"pin the uid with the ordinary_user fixture: {unpinned}"
 
 
 def test_docker_sandbox_runs_as_the_host_user(ordinary_user: None) -> None:
