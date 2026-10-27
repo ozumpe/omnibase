@@ -1,7 +1,8 @@
 """OMNI-49 (KNOWN_ISSUES M19): the Serve canary refuses LLM-written candidates.
 
-A green replica is an ordinary Ray worker in the control-plane cluster, not the
-gauntlet's sandbox (H3). Until OMNI-48 isolates it, only the stub's hand-written
+Written while a green replica was an ordinary Ray worker in the control-plane
+cluster, not the gauntlet's sandbox (H3). OMNI-48 moved the candidate into the
+sandbox worker; until a human lifts this refusal, only the stub's hand-written
 candidate may run there. Same shape as the M1 rule in ``tests/test_gauntlet.py``,
 minus the override: the legacy canary costs nothing to fall back to.
 """
@@ -53,9 +54,9 @@ def test_the_legacy_canary_runs_any_proposer(backend: str) -> None:
 def test_an_llm_proposer_may_not_use_the_serve_canary() -> None:
     problem = gauntlet.serve_canary_problem("serve", "claude")
     assert problem is not None
-    # The reason names the risk and the way out, not just "no".
-    assert "Ray worker" in problem and "IMDS" in problem
-    assert "OMNI-48" in problem and "canary.backend unset" in problem
+    # The reason says who decides and the way out, not just "no".
+    assert "human decision" in problem
+    assert "M19" in problem and "canary.backend unset" in problem
 
 
 # --- the configured check -----------------------------------------------------
@@ -73,7 +74,7 @@ def test_the_configured_backend_is_used_when_none_is_passed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure(monkeypatch, SIS_PROPOSER="claude", SIS_CANARY="serve")
-    with pytest.raises(RuntimeError, match="OMNI-48"):
+    with pytest.raises(RuntimeError, match="M19"):
         gauntlet.ensure_canary_allows_proposer()
 
 
@@ -81,7 +82,7 @@ def test_an_explicit_backend_wins_over_the_configured_one(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure(monkeypatch, SIS_PROPOSER="claude")
-    with pytest.raises(RuntimeError, match="OMNI-48"):
+    with pytest.raises(RuntimeError, match="M19"):
         gauntlet.ensure_canary_allows_proposer("serve")
 
 
@@ -111,7 +112,7 @@ def test_main_refuses_at_startup_before_any_cluster_exists(
         raise AssertionError("bootstrap reached: the refusal came too late")
 
     monkeypatch.setattr(org, "bootstrap", _no_bootstrap)
-    with pytest.raises(RuntimeError, match="OMNI-48"):
+    with pytest.raises(RuntimeError, match="M19"):
         main.main()
 
 
@@ -127,5 +128,5 @@ def test_the_deployment_itself_refuses_even_if_a_caller_forgot_to_ask(
     # worker, and fires before anything touches Serve — no cluster needed.
     _configure(monkeypatch, SIS_PROPOSER="claude")
     cloud = ServeCloud(_Telemetry(), SORT)
-    with pytest.raises(RuntimeError, match="OMNI-48"):
+    with pytest.raises(RuntimeError, match="M19"):
         cloud.deploy_canary("v2", source="def sort_numbers(v): return sorted(v)\n")

@@ -122,8 +122,9 @@ promote or rollback → log outcome → circuit breaker. See the SVG for the pic
   PR; Class 2 opens its PR at the first passing step. Rejections remain feedback.
 - **Validation gauntlet** — see §5.
 - **Canary** — the recording backend executes no candidate code. Opt-in Serve
-  runs live traffic, but is refused with any non-stub proposer (no override,
-  until OMNI-48) and with Class 2. It uses shadow dispatch in the org flow.
+  runs live traffic, serving each candidate from a sandbox worker (OMNI-48), but
+  is refused with any non-stub proposer (no override, until a human lifts it)
+  and with Class 2. It uses shadow dispatch in the org flow.
   Atomic named-actor swaps for internal stateful targets remain planned.
 - **Promote / rollback** — a human merges or closes the PR; `observe_merge()`
   applies that decision by promoting or releasing green. Serve promotion
@@ -166,10 +167,10 @@ accept/reject/inconclusive. Timed batches have no per-call Python harness work;
 Docker confines each worker to a different single CPU and swaps them halfway.
 See [`docs/CODE_TOUR.md`](docs/CODE_TOUR.md) for execution details.
 
-The worker also provides a hot-slot primitive for future deployment. It is not
-yet the Serve canary backend: an ordinary Serve replica still has control-plane
-access, so a passing offline candidate from a real proposer cannot be served
-there. Every finished feature ends in a human-reviewed PR before promotion.
+The worker also serves the Serve canary (OMNI-48): a replica is an ordinary
+Ray worker with control-plane access, so it forwards requests to the candidate
+in a sandbox worker instead of running it. Serving a real proposer's candidate
+there is still refused until a human lifts that refusal (M19). Every finished feature ends in a human-reviewed PR before promotion.
 
 
 ## 6. Guardrails (MCP + repo)

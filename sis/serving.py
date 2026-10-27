@@ -15,26 +15,38 @@ cache, a rate limiter) are explicitly deferred until the mechanics work.
 
 ## Where the sandbox boundary is — read before extending this
 
-A replica **executes the source it is handed** (``_load``). When that source is
-a merged, human-reviewed target, it is ordinary trusted code. When it is a
-*candidate*, this is LLM-generated code running in a Ray worker — and a Serve
-replica is **not** the gauntlet sandbox: no scrubbed environment, no egress
-block, no per-call timeout.
+A replica **never executes the source it is handed** (OMNI-48, H3). It starts
+a :class:`sis.sandbox_worker.SandboxWorker` for that source — the gauntlet's
+own sandbox, the one every offline gate already judged the candidate in — and
+forwards each request over the worker's pipe. The replica is a Ray worker; the
+candidate is not. Before this, a green replica ``exec``'d the candidate
+in-process, so candidate code was a Ray worker in the control-plane cluster
+and could ``ray.get_actor(..., namespace="sis")`` any detached role actor
+before a human had reviewed it.
 
-That is the intended shape of a canary (DESIGN.md §4: deploy the new version
-alongside the old and shift traffic to it), and the candidate has already passed
-every offline gate. But the difference from ``sis.gauntlet`` is real, and
-OMNI-13 settled how far to close it — see :func:`scrubbed_env_vars`:
+What the candidate can reach is then what the configured sandbox allows:
 
-- **Closed:** a green replica's environment is scrubbed to an allowlist, so
-  candidate code cannot read ``ANTHROPIC_API_KEY``, ``AWS_*``, ``ATLASSIAN_*``
-  or any other env-carried credential.
-- **Deliberately still open:** network egress. A replica exists to answer HTTP,
-  so the gauntlet's ``--network none`` is unavailable *by construction*. Green
-  can reach the network; the guarantee there stays procedural (the candidate
-  passed every offline gate inside the real sandbox first).
+- **docker** (what a real proposer requires, M1): no Ray installed, no
+  network, no host environment. The cluster is out of reach.
+- **subprocess**, the soft sandbox: a scrubbed environment, but the host's
+  packages and loopback. Ray's gRPC client does not go through the Python
+  sockets the egress block patches, so a candidate that imports Ray and asks
+  for ``address="auto"`` still finds the cluster. That is M1's reason for
+  refusing it with a real proposer, and it applies here unchanged.
 
-So this is a credential boundary, not a sandbox. Do not treat it as one.
+The driver's sandbox settings are bound into every deployment
+(:func:`sandbox_settings`) rather than read in the replica, because green's
+environment is scrubbed and a blank ``SIS_SANDBOX`` would fall through to
+``config.yml`` — silently serving a candidate in the soft sandbox when the
+driver had asked for docker.
+
+The OMNI-13 environment scrub (:func:`scrubbed_env_vars`) stays on green's
+replica as defence in depth: the replica now runs only trusted code, but it
+is still the process that starts the candidate.
+
+**Still open, deliberately:** :func:`sis.gauntlet.serve_canary_problem` still
+refuses ``canary.backend=serve`` with any non-stub proposer (OMNI-49, M19).
+Lifting that refusal is a separate, human decision.
 """
 
 from __future__ import annotations
@@ -42,16 +54,19 @@ from __future__ import annotations
 import asyncio
 import os
 import random
+import threading
 import time
-import types
 from collections import deque
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from ray import serve
 
+from sis import config
 from sis.canary import CanaryMode, LiveSample
 from sis.contract import OptimizationContract
 from sis.gauntlet import ENV_ALLOWLIST
+from sis.sandbox_worker import SandboxWorker, _rebuilt
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from starlette.requests import Request
@@ -122,19 +137,30 @@ def scrubbed_env_vars() -> dict[str, str]:
     }
 
 
-def _load(source: str, entry: str, label: str) -> Any:
-    """Execute *source* and return its *entry* callable.
+def sandbox_settings() -> dict[str, Any]:
+    """The driver's effective sandbox configuration, for a replica's worker.
 
-    See the module docstring on what executing candidate source means here.
-    ``label`` only names the synthetic module so tracebacks from a served
-    version are attributable to it rather than to ``<string>``.
+    Read here, on the driver, and bound into the deployment: a replica's own
+    environment is not the driver's (green's is scrubbed, and any Ray worker
+    snapshots its environment when it is created), so a replica that read its
+    own configuration could start its candidate in a different sandbox from
+    the one the driver chose. ``proposer.backend`` comes along so the worker's
+    M1 check (``gauntlet.ensure_sandbox_ready``) sees the real proposer.
     """
-    module = types.ModuleType(f"served_{label}")
-    exec(compile(source, f"<served:{label}>", "exec"), module.__dict__)  # noqa: S102
-    fn = getattr(module, entry, None)
-    if not callable(fn):
-        raise ValueError(f"served source does not export a callable {entry!r}")
-    return fn
+    paths = [key.path for key in config.SCHEMA if key.path.startswith("sandbox.")]
+    return {path: config.get(path) for path in (*paths, "proposer.backend")}
+
+
+def _start_worker(source: str, entry: str, settings: Mapping[str, Any] | None) -> SandboxWorker:
+    """Start *source* in the sandbox *settings* name and wait until it has loaded.
+
+    Raises ``WorkerStartError`` (``missing`` names *entry*) for a source that
+    does not export it, so a bad version fails at deploy time rather than at
+    its first request.
+    """
+    if settings:
+        config.apply_cli_overrides(settings)
+    return SandboxWorker(source, entry).start()
 
 
 @serve.deployment
@@ -156,15 +182,54 @@ class TargetDeployment:
     benchmark inputs feed this endpoint with no translation.
     """
 
-    def __init__(self, source: str, entry: str, version: str, slot: str) -> None:
-        self._fn = _load(source, entry, f"{slot}_{version}")
+    def __init__(
+        self,
+        source: str,
+        entry: str,
+        version: str,
+        slot: str,
+        sandbox: Mapping[str, Any] | None = None,
+    ) -> None:
+        self._source = source
         self._entry = entry
         self._version = version
         self._slot = slot
+        self._sandbox = dict(sandbox) if sandbox is not None else None
+        self._lock = threading.Lock()
+        self._worker: SandboxWorker | None = _start_worker(source, entry, self._sandbox)
 
-    def invoke(self, *args: Any) -> Any:
-        """Call the served entry function. No state is kept between calls."""
-        return self._fn(*args)
+    def _call(self, args: tuple[Any, ...]) -> Any:
+        """One call through the worker, restarting it first if it died.
+
+        A worker is killed when a call outlives its timeout, and a candidate can
+        exit its own process. Either way that request fails (an error the canary
+        counts) and the next one gets a fresh worker: the version is stateless,
+        so nothing is lost but the time to start it.
+        """
+        with self._lock:
+            worker = self._worker
+            if worker is None or not worker.running:
+                if worker is not None:
+                    worker.close()
+                self._worker = None
+                worker = self._worker = _start_worker(self._source, self._entry, self._sandbox)
+        result = worker.call([list(args)]).results[0]
+        if result.ok:
+            return result.value
+        raise _rebuilt(result)
+
+    async def invoke(self, *args: Any) -> Any:
+        """Call the served entry function. No state is kept between calls.
+
+        The call waits on the worker's pipe, so it runs in a thread: a hung
+        candidate must not stall the replica's event loop until its timeout.
+        """
+        return await asyncio.to_thread(self._call, args)
+
+    def __del__(self) -> None:
+        worker, self._worker = getattr(self, "_worker", None), None
+        if worker is not None:
+            worker.close()
 
     def info(self) -> dict[str, str]:
         """Which version/slot is answering — so a canary can attribute samples
@@ -177,7 +242,7 @@ class TargetDeployment:
         if not isinstance(args, list):
             return {"error": "'args' must be a list of the entry function's arguments"}
         try:
-            result = self.invoke(*args)
+            result = await self.invoke(*args)
         except Exception as exc:  # noqa: BLE001 - a served version must not take the node down
             # Surfaced as an error *response*, not a crashed replica: the canary
             # reads the error rate off live traffic, and a replica that dies on
@@ -425,7 +490,7 @@ def build(
     # invisible to mypy. Narrow ignores rather than dropping the strict gate.
     return TargetDeployment.options(  # type: ignore[attr-defined]
         num_replicas=num_replicas, ray_actor_options=_LIGHTWEIGHT_REPLICA,
-    ).bind(code, contract.entry, version, slot)
+    ).bind(code, contract.entry, version, slot, sandbox_settings())
 
 
 def build_canary(
@@ -444,7 +509,7 @@ def build_canary(
     """
     blue = TargetDeployment.options(  # type: ignore[attr-defined]
         name="blue", num_replicas=1, ray_actor_options=_LIGHTWEIGHT_REPLICA,
-    ).bind(blue_source, contract.entry, blue_version, BLUE)
+    ).bind(blue_source, contract.entry, blue_version, BLUE, sandbox_settings())
 
     # Pinned to one replica: the router is the only place a paired observation
     # can be recorded, so a second replica would split the window (see the class
@@ -474,7 +539,7 @@ def build_candidate(
     options: dict[str, Any] = {
         "name": "green", "num_replicas": 1, "ray_actor_options": ray_actor_options}
     return TargetDeployment.options(**options).bind(  # type: ignore[attr-defined]
-        source, contract.entry, version, GREEN)
+        source, contract.entry, version, GREEN, sandbox_settings())
 
 
 def serve_slot(

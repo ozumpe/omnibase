@@ -517,8 +517,8 @@ def run_cycle(
     # Backstop for bootstrap()'s check: configuration can change between the
     # two (a CLI overlay, an edited config.yml), and this is before any spend.
     ensure_brake_persistence()
-    # Same moment, same reason: the Serve canary runs candidate code as an
-    # ordinary Ray worker, so it refuses anything but the stub's (OMNI-49).
+    # Same moment, same reason: the Serve canary refuses anything but the
+    # stub's candidate until a human lifts that (OMNI-49, M19).
     gauntlet.ensure_canary_allows_proposer(canary_backend)
 
     ws = handles["Workspace"]

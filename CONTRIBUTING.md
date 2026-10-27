@@ -136,9 +136,10 @@ Markdown must carry the `docs` marker.
   `SIS_SANDBOX=docker` — the loop refuses the soft subprocess sandbox otherwise
   (build the image from `Dockerfile.gauntlet`; explicit override
   `SIS_ALLOW_UNSANDBOXED_LLM=1`, unsafe).
-- **Serve is not a sandbox.** `--canary serve` is refused for any non-stub
-  proposer, with no override, until OMNI-48 isolates its candidate. It is also
-  refused for Class-2 contracts. See `docs/KNOWN_ISSUES.md` H3 and M19.
+- **Serve is not a sandbox.** A replica serves its candidate from a sandbox
+  worker (OMNI-48), and `--canary serve` is still refused for any non-stub
+  proposer, with no override, until a human lifts that. It is also refused for
+  Class-2 contracts. See `docs/KNOWN_ISSUES.md` H3 and M19.
 - The operator console has a known authentication defect (OMNI-53; the
   YAML-rendering one, OMNI-52, is fixed). Use it only behind the loopback/SSM boundary described
   in `docs/OPERATOR_FRONTEND.md`; the configured OAuth mode is not currently an

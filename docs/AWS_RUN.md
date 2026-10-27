@@ -775,12 +775,13 @@ behind a bridge), so the real guarantee is the sandbox. Locally,
 directory"; on this box it would mean "candidate code can mint my cloud
 credentials". Never set it here.
 
-**The Serve canary is not covered by any of that** (KNOWN_ISSUES H3/M19). A
+**The Serve canary was not covered by any of that** (KNOWN_ISSUES H3/M19). A
 `--canary serve` green replica is an ordinary Ray worker on the host: no
 `--network none`, so IMDS is reachable, and other processes' environments are
-readable through `/proc`. The loop therefore refuses `canary.backend=serve`
-with any proposer but the stub (OMNI-49) — at startup, per cycle, and at the
-deployment itself — until OMNI-48 isolates the replica. Run day uses the legacy
+readable through `/proc`. Since OMNI-48 the replica no longer runs the
+candidate, which is served from a docker sandbox worker on this box. The loop
+still refuses `canary.backend=serve` with any proposer but the stub (OMNI-49):
+at startup, per cycle, and at the deployment itself, until a human lifts it. Run day uses the legacy
 canary (`canary.backend` unset), which never executes candidate code.
 
 ### Two spend brakes, deliberately independent
