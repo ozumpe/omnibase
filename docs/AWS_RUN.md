@@ -439,7 +439,8 @@ cd ~/omnibase && SIS_FRONTEND_AUTH=none poetry run python -m sis.frontend
 ```
 
 ```bash
-# On the laptop, then browse http://127.0.0.1:8080
+# On the laptop, then browse http://localhost:8080 (not 127.0.0.1: Bokeh's
+# websocket refuses that origin)
 eval "$(tofu -chdir=infra/aws output -raw frontend_port_forward)"
 ```
 

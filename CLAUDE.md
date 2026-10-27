@@ -499,6 +499,17 @@ internal target before it models anything external.
   it is `follow_imports = "skip"` in the mypy overrides: otherwise the type
   gate would mean something different on a machine that has the `ui` group
   installed than in CI, which does not.
+- Twin viewer (OMNI-40): `poetry run python -m sis.viewer` replays the
+  autumn-2022 fixture (`specs/ca_price_next_week`) week by week; `--trace
+  PATH` replays a capture instead, and a second tab drives generated
+  scenarios (hatched, labelled SIMULATED, D4). It draws the chain as a tank
+  and pumps, with refineries and demand drawn empty (no adapter yet), and a
+  toggle between what was published by then and everything. What to show is
+  pure (`sis/twin_view.py`); `sis/viewer.py` only loads and draws. It is
+  read-only and never reaches Ray (pinned by `tests/test_viewer.py`), asks
+  the predictor in a sandbox worker, and is served under the console's
+  `frontend.*` rules on the console's port plus one. Reach it as
+  `localhost`, not `127.0.0.1`: Bokeh's websocket refuses the other origin.
 - **Configuration is one file: `config.yml`** (OMNI-27), generated from the
   schema in `sis/config.py` — every key with its default, doc, env var, and CLI
   flag. `poetry run python main.py --show-config` prints the effective values
@@ -1204,7 +1215,8 @@ through OMNI-169; 120 Done, 2 In Progress (OMNI-35, OMNI-36), 47 To Do):
      Panel app (not a console tab) that draws the chain as physical things
      (tank, pump), marks not-yet-sensed nodes, replays in time with a
      "what was published by then" toggle, and plots prediction vs reality.
-     Scenario sliders follow; a **geo heat map** is the deferred third slice —
+     **Slices 1–2 built 2026-10-27** (`python -m sis.viewer`, see the
+     Operational quick reference); a **geo heat map** is the deferred third slice —
      a true point map for Iowa (`store_location`), likely for PeMS detectors
      (coordinates unverified), but only a choropleth for US fuel prices, which
      are published by area, not station.

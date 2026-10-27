@@ -287,6 +287,21 @@ Anyone starting the console on that box must know this or it simply will not
 come up, so the requirement and its reasoning live in `docs/AWS_RUN.md`
 alongside the port-forwarding command, not only here.
 
+## The twin viewer is a separate page (OMNI-40)
+
+`python -m sis.viewer` replays the twin's data: the recorded autumn-2022
+fixture by default, a capture with `--trace`, and generated scenarios in a
+second tab. It is not a console tab, because the console configures guardrails
+and the viewer only reads. It writes nothing, opens nothing for writing and
+never reaches Ray or the actors (`tests/test_viewer.py`). It is served through
+`frontend.serve` under the same `frontend.*` settings and allowlist, so the same
+refusal applies: no authentication on a non-loopback bind. Its port is
+`frontend.port` plus one, or `--port`. Open it as `http://localhost:<port>`.
+Bokeh's websocket refuses a page loaded from `127.0.0.1`.
+
+Not built: the static snapshot export the ticket names for sharing a demo, and
+the geo heat map (slice 3).
+
 ## Open questions
 
 - Whether a public deployment is ever wanted. If it is, the Caddy/TLS section
