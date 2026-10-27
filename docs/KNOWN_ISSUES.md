@@ -608,6 +608,22 @@ any long-lived cluster exists.
 
 ## Resolved
 
+- [OMNI-171] **M35 — A scheduled AWS run lost track of its loop once the run's log passed
+  20 KB** *(found 2026-10-26 by the weekly code review; reproduced on
+  `develop` @ 88aaaae)* — `scripts/aws_scheduled_run.py` polled the box with
+  the run's part of `runtime/loop.log` cut to its last 20,000 bytes (SSM keeps
+  24,000 characters of a command's output). Past that size the start marker
+  was cut off, so `read_log` saw `STARTING` whatever the loop did: a loop that
+  had stopped and exited was interrupted at the time limit and abandoned after
+  the grace period, about 75 minutes, and the report said it failed. Any
+  `sort` run of a few cycles writes that much. **Fixed 2026-10-26
+  (OMNI-171):** the poll prints the start marker and the last line of each
+  kind `read_log` decides on (exit, stopped, holding, synced, crashed), found
+  anywhere in the run's part and cut to 300 characters, then a separator, then
+  the tail; the report's lines come from the tail. Regression tests: a run of
+  over 80 KB that exited reads as `EXITED` with its exit code, the output stays
+  under SSM's limit with a 50 KB status line, and both fail without the fix.
+
 - [OMNI-165] **M33 — `contract_author promote` trusted the loop-writable manifest's
   name and could write outside `specs/<name>/`** *(found 2026-10-25 by the
   weekly code review; reproduced on `develop` @ 92e1076)* — `load_staged(name)`
@@ -1906,4 +1922,5 @@ any long-lived cluster exists.
 [OMNI-164]: https://olafzumpe.atlassian.net/browse/OMNI-164
 [OMNI-165]: https://olafzumpe.atlassian.net/browse/OMNI-165
 [OMNI-167]: https://olafzumpe.atlassian.net/browse/OMNI-167
+[OMNI-171]: https://olafzumpe.atlassian.net/browse/OMNI-171
 [OMNI-170]: https://olafzumpe.atlassian.net/browse/OMNI-170
