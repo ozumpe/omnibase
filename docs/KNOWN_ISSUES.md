@@ -38,7 +38,7 @@ reference with no link target below.
 > | H2, M8, M9, M11 | [OMNI-45](https://olafzumpe.atlassian.net/browse/OMNI-45) (epic [OMNI-43](https://olafzumpe.atlassian.net/browse/OMNI-43)) — **fixed** (2026-09-29); M8's second half was [OMNI-146](https://olafzumpe.atlassian.net/browse/OMNI-146) |
 > | H4 | [OMNI-46](https://olafzumpe.atlassian.net/browse/OMNI-46) (epic OMNI-43) — **fixed** |
 > | M10 | [OMNI-47](https://olafzumpe.atlassian.net/browse/OMNI-47) (epic OMNI-43) — **fixed** |
-> | H3 | [OMNI-48](https://olafzumpe.atlassian.net/browse/OMNI-48) (epic [OMNI-44](https://olafzumpe.atlassian.net/browse/OMNI-44)) |
+> | H3 | [OMNI-48](https://olafzumpe.atlassian.net/browse/OMNI-48) (epic [OMNI-44](https://olafzumpe.atlassian.net/browse/OMNI-44)) — **fixed** (2026-10-27) |
 > | H8 | [OMNI-153] (epic OMNI-43), found 2026-10-08 — **fixed** the same day |
 > | H9 | [OMNI-154] (epic OMNI-43), found 2026-10-08 — **fixed** the same day |
 > | M19 | [OMNI-49](https://olafzumpe.atlassian.net/browse/OMNI-49) (epic OMNI-44) — **fixed** (by refusal; isolation is H3) |
@@ -64,32 +64,7 @@ reference with no link target below.
 
 ## High
 
-- [OMNI-48] **H3 — A Serve-canary candidate runs as a full Ray control-plane worker, not
-  in any sandbox** *(found 2026-09-26 by a multi-dimension review; confirmed by
-  two independent skeptics reading the code, not run against a live cluster)* —
-  `TargetDeployment._load` (`sis/serving.py:125`) `exec`s the candidate's source
-  inside a Serve replica, which is an ordinary Ray worker on the same cluster as
-  the detached, named `sis`-namespace actors. The OMNI-13 env scrub only
-  blanks environment variables; it does nothing about cluster membership. Any
-  worker can call `ray.get_actor(name, namespace="sis")` — the exact seam
-  `tests/test_merge_observation.py::_mark_merged` already uses, with its own
-  docstring warning "the agent may not" — and use `__ray_call__` to run
-  arbitrary code inside `Workspace`, `CEO`, `SelfModel` or `DevOps`. A candidate
-  could merge its own PR (`Workspace.vcs` holds an authenticated session under
-  real adapters), promote itself once `observe_merge` sees that merge, reset
-  the circuit breaker, or read tokens held in memory. The canary runs **before**
-  the mandatory human PR merge, so that review does not cover this, and the
-  offline gauntlet cannot catch a payload gated on `ray.is_initialized()`
-  (never true inside the docker sandbox). Fix: never `exec` candidate source in
-  a process attached to the control-plane cluster — a scrubbed subprocess or
-  container fed candidate calls over stdio/a socket, with no Ray connection.
-  Until that lands, refuse `canary.backend=serve` for a non-stub proposer, the
-  same way `ensure_sandbox_allows_proposer` refuses the soft sandbox for M1.
-  **Progress (2026-09-27):** the container that fix needs exists:
-  `sis/sandbox_worker.py` (OMNI-129) serves a candidate from the gauntlet's
-  sandbox over stdio, and tests show a docker candidate cannot reach Ray, the
-  network or the host's environment. Moving green onto it is OMNI-48, so H3
-  stays open, and so does the refusal.
+None open.
 
 ## Medium
 
@@ -665,6 +640,46 @@ any long-lived cluster exists.
   front.
 
 ## Resolved
+
+- [OMNI-48] **H3 — A Serve-canary candidate runs as a full Ray control-plane worker, not
+  in any sandbox** *(found 2026-09-26 by a multi-dimension review; confirmed by
+  two independent skeptics reading the code, not run against a live cluster)* —
+  `TargetDeployment._load` (`sis/serving.py`) `exec`'d the candidate's source
+  inside a Serve replica, which is an ordinary Ray worker on the same cluster as
+  the detached, named `sis`-namespace actors. The OMNI-13 env scrub only
+  blanks environment variables; it does nothing about cluster membership. Any
+  worker can call `ray.get_actor(name, namespace="sis")` — the exact seam
+  `tests/test_merge_observation.py::_mark_merged` already uses, with its own
+  docstring warning "the agent may not" — and use `__ray_call__` to run
+  arbitrary code inside `Workspace`, `CEO`, `SelfModel` or `DevOps`. A candidate
+  could merge its own PR (`Workspace.vcs` holds an authenticated session under
+  real adapters), promote itself once `observe_merge` sees that merge, reset
+  the circuit breaker, or read tokens held in memory. The canary runs **before**
+  the mandatory human PR merge, so that review does not cover this, and the
+  offline gauntlet cannot catch a payload gated on `ray.is_initialized()`
+  (never true inside the docker sandbox). Fix: never `exec` candidate source in
+  a process attached to the control-plane cluster — a scrubbed subprocess or
+  container fed candidate calls over stdio/a socket, with no Ray connection.
+  Until that lands, refuse `canary.backend=serve` for a non-stub proposer, the
+  same way `ensure_sandbox_allows_proposer` refuses the soft sandbox for M1.
+  **Progress (2026-09-27):** the container that fix needs exists:
+  `sis/sandbox_worker.py` (OMNI-129) serves a candidate from the gauntlet's
+  sandbox over stdio, and tests show a docker candidate cannot reach Ray, the
+  network or the host's environment. **Fixed 2026-10-27 (OMNI-48):** a
+  replica no longer executes the source it serves. `TargetDeployment` starts a
+  `SandboxWorker` for it, in the sandbox the driver configured (bound into the
+  deployment, since green's scrubbed environment would otherwise fall back to
+  `config.yml`'s mode), and forwards each request over the pipe; a dead or
+  timed-out worker is restarted at the next request. In docker, which a real
+  proposer requires (M1), the candidate has no Ray, no network and none of the
+  host's files. The soft sandbox cannot keep it off the cluster: Ray's gRPC
+  client bypasses the Python-level egress block, and `address="auto"` finds the
+  cluster by its processes; that is M1's reason for refusing it with a real
+  proposer. Regression tests (`tests/test_serving.py`): a served candidate is
+  not running in a Ray worker, a candidate in docker cannot reach a detached
+  `Workspace` actor (skipped without the image, as on CI), and the driver's
+  sandbox mode is what the replica uses after the scrub. The M19 refusal still
+  stands; lifting it is a separate decision.
 
 - [OMNI-171] **M35 — A scheduled AWS run lost track of its loop once the run's log passed
   20 KB** *(found 2026-10-26 by the weekly code review; reproduced on
@@ -1532,7 +1547,8 @@ any long-lived cluster exists.
   hand-written candidate is as safe on the box as on a laptop, and an LLM's
   is unsafe on both (it can read `secrets.local.yml` locally). No override
   flag, unlike M1 — the legacy canary costs nothing to fall back to. The
-  replica is still not isolated; that is H3, [OMNI-48]. `docs/AWS_RUN.md`
+  replica's candidate was isolated later (H3, [OMNI-48], 2026-10-27); the
+  refusal stands until a human lifts it. `docs/AWS_RUN.md`
   no longer credits `--network none` with covering the Serve canary.
   Regression tests: `tests/test_serve_canary_refusal.py`.
 

@@ -235,10 +235,11 @@ unless the explicit unsafe override `SIS_ALLOW_UNSANDBOXED_LLM=1` is set.
 Per-gate timeouts kill hangs. A failed gate triggers a trusted sandbox probe;
 if that probe fails too, the verdict is `harness:`, not a candidate defect.
 
-Passing these gates does **not** make a Ray Serve replica safe for untrusted
-code. Serve workers can reach the Ray control plane even with scrubbed
-environments. `--canary serve` is refused with any non-stub proposer, with no
-override, until OMNI-48 moves green onto the worker boundary. It is also refused
+A Ray Serve replica is not safe for untrusted code: Serve workers can reach
+the Ray control plane even with scrubbed environments. So a replica never runs
+the candidate it serves; `TargetDeployment` (`sis/serving.py`) forwards each
+request to a `SandboxWorker` (OMNI-48). `--canary serve` is still refused with
+any non-stub proposer, with no override, until a human lifts that refusal (M19). It is also refused
 for Class-2 contracts. The recording canary executes no candidate code.
 
 > Reading route: `_run_harness()` and `_install_proxy()` show trusted execution;

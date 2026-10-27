@@ -98,7 +98,24 @@ def test_the_issue_sections_are_all_still_there() -> None:
     found = {m.group(1) for m in map(_SECTION.match, text.splitlines()) if m}
     assert ISSUE_SECTIONS <= found
     sections_with_entries = {section for section, _, _ in _entries(text)}
-    assert sections_with_entries == ISSUE_SECTIONS
+    # A section may be empty only by saying so, as High did once H3 was fixed
+    # (OMNI-48): an empty section that does not say so is a renamed one.
+    declared_empty = _declared_empty(text)
+    assert not sections_with_entries & declared_empty
+    assert sections_with_entries | declared_empty == ISSUE_SECTIONS
+
+
+def _declared_empty(text: str) -> set[str]:
+    """Issue sections whose body says ``None open.``"""
+    found: set[str] = set()
+    section = ""
+    for line in text.splitlines():
+        heading = _SECTION.match(line)
+        if heading:
+            section = heading.group(1)
+        elif section in ISSUE_SECTIONS and line.strip() == "None open.":
+            found.add(section)
+    return found
 
 
 def test_the_checks_catch_what_they_exist_to_catch() -> None:

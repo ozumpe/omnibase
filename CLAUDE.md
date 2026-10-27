@@ -133,11 +133,17 @@ internal target before it models anything external.
   and REQUIRES `SIS_SANDBOX=docker` — the loop refuses otherwise (override:
   `SIS_ALLOW_UNSANDBOXED_LLM=1`); the subprocess sandbox leaves host files readable (M1)
   and cannot confine a benchmark worker to one CPU (H9).
-  **The Serve canary is not a sandbox at all** — a green replica is an ordinary
-  Ray worker — so `canary.backend=serve` is refused with any non-stub proposer,
-  with **no** override, until OMNI-48 isolates it (OMNI-49, M19;
-  `gauntlet.serve_canary_problem`, checked at startup, per cycle, and in
-  `ServeCloud.deploy_canary`).
+  **A Serve replica never runs the candidate it serves** (OMNI-48, H3 fixed
+  2026-10-27): a replica is an ordinary Ray worker, so `TargetDeployment`
+  starts a `SandboxWorker` for its source and forwards each request over the
+  pipe. The driver's sandbox settings are bound into the deployment
+  (`serving.sandbox_settings`), because green's scrubbed environment would
+  otherwise fall back to `config.yml`'s mode. Only docker keeps the candidate
+  off the cluster: in the soft sandbox Ray's gRPC client bypasses the egress
+  block (M1 again). `canary.backend=serve` is **still refused** with any
+  non-stub proposer, with **no** override, until a human decides to lift it
+  (OMNI-49, M19; `gauntlet.serve_canary_problem`, checked at startup, per
+  cycle, and in `ServeCloud.deploy_canary`).
   **Hot deploys go through the sandbox worker** (`sis/sandbox_worker.py`,
   OMNI-129): the candidate is served from the gauntlet's own sandbox over
   stdin/stdout, so it needs no network. The host times each exchange and
@@ -146,8 +152,8 @@ internal target before it models anything external.
   reading its input is killed like one that never answers (OMNI-155, H10).
   Its stderr is drained as it comes and only an 8 KiB tail is kept, never a
   host-side file; sandbox containers run with `--log-driver none`, so docker
-  keeps no copy either (OMNI-156, H11). OMNI-48 moves
-  the canary onto it; until then the refusal above stands.
+  keeps no copy either (OMNI-156, H11). The Serve canary's
+  replicas serve through it too (OMNI-48).
   **A broken sandbox is never blamed on the candidate** (OMNI-37): when a
   sandboxed gate fails, the gauntlet first runs a trusted self-check in the
   same sandbox (`gauntlet.probe_sandbox`); if that fails too, the verdict is
@@ -967,7 +973,7 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
 **Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L
 severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
 the IDs in commits/PRs. **Open after a 2026-09-26 multi-dimension review with
-adversarial verification: H3, M13, M20–M23,
+adversarial verification: M13, M20–M23,
 L16, L20, L22, L25–L29, L31, L32, L35–L38, L40–L43; plus L46 from the second AWS run and L48–L50
 from the fifth (OMNI-143–145); L55 and L57 from the weekly code reviews
 (OMNI-166/172); L58 and L59, two tests that failed once under `-n auto`
@@ -999,11 +1005,12 @@ candidate's process (H2, M8), and the exam files are protected (M9). **The SLO
 gate still runs its candidate in-process** (L42,
 [OMNI-86](https://olafzumpe.atlassian.net/browse/OMNI-86); no shipped contract
 declares an SLO yet). Separately, the
-Serve canary runs candidate code as a full Ray worker in the control-plane
-cluster, before human review (H3, epic
-[OMNI-44](https://olafzumpe.atlassian.net/browse/OMNI-44)) — so the loop
-refuses `--canary serve` with any non-stub proposer until that lands (OMNI-49,
-no override). M12–M23 are
+Serve canary used to run candidate code as a full Ray worker in the
+control-plane cluster, before human review (H3, epic
+[OMNI-44](https://olafzumpe.atlassian.net/browse/OMNI-44)). Since OMNI-48
+(2026-10-27) it serves the candidate from a sandbox worker, but the loop still
+refuses `--canary serve` with any non-stub proposer (OMNI-49, no override)
+until a human lifts that. M12–M23 are
 guardrail/loop gaps with one story each (OMNI-51–59). **Every KNOWN_ISSUES
 entry starts with its Jira ticket** — open, won't-fix and resolved alike (the
 open Lows are OMNI-64–87; the rest backfilled 2026-09-26 as OMNI-88–120,
@@ -1212,7 +1219,7 @@ through OMNI-169; 120 Done, 2 In Progress (OMNI-35, OMNI-36), 47 To Do):
     see `docs/STAGED_DELIVERY.md`. In order:
     - OMNI-129 (phase 0), the sandbox worker. **Done.** The benchmark and the
       interface, acceptance, invariant and backtest gates use it (OMNI-45,
-      OMNI-146); the Serve canary does not yet (OMNI-48).
+      OMNI-146), and so does the Serve canary (OMNI-48, 2026-10-27).
     - OMNI-130 (phase 1), feature branches. **Built:**
       - each passing step is committed to an agent-owned branch;
       - after `loop.feature_max_steps` steps (default 3), or when a step finds
@@ -1238,7 +1245,8 @@ through OMNI-169; 120 Done, 2 In Progress (OMNI-35, OMNI-36), 47 To Do):
         which matters only once two contracts run at the same time.
     - Done since: Olaf's `testrun` preparation, v0.3.0 and AWS runs #3–#7,
       and OMNI-45 (gate isolation, which unblocked OMNI-132).
-    - Next: OMNI-48 (the canary onto the worker), OMNI-133 (`develop`
+    - Done 2026-10-27: OMNI-48 (the canary onto the worker).
+    - Next: OMNI-133 (`develop`
       blue/green), OMNI-131 (the agent's own review), OMNI-132 (AI
       approval) and OMNI-134 (dynamic feature size).
 
@@ -1268,8 +1276,9 @@ has the defect write-ups and the ID → ticket table:
   (H4), OMNI-47 deep-copy shared arguments (M10). All done 2026-09-29; what is
   left is the SLO gate's in-process timing (L42, OMNI-86).
 - **[OMNI-44](https://olafzumpe.atlassian.net/browse/OMNI-44) (epic, High) —
-  Serve-canary isolation.** OMNI-48 green not a Ray worker (H3), OMNI-49
-  refuse `--canary serve` with a real proposer until then (M19, done), OMNI-50
+  Serve-canary isolation.** OMNI-48 green not a Ray worker (H3, done
+  2026-10-27), OMNI-49 refuse `--canary serve` with a real proposer (M19,
+  done; still in force until a human lifts it), OMNI-50
   paired canary statistics and an error-rate check (M20/M21).
 - **Standalone:** ~~OMNI-51 contract target path through the VCS port (M15)~~
   — done 2026-09-26 (run day uses `sort`, so it was a hard prerequisite),

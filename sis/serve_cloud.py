@@ -201,8 +201,8 @@ class ServeCloud:
                 "ever report 'no difference'. Pass source=<PR artifact>."
             )
         # Backstop for the check run_cycle makes first (OMNI-49): this is the
-        # line that turns candidate source into a Ray worker, so it refuses on
-        # its own rather than trusting every caller to have asked.
+        # line that serves candidate source, so it refuses on its own rather
+        # than trusting every caller to have asked.
         ensure_canary_allows_proposer("serve")
         router = self._require_router()
         self._green_source = source

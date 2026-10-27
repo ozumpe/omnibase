@@ -214,11 +214,11 @@ code is killed, not left to hang.
 
 **Invariant:** candidate or target code never runs in the main process, where
 credentials live. Candidate gates and baseline measurement use the gauntlet's
-sandbox; the recording canary only records measured latency. The Serve canary
-runs a candidate as a Ray worker and is **not a sandbox**: an environment scrub
-does not prevent access to the Ray control plane. `--canary serve` is refused
-for non-stub proposers, with no override, until OMNI-48; it is also refused for
-Class-2 contracts. Passing offline gates does not remove that restriction.
+sandbox; the recording canary only records measured latency. The Serve canary's
+replicas are Ray workers, so they never run a candidate themselves: each
+forwards requests to the candidate in a sandbox worker (OMNI-48). `--canary
+serve` is still refused for non-stub proposers, with no override, until a human
+lifts that refusal (M19); it is also refused for Class-2 contracts. Passing offline gates does not remove that restriction.
 See [the execution model](docs/CODE_TOUR.md#5-the-gauntlet-gate-by-gate-sisgauntletpy).
 
 ### Provenance / episodic store (`sis/episodic.py`)

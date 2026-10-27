@@ -231,10 +231,11 @@ Two guarantees worth knowing, both verified by tests rather than asserted:
 - **Deploying a canary does not restart blue.** Green is a separate Serve
   application the router attaches to, precisely so adding one never re-runs the
   blue graph. The one-application version of this cycled the blue replica.
-- **The green replica's environment is scrubbed, but it is not isolated.**
-  It remains a Ray worker with control-plane access. Env scrubbing is not a
-  credential-security guarantee. Serve is refused for non-stub proposers,
-  with no override, until OMNI-48; Class-2 contracts are also refused.
+- **The green replica is a Ray worker, so it does not run the candidate.**
+  It forwards each request to the candidate in a sandbox worker (OMNI-48), in
+  the sandbox the driver was configured with; only docker keeps it off the
+  cluster. Serve is still refused for non-stub proposers, with no override,
+  until a human lifts that (M19); Class-2 contracts are also refused.
 
 ---
 

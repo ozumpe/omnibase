@@ -337,26 +337,39 @@ def _snitch_on(live, *, scrub: bool):  # type: ignore[no-untyped-def]
 
 
 def test_the_green_replica_cannot_read_credentials(_live) -> None:  # type: ignore[no-untyped-def]
-    # The OMNI-13 decision, enforced rather than documented. A Serve replica is
-    # NOT the gauntlet sandbox — egress stays open by construction, since a
-    # replica exists to answer HTTP — but candidate code must not be able to
-    # read a credential out of the environment it inherited from the driver.
+    # The OMNI-13 decision, enforced rather than documented: candidate code
+    # must not read a credential out of the environment the driver started
+    # with. Since OMNI-48 the candidate runs in the sandbox worker, whose
+    # environment is built from an allowlist, so the variable is not there at
+    # all; the replica's own scrub is defence in depth around it.
     #
-    # Paired with its negative control below, and the pair matters more than
-    # either half: on its own this assertion also passes if the variable never
-    # reached the replica in the first place, which is exactly how the first
+    # Paired with the controls below, and the pair matters more than either
+    # half: on its own this assertion also passes if the variable never
+    # reached the cluster in the first place, which is exactly how the first
     # version of this test passed while proving nothing.
     leaked, has_path = _snitch_on(_live, scrub=True)
-    assert leaked == "", "candidate code read a credential"
-    assert has_path, "scrubbing must not blind the replica to PATH, or it cannot boot"
+    assert leaked != FAKE_VALUE, "candidate code read a credential"
+    assert has_path, "the sandbox must not blind the candidate to PATH"
 
 
-def test_without_the_scrub_the_credential_does_leak(_live) -> None:  # type: ignore[no-untyped-def]
-    # The negative control: proves the threat is real and that the scrub is
-    # what closes it. Without this, the test above is indistinguishable from a
-    # harness that simply never set the variable.
+def test_the_credential_reaches_an_unscrubbed_ray_worker(_live) -> None:  # type: ignore[no-untyped-def]
+    # The negative control: the threat is real. A Ray worker on this cluster
+    # sees the variable, and before OMNI-48 a served candidate was one.
+    ray = pytest.importorskip("ray")
+
+    @ray.remote
+    def read() -> str | None:
+        return os.environ.get(FAKE_CREDENTIAL)
+
+    assert ray.get(read.remote()) == FAKE_VALUE
+
+
+def test_without_the_replica_scrub_the_sandbox_still_hides_it(_live) -> None:  # type: ignore[no-untyped-def]
+    # What OMNI-48 changed: the replica's environment is no longer the
+    # candidate's. With the scrub off the replica holds the credential, and
+    # the candidate, in its own sandboxed process, still cannot read it.
     leaked, _ = _snitch_on(_live, scrub=False)
-    assert leaked == FAKE_VALUE
+    assert leaked != FAKE_VALUE
 
 
 # --- shadow mode -----------------------------------------------------------

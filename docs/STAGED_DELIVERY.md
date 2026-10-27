@@ -62,7 +62,7 @@ sizing based on gains is OMNI-134, still planned.
 | AWS preparation: testrun develop branch, target re-seeding and base setting | Completed before run #3; subsequent runs recorded in [AWS_RUN.md](AWS_RUN.md) |
 | OMNI-45/146: benchmark and correctness gates separated from candidate workers | Built; SLO remains in-process |
 | OMNI-147/149: Class-2 construction and already-built convergence | Built |
-| OMNI-48: move Serve green onto the worker | Planned; non-stub Serve refusal remains |
+| OMNI-48: move Serve green onto the worker | Built 2026-10-27; non-stub Serve refusal remains until a human lifts it |
 | OMNI-131/133: agent review and develop blue/green | Planned |
 | OMNI-132: optional AI approval | Planned; no implemented configuration switch |
 | OMNI-134: dynamic feature size | Planned |
@@ -89,7 +89,8 @@ times each exchange and decodes each answer.
   (OMNI-37).
 
 A worker reached over a pipe needs no network, so the kernel-enforced
-isolation stays whole. That is what a Serve replica lacks (H3). The soft
+isolation stays whole. That is what a Serve replica lacks (H3), so a replica
+serves its candidate through a worker too (OMNI-48). The soft
 subprocess sandbox is refused for a real proposer, exactly as for the gates
 (M1).
 
@@ -121,8 +122,9 @@ Desktop; measure it before relying on either number.
 
 **What it does not do yet:**
 
-- The Serve canary still runs green as a Ray worker until OMNI-48 moves it
-  here, so `--canary serve` stays refused for a real proposer (OMNI-49).
+- `--canary serve` stays refused for a real proposer (OMNI-49, M19), although
+  green now serves its candidate from here (OMNI-48). Lifting the refusal is a
+  human decision.
 - The SLO gate still judges a candidate inside its own process. Every other
   gate that runs the candidate calls it here (OMNI-45, OMNI-146: H2, M8).
 - State is not handed over on a swap. Stateful targets (the omnitrack twin's
