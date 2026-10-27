@@ -69,7 +69,9 @@ governs what a **human operator** may change (the operator console,
 `python -m sis.frontend`, shows `forbidden_` keys read-only, and its write path
 refuses direct edits to them; a `strict_` edit needs a written justification).
 The current console has known OAuth and YAML-rendering defects (OMNI-53/52);
-see [its deployment limits](docs/OPERATOR_FRONTEND.md). The prefix grants the
+see [its deployment limits](docs/OPERATOR_FRONTEND.md). A separate, read-only
+twin viewer (`python -m sis.viewer`, OMNI-40) replays the recorded fuel data and
+generated scenarios under the same serving rules. The prefix grants the
 loop nothing, because `config.yml` and
 `sis/config.py` are both POLICY-FORBIDDEN and the loop may not write either at
 any tier. Naming the config as an optimisation target doesn't help — guardrail
