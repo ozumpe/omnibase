@@ -61,8 +61,9 @@ internal target before it models anything external.
   week's price; the signed error (predicted − actual, the next week's latest
   vintage) goes to telemetry (`prediction.error`, `prediction.summary`) and,
   through `publish(record=...)`, the SelfModel's provenance. A week with no
-  value to compare with is skipped, never scored. The predictor is a SOFT
-  target and runs in a `SandboxWorker`. The baseline is persistence, the
+  value to compare with is skipped, never scored, and so is a week whose next
+  value was already known when asked (a skipped capture; M34, OMNI-170). The
+  predictor is a SOFT target and runs in a `SandboxWorker`. The baseline is persistence, the
   Class-2 contract `ca_price_persistence` (`specs/ca_price_persistence/`,
   `runtime/ca_price_persistence.py` absent until built); it declares no
   backtest, since persistence would fail one in the jump week.

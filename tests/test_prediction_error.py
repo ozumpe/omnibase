@@ -151,6 +151,49 @@ def test_a_missing_week_is_a_gap_not_the_week_after() -> None:
     assert gap.actual is None and gap.next_week is None
 
 
+def _skipped_capture() -> tuple[list[Reading], list[Absent]]:
+    # The first capture ends two weeks early; the next capture, a week late,
+    # brings the last two weeks in at one fetch, so both are known at once.
+    days = list(PRICES)
+    first = capture_lines(
+        [], [Fetched(CA, UNIT, [(eia_period(d.strftime("%Y%m%d")), PRICES[d]) for d in days[:-2]]),
+             Fetched(US, UNIT, [(eia_period(d.strftime("%Y%m%d")), 3.9) for d in days[:-2]])],
+        EIA_RULES, capture="eia-20221005T020000.000000Z-abcdef01",
+        fetched_at=datetime.datetime(2022, 9, 21, 23, tzinfo=datetime.UTC),
+        published=eia_published,
+        provenance={"url": "https://www.eia.gov/opendata/bulk/PET.zip", "sha256": "ab" * 32,
+                    "attribution": "Source: U.S. Energy Information Administration (Sep 2022)"})
+    later = capture_lines(
+        first, [Fetched(CA, UNIT, [(eia_period(d.strftime("%Y%m%d")), PRICES[d]) for d in days]),
+                Fetched(US, UNIT, [(eia_period(d.strftime("%Y%m%d")), 3.9) for d in days])],
+        EIA_RULES, capture="eia-20221006T020000.000000Z-abcdef02",
+        fetched_at=datetime.datetime(2022, 10, 6, 2, tzinfo=datetime.UTC),
+        published=eia_published,
+        provenance={"url": "https://www.eia.gov/opendata/bulk/PET.zip", "sha256": "cd" * 32,
+                    "attribution": "Source: U.S. Energy Information Administration (Oct 2022)"})
+    readings, absent = read_back(first + later, EIA_RULES)
+    return list(readings), list(absent)
+
+
+def test_a_next_week_known_when_asked_is_skipped_never_scored() -> None:
+    # M34 (OMNI-170): a skipped capture made the 26 Sep and 3 Oct prices known
+    # at the same fetch. Asked about 26 Sep, the view held 3 Oct too, and
+    # persistence, returning it, scored an error of 0.
+    days = list(PRICES)
+    asked = prediction_error.questions(*_skipped_capture())
+    by_week = {q.week.date(): q for q in asked}
+    leaked = by_week[days[-2]]
+    assert leaked.at == by_week[days[-1]].at
+    assert any(r["event_time"] == by_week[days[-1]].week.isoformat()
+               for r in leaked.state["readings"] if r["series"] == CA)
+    assert leaked.actual is None and leaked.skip
+    report = prediction_error.score(asked, prediction_error.ask(_persistence, asked))
+    step = next(s for s in report.steps if s.week.date() == days[-2])
+    assert step.error is None and "already known" in step.note
+    assert all(s.error != 0 for s in report.scored)
+    assert report.summary()["scored"] == len(days) - 2
+
+
 # -- the score ------------------------------------------------------------------
 
 def test_the_error_is_signed_and_the_summary_counts_skips() -> None:
