@@ -51,6 +51,9 @@ class AnthropicClient:
     """Claude via the ``anthropic`` SDK (adaptive thinking, cached system prompt)."""
 
     def __init__(self, model: str = DEFAULT_ANTHROPIC_MODEL) -> None:
+        from sis.cost import price
+
+        price(model)   # an unpriced model is refused before any call (L25)
         self.model = model
 
     def complete(self, *, system: str, user: str, max_tokens: int) -> LLMResponse:
@@ -95,6 +98,24 @@ def get_llm_client(provider: str | None = None, model: str | None = None) -> LLM
             f"Unknown proposer.llm_provider={name!r} (SIS_LLM_PROVIDER; known: {known})"
         )
     return factory(model or config.get("proposer.llm_model"))
+
+
+def ensure_proposer_priced() -> None:
+    """Refuse a real proposer whose model has no price, before any spend (L25).
+
+    The client is built only when a proposal is asked for, inside a cycle whose
+    spend is already reserved; checking here lets ``run_cycle`` refuse first.
+    """
+    if config.get("proposer.backend") == "stub":
+        return
+    from sis.cost import UnpricedModel
+
+    try:
+        get_llm_client()
+    except UnpricedModel as exc:
+        raise UnpricedModel(
+            f"{exc}. Set proposer.llm_model (SIS_LLM_MODEL) to a priced model, or add "
+            "its published rates to sis/cost.py.") from None
 
 
 def configured_model(provider: str | None = None, model: str | None = None) -> str:
