@@ -1076,15 +1076,27 @@ def probe_sandbox(tmpdir: str, env: dict[str, str]) -> str | None:
     this fails, whatever a gate just said about the candidate is not evidence.
 
     Uses its own files under a probe subdirectory, so it cannot disturb a
-    validation that is still using *tmpdir*.
+    validation that is still using *tmpdir*. And a scratch of its own (L16,
+    OMNI-65): the gates' ``HOME`` is the candidate's to write, and an
+    interpreter started there runs a ``usercustomize.py`` or ``.pth`` file
+    planted in its user site, so a candidate could fail the probe and have its
+    own rejection blamed on the sandbox.
     """
     probe_dir = pathlib.Path(tmpdir) / "_sis_probe"
     probe_dir.mkdir(exist_ok=True)
     (probe_dir / "probe_in.txt").write_text(_PROBE_TOKEN, encoding="utf-8")
     (probe_dir / "sis_probe_mod.py").write_text(f"TOKEN = {_PROBE_TOKEN!r}\n", encoding="utf-8")
-    # Written where the sandbox can write: the scratch, when it has one, since the
-    # exam directory is read-only in docker mode (M9).
-    out = pathlib.Path(env.get("HOME", tmpdir)) / "probe_out.txt"
+    with tempfile.TemporaryDirectory(prefix="sis-probe-") as scratch:
+        probe_env = {**env, "HOME": scratch, "TMPDIR": scratch, "PYTHONNOUSERSITE": "1",
+                     "HYPOTHESIS_STORAGE_DIRECTORY": os.path.join(scratch, ".hypothesis")}
+        # Written where the sandbox can write: the scratch, since the exam
+        # directory is read-only in docker mode (M9).
+        return _probe(tmpdir, probe_env, probe_dir, pathlib.Path(scratch) / "probe_out.txt")
+
+
+def _probe(tmpdir: str, env: dict[str, str], probe_dir: pathlib.Path,
+           out: pathlib.Path) -> str | None:
+    """:func:`probe_sandbox`'s run, once its files and scratch are in place."""
     script = textwrap.dedent(
         f"""\
         import sys

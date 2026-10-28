@@ -13,7 +13,10 @@ never trusted on its own, so a candidate that exits 125 is still judged.
 
 from __future__ import annotations
 
+import os
+import pathlib
 import subprocess
+import sys
 import tempfile
 from collections.abc import Callable
 from typing import Any
@@ -67,6 +70,69 @@ def test_a_healthy_sandbox_passes_the_probe() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         env = gauntlet._sandbox_env(home=tmpdir, pythonpath=tmpdir)
         assert gauntlet.probe_sandbox(tmpdir, env) is None
+
+
+# Docker's sandbox runs the image's system Python, which reads a user site
+# directory under HOME; a virtualenv's interpreter does not. The probe only
+# needs the standard library, so it runs here under the base interpreter too.
+_SYSTEM_PYTHON = getattr(sys, "_base_executable", sys.executable)
+
+
+def _user_site(home: str) -> pathlib.Path:
+    """The user site directory a sandboxed interpreter with this ``HOME`` reads."""
+    out = subprocess.run(
+        [_SYSTEM_PYTHON, "-c", "import site; print(site.getusersitepackages())"],
+        env={"HOME": home, "PATH": os.environ.get("PATH", os.defpath)},
+        capture_output=True, text=True, check=True,
+    )
+    return pathlib.Path(out.stdout.strip())
+
+
+@pytest.mark.parametrize("plant", ["usercustomize", "pth", "probe_out"])
+def test_a_candidate_cannot_break_the_probe_through_the_scratch(
+    plant: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # L16 (OMNI-65): a candidate that runs with the sandbox's HOME (the SLO
+    # gate's does) can leave something there for the probe that follows its
+    # failure. The probe must not read it, or the candidate's rejection becomes
+    # "harness:" and pages a human about a sandbox that is fine.
+    monkeypatch.setattr(sys, "executable", _SYSTEM_PYTHON)
+    with tempfile.TemporaryDirectory() as exam, tempfile.TemporaryDirectory() as scratch:
+        env = gauntlet._sandbox_env(home=scratch, pythonpath=exam)
+        if plant == "probe_out":
+            (pathlib.Path(scratch) / "probe_out.txt").mkdir()
+        else:
+            site_dir = _user_site(scratch)
+            site_dir.mkdir(parents=True)
+            if plant == "usercustomize":
+                (site_dir / "usercustomize.py").write_text("raise SystemExit(3)\n")
+            else:
+                (site_dir / "planted.pth").write_text("import sys; sys.exit(3)\n")
+        assert gauntlet.probe_sandbox(exam, env) is None
+
+
+def test_the_probe_runs_with_a_scratch_of_its_own(
+    docker_mode: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The same property in docker mode, where HOME is what gets mounted
+    # read-write: the probe's must be a fresh directory, not the gates'.
+    seen: dict[str, str] = {}
+
+    def run(inner: list[str], tmpdir: str, env: dict[str, str], **_: Any
+            ) -> subprocess.CompletedProcess[str]:
+        seen.update(env)
+        (pathlib.Path(env["HOME"]) / "probe_out.txt").write_text(
+            gauntlet._PROBE_TOKEN, encoding="utf-8")
+        return _cp(0)
+
+    monkeypatch.setattr(gauntlet, "_run", run)
+    with tempfile.TemporaryDirectory() as exam, tempfile.TemporaryDirectory() as scratch:
+        env = gauntlet._sandbox_env(home=scratch, pythonpath=exam)
+        assert gauntlet.probe_sandbox(exam, env) is None
+    assert seen["HOME"] not in (scratch, exam)
+    assert seen["TMPDIR"] == seen["HOME"]
+    assert seen["PYTHONNOUSERSITE"] == "1"
+    assert seen["PYTHONPATH"] == exam  # the exam is still what it checks it can read
 
 
 # --- shape 1: docker cannot start a container -----------------------------
