@@ -101,10 +101,16 @@ def test_the_loop_stops_when_the_target_has_converged(handles, capsys) -> None: 
     results = loop.serve(handles, loop.repeat("again", "nothing left"),
                          interval_s=0.01, max_cycles=6, converged_after=2)
 
-    assert [r["status"] for r in results] == [handles["_expected_status"]] * 2
     out = capsys.readouterr().out
-    assert "has converged" in out and "reached loop.max_cycles" not in out
-    assert not ray.get(handles["CEO"].breaker_open.remote()), "a converged target tripped it"
+    if handles["_expected_status"] == "inconclusive":
+        # L50 (OMNI-145): a candidate that looked faster but could not be
+        # confirmed is no evidence the target converged, so it never stops it.
+        assert [r["status"] for r in results] == ["inconclusive"] * 6
+        assert "has converged" not in out and "reached loop.max_cycles" in out
+    else:
+        assert [r["status"] for r in results] == [handles["_expected_status"]] * 2
+        assert "has converged" in out and "reached loop.max_cycles" not in out
+    assert not ray.get(handles["CEO"].breaker_open.remote()), "a neutral run tripped it"
 
 
 # Builds its own CEO and never reads the neutral outcome, so run it once rather

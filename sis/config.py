@@ -311,9 +311,10 @@ SCHEMA: tuple[Key, ...] = (
         "(OMNI-130)."),
     Key("loop", "converged_after", ConfigTier.SOFT, Kind.INT, 3,
         "SIS_LOOP_CONVERGED_AFTER",
-        "Neutral cycles in a row (no change, inconclusive, no gain) after which "
-        "the loop stops: the target has converged. Not a breaker trip; nothing "
-        "to reset (OMNI-138)."),
+        "Cycles in a row that found nothing to improve (no change, no gain) "
+        "after which the loop stops: the target has converged. An inconclusive "
+        "benchmark resets the count (OMNI-145). Not a breaker trip; nothing to "
+        "reset (OMNI-138)."),
     Key("loop", "artifact_sync_every", ConfigTier.SOFT, Kind.INT, 1,
         "SIS_LOOP_ARTIFACT_SYNC_EVERY",
         "Cycles between syncs of the run's episodic log, audit and console log to "

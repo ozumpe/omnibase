@@ -569,9 +569,10 @@ gate" — but permanently, not just until a human acts.
 
 Pending PR state is persisted and real-adapter runs also recover outstanding
 loop PRs from GitHub. Accepted feature steps and plans are persisted separately,
-so a restart can resume unfinished work. Neutral convergence stops the loop
-politely; OMNI-145 records the remaining limitation that inconclusive results
-also count toward that stop. `main.py` holds `runtime/loop.lock` for its entire
+so a restart can resume unfinished work. Convergence stops the loop
+politely: `loop.converged_after` no-op or no-gain cycles in a row. An
+inconclusive result is neutral for the breaker but resets that count
+(OMNI-145). `main.py` holds `runtime/loop.lock` for its entire
 run; a second start exits 3 naming the holder.
 
 `python -m sis.admin` inspects or pauses/resumes the live CEO and resets the

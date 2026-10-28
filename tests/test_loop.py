@@ -203,9 +203,21 @@ def test_converged_after_n_neutral_cycles_in_a_row() -> None:
     from sis.loop import converged
 
     # The fourth AWS run: an accepted step, then only "nothing to improve".
-    run = ["feature_step", "no_gain", "inconclusive", "no_change"]
+    run = ["feature_step", "no_gain", "no_change", "no_change"]
     assert converged(run, 3)
     assert not converged(run, 4)            # the accepted step is in the window
+
+
+def test_an_inconclusive_cycle_is_no_evidence_of_convergence() -> None:
+    # L50 (OMNI-145), AWS run #5: a candidate measured 0.83 with an interval
+    # reaching 0.96 against a 0.90 margin, so the verdict was inconclusive and
+    # it counted as one of the three cycles that stopped the loop "converged".
+    # Inconclusive is reachable only by a candidate that looks faster.
+    from sis.loop import converged
+
+    assert not converged(["no_gain", "inconclusive", "no_change"], 3)
+    assert not converged(["inconclusive"] * 5, 3)
+    assert converged(["inconclusive", "no_gain", "no_change", "no_gain"], 3)
 
 
 def test_any_other_outcome_resets_the_run() -> None:
