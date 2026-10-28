@@ -55,7 +55,7 @@ reference with no link target below.
 > | L21, L23 | [OMNI-61](https://olafzumpe.atlassian.net/browse/OMNI-61) (brake state fails closed; `sis.admin`) — **fixed** |
 > | L24 | [OMNI-62](https://olafzumpe.atlassian.net/browse/OMNI-62) (Notifier port) — **fixed** |
 > | M7 | [OMNI-88] — **won't fix** for now (label `wont-fix`); see the Won't fix section |
-> | L15–L20, L22, L25–L29, L31–L38, L40–L43 | one ticket each, [OMNI-64]–[OMNI-87], on each entry below (L15 and L33 **fixed** 2026-09-29, L34 2026-09-30, L19 2026-10-15, L17 and L18 2026-10-26, L25 2026-10-27). Each is linked (Relates) in Jira to the ticket it should ship with. |
+> | L15–L20, L22, L25–L29, L31–L38, L40–L43 | one ticket each, [OMNI-64]–[OMNI-87], on each entry below (L15 and L33 **fixed** 2026-09-29, L34 2026-09-30, L19 2026-10-15, L17 and L18 2026-10-26, L25 2026-10-27, L16 2026-10-28). Each is linked (Relates) in Jira to the ticket it should ship with. |
 > | L30 | [OMNI-55], with M16 — **fixed** (2026-10-08) |
 > | L39 | [OMNI-42] — **fixed** (2026-10-15, with OMNI-68) |
 > | L55, L57 | [OMNI-166], [OMNI-172], from the weekly code reviews of 2026-10-25 and 2026-10-26 |
@@ -141,11 +141,6 @@ None open.
 
 ## Low
 
-- [OMNI-65] **L16** — The OMNI-37 sandbox self-check (`probe_sandbox`) loads
-  `sitecustomize.py` from the same writable directory a failing candidate can
-  also write to (see M9), so a candidate that wants its own rejection blamed
-  on the harness can corrupt the probe too. Fix: give the probe its own
-  read-only directory, not the candidate's.
 - [OMNI-69] **L20** — The operator audit log (`runtime/operator_audit.jsonl`) path
   depends on the process's working directory, and entries don't record which
   operator made the edit. Fix: resolve the path against a fixed root; add the
@@ -307,6 +302,21 @@ None open.
   Next time it fails, keep the assertion's `reason` before changing anything.
 
 ## Resolved (Low)
+
+- [OMNI-65] **L16** — The OMNI-37 sandbox self-check (`probe_sandbox`) loaded
+  `sitecustomize.py` from the same writable directory a failing candidate can
+  also write to (see M9), so a candidate that wanted its own rejection blamed
+  on the harness could corrupt the probe too (a `harness:` verdict, which
+  pages a human). OMNI-45 closed that path: the exam directory is read-only in
+  docker and checked for tampering before a failure is attributed. The
+  scratch was still shared: the probe ran with the gates' `HOME`, where an
+  interpreter runs a `usercustomize.py` or `.pth` file planted in its user
+  site (docker's system Python reads one; a virtualenv's does not), and wrote
+  its answer to a path a candidate could block. Only the SLO gate runs a
+  candidate with that `HOME`, so it was latent. **Fixed 2026-10-28
+  (OMNI-65):** the probe runs with a fresh scratch of its own and
+  `PYTHONNOUSERSITE=1`. Regression tests in `tests/test_harness_faults.py`
+  fail without the fix.
 
 - [OMNI-173] **L60** — `tests/test_gauntlet.py::
   test_docker_args_confine_to_a_cpu_only_when_asked` called
