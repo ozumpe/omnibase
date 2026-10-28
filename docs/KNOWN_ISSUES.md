@@ -55,7 +55,7 @@ reference with no link target below.
 > | L21, L23 | [OMNI-61](https://olafzumpe.atlassian.net/browse/OMNI-61) (brake state fails closed; `sis.admin`) — **fixed** |
 > | L24 | [OMNI-62](https://olafzumpe.atlassian.net/browse/OMNI-62) (Notifier port) — **fixed** |
 > | M7 | [OMNI-88] — **won't fix** for now (label `wont-fix`); see the Won't fix section |
-> | L15–L20, L22, L25–L29, L31–L38, L40–L43 | one ticket each, [OMNI-64]–[OMNI-87], on each entry below (L15 and L33 **fixed** 2026-09-29, L34 2026-09-30, L19 2026-10-15, L17 and L18 2026-10-26). Each is linked (Relates) in Jira to the ticket it should ship with. |
+> | L15–L20, L22, L25–L29, L31–L38, L40–L43 | one ticket each, [OMNI-64]–[OMNI-87], on each entry below (L15 and L33 **fixed** 2026-09-29, L34 2026-09-30, L19 2026-10-15, L17 and L18 2026-10-26, L25 2026-10-27). Each is linked (Relates) in Jira to the ticket it should ship with. |
 > | L30 | [OMNI-55], with M16 — **fixed** (2026-10-08) |
 > | L39 | [OMNI-42] — **fixed** (2026-10-15, with OMNI-68) |
 > | L55, L57 | [OMNI-166], [OMNI-172], from the weekly code reviews of 2026-10-25 and 2026-10-26 |
@@ -154,10 +154,6 @@ None open.
   stay open with nothing tracking them; merging one later promotes nothing
   but leaves a merged-looking PR with no effect. Fix: close (not merge) the
   PR as part of recording the rejected outcome.
-- [OMNI-71] **L25** — Unknown/unpriced Anthropic model ids are silently billed at
-  `claude-opus-4-8` rates in `cost.py`, which can undercount a pricier
-  model's actual spend against the hard cap. Fix: fail loudly (or price at
-  the most expensive known tier) on an unrecognised model id.
 - [OMNI-72] **L26** — A live-canary rejection files two bugs for the same event. Fix:
   file one.
 - [OMNI-73] **L27** — `episodic.gate_from_reason` matches `"timed out"`/`"timeout"`
@@ -329,6 +325,17 @@ None open.
   case-folded, on every filesystem; a SOFT target is still matched exactly, so
   a different spelling of one is STRICT. Both directions fail closed.
   Regression tests in `tests/test_policy.py` fail without the fix.
+
+- [OMNI-71] **L25** — Unknown/unpriced Anthropic model ids were silently
+  billed at `claude-opus-4-8` rates in `cost.py`, which under-counts a
+  pricier model's spend against the hard cap. It mattered once the Claude 5
+  family shipped: none of its ids was in the table. **Fixed 2026-10-27
+  (OMNI-71):** `cost.price` raises `UnpricedModel` for an id with no row,
+  `AnthropicClient` refuses one when it is built, and `org.run_cycle` refuses a
+  real proposer with one before any spend (`llm.ensure_proposer_priced`). The
+  Claude 5 family's ids are priced at their published rates; where a model has
+  two rates the higher one is used. Regression tests in `tests/test_cost.py`
+  and `tests/test_llm.py` fail without the fix.
 
 - [OMNI-66] **L17** — `NaN` passed `config.py`'s number validation and silently
   disabled the spend cap and cost-per-accepted SLO (a threshold compared

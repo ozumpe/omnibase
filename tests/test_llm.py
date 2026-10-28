@@ -2,7 +2,7 @@
 
 import pytest
 
-from sis import llm, proposer
+from sis import cost, llm, proposer
 
 
 class _FakeClient:
@@ -32,6 +32,26 @@ def test_model_override(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.setenv("SIS_LLM_MODEL", "claude-sonnet-5")
     assert llm.get_llm_client().model == "claude-sonnet-5"
     assert llm.configured_model() == "claude-sonnet-5"  # no API call
+
+
+def test_an_unpriced_model_is_refused_before_any_call(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # L25 (OMNI-71): the client is built only to make a call, so refusing here
+    # means an unpriced model never spends a dollar the cap cannot see.
+    monkeypatch.setenv("SIS_LLM_MODEL", "claude-opus-9")
+    with pytest.raises(cost.UnpricedModel, match="claude-opus-9"):
+        llm.get_llm_client()
+
+
+def test_a_real_proposer_with_an_unpriced_model_is_refused_up_front(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("SIS_LLM_MODEL", "claude-opus-9")
+    monkeypatch.setenv("SIS_PROPOSER", "claude")
+    with pytest.raises(cost.UnpricedModel, match="proposer.llm_model"):
+        llm.ensure_proposer_priced()
+    monkeypatch.setenv("SIS_PROPOSER", "stub")
+    llm.ensure_proposer_priced()   # the stub calls no model, so nothing to price
+    monkeypatch.setenv("SIS_PROPOSER", "claude")
+    monkeypatch.setenv("SIS_LLM_MODEL", "claude-opus-5-5")
+    llm.ensure_proposer_priced()
 
 
 def test_unknown_provider_fails_loudly(monkeypatch) -> None:  # type: ignore[no-untyped-def]

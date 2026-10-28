@@ -985,7 +985,7 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
 severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
 the IDs in commits/PRs. **Open after a 2026-09-26 multi-dimension review with
 adversarial verification: M13, M20–M23,
-L16, L20, L22, L25–L29, L31, L32, L35–L38, L40–L43; plus L46 from the second AWS run and L48–L50
+L16, L20, L22, L26–L29, L31, L32, L35–L38, L40–L43; plus L46 from the second AWS run and L48–L50
 from the fifth (OMNI-143–145); L55 and L57 from the weekly code reviews
 (OMNI-166/172); L58 and L59, two tests that failed once under `-n auto`
 (OMNI-141/174)** (M7 is won't-fix for now; H4, M10, M15, M19, L21, L23
@@ -1010,7 +1010,8 @@ OMNI-165; L56, an adapter declaring the simulated source, the same day, OMNI-167
 L17, a `nan` spend cap, 2026-10-26, OMNI-66; L18, a guardrail path in
 another case, the same day, OMNI-67; M34, a predictor shown the value it was
 asked for, and M35, a scheduled run losing its loop in a long log, 2026-10-27,
-OMNI-170/171; L60, a docker test that failed as root, the same day, OMNI-173). The headline, before trusting any
+OMNI-170/171; L60, a docker test that failed as root, the same day, OMNI-173; L25, an
+unpriced model billed at another's rate, the same day, OMNI-71). The headline, before trusting any
 gauntlet verdict: every gate but SLO now judges its candidate from outside the
 candidate's process (H2, M8), and the exam files are protected (M9). **The SLO
 gate still runs its candidate in-process** (L42,
