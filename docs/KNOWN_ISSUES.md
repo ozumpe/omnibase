@@ -214,18 +214,6 @@ None open.
   pure brake-decision functions into their own FORBIDDEN module so
   safety-critical logic doesn't share a STRICT file with ordinary actor code.
 
-- [OMNI-127] **L46** — The proposer is not told which candidates were already
-  rejected, so it resubmits identical code and is billed again *(found
-  2026-09-27 in the second AWS run, OMNI-29)*. With the sort target already
-  fast after the merge, two consecutive cycles submitted byte-identical code
-  (`candidate_sha` `ae2b8da062a6`). The second was paid for ($0.015),
-  sandboxed, benchmarked and rejected for the same reason as the first. The
-  episodic store records every attempt, but nothing reads it back into the
-  prompt. Fix: short-circuit a resubmission whose sha matches one already
-  rejected against the same baseline, and put the last few attempts (gate,
-  reason, ratio) into the prompt as data, not instructions (see L27). The
-  breaker and the budget bound the cost.
-
 - [OMNI-143] **L48** — The runbook's manual sync copies a `--loop` run a
   second time, under a folder named for the wrong time *(found 2026-09-29
   reviewing AWS run #5's artifacts)*. Since OMNI-140 the loop syncs itself to
@@ -292,6 +280,28 @@ None open.
   Next time it fails, keep the assertion's `reason` before changing anything.
 
 ## Resolved (Low)
+
+- [OMNI-127] **L46** — The proposer is not told which candidates were already
+  rejected, so it resubmits identical code and is billed again *(found
+  2026-09-27 in the second AWS run, OMNI-29)*. With the sort target already
+  fast after the merge, two consecutive cycles submitted byte-identical code
+  (`candidate_sha` `ae2b8da062a6`). The second was paid for ($0.015),
+  sandboxed, benchmarked and rejected for the same reason as the first. The
+  episodic store records every attempt, but nothing reads it back into the
+  prompt. Fix: short-circuit a resubmission whose sha matches one already
+  rejected against the same baseline, and put the last few attempts (gate,
+  reason, ratio) into the prompt as data, not instructions (see L27). The
+  breaker and the budget bound the cost. **Fixed 2026-10-29 (OMNI-127):** OMNI-130 had
+  already put a feature's last attempts in the prompt, as quoted data, but a
+  Class-1 rejection with no feature in progress (the run #2 case) was not
+  remembered. Now every rejection is kept on the feature, one with no step yet
+  included, and a candidate whose sha was already rejected against the same
+  baseline sha gets the same verdict without a second gauntlet run, marked
+  `[resubmitted: …]` at the end so it classifies like the original (a
+  converged target still stops politely). A harness or timeout verdict is
+  only noted, never replayed. The proposal is still paid for; only the run is
+  saved. Regression tests in `tests/test_resubmission.py` and
+  `tests/test_feature.py` fail without the fix.
 
 - [OMNI-145] **L50** — An inconclusive candidate counted toward "converged"
   and was never measured again *(found 2026-09-29 in AWS run #5, cycle

@@ -987,8 +987,8 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
 severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
 the IDs in commits/PRs. **Open after a 2026-09-26 multi-dimension review with
 adversarial verification: M13, M20–M23,
-L20, L22, L26–L29, L31, L32, L35–L38, L40–L43; plus L46 from the second AWS run and L48–L49
-from the fifth (OMNI-143/144); L55 and L57 from the weekly code reviews
+L20, L22, L26–L29, L31, L32, L35–L38, L40–L43; plus L48–L49 from the fifth
+AWS run (OMNI-143/144); L55 and L57 from the weekly code reviews
 (OMNI-166/172); L58 and L59, two tests that failed once under `-n auto`
 (OMNI-141/174)** (M7 is won't-fix for now; H4, M10, M15, M19, L21, L23
 and L24 fixed 2026-09-26, OMNI-46/47/51/49/61/62; H5, H6, M24 and L44, found
@@ -1016,7 +1016,8 @@ OMNI-170/171; L60, a docker test that failed as root, the same day, OMNI-173; L2
 unpriced model billed at another's rate, the same day, OMNI-71; L16, a
 sandbox self-check a candidate could break through the scratch, 2026-10-28,
 OMNI-65; L50, an inconclusive cycle counted toward "converged", the same day,
-OMNI-145). The headline, before trusting any
+OMNI-145; L46, the second run's identical resubmission judged and billed
+twice, 2026-10-29, OMNI-127). The headline, before trusting any
 gauntlet verdict: every gate but SLO now judges its candidate from outside the
 candidate's process (H2, M8), and the exam files are protected (M9). **The SLO
 gate still runs its candidate in-process** (L42,
@@ -1243,7 +1244,10 @@ through OMNI-169; 120 Done, 2 In Progress (OMNI-35, OMNI-36), 47 To Do):
       - after `loop.feature_max_steps` steps (default 3), or when a step finds
         no further gain, one PR goes to the base branch with every step in
         its description;
-      - the prompt carries the earlier attempts;
+      - the prompt carries the earlier attempts, a Class-1 rejection with no
+        feature in progress included, and a candidate already rejected
+        against the same baseline keeps its verdict without a second run
+        (OMNI-127, L46);
       - the test suite runs one-step features (`conftest.py`).
       **OMNI-135 (hardening, Done 2026-09-29)**, two of its three parts, in `v0.3.2`:
       - one plan per feature: the spec page, epic and story are written when a

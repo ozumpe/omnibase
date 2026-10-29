@@ -9,7 +9,10 @@ its first step, the first candidate that passes every gate, and the attempts
 before it are notes the next prompt sees.
 
 The state is a plain dict, so it can cross Ray actor boundaries:
-``{"branch", "story", "steps": [...], "attempts": [...]}``.
+``{"branch", "story", "steps": [...], "attempts": [...], "rejected": [...]}``.
+A feature with no step yet holds only notes: the attempts before its first
+passing step, for a Class-1 target too (OMNI-127), so a rejection at the base
+reaches the next prompt and an identical resubmission is not judged again.
 
 Every step's commit carries the plan it belongs to and its timings as
 trailers (:func:`step_message`), so a feature a process left half built can be
@@ -30,6 +33,14 @@ from sis.ports import BranchState, PullRequest
 # itself (the second AWS run resubmitted byte-identical code, OMNI-127), few
 # enough to keep the prompt about the code.
 MAX_NOTES = 5
+
+# How many rejected candidates a feature remembers by sha (OMNI-127). A sha is
+# small, and a proposer that cycles between a few answers is caught as well.
+MAX_REJECTED = 20
+
+# The verdicts that were not the candidate's: a broken sandbox or a machine too
+# loaded to finish. The same code deserves another run once the harness is well.
+_NOT_THE_CANDIDATES = frozenset({"harness", "timeout"})
 
 
 BRANCH_PREFIX = "feature/"
@@ -68,7 +79,7 @@ def contract_from_title(title: str, known: Iterable[str]) -> str | None:
 
 
 def new_feature(branch: str, story_id: str) -> dict[str, Any]:
-    return {"branch": branch, "story": story_id, "steps": [], "attempts": []}
+    return {"branch": branch, "story": story_id, "steps": [], "attempts": [], "rejected": []}
 
 
 def ends_feature(reason: str | None) -> bool:
@@ -91,9 +102,10 @@ def finds_no_gain(feature: dict[str, Any] | None, reason: str | None) -> bool:
     target has converged. That is not a failure of the loop, and filing a bug
     and counting it toward the breaker is how a finished ``sum_of_divisors``
     tripped the breaker in the fourth AWS run. Inside a feature the same
-    verdict ends the feature instead, and its PR opens.
+    verdict ends the feature instead, and its PR opens. A feature with no step
+    yet only holds notes (OMNI-127): its step started from the base too.
     """
-    return feature is None and ends_feature(reason)
+    return (feature is None or not feature["steps"]) and ends_feature(reason)
 
 
 def is_full(feature: dict[str, Any], max_steps: int) -> bool:
@@ -108,6 +120,49 @@ def with_step(feature: dict[str, Any], story_id: str, baseline_s: float,
     step = {"story": story_id, "baseline_s": baseline_s, "candidate_s": candidate_s}
     return with_note({**feature, "steps": [*feature["steps"], step]},
                      f"step {len(feature['steps']) + 1} accepted: {gain}")
+
+
+def with_rejection(feature: dict[str, Any], candidate_sha: str, baseline_sha: str,
+                   reason: str) -> dict[str, Any]:
+    """*feature* remembering a rejected candidate (OMNI-127, L46). Pure.
+
+    A note for the next prompt, and the candidate's sha against the baseline it
+    was judged on, so :func:`rejected_before` can answer a resubmission without
+    a second run. A verdict that was not the candidate's is only noted.
+    """
+    noted = with_note(feature, f"rejected: {reason}")
+    if episodic.gate_from_reason(reason) in _NOT_THE_CANDIDATES:
+        return noted
+    entry = {"candidate": candidate_sha, "baseline": baseline_sha, "reason": reason}
+    return {**noted, "rejected": [*feature.get("rejected", []), entry][-MAX_REJECTED:]}
+
+
+def rejected_before(feature: Mapping[str, Any] | None, candidate_sha: str,
+                    baseline_sha: str) -> str | None:
+    """Why this candidate was rejected against this baseline before, if it was. Pure.
+
+    The second AWS run paid for, sandboxed and benchmarked byte-identical code
+    twice, and rejected it twice for the same reason (OMNI-127). The proposal
+    is paid for either way; the second run is not needed. A feature saved
+    before OMNI-127 has no record, and so no answer.
+    """
+    for entry in reversed((feature or {}).get("rejected", [])):
+        if entry["candidate"] == candidate_sha and entry["baseline"] == baseline_sha:
+            return str(entry["reason"])
+    return None
+
+
+def resubmitted(reason: str) -> str:
+    """The verdict for a resubmission of a candidate rejected for *reason*. Pure.
+
+    The same verdict, marked as such. The marker goes last, because the
+    reason's start is what classifies it (:func:`sis.episodic.gate_from_reason`,
+    :func:`sis.episodic.neutral_status`): a converged target that keeps
+    proposing the same module must still stop politely (OMNI-138), not trip
+    the breaker on duplicates.
+    """
+    return (f"{reason} [resubmitted: identical to a candidate already rejected "
+            "against this baseline, not judged again]")
 
 
 def with_note(feature: dict[str, Any], note: str) -> dict[str, Any]:
