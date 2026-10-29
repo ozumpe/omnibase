@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING, Any
 
 from sis import artifact_sync
 from sis.artifact_sync import ArtifactSync
-from sis.episodic import NEUTRAL_STATUSES
+from sis.episodic import CONVERGED_STATUSES
 
 if TYPE_CHECKING:
     from sis.ports import Cloud
@@ -78,13 +78,15 @@ def decide(tick: Tick) -> Action:
 def converged(statuses: Sequence[str], after: int) -> bool:
     """Whether the last *after* cycles all found nothing to improve. Pure (OMNI-138).
 
-    "Nothing to improve" is every neutral status: no change, an inconclusive
-    benchmark, no gain from the base. They cost no breaker count, so without
-    this a finished target would keep spending until the budget ran out.
-    Anything else in between — an accepted step, a failure — resets the run.
+    "Nothing to improve" is no change, or no gain from the base. They cost no
+    breaker count, so without this a finished target would keep spending until
+    the budget ran out. Anything else in between resets the run: an accepted
+    step, a failure, and an inconclusive benchmark, which only a candidate that
+    looked faster reaches (L50, OMNI-145). That one stays neutral for the
+    breaker, but it is no evidence that there is nothing left to gain.
     """
     n = max(1, after)
-    return len(statuses) >= n and all(s in NEUTRAL_STATUSES for s in statuses[-n:])
+    return len(statuses) >= n and all(s in CONVERGED_STATUSES for s in statuses[-n:])
 
 
 def stop_alert(tick: Tick, cycles_run: int) -> tuple[str, str] | None:
@@ -400,9 +402,10 @@ def serve(
     builds the sync (default: from the configuration); one that returns None
     syncs nothing. A failed sync warns and never stops the loop.
 
-    ``converged_after`` (default: ``loop.converged_after``) neutral cycles in a
-    row stop the loop: the target has converged (OMNI-138). A WARNING page, not
-    a breaker trip — nothing is broken, and there is nothing to reset.
+    ``converged_after`` (default: ``loop.converged_after``) cycles in a row that
+    found nothing to improve stop the loop: the target has converged (OMNI-138;
+    an inconclusive one is not counted, see :func:`converged`). A WARNING page,
+    not a breaker trip — nothing is broken, and there is nothing to reset.
 
     ``canary_backend`` is threaded to every cycle's ``DevOps.canary()`` call
     (OMNI-14) — ``"serve"`` for a real Ray Serve deployment judged against

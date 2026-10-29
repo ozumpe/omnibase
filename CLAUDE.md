@@ -702,10 +702,12 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
   not in `bootstrap()`, which tools that never start a cycle also call.
   **A converged target stops the loop, politely** (OMNI-138): a new feature
   whose first step cannot beat the base is the neutral `no_gain` (no bug, no
-  breaker count), and `loop.converged_after` neutral cycles in a row end
-  `loop.serve` with "*contract* has converged" and a WARNING page. Before,
-  the fourth AWS run's finished `sum_of_divisors` filed three bugs and
-  tripped the breaker.
+  breaker count), and `loop.converged_after` no-change or no-gain cycles in
+  a row end `loop.serve` with "*contract* has converged" and a WARNING page.
+  Before, the fourth AWS run's finished `sum_of_divisors` filed three bugs and
+  tripped the breaker. An inconclusive benchmark is neutral too but resets
+  that count (OMNI-145, L50): only a candidate that looked faster reaches it,
+  and AWS run #5 stopped as "converged" on one that measured 0.83.
   **The run's dataset syncs itself** (OMNI-140, `sis/artifact_sync.py`):
   `loop.serve` uploads the episodic log, its state, the operator audit and the
   console log (`runtime/loop.log`, which the runbook tees, OMNI-139) to
@@ -985,8 +987,8 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
 severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
 the IDs in commits/PRs. **Open after a 2026-09-26 multi-dimension review with
 adversarial verification: M13, M20–M23,
-L20, L22, L26–L29, L31, L32, L35–L38, L40–L43; plus L46 from the second AWS run and L48–L50
-from the fifth (OMNI-143–145); L55 and L57 from the weekly code reviews
+L20, L22, L26–L29, L31, L32, L35–L38, L40–L43; plus L46 from the second AWS run and L48–L49
+from the fifth (OMNI-143/144); L55 and L57 from the weekly code reviews
 (OMNI-166/172); L58 and L59, two tests that failed once under `-n auto`
 (OMNI-141/174)** (M7 is won't-fix for now; H4, M10, M15, M19, L21, L23
 and L24 fixed 2026-09-26, OMNI-46/47/51/49/61/62; H5, H6, M24 and L44, found
@@ -1013,7 +1015,8 @@ asked for, and M35, a scheduled run losing its loop in a long log, 2026-10-27,
 OMNI-170/171; L60, a docker test that failed as root, the same day, OMNI-173; L25, an
 unpriced model billed at another's rate, the same day, OMNI-71; L16, a
 sandbox self-check a candidate could break through the scratch, 2026-10-28,
-OMNI-65). The headline, before trusting any
+OMNI-65; L50, an inconclusive cycle counted toward "converged", the same day,
+OMNI-145). The headline, before trusting any
 gauntlet verdict: every gate but SLO now judges its candidate from outside the
 candidate's process (H2, M8), and the exam files are protected (M9). **The SLO
 gate still runs its candidate in-process** (L42,

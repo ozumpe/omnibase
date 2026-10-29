@@ -177,8 +177,9 @@ an episodic-log line. The configured failure threshold trips the breaker and
 files a distinct `CIRCUIT BREAKER OPEN` bug; the Notifier also pages a human.
 No-op, no-gain and inconclusive outcomes are neutral: spend is recorded without
 filing a bug or incrementing the breaker. Exceptions after a proposal are
-charged and recorded as `error` outcomes. See [known issues](docs/KNOWN_ISSUES.md)
-for the remaining inconclusive/convergence limitation (OMNI-145).
+charged and recorded as `error` outcomes. `loop.converged_after` no-op or
+no-gain cycles in a row stop the loop as converged; an inconclusive one resets
+that count, since only a candidate that looked faster reaches it (OMNI-145).
 
 ### The validation gauntlet (`sis/gauntlet.py`)
 

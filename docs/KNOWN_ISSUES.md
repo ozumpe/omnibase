@@ -244,16 +244,6 @@ None open.
   Fix: a per-folder `run.json` manifest (start, code version, contract,
   first/last `cycle_id`, spend at start and end), or upload this process's
   slice alongside the cumulative files.
-- [OMNI-145] **L50** — An inconclusive candidate counts toward "converged"
-  and is never measured again *(found 2026-09-29 in AWS run #5, cycle
-  `6ea64dd07e95`)*. It measured a ratio of 0.8305, interval [0.6860, 0.9624]
-  over 109 pairs: the point estimate cleared the 0.90 margin, the interval did
-  not, so the verdict was neutral (OMNI-41). OMNI-138 counts every neutral
-  cycle toward `loop.converged_after`, so this one helped stop the loop with
-  "converged". Inconclusive is reachable only by a candidate that *looks*
-  faster, so it is the one neutral outcome that is not evidence of
-  convergence. Fix: count only `no_gain`/`no_change` toward convergence, and
-  consider one bounded re-measurement with a fresh seed before discarding.
 
 - [OMNI-166] **L55** — Atomic writes leave the file readable by its owner
   only *(found 2026-10-25 by the weekly code review)*. `write_text_atomic`
@@ -302,6 +292,21 @@ None open.
   Next time it fails, keep the assertion's `reason` before changing anything.
 
 ## Resolved (Low)
+
+- [OMNI-145] **L50** — An inconclusive candidate counted toward "converged"
+  and was never measured again *(found 2026-09-29 in AWS run #5, cycle
+  `6ea64dd07e95`)*. It measured a ratio of 0.8305, interval [0.6860, 0.9624]
+  over 109 pairs: the point estimate cleared the 0.90 margin, the interval did
+  not, so the verdict was neutral (OMNI-41). OMNI-138 counted every neutral
+  cycle toward `loop.converged_after`, so this one helped stop the loop with
+  "converged". Inconclusive is reachable only by a candidate that *looks*
+  faster, so it is the one neutral outcome that is not evidence of
+  convergence. **Fixed 2026-10-28 (OMNI-145):** `loop.converged` counts only
+  `episodic.CONVERGED_STATUSES` (`no_change`, `no_gain`); an inconclusive
+  cycle stays neutral for the breaker and resets the count. Not built: a
+  bounded re-measurement of an inconclusive candidate with a fresh seed; the
+  next cycle proposes afresh instead. Regression tests in `tests/test_loop.py`
+  and `tests/test_org_no_change.py` fail without the fix.
 
 - [OMNI-65] **L16** — The OMNI-37 sandbox self-check (`probe_sandbox`) loaded
   `sitecustomize.py` from the same writable directory a failing candidate can
