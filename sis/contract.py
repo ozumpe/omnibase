@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
 
-from sis.backtest import Backtest, BacktestSkill, check_skill
+from sis.backtest import Backtest, BacktestSkill, check_skill, private_backtests
 from sis.invariant import DEFAULT_INVARIANT_EXAMPLES, Invariant
 from sis.paths import PROJECT_ROOT
 from sis.slo import DomainSLO
@@ -581,10 +581,54 @@ CA_PRICE_PERSISTENCE = FeatureContract(
     ),
 )
 
+# The first gated omnitrack contract (OMNI-163): next week's California retail
+# price from the wholesale price, stocks and the season, and it must beat
+# persistence. Every held-out week from 2020 is an episode. Each must be within
+# 15%, a sanity bound only: both persistence and the spike's model miss the
+# autumn-2022 jump by about 12%, so no per-week tolerance separates them. What
+# does is the skill check, a mean absolute error at least 10% below
+# persistence's (the spike's model: 21% below, as of the fixture).
+#
+# The fixture shows the licensed LA spot price, so its episodes are private
+# (``specs/ca_price_wholesale/private/``, gitignored) and git holds their
+# digests in ``private.json``, which arrives with the human promotion.
+CA_PRICE_WHOLESALE_INDEX = "specs/ca_price_wholesale/private.json"
+
+
+def ca_price_wholesale(index: str = CA_PRICE_WHOLESALE_INDEX) -> FeatureContract:
+    """The ``ca_price_wholesale`` contract, judged on the episodes *index* lists."""
+    return FeatureContract(
+        name="ca_price_wholesale",
+        spec_ref="OMNI-163",
+        entry="predict_next_week",
+        entry_module="runtime/ca_price_wholesale.py",
+        acceptance_tests="specs/ca_price_wholesale/tests.py",
+        public_api=("predict_next_week",),
+        oracle_path="specs/ca_price_wholesale/oracle.py",
+        stub_candidate_path="runtime/candidates/ca_price_wholesale.py",
+        invariants=(
+            # Generated states have no spot price: a forecast must still come.
+            Invariant(name="plausible", strategy="fuel_scenario_states",
+                      check="plausible_price"),
+            Invariant(name="deterministic", strategy="fuel_scenario_states",
+                      check="deterministic"),
+        ),
+        backtests=private_backtests(index, tolerance=0.15),
+        skill=BacktestSkill(baseline="persistence", margin=0.10),
+    )
+
+
+# Registered once its fixture is promoted: until ``private.json`` is in git
+# there is nothing to judge it on, and a skill check with no held-out episodes
+# is refused at declaration.
+CA_PRICE_WHOLESALE: FeatureContract | None = (
+    ca_price_wholesale() if (PROJECT_ROOT / CA_PRICE_WHOLESALE_INDEX).exists() else None)
+
 # Kept apart from DEFAULT_CONTRACTS, which are the served (Class-1) targets:
 # the Serve canary, the load generator and ``serve_cloud`` need a reference
 # oracle and a benchmark, and a feature has neither.
-FEATURE_CONTRACTS: tuple[FeatureContract, ...] = (ROMAN, CA_PRICE_PERSISTENCE)
+FEATURE_CONTRACTS: tuple[FeatureContract, ...] = (
+    ROMAN, CA_PRICE_PERSISTENCE, *((CA_PRICE_WHOLESALE,) if CA_PRICE_WHOLESALE else ()))
 
 # Every contract the loop can run (OMNI-147): what ``bootstrap`` registers and
 # ``--contract`` selects from. The SWE builds a feature where it optimises a

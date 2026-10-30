@@ -180,6 +180,9 @@ DEFAULT_TARGET_PATHS: tuple[str, ...] = (
     # The persistence predictor (OMNI-36), a Class-2 target like roman: absent
     # until an implementer writes it from specs/ca_price_persistence/.
     "runtime/ca_price_persistence.py",
+    # The wholesale-price predictor (OMNI-163), Class 2: absent until built
+    # from specs/ca_price_wholesale/.
+    "runtime/ca_price_wholesale.py",
 )
 
 SCHEMA: tuple[Key, ...] = (

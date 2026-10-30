@@ -277,6 +277,11 @@ internal target before it models anything external.
     that far below the baseline's. A per-episode tolerance cannot separate the
     two, because both miss a jump week alike. The baseline runs in the harness
     on its own copy of the arguments, and a rejection shows neither error (M31).
+    Its first user is `ca_price_wholesale` (OMNI-163): next week's California
+    price from the LA spot price, stocks and the season, judged on every week
+    from 2020 (each within 15%, and a mean absolute error at least 10% below
+    persistence's). Its fixture is private, so the contract is registered only
+    once `specs/ca_price_wholesale/private.json` is promoted.
   - **Candidate output is compared only as plain values, and never shares an
     input object with the other side** (OMNI-46/47). `sis/canonical.py`
     rebuilds output from exact builtins before every `==` — differential,
@@ -349,7 +354,8 @@ internal target before it models anything external.
     deliberately absent until an implementer writes it), `runtime/scenarios.py`
     (the scenario generator's working copy, OMNI-34, D7),
     `runtime/ca_price_persistence.py` (OMNI-36's predictor, Class 2, absent
-    until built), extendable via
+    until built), `runtime/ca_price_wholesale.py` (OMNI-163's, likewise),
+    extendable via
     `policy.target_paths` / `SIS_TARGET_PATHS`. **Guardrail classification always
     wins** — and that ordering is now load-bearing rather than tidy, because the
     target list is itself a config key: "name the config as a target, then
