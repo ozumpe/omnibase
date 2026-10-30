@@ -51,6 +51,61 @@ def test_the_prompt_notes_are_capped() -> None:
     assert f["attempts"][-1] == "rejected: attempt 11"
 
 
+# --- a rejected candidate is judged once (OMNI-127, L46) ----------------------
+
+
+def test_a_rejection_is_remembered_against_its_baseline() -> None:
+    f = feature.with_rejection(feature.new_feature("b", "TES-1"), "c1", "base1",
+                               "acceptance tests failed")
+    assert f["attempts"] == ["rejected: acceptance tests failed"]
+    assert feature.rejected_before(f, "c1", "base1") == "acceptance tests failed"
+    # Another candidate, or the same one against another baseline, is judged.
+    assert feature.rejected_before(f, "c2", "base1") is None
+    assert feature.rejected_before(f, "c1", "base2") is None
+    assert feature.rejected_before(None, "c1", "base1") is None
+    # A feature saved before OMNI-127 has no record of rejections.
+    assert feature.rejected_before({"attempts": [], "steps": []}, "c1", "base1") is None
+
+
+@pytest.mark.parametrize("reason", [
+    "harness: the sandbox cannot run (after the mypy gate failed)",
+    "mypy gate timed out",
+])
+def test_a_verdict_that_was_not_the_candidates_is_not_replayed(reason: str) -> None:
+    # A broken sandbox or a loaded machine says nothing about the code: the
+    # same candidate deserves another run once the harness is well.
+    f = feature.with_rejection(feature.new_feature("b", "TES-1"), "c1", "base1", reason)
+    assert f["attempts"] == [f"rejected: {reason}"], "still a note for the prompt"
+    assert feature.rejected_before(f, "c1", "base1") is None
+
+
+@pytest.mark.parametrize("reason", [
+    "acceptance tests failed",
+    "no change: candidate is identical to the baseline",
+    "benchmark inconclusive: candidate 0.000251s vs baseline 0.000282s per call",
+    "no improvement: candidate ~0.000001s vs baseline 0.000001s per call",
+    "tampered: the candidate changed oracle.py",
+])
+def test_a_replayed_verdict_is_classified_like_the_original(reason: str) -> None:
+    # A converged target that keeps proposing the same module must still stop
+    # politely (OMNI-138), not trip the breaker on "duplicates".
+    from sis import episodic
+    replayed = feature.resubmitted(reason)
+    assert replayed != reason and "resubmitted" in replayed
+    assert episodic.gate_from_reason(replayed) == episodic.gate_from_reason(reason)
+    assert episodic.neutral_status(replayed) == episodic.neutral_status(reason)
+    assert feature.ends_feature(replayed) is feature.ends_feature(reason)
+
+
+def test_the_rejection_record_is_capped() -> None:
+    f = feature.new_feature("b", "TES-1")
+    for i in range(feature.MAX_REJECTED + 5):
+        f = feature.with_rejection(f, f"c{i}", "base", f"rejected {i}")
+    assert len(f["rejected"]) == feature.MAX_REJECTED
+    assert feature.rejected_before(f, "c0", "base") is None
+    assert feature.rejected_before(f, f"c{feature.MAX_REJECTED + 4}", "base") is not None
+
+
 def test_the_pr_shows_every_step_and_why_it_stopped() -> None:
     body = feature.pr_body("sort", _with_steps(2), "no further gain (no improvement)")
     assert "| 1 | TES-1 | 0.001000s | 0.000500s |" in body
@@ -86,7 +141,10 @@ def test_no_gain_from_the_base_means_the_target_converged() -> None:
     assert feature.finds_no_gain(None, _NO_IMPROVEMENT)
     assert feature.finds_no_gain(None, "no change: candidate is identical to the baseline")
     # Inside a feature the same verdict ends the feature instead (its PR opens).
-    assert not feature.finds_no_gain(feature.new_feature("feature/x", "TES-1"), _NO_IMPROVEMENT)
+    assert not feature.finds_no_gain(_with_steps(1), _NO_IMPROVEMENT)
+    # A feature with no step yet only holds notes (OMNI-127): it starts from the
+    # base too, so its verdict is the same as with no feature at all.
+    assert feature.finds_no_gain(feature.new_feature("feature/x", "TES-1"), _NO_IMPROVEMENT)
     # A real failure is never "no gain".
     assert not feature.finds_no_gain(None, "correctness mismatch (candidate disagrees)")
     assert not feature.finds_no_gain(None, None)

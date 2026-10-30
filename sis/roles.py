@@ -885,32 +885,43 @@ class SWE(Role):
         candidate_sha = _sha(candidate)
         cost_usd = proposer.last_cost_usd()  # 0.0 for the stub; real $ for Claude
         paid["candidate_sha"] = candidate_sha
-        # Benchmark the candidate against the source the cycle is based on (the
-        # merged target), not the stale local file — see KNOWN_ISSUES.md H1.
-        report = gauntlet.validate(
-            candidate, baseline, baseline_source=current_source or None, contract=spec)
+        # The same code against the same baseline was judged already: its verdict
+        # stands, without a second run (OMNI-127, L46). The proposal was paid for.
+        baseline_sha = _sha(current_source)
+        earlier = feature_mod.rejected_before(feature, candidate_sha, baseline_sha)
+        if earlier is not None:
+            ray.get(self._ws.emit.remote("candidate.resubmitted", story_id=story_id,
+                                         candidate_sha=candidate_sha, reason=earlier))
+            report = gauntlet.Result(passed=False, reason=feature_mod.resubmitted(earlier))
+        else:
+            # Benchmark the candidate against the source the cycle is based on (the
+            # merged target), not the stale local file — see KNOWN_ISSUES.md H1.
+            report = gauntlet.validate(
+                candidate, baseline, baseline_source=current_source or None, contract=spec)
 
         if not report.passed:
             ray.get(self._ws.transition.remote(
                 story_id, IssueStatus.TBD, f"Gauntlet failed: {report.reason}"))
             ray.get(self._sm.record.remote("outcome", story_id, passed=False, reason=report.reason))
-            if building and feature is None:
+            started = feature
+            if feature is None:
                 # The reasons a feature's attempts failed are what its next
-                # prompt needs most, and it has no branch until one passes.
+                # prompt needs most, and it has no branch until one passes. For
+                # a Class-1 target too: the second AWS run resubmitted identical
+                # code at the base, where nothing was remembered (OMNI-127).
                 feature = feature_mod.new_feature(
                     feature_mod.feature_branch(story_id), story_id)
-                started = None
-            else:
-                started = feature
-            if feature is not None:
-                feature = feature_mod.with_note(feature, f"rejected: {report.reason}")
-                if feature["steps"] and feature_mod.ends_feature(report.reason):
-                    # The head cannot be beaten: the feature is finished, and
-                    # its PR carries the head, not this rejected candidate.
-                    return self._finish_feature(
-                        story_id, spec, feature, current_source, cost_usd, candidate_sha,
-                        f"no further gain ({report.reason})", model=model)
-                ray.get(self._sm.set_feature.remote(spec.name, feature))
+            feature = (feature_mod.with_note(feature, f"resubmitted, rejected again: {earlier}")
+                       if earlier is not None else
+                       feature_mod.with_rejection(feature, candidate_sha, baseline_sha,
+                                                  report.reason))
+            if feature["steps"] and feature_mod.ends_feature(report.reason):
+                # The head cannot be beaten: the feature is finished, and
+                # its PR carries the head, not this rejected candidate.
+                return self._finish_feature(
+                    story_id, spec, feature, current_source, cost_usd, candidate_sha,
+                    f"no further gain ({report.reason})", model=model)
+            ray.get(self._sm.set_feature.remote(spec.name, feature))
             return {"passed": False, "reason": report.reason, "pr_id": None,
                     "cost_usd": cost_usd, "candidate_sha": candidate_sha,
                     "contract": spec.name, "model": model,
