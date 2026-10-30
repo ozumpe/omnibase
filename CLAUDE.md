@@ -557,15 +557,22 @@ internal target before it models anything external.
   live runs — don't put planning there.
 
 ## Current status — where to pick up
-Released through **v0.4.0** (2026-10-26): the omnitrack Phase-A sensor work,
+Released through **v0.5.0** (2026-10-30): omnitrack Phase A's milestone and
+the fixes since v0.4.0. OMNI-35: the first recorded fixture,
+`specs/ca_price_next_week` (California autumn 2022, from a real capture, the
+release calendar checked). OMNI-36's autumn-2022 errors against persistence
+were measured from that capture, and Phase A (OMNI-30) is closed. OMNI-40: the
+twin viewer. OMNI-48: the Serve canary serves its candidate from a sandbox
+worker (H3). With them OMNI-66/67 (L17, L18), OMNI-170/171 (M34, M35),
+OMNI-173 (L60), OMNI-71 (L25), OMNI-65 (L16), OMNI-145 (L50), OMNI-127 (L46)
+and OMNI-82 (L37). Before that, **v0.4.0** (2026-10-26): the omnitrack Phase-A sensor work,
 the first code that reads the outside world. OMNI-31: the `Sensor` port.
 OMNI-32: the sanitising door. OMNI-33: `EIASensor` and its trace. OMNI-35:
 the fixture tooling. OMNI-34: the scenario generator. OMNI-36: the
 prediction-error report. With them, the fixes from the review after v0.3.7
 (OMNI-155–162: H10–H13, M29–M31, L54), OMNI-54/68/42 (M14, L19, L39),
 OMNI-52 (M12), OMNI-164/165/167 (M32, M33, L56) and the scheduled AWS runs
-(OMNI-168/169). The real fixture and the autumn-2022 errors (OMNI-35/36) wait
-for the first capture on a v0.4.0 box. Before that, **v0.3.7** (2026-10-08):
+(OMNI-168/169). Before that, **v0.3.7** (2026-10-08):
 v0.3.6 plus the hardening after the
 seventh AWS run, most of it gate integrity. OMNI-151: one loop per box.
 OMNI-152: no benchmark input is timed twice (H7). OMNI-153: a timed batch
@@ -1058,8 +1065,9 @@ Two traps L5 surfaced, both worth knowing before writing similar code:
 
 **Next — the milestone plan is in Jira ([`OMNI`](https://olafzumpe.atlassian.net/browse/OMNI)),
 not here.** Check the board for current status rather than trusting this list.
-**Last reconciled against a live query on 2026-10-26** (169 issues, OMNI-1
-through OMNI-169; 120 Done, 2 In Progress (OMNI-35, OMNI-36), 47 To Do):
+**Last reconciled against a live query on 2026-10-30** (175 issues, OMNI-1
+through OMNI-175; 136 Done, 3 In Progress (the epics OMNI-43, OMNI-44,
+OMNI-128), 36 To Do):
 
 1. ~~**[OMNI-1](https://olafzumpe.atlassian.net/browse/OMNI-1) — L5 target
    contract** (Class 1)~~ — **done 2026-08-06** (OMNI-4/5/6/7). Two targets ship
@@ -1138,7 +1146,7 @@ through OMNI-169; 120 Done, 2 In Progress (OMNI-35, OMNI-36), 47 To Do):
    instance lifecycle: `user_data` racing Ubuntu's `unattended-upgrades` for
    the dpkg lock, and SSM sessions landing as `ssm-user` rather than `ubuntu`
    (every runbook step now starts with `sudo -iu ubuntu`). The box clones
-   the release tag in `var.repo_ref` (`v0.4.0`; a branch needs
+   the release tag in `var.repo_ref` (`v0.5.0`; a branch needs
    `allow_branch_ref = true`, OMNI-63) and every run records the commit it
    ran; run day uses `--contract sort`. **Rehearsed
    2026-09-23** on a local Ubuntu 24.04 box (`scripts/rehearse_aws_run.sh`),
@@ -1162,7 +1170,7 @@ through OMNI-169; 120 Done, 2 In Progress (OMNI-35, OMNI-36), 47 To Do):
    (AWS_RUN.md "Scheduled runs").
 
 8. **[OMNI-30](https://olafzumpe.atlassian.net/browse/OMNI-30) — omnitrack
-   Phase A: the `Sensor` port.** `To Do`, filed 2026-08-27 — the first epic of
+   Phase A: the `Sensor` port.** **Done 2026-10-30**, filed 2026-08-27 — the first epic of
    omnitrack proper, unblocked by D0 and by OMNI-3 closing; **re-scoped
    2026-09-24 to the California gasoline market** with the D0 revision (no
    Phase-A code existed, so nothing was thrown away). `Sensor` port +
@@ -1173,7 +1181,7 @@ through OMNI-169; 120 Done, 2 In Progress (OMNI-35, OMNI-36), 47 To Do):
    non-numeric markers and moving endpoints, and the second application's
    store names are written by outsiders; all of it can reach scenario
    libraries, backtest fixtures and potentially LLM prompts. Eight stories;
-   OMNI-31–34 Done, OMNI-35 and OMNI-36 In Progress, the rest `To Do`:
+   OMNI-31–36 and OMNI-40 Done, OMNI-163 `To Do`:
    - ~~[OMNI-31](https://olafzumpe.atlassian.net/browse/OMNI-31) (High) — `Sensor`
      port + `SimSensor` default adapter; a reading carries two times, `event_time`
      and `known_at`.~~ **Built 2026-10-09.**
@@ -1204,8 +1212,9 @@ through OMNI-169; 120 Done, 2 In Progress (OMNI-35, OMNI-36), 47 To Do):
      human verified (`scripts/data/eia_release_calendar_2021_2022.json`), and
      stage them for `python -m sis.contract_author promote` (OMNI-68). Data
      only: no contract gates on it (persistence would fail it). **The real
-     fixture waits for the box's first capture** (Olaf's call), then a human
-     checks the calendar, reviews and promotes. Fixed first: OMNI-161 (M30),
+     fixture is promoted** (PR #182, 2026-10-26, in v0.5.0):
+     `specs/ca_price_next_week`, from a capture on Olaf's Mac, the calendar
+     checked and two captures agreeing. Fixed first: OMNI-161 (M30),
      OMNI-162 (M31), OMNI-68/54/42.
    - [OMNI-163](https://olafzumpe.atlassian.net/browse/OMNI-163) (High) — the
      PADD 5 inventory fixture and **the first gated omnitrack contract**,
@@ -1216,8 +1225,8 @@ through OMNI-169; 120 Done, 2 In Progress (OMNI-35, OMNI-36), 47 To Do):
      (PR #174, in v0.4.0): `sis/prediction_error.py` (questions, signed error, bias/MAE/RMSE,
      telemetry and SelfModel provenance), the persistence contract
      `ca_price_persistence`, and `scripts/prediction_error.py` (autumn 2022
-     from a trace, or a scenario). The autumn-2022 numbers wait for the box's
-     first capture, like OMNI-35.
+     from a trace, or a scenario). Autumn 2022 from the OMNI-35 capture, 18
+     weeks: bias +$0.050, MAE $0.179, RMSE $0.232 a gallon.
    - [OMNI-40](https://olafzumpe.atlassian.net/browse/OMNI-40) (Medium, filed
      2026-09-25, off the critical path) — the twin viewer: a separate read-only
      Panel app (not a console tab) that draws the chain as physical things
