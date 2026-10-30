@@ -10,7 +10,16 @@ question, its inputs in a ``_fixture.json`` and the recorded answer apart in an
 known, given everything known then, what is its value for week *w* + 1? The
 inputs are the as-of view at that moment (:func:`sis.replay.as_of`): every
 series, latest vintage per period, nothing not yet known, back to a lookback.
-The answer is the value for *w* + 1, as the trace holds it now.
+The answer is the value for *w* + 1, as the trace holds it now. A question may
+wait (``ask_after``) for an input published later in the week: the wholesale
+price comes out the day after the retail one (OMNI-163).
+
+**A private fixture** (``build(private=True)``) shows data that may be
+modelled, never redistributed, such as the licensed LA spot price (OMNI-163).
+Its episodes go under ``private/``, which is gitignored under ``specs/``, and
+``private.json`` lists each file with its sha256: that index is committed, and
+the backtest gate refuses a file that differs from it
+(:func:`sis.backtest.private_backtests`).
 
 **A reconstructed ``known_at`` is checked against release evidence first.**
 Backfilled history carries times estimated from a publication schedule, and an
@@ -42,7 +51,7 @@ from dataclasses import dataclass
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sis.backtest import FIXTURE_SCHEMA
+from sis.backtest import FIXTURE_SCHEMA, PRIVATE_DIR, PRIVATE_INDEX, PRIVATE_INDEX_SCHEMA
 from sis.clock import parse_event_time
 from sis.contract_author import ContractDraft
 from sis.ports import Reading
@@ -118,6 +127,15 @@ class Question:
     last: datetime.date           # the last week predicted, included
     lookback: datetime.timedelta = datetime.timedelta(weeks=52)
     horizon: datetime.timedelta = datetime.timedelta(weeks=1)
+    # The series an episode shows, the target always among them. A fixture
+    # committed under specs/ is public, so it names only series that may be
+    # redistributed (OMNI-163); None shows every series in the trace.
+    inputs: frozenset[str] | None = None
+    # How long after the week's value became known the question is asked. A
+    # question that also shows a series released later waits for it: the LA
+    # spot price for Monday is out on Wednesday, after the retail price
+    # (OMNI-163). The answer must still be unknown then (M32).
+    ask_after: datetime.timedelta = datetime.timedelta(0)
 
 
 def _key(item: Reading | Absent) -> tuple[str, datetime.datetime, datetime.datetime, str]:
@@ -159,17 +177,24 @@ def _dump(value: Any) -> str:
     return json.dumps(value, sort_keys=True, indent=1, allow_nan=False) + "\n"
 
 
+def _digest(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def _absent_record(item: Absent) -> dict[str, Any]:
     return {"source": item.source, "series": item.series, "marker": item.marker,
             "event_time": item.event_time.isoformat(), "known_at": item.known_at.isoformat()}
 
 
 def build(lines: Sequence[Mapping[str, Any]], rules: SourceRules, calendar: ReleaseCalendar,
-          question: Question, *, name: str, spec_ref: str) -> ContractDraft:
+          question: Question, *, name: str, spec_ref: str,
+          private: bool = False) -> ContractDraft:
     """The fixture *question* asks of the trace *lines*, as a draft to stage.
 
     The trace is read back through the door first (:func:`sis.sensor_trace.read_back`),
-    so a trace that was edited or cut short refuses here, not in a gate.
+    so a trace that was edited or cut short refuses here, not in a gate. With
+    *private*, the episodes go under ``private/`` and ``private.json`` indexes
+    them by digest (module docstring).
     """
     if is_simulated(rules.source):
         # D4: a fixture is acceptance evidence, a scenario only refutes (OMNI-34).
@@ -181,8 +206,10 @@ def build(lines: Sequence[Mapping[str, Any]], rules: SourceRules, calendar: Rele
     # outside every lookback, or after the last week asked about, is never shown.
     first_shown = question.first - question.horizon - question.lookback
     every: list[Reading | Absent] = [*readings, *absent]
+    inputs = None if question.inputs is None else question.inputs | {question.target}
     shown = [item for item in every
-             if first_shown <= item.event_time.astimezone(calendar.timezone).date()
+             if (inputs is None or item.series in inputs)
+             and first_shown <= item.event_time.astimezone(calendar.timezone).date()
              <= question.last]
     adjusted = [_adjusted(item, calendar, _key(item) in flagged) for item in shown]
     targets = sorted((r for r in adjusted if isinstance(r, Reading)
@@ -204,7 +231,7 @@ def build(lines: Sequence[Mapping[str, Any]], rules: SourceRules, calendar: Rele
         # the question is asked; the answer is the value for this week as the
         # trace holds it now (its latest vintage). No vintage of this week may
         # be known by then: the view would show it (M32, OMNI-164).
-        at = by_week[asked][0].known_at
+        at = by_week[asked][0].known_at + question.ask_after
         answer = by_week[week][-1]
         if by_week[week][0].known_at <= at:
             raise FixtureRefused(f"{question.target} {week}: known before the question "
@@ -219,20 +246,30 @@ def build(lines: Sequence[Mapping[str, Any]], rules: SourceRules, calendar: Rele
             "absent": [_absent_record(a) for a in view.absent
                        if a.event_time.astimezone(calendar.timezone).date() >= floor],
         }
-        stem = f"backtests/{week.isoformat()}"
+        stem = f"{PRIVATE_DIR}/backtests/{week.isoformat()}" if private \
+            else f"backtests/{week.isoformat()}"
         files[f"{stem}_fixture.json"] = _dump(
             {"schema": FIXTURE_SCHEMA, "event_time": at.isoformat(), "args": [state]})
         files[f"{stem}_expect.json"] = _dump({"schema": FIXTURE_SCHEMA, "value": answer.value})
         episodes.append(week.isoformat())
         week += question.horizon
+    if private:
+        index = []
+        for week_name in episodes:
+            fixture = f"{PRIVATE_DIR}/backtests/{week_name}_fixture.json"
+            expect = f"{PRIVATE_DIR}/backtests/{week_name}_expect.json"
+            index.append({"name": week_name, "fixture": fixture, "expect": expect,
+                          "fixture_sha256": _digest(files[fixture]),
+                          "expect_sha256": _digest(files[expect])})
+        files[PRIVATE_INDEX] = _dump({"schema": PRIVATE_INDEX_SCHEMA, "episodes": index})
     files[CALENDAR_FILE] = calendar.raw
     files["README.md"] = _readme(lines, calendar, question, name=name, spec_ref=spec_ref,
-                                 episodes=episodes)
+                                 episodes=episodes, private=private)
     return ContractDraft(name=name, spec_ref=spec_ref, files=files)
 
 
 def _readme(lines: Sequence[Mapping[str, Any]], calendar: ReleaseCalendar, question: Question,
-            *, name: str, spec_ref: str, episodes: Sequence[str]) -> str:
+            *, name: str, spec_ref: str, episodes: Sequence[str], private: bool) -> str:
     captures = [line for line in lines if line["kind"] == "capture"]
     provenance = []
     for line in captures:
@@ -246,11 +283,19 @@ def _readme(lines: Sequence[Mapping[str, Any]], calendar: ReleaseCalendar, quest
         f"# `{name}`: recorded fixture ({spec_ref})\n\n",
         f"Built by `scripts/build_fixture.py` from a sensor trace. **{len(episodes)} "
         "episodes**, all held out (`Split.HOLDOUT`).\n\n",
-        f"**The question.** When `{question.target}`'s value for a week became known, "
-        "given everything known then (every series, latest vintage per period, back "
-        f"{question.lookback.days} days), what is its value for the next week? Each "
-        "`backtests/<week>_fixture.json` holds that as-of view in `args[0]`; each "
-        "`<week>_expect.json` holds the answer, the value for `<week>`.\n\n",
+        f"**The question.** {_when(question)}, given everything known then (",
+        "every series" if question.inputs is None
+        else ", ".join(f"`{series}`" for series in sorted(question.inputs | {question.target})),
+        f"; latest vintage per period, back {question.lookback.days} days), what is "
+        f"`{question.target}`'s value for the next week? Each "
+        f"`{PRIVATE_DIR + '/' if private else ''}backtests/<week>_fixture.json` holds that "
+        "as-of view in `args[0]`; each `<week>_expect.json` holds the answer, the value "
+        "for `<week>`.\n\n",
+        *([f"**Private.** The episodes show data that may be modelled but not "
+           f"redistributed, so `{PRIVATE_DIR}/` is gitignored and kept in the private "
+           f"artifacts bucket; `{PRIVATE_INDEX}` lists each file's sha256, is committed, "
+           "and the backtest gate refuses a file that differs from it.\n\n"]
+          if private else []),
         "**Replay rule** (`sis/replay.py`): by `known_at`; `event_time` is data; mixed "
         "anchors (Friday stocks, Monday prices) are not aligned.\n\n",
         f"**Release check.** Reconstructed times were checked against `{CALENDAR_FILE}` "
@@ -268,6 +313,13 @@ def _readme(lines: Sequence[Mapping[str, Any]], calendar: ReleaseCalendar, quest
         "## Episodes\n\n",
         "".join(f"- {week}\n" for week in episodes),
     ])
+
+
+def _when(question: Question) -> str:
+    became = f"`{question.target}`'s value for a week became known"
+    if not question.ask_after:
+        return f"When {became}"
+    return f"{question.ask_after.total_seconds() / 3600:g} hours after {became}"
 
 
 __all__ = ["CALENDAR_FILE", "FixtureRefused", "Question", "ReleaseCalendar", "build"]

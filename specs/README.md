@@ -62,6 +62,12 @@ from a spec, with no implementation to differ against.
 `specs/ca_price_persistence/` is the second (OMNI-36): `predict_next_week`, the
 persistence baseline whose prediction error `sis/prediction_error.py` reports.
 Its laws run over generated fuel scenarios (`fuel_scenario_states`).
+`specs/ca_price_wholesale/` is the third (OMNI-163), and the first with gated
+history: next week's California price from the LA spot price, stocks and the
+season, which must beat persistence on held-out weeks (`BacktestSkill`). Its
+episodes show licensed data, so they are private: `private/` is gitignored and
+`private.json` holds their digests. It is registered once that index is
+promoted.
 
 Keep spec modules self-contained and independent of `sis/`. The acceptance,
 invariant and backtest harnesses run trusted code on the host, calling a proxy
@@ -77,7 +83,9 @@ Class-2 analogue of the benchmark, with history as the reference
 (`sis/backtest.py`). None of the shipped contracts (`sum_of_divisors`, `sort`,
 `roman`, `ca_price_persistence`) declares recorded backtests. Persistence would
 fail the California price fixture in its jump week, which is why that fixture is
-data its error is computed on, not a gate (OMNI-163 is the first gated one).
+data its error is computed on, not a gate. `ca_price_wholesale` (OMNI-163) is
+the first gated one, with a loose per-week bound and a skill check against
+persistence.
 The others are pure functions with no historical
 episodes to reproduce; inventing some would make the gate look exercised while
 testing nothing.

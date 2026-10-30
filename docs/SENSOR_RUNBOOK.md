@@ -1,7 +1,7 @@
 # Sensor capture and replay
 
 The sensor implementation reads observations, not a fuel-market model. The
-current EIA adapter captures five weekly series into a local trace, and
+current EIA adapter captures five weekly series and one daily one into a local trace, and
 generated scenarios (OMNI-34) replay through the simulated sensor, and a
 predictor's error can be computed on either (OMNI-36); approved domain
 fixtures (OMNI-35) remain separate work. No control-loop consumer uses the
@@ -30,6 +30,17 @@ backend nor starting `main.py` schedules them.
 | `PET.EMM_EPMRR_PTE_Y05LA_DPG.W` | Los Angeles regular reformulated retail price | Dollars per Gallon |
 | `PET.EMM_EPMRR_PTE_Y05SF_DPG.W` | San Francisco regular reformulated retail price | Dollars per Gallon |
 | `PET.EMM_EPMRR_PTE_NUS_DPG.W` | US regular reformulated retail price | Dollars per Gallon |
+| `PET.EER_EPMRR_PF4_Y05LA_DPG.D` | Los Angeles RBOB spot price, daily (licensed, see below) | Dollars per Gallon |
+
+The Los Angeles spot price is Thomson Reuters' data, which EIA republishes
+under licence. EIA's reuse policy puts it under "Protected materials", not the
+public-domain line: it may be modelled, and its raw values may not be
+redistributed. The trace is gitignored. A fixture committed under `specs/`
+shows only `EIA_PUBLIC_SERIES` (`scripts/build_fixture.py`), so never this
+series; one that shows it is private (see "A private fixture" below). Do not
+paste its values into a PR, a ticket or a public log. Spot
+prices are released once a week on Wednesday, so a day's value is taken as
+known on the first Thursday at least three days later, at 17:00 ET.
 
 Stocks and prices have different reporting geographies and anchor days. This
 adapter does not capture production, inter-PADD transfers, traffic or station
@@ -120,6 +131,36 @@ A fixture is the exam, so it reaches `specs/` only through a human:
    --digest <digest> --reason "..."`. It refuses a different digest or a file changed
    since review, and audits to `runtime/operator_audit.jsonl`. Commit the new
    `specs/` directory through a pull request.
+
+### A private fixture (OMNI-163)
+
+`ca_price_wholesale` shows the licensed LA spot price, so its episodes may not
+be committed. The steps are the same, with these differences:
+
+1. **Draft and check the calendar.** It also needs the spot price's releases.
+   `python scripts/draft_release_calendar.py urls --sources DIR` prints what to
+   save into `DIR` (`curl -sSL -o DIR/<name> '<url>'`; run it again once
+   `spot_vintages.html` is saved, for the spot CSVs). `draft --sources DIR`
+   writes `scripts/data/eia_release_calendar_2018_2026.json` with
+   `checked_by` empty. Check its dates against the saved files and fill in
+   both fields. The spot dates come from ALFRED's `DGASUSGULF`, the Gulf Coast
+   price from the same weekly EIA release, because ALFRED does not carry the
+   LA series. Only dates are kept.
+2. **Build:** `python scripts/build_fixture.py --fixture ca_price_wholesale`
+   builds every week from 6 January 2020 to the last the trace answers (about
+   350 episodes, about 40 MB). Each question is asked on Thursday at 17:00 ET,
+   a day after the retail price is out, when Monday's spot price is known.
+   The episodes are staged under `private/`, with `private.json` listing the
+   sha256 of each.
+3. **Review and promote** as above. `specs/ca_price_wholesale/private/` is
+   gitignored. Commit only `private.json`, `README.md` and the calendar.
+4. **Keep the private files in the artifacts bucket**, not in git:
+   `aws s3 sync specs/ca_price_wholesale/private/
+   s3://<artifacts bucket>/specs/ca_price_wholesale/private/`. On another
+   machine, sync them back into the same directory. The backtest gate checks
+   every file against `private.json` and refuses a missing or different one as
+   a `harness:` fault, so a verdict is only reached on the data a human
+   promoted.
 
 ## Generated scenarios
 

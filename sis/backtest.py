@@ -42,6 +42,7 @@ run untrusted code" decision in one file.
 from __future__ import annotations
 
 import json
+import re
 import textwrap
 from dataclasses import dataclass
 from datetime import datetime
@@ -50,6 +51,7 @@ from pathlib import Path
 from typing import Any
 
 from sis.clock import parse_event_time
+from sis.paths import PROJECT_ROOT
 from sis.sensor_input import SIMULATED_SOURCE, is_simulated
 
 # Fixture schema version. Bumped only for a breaking layout change; the gate
@@ -77,6 +79,15 @@ EXIT_NO_COMPARATOR = 5  # the named comparator does not exist (harness fault)
 EXIT_BAD_FIXTURE = 6    # fixture/expect file malformed or wrong schema
 EXIT_NO_SKILL = 7       # candidate did not beat the baseline on average (BacktestSkill)
 EXIT_NO_BASELINE = 8    # the named baseline does not exist (harness fault)
+
+# A private fixture (OMNI-163) lives in ``specs/<name>/private/``, which is
+# gitignored, and is listed with its digest in ``specs/<name>/private.json``,
+# which is committed. The data may be modelled, never redistributed; what git
+# holds is the proof of which data a verdict was reached on.
+PRIVATE_DIR = "private"
+PRIVATE_INDEX = "private.json"
+PRIVATE_INDEX_SCHEMA = 1
+_SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
 class Split(str, Enum):
@@ -106,6 +117,11 @@ class Backtest:
     *fixture* and *expect* are repo-relative paths into ``specs/`` — POLICY-
     FORBIDDEN, so the implementer cannot edit the history it is judged against,
     the same guarantee that protects the reference oracle.
+
+    *fixture_sha256* and *expect_sha256* are set for a private fixture
+    (OMNI-163), one that may not be committed because it shows licensed data:
+    the file is gitignored, its digest is in git, and the gate refuses a file
+    that is missing or differs (:func:`private_backtests`).
     """
 
     name: str
@@ -114,10 +130,15 @@ class Backtest:
     split: Split = Split.HOLDOUT      # default to the strict side, not the lenient one
     compare: str = DEFAULT_COMPARATOR
     tolerance: float = DEFAULT_TOLERANCE
+    fixture_sha256: str | None = None
+    expect_sha256: str | None = None
 
     def __post_init__(self) -> None:
         if not self.name:
             raise ValueError("backtest name must not be empty")
+        for digest in (self.fixture_sha256, self.expect_sha256):
+            if digest is not None and not _SHA256.fullmatch(digest):
+                raise ValueError(f"backtest {self.name!r}: {digest!r} is not a sha256 digest")
         if self.tolerance < 0.0:
             raise ValueError(f"tolerance must be >= 0, got {self.tolerance}")
         if not self.compare:
@@ -167,6 +188,43 @@ def check_skill(
     if not holdout(backtests):
         raise ValueError(f"contract {contract!r}: a skill check is judged on the held-out "
                          "backtests, and it declares none")
+
+
+def private_backtests(
+    index: str, *, compare: str = DEFAULT_COMPARATOR, tolerance: float = DEFAULT_TOLERANCE,
+    root: Path | None = None,
+) -> tuple[Backtest, ...]:
+    """The held-out backtests a committed private index lists, with their digests.
+
+    *index* is repo-relative (``specs/<name>/private.json``); each episode's
+    files are relative to its directory and must lie in its ``private/``
+    directory, so an index cannot point the gate at a file outside the exam.
+    The index is written by :func:`sis.fixture_builder.build` and reaches
+    ``specs/`` by the same human promotion as the fixtures it lists.
+    """
+    path = (root or PROJECT_ROOT) / index
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or data.get("schema") != PRIVATE_INDEX_SCHEMA:
+        raise ValueError(f"{index}: not a schema-{PRIVATE_INDEX_SCHEMA} private index")
+    base = Path(index).parent
+    episodes = data.get("episodes")
+    if not isinstance(episodes, list) or not episodes:
+        raise ValueError(f"{index}: lists no episodes")
+    out = []
+    for episode in episodes:
+        files = {}
+        for key in ("fixture", "expect"):
+            relative = Path(str(episode[key]))
+            if relative.is_absolute() or ".." in relative.parts \
+                    or relative.parts[:1] != (PRIVATE_DIR,):
+                raise ValueError(f"{index}: {relative} is not inside {PRIVATE_DIR}/")
+            files[key] = (base / relative).as_posix()
+        out.append(Backtest(
+            name=str(episode["name"]), fixture=files["fixture"], expect=files["expect"],
+            split=Split.HOLDOUT, compare=compare, tolerance=tolerance,
+            fixture_sha256=str(episode["fixture_sha256"]),
+            expect_sha256=str(episode["expect_sha256"])))
+    return tuple(out)
 
 
 @dataclass(frozen=True)

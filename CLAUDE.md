@@ -73,7 +73,15 @@ internal target before it models anything external.
   triggers (D9).
   **The real sensor is `EIASensor`** (OMNI-33, `sis/adapters_real.py`): EIA's
   bulk file `PET.zip` (no key), five weekly series (PADD 5 gasoline stocks;
-  California, Los Angeles, San Francisco and US retail prices).
+  California, Los Angeles, San Francisco and US retail prices) and, since
+  OMNI-163, the daily Los Angeles RBOB spot price. **The spot price is
+  Thomson Reuters' data under licence to EIA** ("Protected materials", checked
+  by Olaf on 2026-10-30): it may be modelled, never redistributed. It is
+  `redistributable=False`, the trace is gitignored, and a public fixture shows
+  only `EIA_PUBLIC_SERIES`; one that needs spot is private: its episodes in
+  `specs/<name>/private/` (gitignored, kept in the artifacts bucket), their
+  sha256 in the committed `private.json`, which the backtest gate checks
+  (`backtest.private_backtests`).
   `scripts/capture_sensor.py` fetches it and appends to an append-only trace,
   `runtime/sensor_traces/eia.jsonl`, in D12's capture format
   (`sis/sensor_trace.py`, POLICY-FORBIDDEN). `read()` answers from the trace
@@ -269,6 +277,11 @@ internal target before it models anything external.
     that far below the baseline's. A per-episode tolerance cannot separate the
     two, because both miss a jump week alike. The baseline runs in the harness
     on its own copy of the arguments, and a rejection shows neither error (M31).
+    Its first user is `ca_price_wholesale` (OMNI-163): next week's California
+    price from the LA spot price, stocks and the season, judged on every week
+    from 2020 (each within 15%, and a mean absolute error at least 10% below
+    persistence's). Its fixture is private, so the contract is registered only
+    once `specs/ca_price_wholesale/private.json` is promoted.
   - **Candidate output is compared only as plain values, and never shares an
     input object with the other side** (OMNI-46/47). `sis/canonical.py`
     rebuilds output from exact builtins before every `==` — differential,
@@ -341,7 +354,8 @@ internal target before it models anything external.
     deliberately absent until an implementer writes it), `runtime/scenarios.py`
     (the scenario generator's working copy, OMNI-34, D7),
     `runtime/ca_price_persistence.py` (OMNI-36's predictor, Class 2, absent
-    until built), extendable via
+    until built), `runtime/ca_price_wholesale.py` (OMNI-163's, likewise),
+    extendable via
     `policy.target_paths` / `SIS_TARGET_PATHS`. **Guardrail classification always
     wins** — and that ordering is now load-bearing rather than tidy, because the
     target list is itself a config key: "name the config as a target, then
