@@ -59,6 +59,9 @@ Already done if you have run this before; skip to
    ```bash
    SIS_ADAPTERS=real poetry run python scripts/check_connections.py --deep
    ```
+   With `SIS_PROPOSER=claude` and `ANTHROPIC_API_KEY` exported, its `LLM` line
+   checks the key and model as well, at no cost (OMNI-82); otherwise it is
+   skipped.
 3. **Install the SSM plugin** (laptop), which `aws ssm start-session` needs:
    ```bash
    brew install --cask session-manager-plugin
@@ -524,7 +527,8 @@ as `instance destroyed: NO, take it down by hand`, and the script exits 1.
 
 On either kind of box it waits for SSM, and starts step 5c's loop in a tmux
 session `sis` with one `ssm send-command`: the environment of step 5a, then
-`check_connections.py --deep` (a failure ends the run before any spend), then
+`check_connections.py --deep` (a failure ends the run before any spend; it
+checks the Anthropic key and model too, OMNI-82), then
 `main.py … --loop --loop-max-cycles 10`, teed to `runtime/loop.log` between a
 `[scheduled] <run id> start` and `exit` line. It reads this run's part of the
 log every minute, presses Ctrl-C in the pane once when the loop holds for a PR

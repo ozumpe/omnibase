@@ -46,6 +46,14 @@ class LLMClient(Protocol):
 
     def complete(self, *, system: str, user: str, max_tokens: int) -> LLMResponse: ...
 
+    def check(self) -> str:
+        """Confirm the key and the model without a completion; the model's name.
+
+        Read-only and free: the preflight's (OMNI-82). Raises what the provider
+        raises for a key it rejects or a model it does not serve.
+        """
+        ...
+
 
 class AnthropicClient:
     """Claude via the ``anthropic`` SDK (adaptive thinking, cached system prompt)."""
@@ -75,6 +83,13 @@ class AnthropicClient:
         return LLMResponse(
             text=text, cost_usd=cost_from_usage(message.usage, self.model), model=self.model,
             truncated=message.stop_reason == "max_tokens")
+
+    def check(self) -> str:
+        """``GET /v1/models/{model}``: a 401 for a bad key, a 404 for an unknown model."""
+        import anthropic
+
+        info = anthropic.Anthropic().models.retrieve(self.model)
+        return str(getattr(info, "display_name", None) or self.model)
 
 
 def _make_anthropic(model: str | None) -> LLMClient:
