@@ -40,7 +40,7 @@ variable "repo_ref" {
     needs allow_branch_ref = true as well.
   EOT
   type        = string
-  default     = "v0.4.0"
+  default     = "v0.5.0"
 }
 
 variable "allow_branch_ref" {

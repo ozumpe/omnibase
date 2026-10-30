@@ -23,7 +23,7 @@ This document has four parts:
 
 | | |
 |---|---|
-| Code | release tag **`v0.4.0`** (`var.repo_ref`), never a branch — see [Which code runs](#which-code-runs) |
+| Code | release tag **`v0.5.0`** (`var.repo_ref`), never a branch — see [Which code runs](#which-code-runs) |
 | Box | one `m7i.xlarge`, `us-east-1`, **no inbound ports**; shell via SSM only |
 | Contract | Class 1, one with room left: `sort` and `sum_of_divisors` have both converged, so re-seed a naive one on `ozumpe/testrun`'s `develop` first ([Before every run](#before-every-run-a-target-with-room-left)). Or Class 2, `roman`: built from its spec, no re-seed (from `v0.3.5`) |
 | Where artifacts land | Jira `TES`, GitHub `ozumpe/testrun` (PRs against `develop`) |
@@ -684,7 +684,7 @@ human, one box: a remote state backend is ceremony this doesn't need yet.
 
 ### Which code runs
 
-The box runs the **release tag** in `var.repo_ref` — `v0.4.0` by default
+The box runs the **release tag** in `var.repo_ref` — `v0.5.0` by default
 (OMNI-63). A tag, not `develop`: a run's results are only worth something if
 they name the code that produced them, and a branch names whatever it pointed
 at when the box booted. `tofu plan` refuses a branch unless
