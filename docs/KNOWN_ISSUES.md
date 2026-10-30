@@ -282,7 +282,9 @@ None open.
   `SWE.implement`, after Jira/Confluence artifacts already exist for the
   cycle. Fix: add an Anthropic check to `--deep`. **Fixed 2026-10-30 (OMNI-82):** the
   scheduled run of 2026-10-29 (`runs/20261029-1457/`) did start with a key
-  the API rejected, and all three cycles failed (OMNI-175). The preflight
+  the API rejected, and all three cycles failed, labelled as errors "after
+  the proposal" although no proposal came back (OMNI-175: now "in the
+  proposer, while asking for the proposal"). The preflight
   now checks a real proposer's key and model with `LLMClient.check`
   (`GET /v1/models/{model}`, free, read-only), without `--deep` too, so the
   scheduled runner stops before any spend. A stub proposer skips it.

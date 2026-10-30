@@ -409,7 +409,9 @@ internal target before it models anything external.
   driver only in `SWE.implement`'s return value, so a 403 at `open_pr` lost
   it: the cap never saw it and `--loop` died. Now the SWE's step never leaves
   by raising once a proposal was asked for; it returns the cost with the
-  error. `org.run_cycle` records anything else that raises as status `error`:
+  error. An error the proposer's own call raised (a rejected key, a rate
+  limit) is labelled "in the proposer, while asking for the proposal", not
+  "after the proposal" (OMNI-175). `org.run_cycle` records anything else that raises as status `error`:
   charged, counted toward the breaker in full, a bug filed, a human paged, a
   canary set by that cycle retired. Only the refusals before any spend still
   raise, and a CEO that cannot be told: a loop that cannot reach its brakes
