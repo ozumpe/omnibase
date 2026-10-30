@@ -78,8 +78,10 @@ internal target before it models anything external.
   Thomson Reuters' data under licence to EIA** ("Protected materials", checked
   by Olaf on 2026-10-30): it may be modelled, never redistributed. It is
   `redistributable=False`, the trace is gitignored, and a public fixture shows
-  only `EIA_PUBLIC_SERIES`; one that needs spot lives beside `specs/`,
-  gitignored, with only its digest in git.
+  only `EIA_PUBLIC_SERIES`; one that needs spot is private: its episodes in
+  `specs/<name>/private/` (gitignored, kept in the artifacts bucket), their
+  sha256 in the committed `private.json`, which the backtest gate checks
+  (`backtest.private_backtests`).
   `scripts/capture_sensor.py` fetches it and appends to an append-only trace,
   `runtime/sensor_traces/eia.jsonl`, in D12's capture format
   (`sis/sensor_trace.py`, POLICY-FORBIDDEN). `read()` answers from the trace

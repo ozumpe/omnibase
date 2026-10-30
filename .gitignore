@@ -66,3 +66,8 @@ secrets/
 
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/
+
+# Private backtest fixtures (OMNI-163): licensed data that may be modelled, never
+# redistributed. Kept in the private artifacts bucket; specs/<name>/private.json,
+# which is committed, holds each file's sha256.
+specs/*/private/

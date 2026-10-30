@@ -924,20 +924,33 @@ def _gate_backtest(ctx: _GateContext) -> Result | None:
 
     plan: list[dict[str, object]] = []
     for index, bt in enumerate(spec.backtests):
-        fixture_src = PROJECT_ROOT / bt.fixture
-        expect_src = PROJECT_ROOT / bt.expect
-        for path in (fixture_src, expect_src):
+        texts: list[str] = []
+        for relative, digest in ((bt.fixture, bt.fixture_sha256),
+                                 (bt.expect, bt.expect_sha256)):
+            path = PROJECT_ROOT / relative
             if not path.exists():
+                where = (" — a private fixture is not in git: fetch it from the artifacts "
+                         "bucket (docs/SENSOR_RUNBOOK.md)") if digest else ""
                 return Result(
                     passed=False,
                     reason=f"harness: backtest {bt.name!r} references a missing file "
-                           f"({path}) — the backtest gate cannot run",
+                           f"({path}) — the backtest gate cannot run{where}",
                 )
+            # Read once: the bytes checked are the bytes parsed and copied in.
+            data = path.read_bytes()
+            if digest is not None and hashlib.sha256(data).hexdigest() != digest:
+                return Result(
+                    passed=False,
+                    reason=f"harness: backtest {bt.name!r}: {relative} is not the file whose "
+                           "digest is in git (private fixture changed or replaced)",
+                )
+            texts.append(data.decode("utf-8"))
+        fixture_text, expect_text = texts
         try:
             # Parsed for validation, then copied verbatim: the sandbox re-reads
             # the file, so re-serialising here would let the two views drift.
-            parse_fixture(fixture_src.read_text(encoding="utf-8"), where=bt.fixture)
-            parse_expectation(expect_src.read_text(encoding="utf-8"), where=bt.expect)
+            parse_fixture(fixture_text, where=bt.fixture)
+            parse_expectation(expect_text, where=bt.expect)
         except ValueError as exc:
             return Result(
                 passed=False,
@@ -945,10 +958,8 @@ def _gate_backtest(ctx: _GateContext) -> Result | None:
             )
         # Indexed filenames, not bt.name: a name is human-authored and may
         # contain a path separator or a character the filesystem dislikes.
-        fixture_dst = ctx.put(
-            f"fixtures/{index}_fixture.json", fixture_src.read_text(encoding="utf-8"))
-        expect_dst = ctx.put(
-            f"fixtures/{index}_expect.json", expect_src.read_text(encoding="utf-8"))
+        fixture_dst = ctx.put(f"fixtures/{index}_fixture.json", fixture_text)
+        expect_dst = ctx.put(f"fixtures/{index}_expect.json", expect_text)
         plan.append(plan_entry(bt, fixture_path=fixture_dst, expect_path=expect_dst))
 
     nonce = secrets.token_hex(8)
