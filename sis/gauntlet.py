@@ -67,8 +67,10 @@ from sis import canonical, config
 from sis.backtest import (
     EXIT_BAD_FIXTURE,
     EXIT_MISMATCH,
+    EXIT_NO_BASELINE,
     EXIT_NO_COMPARATOR,
     EXIT_NO_ENTRY,
+    EXIT_NO_SKILL,
     build_script,
     parse_expectation,
     parse_fixture,
@@ -961,6 +963,7 @@ def _gate_backtest(ctx: _GateContext) -> Result | None:
         entry=spec.entry,
         plan=plan,
         nonce=nonce,
+        skill=spec.skill,
     )
     result = _run_harness(ctx, ["-c", script], worker)
     if failure := _worker_failure(result, "backtest", spec):
@@ -977,6 +980,21 @@ def _gate_backtest(ctx: _GateContext) -> Result | None:
             passed=False,
             reason="harness: a backtest names a comparator that does not exist in the "
                    "contract's oracle or in specs/comparators.py",
+            errors=result.stdout.splitlines(),
+        )
+    if result.returncode == EXIT_NO_BASELINE:
+        return Result(
+            passed=False,
+            reason="harness: the contract's skill baseline does not exist in its oracle, "
+                   "or did not return a number",
+            errors=result.stdout.splitlines(),
+        )
+    if result.returncode == EXIT_NO_SKILL:
+        detail = result.stdout.strip().rpartition("NOSKILL")[2].strip()
+        return Result(
+            passed=False,
+            reason="backtest failed: candidate did not beat the baseline on held-out "
+                   f"history (mean absolute error not far enough below it) — {detail}",
             errors=result.stdout.splitlines(),
         )
     if result.returncode == EXIT_BAD_FIXTURE:
