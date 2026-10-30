@@ -301,6 +301,14 @@ def _script() -> Any:
     return module
 
 
+def _tree(root: pathlib.Path) -> dict[str, bytes] | None:
+    """Every file under ``root`` with its bytes, or None if there is no ``root``."""
+    if not root.exists():
+        return None
+    return {str(p.relative_to(root)): p.read_bytes()
+            for p in sorted(root.rglob("*")) if p.is_file()}
+
+
 def test_the_script_builds_from_a_trace_and_stages_it_for_a_human(
         tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str]) -> None:
@@ -315,6 +323,10 @@ def test_the_script_builds_from_a_trace_and_stages_it_for_a_human(
     unchecked.write_text(_checked(raw, by=""), encoding="utf-8")
     checked.write_text(_checked(raw), encoding="utf-8")
     script = _script()
+    # The promoted fixture may already be in specs/ (OMNI-35): what matters is
+    # that building and staging leaves it exactly as it was.
+    promoted = pathlib.Path(contract_author.SPECS_DIR) / "ca_price_next_week"
+    before = _tree(promoted)
 
     assert script.main(["--trace", str(trace), "--calendar", str(unchecked)]) == 1
     assert "not been checked by a human" in capsys.readouterr().err
@@ -324,4 +336,4 @@ def test_the_script_builds_from_a_trace_and_stages_it_for_a_human(
     out = capsys.readouterr().out
     staged = contract_author.load_staged("ca_price_next_week")
     assert f"digest: {staged.digest}" in out and "17 episodes" in out
-    assert not (pathlib.Path(contract_author.SPECS_DIR) / "ca_price_next_week").exists()
+    assert _tree(promoted) == before

@@ -46,11 +46,22 @@ class LLMClient(Protocol):
 
     def complete(self, *, system: str, user: str, max_tokens: int) -> LLMResponse: ...
 
+    def check(self) -> str:
+        """Confirm the key and the model without a completion; the model's name.
+
+        Read-only and free: the preflight's (OMNI-82). Raises what the provider
+        raises for a key it rejects or a model it does not serve.
+        """
+        ...
+
 
 class AnthropicClient:
     """Claude via the ``anthropic`` SDK (adaptive thinking, cached system prompt)."""
 
     def __init__(self, model: str = DEFAULT_ANTHROPIC_MODEL) -> None:
+        from sis.cost import price
+
+        price(model)   # an unpriced model is refused before any call (L25)
         self.model = model
 
     def complete(self, *, system: str, user: str, max_tokens: int) -> LLMResponse:
@@ -72,6 +83,13 @@ class AnthropicClient:
         return LLMResponse(
             text=text, cost_usd=cost_from_usage(message.usage, self.model), model=self.model,
             truncated=message.stop_reason == "max_tokens")
+
+    def check(self) -> str:
+        """``GET /v1/models/{model}``: a 401 for a bad key, a 404 for an unknown model."""
+        import anthropic
+
+        info = anthropic.Anthropic().models.retrieve(self.model)
+        return str(getattr(info, "display_name", None) or self.model)
 
 
 def _make_anthropic(model: str | None) -> LLMClient:
@@ -95,6 +113,24 @@ def get_llm_client(provider: str | None = None, model: str | None = None) -> LLM
             f"Unknown proposer.llm_provider={name!r} (SIS_LLM_PROVIDER; known: {known})"
         )
     return factory(model or config.get("proposer.llm_model"))
+
+
+def ensure_proposer_priced() -> None:
+    """Refuse a real proposer whose model has no price, before any spend (L25).
+
+    The client is built only when a proposal is asked for, inside a cycle whose
+    spend is already reserved; checking here lets ``run_cycle`` refuse first.
+    """
+    if config.get("proposer.backend") == "stub":
+        return
+    from sis.cost import UnpricedModel
+
+    try:
+        get_llm_client()
+    except UnpricedModel as exc:
+        raise UnpricedModel(
+            f"{exc}. Set proposer.llm_model (SIS_LLM_MODEL) to a priced model, or add "
+            "its published rates to sis/cost.py.") from None
 
 
 def configured_model(provider: str | None = None, model: str | None = None) -> str:

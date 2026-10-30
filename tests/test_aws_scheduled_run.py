@@ -99,6 +99,45 @@ def test_the_tail_shows_only_this_runs_part_of_the_log(tmp_path: pathlib.Path) -
     assert "old" not in out
 
 
+def _tail(tmp_path: pathlib.Path, text: str) -> str:
+    log = tmp_path / "loop.log"
+    log.write_text(text)
+    cmd = sr.tail_commands(RUN)[1].replace(sr.LOG_PATH, str(log))
+    return subprocess.run(["bash", "-c", cmd], capture_output=True, text=True,
+                          check=True).stdout
+
+
+def test_a_long_run_is_still_read_once_its_log_passes_the_tail(tmp_path: pathlib.Path) -> None:
+    # M35 (OMNI-171): the tail alone dropped the start marker past 20 KB, so a
+    # run that had exited read as STARTING and the driver waited out its
+    # limit and grace (~75 minutes) before abandoning it.
+    cycles = [f"[cycle] {i} rolled_back: benchmark " + "x" * 200 for i in range(400)]
+    text = "\n".join(["[scheduled] 20261022T150000Z start", "[loop] crashed: old",
+                      f"[scheduled] {RUN} start 2026-10-29T15:00:00Z v0.4.0",
+                      "[sis] artifacts synced to s3://b/runs/1", *cycles,
+                      "[loop] stopped after 400 cycle(s): converged",
+                      "[sis] artifacts synced to s3://b/runs/2",
+                      f"[scheduled] {RUN} exit 0"]) + "\n"
+    assert len(text) > 4 * sr._TAIL_BYTES
+    out = _tail(tmp_path, text)
+    assert len(out) < 24_000              # what SSM keeps of a command's output
+    state = sr.read_log(out, RUN)
+    assert (state.phase, state.exit_code, state.synced, state.crashed) == (
+        sr.Phase.EXITED, 0, True, False)
+    assert "s3://b/runs/2" in out and "s3://b/runs/1" not in out   # the last of each kind
+    lines = sr.summary_lines(sr.log_tail(out))
+    assert lines[-1] == f"[scheduled] {RUN} exit 0" and lines.count(lines[-1]) == 1
+
+
+def test_a_long_status_line_is_cut_and_the_output_stays_under_ssms_limit(
+        tmp_path: pathlib.Path) -> None:
+    text = "\n".join([f"[scheduled] {RUN} start", "[loop] crashed: " + "y" * 50_000,
+                      *(["z" * 999] * 60)]) + "\n"
+    out = _tail(tmp_path, text)
+    assert len(out) < 24_000
+    assert sr.read_log(out, RUN).crashed
+
+
 # --- reading the log and deciding --------------------------------------------
 
 def _log(*lines: str) -> str:

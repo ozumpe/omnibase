@@ -23,7 +23,7 @@ This document has four parts:
 
 | | |
 |---|---|
-| Code | release tag **`v0.4.0`** (`var.repo_ref`), never a branch — see [Which code runs](#which-code-runs) |
+| Code | release tag **`v0.5.0`** (`var.repo_ref`), never a branch — see [Which code runs](#which-code-runs) |
 | Box | one `m7i.xlarge`, `us-east-1`, **no inbound ports**; shell via SSM only |
 | Contract | Class 1, one with room left: `sort` and `sum_of_divisors` have both converged, so re-seed a naive one on `ozumpe/testrun`'s `develop` first ([Before every run](#before-every-run-a-target-with-room-left)). Or Class 2, `roman`: built from its spec, no re-seed (from `v0.3.5`) |
 | Where artifacts land | Jira `TES`, GitHub `ozumpe/testrun` (PRs against `develop`) |
@@ -59,6 +59,9 @@ Already done if you have run this before; skip to
    ```bash
    SIS_ADAPTERS=real poetry run python scripts/check_connections.py --deep
    ```
+   With `SIS_PROPOSER=claude` and `ANTHROPIC_API_KEY` exported, its `LLM` line
+   checks the key and model as well, at no cost (OMNI-82); otherwise it is
+   skipped.
 3. **Install the SSM plugin** (laptop), which `aws ssm start-session` needs:
    ```bash
    brew install --cask session-manager-plugin
@@ -439,7 +442,8 @@ cd ~/omnibase && SIS_FRONTEND_AUTH=none poetry run python -m sis.frontend
 ```
 
 ```bash
-# On the laptop, then browse http://127.0.0.1:8080
+# On the laptop, then browse http://localhost:8080 (not 127.0.0.1: Bokeh's
+# websocket refuses that origin)
 eval "$(tofu -chdir=infra/aws output -raw frontend_port_forward)"
 ```
 
@@ -523,7 +527,8 @@ as `instance destroyed: NO, take it down by hand`, and the script exits 1.
 
 On either kind of box it waits for SSM, and starts step 5c's loop in a tmux
 session `sis` with one `ssm send-command`: the environment of step 5a, then
-`check_connections.py --deep` (a failure ends the run before any spend), then
+`check_connections.py --deep` (a failure ends the run before any spend; it
+checks the Anthropic key and model too, OMNI-82), then
 `main.py … --loop --loop-max-cycles 10`, teed to `runtime/loop.log` between a
 `[scheduled] <run id> start` and `exit` line. It reads this run's part of the
 log every minute, presses Ctrl-C in the pane once when the loop holds for a PR
@@ -679,7 +684,7 @@ human, one box: a remote state backend is ceremony this doesn't need yet.
 
 ### Which code runs
 
-The box runs the **release tag** in `var.repo_ref` — `v0.4.0` by default
+The box runs the **release tag** in `var.repo_ref` — `v0.5.0` by default
 (OMNI-63). A tag, not `develop`: a run's results are only worth something if
 they name the code that produced them, and a branch names whatever it pointed
 at when the box booted. `tofu plan` refuses a branch unless
@@ -775,12 +780,13 @@ behind a bridge), so the real guarantee is the sandbox. Locally,
 directory"; on this box it would mean "candidate code can mint my cloud
 credentials". Never set it here.
 
-**The Serve canary is not covered by any of that** (KNOWN_ISSUES H3/M19). A
+**The Serve canary was not covered by any of that** (KNOWN_ISSUES H3/M19). A
 `--canary serve` green replica is an ordinary Ray worker on the host: no
 `--network none`, so IMDS is reachable, and other processes' environments are
-readable through `/proc`. The loop therefore refuses `canary.backend=serve`
-with any proposer but the stub (OMNI-49) — at startup, per cycle, and at the
-deployment itself — until OMNI-48 isolates the replica. Run day uses the legacy
+readable through `/proc`. Since OMNI-48 the replica no longer runs the
+candidate, which is served from a docker sandbox worker on this box. The loop
+still refuses `canary.backend=serve` with any proposer but the stub (OMNI-49):
+at startup, per cycle, and at the deployment itself, until a human lifts it. Run day uses the legacy
 canary (`canary.backend` unset), which never executes candidate code.
 
 ### Two spend brakes, deliberately independent

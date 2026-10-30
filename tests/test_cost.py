@@ -1,6 +1,8 @@
 """Tests for LLM cost accounting (no Ray, no network)."""
 
-from sis.cost import cost_from_usage, cost_usd
+import pytest
+
+from sis.cost import UnpricedModel, cost_from_usage, cost_usd, price
 
 
 def test_cost_usd_opus_pricing() -> None:
@@ -25,8 +27,25 @@ def test_cost_from_usage_duck_typed() -> None:
     assert cost_from_usage(Usage()) == 7.5
 
 
-def test_unknown_model_falls_back_to_opus() -> None:
-    assert cost_usd(1_000_000, 0, model="not-a-model") == 5.0
+def test_an_unpriced_model_is_refused_not_billed_at_opus_rates() -> None:
+    # L25 (OMNI-71): an unknown id used to be priced at claude-opus-4-8 rates,
+    # which under-counts any pricier model against the hard spend cap.
+    with pytest.raises(UnpricedModel, match="not-a-model"):
+        cost_usd(1_000_000, 0, model="not-a-model")
+    with pytest.raises(UnpricedModel, match="claude-opus-4-8-20260101"):
+        price("claude-opus-4-8-20260101")   # a dated id is not the alias it resembles
+
+
+def test_the_current_models_are_priced() -> None:
+    # Published first-party rates, $/MTok, checked 2026-10-27.
+    assert price("claude-fable-5-1") == (10.0, 50.0)
+    assert price("claude-fable-5") == (10.0, 50.0)
+    assert price("claude-opus-5-5") == (4.0, 20.0)
+    assert price("claude-opus-5") == (5.0, 25.0)
+    assert price("claude-sonnet-5-5") == (2.0, 10.0)
+    # Haiku 5.5 bills prompts over 100K tokens at a higher rate; the table holds
+    # that one, so a long prompt is never under-counted.
+    assert price("claude-haiku-5-5") == (0.5, 2.5)
 
 
 def test_pricing_table_matches_published_rates() -> None:

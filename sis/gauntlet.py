@@ -575,14 +575,16 @@ def ensure_sandbox_allows_proposer() -> None:
 def serve_canary_problem(canary_backend: str, proposer_backend: str) -> str | None:
     """Why the Serve canary may not run this proposer's code, or ``None``. Pure.
 
-    OMNI-49 (KNOWN_ISSUES M19), interim until OMNI-48 (H3) isolates the Serve
-    canary. A green replica is an ordinary Ray worker, not the gauntlet's
-    sandbox: no ``--network none``, the host filesystem readable, the named
-    actors (the CEO's ``reset_breaker`` included) callable, and on the AWS box
-    the instance role's credentials a request to IMDS away — the hop limit of 1
-    only stops *containers* behind a bridge, not host processes. The env scrub
-    blanks credentials in the replica's own environment; a same-uid process
-    can still read them from ``/proc/<pid>/environ`` of the raylet or driver.
+    OMNI-49 (KNOWN_ISSUES M19). Written while a green replica executed its candidate
+    itself (H3, fixed by OMNI-48: the candidate now runs in a ``SandboxWorker``).
+    Whether to lift it for the docker sandbox is a human decision, not yet taken.
+    The reasons it was written: a replica was an ordinary Ray worker, not the
+    gauntlet's sandbox: no ``--network none``, the host filesystem readable, the
+    named actors (the CEO's ``reset_breaker`` included) callable, and on the AWS box
+    the instance role's credentials a request to IMDS away — the hop limit of 1 only
+    stops *containers* behind a bridge, not host processes. The env scrub blanks
+    credentials in the replica's own environment; a same-uid process can still read
+    them from ``/proc/<pid>/environ`` of the raylet or driver.
 
     That is fine for the stub's hand-written candidate and not for code an LLM
     wrote, wherever it runs — so the rule keys on the proposer, not on
@@ -596,12 +598,11 @@ def serve_canary_problem(canary_backend: str, proposer_backend: str) -> str | No
     if canary_backend != "serve" or proposer_backend == "stub":
         return None
     return (
-        f"canary.backend='serve' with proposer.backend={proposer_backend!r} would run "
-        "LLM-written code as an ordinary Ray worker in the control-plane cluster — not "
-        "the gauntlet's sandbox: it can read host files and other processes' "
-        "environments, call the named actors, and on AWS reach the instance's "
-        "credentials through IMDS (KNOWN_ISSUES H3/M19). Leave canary.backend unset "
-        "(the legacy in-memory canary) until OMNI-48 isolates the Serve canary."
+        f"canary.backend='serve' with proposer.backend={proposer_backend!r} is refused "
+        "(KNOWN_ISSUES M19): the Serve canary is not cleared for LLM-written code. Green "
+        "now runs its candidate in the sandbox worker (OMNI-48, H3), but lifting this "
+        "refusal is a human decision. Leave canary.backend unset (the legacy in-memory "
+        "canary)."
     )
 
 
@@ -1075,15 +1076,27 @@ def probe_sandbox(tmpdir: str, env: dict[str, str]) -> str | None:
     this fails, whatever a gate just said about the candidate is not evidence.
 
     Uses its own files under a probe subdirectory, so it cannot disturb a
-    validation that is still using *tmpdir*.
+    validation that is still using *tmpdir*. And a scratch of its own (L16,
+    OMNI-65): the gates' ``HOME`` is the candidate's to write, and an
+    interpreter started there runs a ``usercustomize.py`` or ``.pth`` file
+    planted in its user site, so a candidate could fail the probe and have its
+    own rejection blamed on the sandbox.
     """
     probe_dir = pathlib.Path(tmpdir) / "_sis_probe"
     probe_dir.mkdir(exist_ok=True)
     (probe_dir / "probe_in.txt").write_text(_PROBE_TOKEN, encoding="utf-8")
     (probe_dir / "sis_probe_mod.py").write_text(f"TOKEN = {_PROBE_TOKEN!r}\n", encoding="utf-8")
-    # Written where the sandbox can write: the scratch, when it has one, since the
-    # exam directory is read-only in docker mode (M9).
-    out = pathlib.Path(env.get("HOME", tmpdir)) / "probe_out.txt"
+    with tempfile.TemporaryDirectory(prefix="sis-probe-") as scratch:
+        probe_env = {**env, "HOME": scratch, "TMPDIR": scratch, "PYTHONNOUSERSITE": "1",
+                     "HYPOTHESIS_STORAGE_DIRECTORY": os.path.join(scratch, ".hypothesis")}
+        # Written where the sandbox can write: the scratch, since the exam
+        # directory is read-only in docker mode (M9).
+        return _probe(tmpdir, probe_env, probe_dir, pathlib.Path(scratch) / "probe_out.txt")
+
+
+def _probe(tmpdir: str, env: dict[str, str], probe_dir: pathlib.Path,
+           out: pathlib.Path) -> str | None:
+    """:func:`probe_sandbox`'s run, once its files and scratch are in place."""
     script = textwrap.dedent(
         f"""\
         import sys

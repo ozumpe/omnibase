@@ -15,13 +15,15 @@ for any non-stub proposer. The Class-2/domain-canary discussion and pseudocode
 below describe intended reuse, not a supported Class-2 deployment today. The
 latency and error-rate gates have open defects (OMNI-50); see
 [KNOWN_ISSUES.md](KNOWN_ISSUES.md). Scrubbing a replica's environment does not
-isolate it from the Ray control plane.
+isolate it from the Ray control plane, which is why a replica serves its
+candidate from a sandbox worker (OMNI-48).
 
-> **Where green is going (2026-09-27).** Green still runs as an ordinary Ray
-> worker, which is why `--canary serve` is refused with a real proposer
-> (KNOWN_ISSUES H3, OMNI-49). Its replacement exists: the sandbox worker
-> (`sis/sandbox_worker.py`, OMNI-129) serves a candidate from the gauntlet's
-> own sandbox over stdio. OMNI-48 moves green onto it. See
+> **Where green runs (2026-10-27).** A replica is an ordinary Ray worker, so it
+> no longer runs its candidate (KNOWN_ISSUES H3, fixed by OMNI-48).
+> `TargetDeployment` starts a sandbox worker (`sis/sandbox_worker.py`,
+> OMNI-129) for the source it serves and forwards each request over stdio, in
+> the sandbox the driver configured. `--canary serve` is still refused with a
+> real proposer (OMNI-49, M19) until a human lifts that. See
 > [`docs/STAGED_DELIVERY.md`](STAGED_DELIVERY.md).
 
 > Mirrored in Confluence (SD space) as a child of **The Validation Gauntlet**, sibling
@@ -366,8 +368,9 @@ step 1 (already done):
    timeout. **Historical conclusion:** step 9 added a scrubbed `runtime_env`
    (every non-allowlisted variable blanked), while egress stayed open. That did
    not establish isolation: the later H3 review found Ray control-plane access.
-   Current operation refuses non-stub Serve candidates until OMNI-48; passing
-   every offline gate does not bypass the refusal.
+   OMNI-48 (2026-10-27) moved the candidate out of the replica into a sandbox
+   worker. Non-stub Serve candidates are still refused until a human lifts it;
+   passing every offline gate does not bypass the refusal.
 
 7. ~~**`Cloud.shift_traffic` / `Cloud.live_metrics`** on the port~~ — **done**
    (2026-08-05). The port grew both; `InMemoryCloud` implements them for real
@@ -430,8 +433,9 @@ step 1 (already done):
    **Environment scrubbing, not sandboxing.** Green blanks non-allowlisted
    environment variables, but the later H3 review established that it can reach
    credentials held by control-plane actors. Network egress also remains open.
-   This is not an effective credential boundary. Non-stub candidates are refused
-   until OMNI-48 isolates their execution; see the current-scope note above.
+   This was not an effective credential boundary; since OMNI-48 the candidate
+   runs in a sandbox worker instead, whose environment is built from an
+   allowlist. Non-stub candidates are still refused; see the note above.
    Scrubbing works by **blanking rather than omitting**, because Ray's
    `runtime_env["env_vars"]` merges with the inherited environment — listing only
    the safe variables would have left every secret intact. Both halves are

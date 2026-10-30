@@ -26,7 +26,7 @@ from typing import Any
 
 import ray
 
-from sis import config, episodic, gauntlet
+from sis import config, episodic, gauntlet, llm
 from sis.contract import REGISTERED_CONTRACTS, FeatureContract
 from sis.ports import Severity
 from sis.roles import (
@@ -514,11 +514,13 @@ def run_cycle(
     # requires the kernel-enforced docker sandbox so its code can't read host
     # credentials (KNOWN_ISSUES.md M1). validate() re-checks as a backstop.
     gauntlet.ensure_sandbox_allows_proposer()
+    # A model with no price would spend what the cap cannot count (L25).
+    llm.ensure_proposer_priced()
     # Backstop for bootstrap()'s check: configuration can change between the
     # two (a CLI overlay, an edited config.yml), and this is before any spend.
     ensure_brake_persistence()
-    # Same moment, same reason: the Serve canary runs candidate code as an
-    # ordinary Ray worker, so it refuses anything but the stub's (OMNI-49).
+    # Same moment, same reason: the Serve canary refuses anything but the
+    # stub's candidate until a human lifts that (OMNI-49, M19).
     gauntlet.ensure_canary_allows_proposer(canary_backend)
 
     ws = handles["Workspace"]

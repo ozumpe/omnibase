@@ -13,7 +13,11 @@ shown the as-of view at that moment (:func:`sis.replay.as_of`), so it is never
 handed a reading before its ``known_at``. Its answer is compared with the value
 for *w* + 1 as the trace holds it now, its latest vintage. A week with no value
 for *w* + 1 (missing, or withdrawn by now) has nothing to compare with and is
-counted as skipped, never scored as zero.
+counted as skipped, never scored as zero. Nor is a week whose next value was
+already known when the question was asked, any vintage of it: a capture that
+skipped a week, or a late release, brings two weeks in at one moment, and the
+view would show the predictor its own answer (M34, OMNI-170; M32 in the
+fixture builder). It is still asked, so the answers line up, and skipped.
 
 **The error is signed**, prediction minus actual, in the series' unit ($/gal
 for a price), so a model that is always late in a rising market shows as
@@ -58,6 +62,7 @@ class Question:
     state: dict[str, Any]              # the as-of view, shaped as a fixture argument
     next_week: datetime.datetime | None
     actual: float | None               # the next week's value, latest vintage; None: skipped
+    skip: str = ""                     # why a week with a next value is not scored
 
 
 @dataclass(frozen=True)
@@ -142,11 +147,17 @@ def questions(readings: Iterable[Reading], absent: Iterable[Absent], *, target: 
         later = [w for w in weeks if w > week]
         next_week = later[0] if later else None
         actual: float | None = None
+        skip = ""
         if next_week is not None and next_week - week <= HORIZON + _NEXT_WEEK_SLACK:
             actual = now.get(next_week)     # None: withdrawn by now
+            if first[next_week] <= at:
+                # Its first vintage, not only its latest: any vintage known by
+                # then is in the view (M34, OMNI-170).
+                actual, skip = None, "the next week was already known when asked"
         else:
             next_week = None
-        out.append(Question(week=week, at=at, state=state, next_week=next_week, actual=actual))
+        out.append(Question(week=week, at=at, state=state, next_week=next_week, actual=actual,
+                            skip=skip))
     return out
 
 
@@ -172,7 +183,7 @@ def score(asked: Sequence[Question], answers: Sequence[Any | BaseException], *,
         predicted = float(answer)
         if question.actual is None:
             steps.append(Step(question.week, question.at, predicted, None, None,
-                              "no value for the next week to compare with"))
+                              question.skip or "no value for the next week to compare with"))
             continue
         steps.append(Step(question.week, question.at, predicted, question.actual,
                           predicted - question.actual))

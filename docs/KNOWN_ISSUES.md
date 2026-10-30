@@ -38,7 +38,7 @@ reference with no link target below.
 > | H2, M8, M9, M11 | [OMNI-45](https://olafzumpe.atlassian.net/browse/OMNI-45) (epic [OMNI-43](https://olafzumpe.atlassian.net/browse/OMNI-43)) — **fixed** (2026-09-29); M8's second half was [OMNI-146](https://olafzumpe.atlassian.net/browse/OMNI-146) |
 > | H4 | [OMNI-46](https://olafzumpe.atlassian.net/browse/OMNI-46) (epic OMNI-43) — **fixed** |
 > | M10 | [OMNI-47](https://olafzumpe.atlassian.net/browse/OMNI-47) (epic OMNI-43) — **fixed** |
-> | H3 | [OMNI-48](https://olafzumpe.atlassian.net/browse/OMNI-48) (epic [OMNI-44](https://olafzumpe.atlassian.net/browse/OMNI-44)) |
+> | H3 | [OMNI-48](https://olafzumpe.atlassian.net/browse/OMNI-48) (epic [OMNI-44](https://olafzumpe.atlassian.net/browse/OMNI-44)) — **fixed** (2026-10-27) |
 > | H8 | [OMNI-153] (epic OMNI-43), found 2026-10-08 — **fixed** the same day |
 > | H9 | [OMNI-154] (epic OMNI-43), found 2026-10-08 — **fixed** the same day |
 > | M19 | [OMNI-49](https://olafzumpe.atlassian.net/browse/OMNI-49) (epic OMNI-44) — **fixed** (by refusal; isolation is H3) |
@@ -55,38 +55,16 @@ reference with no link target below.
 > | L21, L23 | [OMNI-61](https://olafzumpe.atlassian.net/browse/OMNI-61) (brake state fails closed; `sis.admin`) — **fixed** |
 > | L24 | [OMNI-62](https://olafzumpe.atlassian.net/browse/OMNI-62) (Notifier port) — **fixed** |
 > | M7 | [OMNI-88] — **won't fix** for now (label `wont-fix`); see the Won't fix section |
-> | L15–L20, L22, L25–L29, L31–L38, L40–L43 | one ticket each, [OMNI-64]–[OMNI-87], on each entry below (L15 and L33 **fixed** 2026-09-29, L34 2026-09-30, L19 2026-10-15). Each is linked (Relates) in Jira to the ticket it should ship with. |
+> | L15–L20, L22, L25–L29, L31–L38, L40–L43 | one ticket each, [OMNI-64]–[OMNI-87], on each entry below (L15 and L33 **fixed** 2026-09-29, L34 2026-09-30, L19 2026-10-15, L17 and L18 2026-10-26, L25 2026-10-27, L16 2026-10-28, L37 2026-10-30). Each is linked (Relates) in Jira to the ticket it should ship with. |
 > | L30 | [OMNI-55], with M16 — **fixed** (2026-10-08) |
 > | L39 | [OMNI-42] — **fixed** (2026-10-15, with OMNI-68) |
+> | L55, L57 | [OMNI-166], [OMNI-172], from the weekly code reviews of 2026-10-25 and 2026-10-26 |
+> | L58, L59 | [OMNI-141], [OMNI-174]: tests that failed once under `-n auto` |
+> | L60 | [OMNI-173] — **fixed** (2026-10-27) |
 
 ## High
 
-- [OMNI-48] **H3 — A Serve-canary candidate runs as a full Ray control-plane worker, not
-  in any sandbox** *(found 2026-09-26 by a multi-dimension review; confirmed by
-  two independent skeptics reading the code, not run against a live cluster)* —
-  `TargetDeployment._load` (`sis/serving.py:125`) `exec`s the candidate's source
-  inside a Serve replica, which is an ordinary Ray worker on the same cluster as
-  the detached, named `sis`-namespace actors. The OMNI-13 env scrub only
-  blanks environment variables; it does nothing about cluster membership. Any
-  worker can call `ray.get_actor(name, namespace="sis")` — the exact seam
-  `tests/test_merge_observation.py::_mark_merged` already uses, with its own
-  docstring warning "the agent may not" — and use `__ray_call__` to run
-  arbitrary code inside `Workspace`, `CEO`, `SelfModel` or `DevOps`. A candidate
-  could merge its own PR (`Workspace.vcs` holds an authenticated session under
-  real adapters), promote itself once `observe_merge` sees that merge, reset
-  the circuit breaker, or read tokens held in memory. The canary runs **before**
-  the mandatory human PR merge, so that review does not cover this, and the
-  offline gauntlet cannot catch a payload gated on `ray.is_initialized()`
-  (never true inside the docker sandbox). Fix: never `exec` candidate source in
-  a process attached to the control-plane cluster — a scrubbed subprocess or
-  container fed candidate calls over stdio/a socket, with no Ray connection.
-  Until that lands, refuse `canary.backend=serve` for a non-stub proposer, the
-  same way `ensure_sandbox_allows_proposer` refuses the soft sandbox for M1.
-  **Progress (2026-09-27):** the container that fix needs exists:
-  `sis/sandbox_worker.py` (OMNI-129) serves a candidate from the gauntlet's
-  sandbox over stdio, and tests show a docker candidate cannot reach Ray, the
-  network or the host's environment. Moving green onto it is OMNI-48, so H3
-  stays open, and so does the refusal.
+None open.
 
 ## Medium
 
@@ -163,18 +141,6 @@ reference with no link target below.
 
 ## Low
 
-- [OMNI-65] **L16** — The OMNI-37 sandbox self-check (`probe_sandbox`) loads
-  `sitecustomize.py` from the same writable directory a failing candidate can
-  also write to (see M9), so a candidate that wants its own rejection blamed
-  on the harness can corrupt the probe too. Fix: give the probe its own
-  read-only directory, not the candidate's.
-- [OMNI-66] **L17** — `NaN` passes `config.py`'s number validation and silently
-  disables the spend cap and cost-per-accepted SLO (a threshold compared
-  against `NaN` is never true). Fix: reject non-finite floats in
-  `parse_value`.
-- [OMNI-67] **L18** — `policy.classify()` is case-sensitive, so on a case-insensitive
-  filesystem a different-case path to guardrail code classifies as STRICT
-  rather than FORBIDDEN. Fix: normalise case via the resolved path.
 - [OMNI-69] **L20** — The operator audit log (`runtime/operator_audit.jsonl`) path
   depends on the process's working directory, and entries don't record which
   operator made the edit. Fix: resolve the path against a fixed root; add the
@@ -183,10 +149,6 @@ reference with no link target below.
   stay open with nothing tracking them; merging one later promotes nothing
   but leaves a merged-looking PR with no effect. Fix: close (not merge) the
   PR as part of recording the rejected outcome.
-- [OMNI-71] **L25** — Unknown/unpriced Anthropic model ids are silently billed at
-  `claude-opus-4-8` rates in `cost.py`, which can undercount a pricier
-  model's actual spend against the hard cap. Fix: fail loudly (or price at
-  the most expensive known tier) on an unrecognised model id.
 - [OMNI-72] **L26** — A live-canary rejection files two bugs for the same event. Fix:
   file one.
 - [OMNI-73] **L27** — `episodic.gate_from_reason` matches `"timed out"`/`"timeout"`
@@ -219,10 +181,6 @@ reference with no link target below.
 - [OMNI-81] **L36** — `scripts/aws_secret.py`'s routing guard checks the Jira project
   and GitHub repo but not the Confluence space, which defaults to the real
   `SD` space. Fix: add the same allowlist check for the Confluence space key.
-- [OMNI-82] **L37** — `scripts/check_connections.py` doesn't preflight the Anthropic
-  API key/model; a bad `SIS_LLM_MODEL` or key only fails inside
-  `SWE.implement`, after Jira/Confluence artifacts already exist for the
-  cycle. Fix: add an Anthropic check to `--deep`.
 - [OMNI-83] **L38** — `Dockerfile.gauntlet` installs `mypy`/`pytest`/`hypothesis`
   unpinned, so the docker sandbox's gate toolchain can drift from
   `poetry.lock` (and thus from what CI and the subprocess sandbox actually
@@ -252,18 +210,6 @@ reference with no link target below.
   pure brake-decision functions into their own FORBIDDEN module so
   safety-critical logic doesn't share a STRICT file with ordinary actor code.
 
-- [OMNI-127] **L46** — The proposer is not told which candidates were already
-  rejected, so it resubmits identical code and is billed again *(found
-  2026-09-27 in the second AWS run, OMNI-29)*. With the sort target already
-  fast after the merge, two consecutive cycles submitted byte-identical code
-  (`candidate_sha` `ae2b8da062a6`). The second was paid for ($0.015),
-  sandboxed, benchmarked and rejected for the same reason as the first. The
-  episodic store records every attempt, but nothing reads it back into the
-  prompt. Fix: short-circuit a resubmission whose sha matches one already
-  rejected against the same baseline, and put the last few attempts (gate,
-  reason, ratio) into the prompt as data, not instructions (see L27). The
-  breaker and the budget bound the cost.
-
 - [OMNI-143] **L48** — The runbook's manual sync copies a `--loop` run a
   second time, under a folder named for the wrong time *(found 2026-09-29
   reviewing AWS run #5's artifacts)*. Since OMNI-140 the loop syncs itself to
@@ -282,18 +228,154 @@ reference with no link target below.
   Fix: a per-folder `run.json` manifest (start, code version, contract,
   first/last `cycle_id`, spend at start and end), or upload this process's
   slice alongside the cumulative files.
-- [OMNI-145] **L50** — An inconclusive candidate counts toward "converged"
-  and is never measured again *(found 2026-09-29 in AWS run #5, cycle
+
+- [OMNI-166] **L55** — Atomic writes leave the file readable by its owner
+  only *(found 2026-10-25 by the weekly code review)*. `write_text_atomic`
+  (`sis/atomic.py`) writes through `tempfile.mkstemp`, which creates mode 0600,
+  and `os.replace` puts that file in place of the original. So the first
+  operator edit through `sis.operator.save_edits`, or `python -m sis.config
+  --write`, turns `config.yml` from 0644 into 0600, and every other file
+  written this way ends the same. Git tracks only the executable bit and does
+  not notice; a console or CI step under another uid then fails with an
+  unrelated-looking `PermissionError`. Fix: keep the destination's mode
+  (`0o666 & ~umask` for a new file), with a test that the mode survives a
+  save; whether brake state should stay 0600 is decided per caller, not by
+  `mkstemp`.
+- [OMNI-172] **L57** — The scheduled-run principal can reach every run
+  secret and launch any instance size *(found 2026-10-26 by the weekly code
+  review)*. `infra/aws/scheduled_runner_policy.json` grants
+  `ssm:SendCommand` with `AWS-RunShellScript` (root) on the tagged box, and
+  `ec2:RunInstances` plus `iam:PassRole` for the instance role, which reads
+  the run secret. So whoever holds the principal can start the box and read
+  the Atlassian, GitHub and Anthropic credentials as root, although
+  `scripts/aws_scheduled_run.py` never does and its docstring says the caller
+  never handles them. `LaunchOnlyTheTaggedRunBox` also caps neither
+  `ec2:InstanceType` nor the count; only the AWS Budget alarm would notice,
+  afterwards. Fix: a custom SSM document that accepts only the runner's
+  commands, an `ec2:InstanceType` condition matching `infra/aws`, and a check
+  that `ec2:Owner` `"amazon"` cannot boot any Amazon-owned image.
+- [OMNI-141] **L58** — `tests/test_adversarial.py::
+  test_fast_on_typical_inputs_but_slower_in_total_is_rejected` once came out
+  `benchmark inconclusive` instead of `no improvement` under `-n auto`
+  *(seen 2026-09-29; passed 5/5 alone)*. Not a false accept, but inconclusive
+  needs a point estimate that clears the margin, so under that load a
+  candidate about 2x slower in total measured as looking faster. Find out
+  whether oversubscription can move the total-cost ratio that far or the
+  pairing broke, before deciding to accept inconclusive (as its sibling
+  `test_memoised_naive_impl_cannot_game_a_replayed_workload` does) or to run
+  it serially.
+- [OMNI-174] **L59** — `tests/test_feature_cycles.py::
+  test_a_feature_is_planned_once_and_carried_on_after_a_restart` failed once
+  in a full `pytest -n auto` run *(seen 2026-10-26; the output was not
+  kept)*. It did not fail again in three full parallel runs or six runs of its
+  module with `-n 2`. Ordering and shared state are ruled out by reading the
+  code: `feature.resumable_feature` picks deterministically, the in-memory VCS
+  lists branches in insertion order, each xdist worker starts its own Ray
+  cluster, and the suite runs with `episodic.store=none`. The suspect, not
+  proven, is a sandboxed gate timing out under heavy load in the first cycle.
+  Next time it fails, keep the assertion's `reason` before changing anything.
+
+## Resolved (Low)
+
+- [OMNI-82] **L37** — `scripts/check_connections.py` doesn't preflight the Anthropic
+  API key/model; a bad `SIS_LLM_MODEL` or key only fails inside
+  `SWE.implement`, after Jira/Confluence artifacts already exist for the
+  cycle. Fix: add an Anthropic check to `--deep`. **Fixed 2026-10-30 (OMNI-82):** the
+  scheduled run of 2026-10-29 (`runs/20261029-1457/`) did start with a key
+  the API rejected, and all three cycles failed (OMNI-175). The preflight
+  now checks a real proposer's key and model with `LLMClient.check`
+  (`GET /v1/models/{model}`, free, read-only), without `--deep` too, so the
+  scheduled runner stops before any spend. A stub proposer skips it.
+  Regression tests in `tests/test_preflight_llm.py` fail without the fix.
+
+- [OMNI-127] **L46** — The proposer is not told which candidates were already
+  rejected, so it resubmits identical code and is billed again *(found
+  2026-09-27 in the second AWS run, OMNI-29)*. With the sort target already
+  fast after the merge, two consecutive cycles submitted byte-identical code
+  (`candidate_sha` `ae2b8da062a6`). The second was paid for ($0.015),
+  sandboxed, benchmarked and rejected for the same reason as the first. The
+  episodic store records every attempt, but nothing reads it back into the
+  prompt. Fix: short-circuit a resubmission whose sha matches one already
+  rejected against the same baseline, and put the last few attempts (gate,
+  reason, ratio) into the prompt as data, not instructions (see L27). The
+  breaker and the budget bound the cost. **Fixed 2026-10-29 (OMNI-127):** OMNI-130 had
+  already put a feature's last attempts in the prompt, as quoted data, but a
+  Class-1 rejection with no feature in progress (the run #2 case) was not
+  remembered. Now every rejection is kept on the feature, one with no step yet
+  included, and a candidate whose sha was already rejected against the same
+  baseline sha gets the same verdict without a second gauntlet run, marked
+  `[resubmitted: …]` at the end so it classifies like the original (a
+  converged target still stops politely). A harness or timeout verdict is
+  only noted, never replayed. The proposal is still paid for; only the run is
+  saved. Regression tests in `tests/test_resubmission.py` and
+  `tests/test_feature.py` fail without the fix.
+
+- [OMNI-145] **L50** — An inconclusive candidate counted toward "converged"
+  and was never measured again *(found 2026-09-29 in AWS run #5, cycle
   `6ea64dd07e95`)*. It measured a ratio of 0.8305, interval [0.6860, 0.9624]
   over 109 pairs: the point estimate cleared the 0.90 margin, the interval did
-  not, so the verdict was neutral (OMNI-41). OMNI-138 counts every neutral
+  not, so the verdict was neutral (OMNI-41). OMNI-138 counted every neutral
   cycle toward `loop.converged_after`, so this one helped stop the loop with
   "converged". Inconclusive is reachable only by a candidate that *looks*
   faster, so it is the one neutral outcome that is not evidence of
-  convergence. Fix: count only `no_gain`/`no_change` toward convergence, and
-  consider one bounded re-measurement with a fresh seed before discarding.
+  convergence. **Fixed 2026-10-28 (OMNI-145):** `loop.converged` counts only
+  `episodic.CONVERGED_STATUSES` (`no_change`, `no_gain`); an inconclusive
+  cycle stays neutral for the breaker and resets the count. Not built: a
+  bounded re-measurement of an inconclusive candidate with a fresh seed; the
+  next cycle proposes afresh instead. Regression tests in `tests/test_loop.py`
+  and `tests/test_org_no_change.py` fail without the fix.
 
-## Resolved (Low)
+- [OMNI-65] **L16** — The OMNI-37 sandbox self-check (`probe_sandbox`) loaded
+  `sitecustomize.py` from the same writable directory a failing candidate can
+  also write to (see M9), so a candidate that wanted its own rejection blamed
+  on the harness could corrupt the probe too (a `harness:` verdict, which
+  pages a human). OMNI-45 closed that path: the exam directory is read-only in
+  docker and checked for tampering before a failure is attributed. The
+  scratch was still shared: the probe ran with the gates' `HOME`, where an
+  interpreter runs a `usercustomize.py` or `.pth` file planted in its user
+  site (docker's system Python reads one; a virtualenv's does not), and wrote
+  its answer to a path a candidate could block. Only the SLO gate runs a
+  candidate with that `HOME`, so it was latent. **Fixed 2026-10-28
+  (OMNI-65):** the probe runs with a fresh scratch of its own and
+  `PYTHONNOUSERSITE=1`. Regression tests in `tests/test_harness_faults.py`
+  fail without the fix.
+
+- [OMNI-173] **L60** — `tests/test_gauntlet.py::
+  test_docker_args_confine_to_a_cpu_only_when_asked` called
+  `gauntlet._docker_args` without the `ordinary_user` fixture its siblings
+  use, so it failed wherever the suite runs as root (a cloud session's
+  container); CI, which is not root, stayed green, and earlier PRs called the
+  failure environment noise. **Fixed 2026-10-27 (OMNI-173, PR #187):** the
+  test pins the uid, and `test_every_docker_args_test_pins_the_uid` fails on
+  any test in the module that calls `_docker_args` without doing so.
+
+- [OMNI-67] **L18** — `policy.classify()` was case-sensitive, so on a
+  case-insensitive filesystem a different-case path to guardrail code
+  (`SIS/policy.py`, `Specs/…`) classified as STRICT rather than FORBIDDEN;
+  `resolve()` keeps the case it is given, so resolving did not help.
+  **Fixed 2026-10-26 (OMNI-67):** guardrail files and directories are matched
+  case-folded, on every filesystem; a SOFT target is still matched exactly, so
+  a different spelling of one is STRICT. Both directions fail closed.
+  Regression tests in `tests/test_policy.py` fail without the fix.
+
+- [OMNI-71] **L25** — Unknown/unpriced Anthropic model ids were silently
+  billed at `claude-opus-4-8` rates in `cost.py`, which under-counts a
+  pricier model's spend against the hard cap. It mattered once the Claude 5
+  family shipped: none of its ids was in the table. **Fixed 2026-10-27
+  (OMNI-71):** `cost.price` raises `UnpricedModel` for an id with no row,
+  `AnthropicClient` refuses one when it is built, and `org.run_cycle` refuses a
+  real proposer with one before any spend (`llm.ensure_proposer_priced`). The
+  Claude 5 family's ids are priced at their published rates; where a model has
+  two rates the higher one is used. Regression tests in `tests/test_cost.py`
+  and `tests/test_llm.py` fail without the fix.
+
+- [OMNI-66] **L17** — `NaN` passed `config.py`'s number validation and silently
+  disabled the spend cap and cost-per-accepted SLO (a threshold compared
+  against `NaN` is never true; `inf` likewise never trips). **Fixed
+  2026-10-26 (OMNI-66):** `parse_value` refuses a non-finite number from any
+  layer (`nan`, `inf`, an overflowing `1e400`, YAML's `.nan`/`.inf`), naming
+  the layer it came from. Regression tests in `tests/test_config.py`
+  (`test_a_non_finite_number_*`) fail without the fix.
 
 - [OMNI-167] **L56** — "no real adapter may declare source `sim`" was
   documented on `SIMULATED_SOURCE` but not enforced: `SourceRules("sim", …)`
@@ -598,6 +680,62 @@ any long-lived cluster exists.
 
 ## Resolved
 
+- [OMNI-48] **H3 — A Serve-canary candidate runs as a full Ray control-plane worker, not
+  in any sandbox** *(found 2026-09-26 by a multi-dimension review; confirmed by
+  two independent skeptics reading the code, not run against a live cluster)* —
+  `TargetDeployment._load` (`sis/serving.py`) `exec`'d the candidate's source
+  inside a Serve replica, which is an ordinary Ray worker on the same cluster as
+  the detached, named `sis`-namespace actors. The OMNI-13 env scrub only
+  blanks environment variables; it does nothing about cluster membership. Any
+  worker can call `ray.get_actor(name, namespace="sis")` — the exact seam
+  `tests/test_merge_observation.py::_mark_merged` already uses, with its own
+  docstring warning "the agent may not" — and use `__ray_call__` to run
+  arbitrary code inside `Workspace`, `CEO`, `SelfModel` or `DevOps`. A candidate
+  could merge its own PR (`Workspace.vcs` holds an authenticated session under
+  real adapters), promote itself once `observe_merge` sees that merge, reset
+  the circuit breaker, or read tokens held in memory. The canary runs **before**
+  the mandatory human PR merge, so that review does not cover this, and the
+  offline gauntlet cannot catch a payload gated on `ray.is_initialized()`
+  (never true inside the docker sandbox). Fix: never `exec` candidate source in
+  a process attached to the control-plane cluster — a scrubbed subprocess or
+  container fed candidate calls over stdio/a socket, with no Ray connection.
+  Until that lands, refuse `canary.backend=serve` for a non-stub proposer, the
+  same way `ensure_sandbox_allows_proposer` refuses the soft sandbox for M1.
+  **Progress (2026-09-27):** the container that fix needs exists:
+  `sis/sandbox_worker.py` (OMNI-129) serves a candidate from the gauntlet's
+  sandbox over stdio, and tests show a docker candidate cannot reach Ray, the
+  network or the host's environment. **Fixed 2026-10-27 (OMNI-48):** a
+  replica no longer executes the source it serves. `TargetDeployment` starts a
+  `SandboxWorker` for it, in the sandbox the driver configured (bound into the
+  deployment, since green's scrubbed environment would otherwise fall back to
+  `config.yml`'s mode), and forwards each request over the pipe; a dead or
+  timed-out worker is restarted at the next request. In docker, which a real
+  proposer requires (M1), the candidate has no Ray, no network and none of the
+  host's files. The soft sandbox cannot keep it off the cluster: Ray's gRPC
+  client bypasses the Python-level egress block, and `address="auto"` finds the
+  cluster by its processes; that is M1's reason for refusing it with a real
+  proposer. Regression tests (`tests/test_serving.py`): a served candidate is
+  not running in a Ray worker, a candidate in docker cannot reach a detached
+  `Workspace` actor (skipped without the image, as on CI), and the driver's
+  sandbox mode is what the replica uses after the scrub. The M19 refusal still
+  stands; lifting it is a separate decision.
+
+- [OMNI-171] **M35 — A scheduled AWS run lost track of its loop once the run's log passed
+  20 KB** *(found 2026-10-26 by the weekly code review; reproduced on
+  `develop` @ 88aaaae)* — `scripts/aws_scheduled_run.py` polled the box with
+  the run's part of `runtime/loop.log` cut to its last 20,000 bytes (SSM keeps
+  24,000 characters of a command's output). Past that size the start marker
+  was cut off, so `read_log` saw `STARTING` whatever the loop did: a loop that
+  had stopped and exited was interrupted at the time limit and abandoned after
+  the grace period, about 75 minutes, and the report said it failed. Any
+  `sort` run of a few cycles writes that much. **Fixed 2026-10-26
+  (OMNI-171):** the poll prints the start marker and the last line of each
+  kind `read_log` decides on (exit, stopped, holding, synced, crashed), found
+  anywhere in the run's part and cut to 300 characters, then a separator, then
+  the tail; the report's lines come from the tail. Regression tests: a run of
+  over 80 KB that exited reads as `EXITED` with its exit code, the output stays
+  under SSM's limit with a 50 KB status line, and both fail without the fix.
+
 - [OMNI-165] **M33 — `contract_author promote` trusted the loop-writable manifest's
   name and could write outside `specs/<name>/`** *(found 2026-10-25 by the
   weekly code review; reproduced on `develop` @ 92e1076)* — `load_staged(name)`
@@ -618,6 +756,23 @@ any long-lived cluster exists.
   writes. The CLI prints `refused:` and exits 1. Regression tests: `../x`,
   `.`, `..`, `a/b`, an empty name and a mismatched name are refused by
   `load_staged`, by `promote` and on the command line, and fail without the fix.
+
+- [OMNI-170] **M34 — The prediction-error report could show a predictor the week it is
+  scored on** *(found 2026-10-26 by the weekly code review; reproduced on
+  `develop` @ 88aaaae)* — `prediction_error.questions()` asks each week at the
+  moment its value first became known, and shows the as-of view then. When a
+  weekly capture was skipped (or a release was late), week *w* and *w* + 1
+  became known at the same fetch, so the view for the question about *w* held
+  *w* + 1, its answer: persistence, returning the newest value, scored an
+  error of 0. The same pattern as M32 in the fixture builder. The autumn-2022
+  numbers (OMNI-36) were not affected: the backfill's reconstructed times are
+  all distinct, and the rerun gives the same 18 weeks, bias +0.050, MAE 0.179,
+  RMSE 0.232. **Fixed 2026-10-26 (OMNI-170):** a week whose next value has any
+  vintage known by the time it is asked is still asked, so the answers line
+  up, but skipped with the note "the next week was already known when asked",
+  never scored. Regression test: a capture that skips a week makes two weeks
+  known at once; the leaked week is skipped and no scored error is 0, and the
+  test fails without the fix.
 
 - [OMNI-164] **M32 — A fixture episode could show the model an earlier vintage of the
   week it must predict** *(found 2026-10-25 by the weekly code review;
@@ -1431,7 +1586,8 @@ any long-lived cluster exists.
   hand-written candidate is as safe on the box as on a laptop, and an LLM's
   is unsafe on both (it can read `secrets.local.yml` locally). No override
   flag, unlike M1 — the legacy canary costs nothing to fall back to. The
-  replica is still not isolated; that is H3, [OMNI-48]. `docs/AWS_RUN.md`
+  replica's candidate was isolated later (H3, [OMNI-48], 2026-10-27); the
+  refusal stands until a human lifts it. `docs/AWS_RUN.md`
   no longer credits `--network none` with covering the Serve canary.
   Regression tests: `tests/test_serve_canary_refusal.py`.
 
@@ -1879,3 +2035,10 @@ any long-lived cluster exists.
 [OMNI-164]: https://olafzumpe.atlassian.net/browse/OMNI-164
 [OMNI-165]: https://olafzumpe.atlassian.net/browse/OMNI-165
 [OMNI-167]: https://olafzumpe.atlassian.net/browse/OMNI-167
+[OMNI-171]: https://olafzumpe.atlassian.net/browse/OMNI-171
+[OMNI-170]: https://olafzumpe.atlassian.net/browse/OMNI-170
+[OMNI-141]: https://olafzumpe.atlassian.net/browse/OMNI-141
+[OMNI-166]: https://olafzumpe.atlassian.net/browse/OMNI-166
+[OMNI-172]: https://olafzumpe.atlassian.net/browse/OMNI-172
+[OMNI-173]: https://olafzumpe.atlassian.net/browse/OMNI-173
+[OMNI-174]: https://olafzumpe.atlassian.net/browse/OMNI-174

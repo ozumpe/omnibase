@@ -69,7 +69,9 @@ governs what a **human operator** may change (the operator console,
 `python -m sis.frontend`, shows `forbidden_` keys read-only, and its write path
 refuses direct edits to them; a `strict_` edit needs a written justification).
 The current console has known OAuth and YAML-rendering defects (OMNI-53/52);
-see [its deployment limits](docs/OPERATOR_FRONTEND.md). The prefix grants the
+see [its deployment limits](docs/OPERATOR_FRONTEND.md). A separate, read-only
+twin viewer (`python -m sis.viewer`, OMNI-40) replays the recorded fuel data and
+generated scenarios under the same serving rules. The prefix grants the
 loop nothing, because `config.yml` and
 `sis/config.py` are both POLICY-FORBIDDEN and the loop may not write either at
 any tier. Naming the config as an optimisation target doesn't help — guardrail
@@ -175,8 +177,9 @@ an episodic-log line. The configured failure threshold trips the breaker and
 files a distinct `CIRCUIT BREAKER OPEN` bug; the Notifier also pages a human.
 No-op, no-gain and inconclusive outcomes are neutral: spend is recorded without
 filing a bug or incrementing the breaker. Exceptions after a proposal are
-charged and recorded as `error` outcomes. See [known issues](docs/KNOWN_ISSUES.md)
-for the remaining inconclusive/convergence limitation (OMNI-145).
+charged and recorded as `error` outcomes. `loop.converged_after` no-op or
+no-gain cycles in a row stop the loop as converged; an inconclusive one resets
+that count, since only a candidate that looked faster reaches it (OMNI-145).
 
 ### The validation gauntlet (`sis/gauntlet.py`)
 
@@ -214,11 +217,11 @@ code is killed, not left to hang.
 
 **Invariant:** candidate or target code never runs in the main process, where
 credentials live. Candidate gates and baseline measurement use the gauntlet's
-sandbox; the recording canary only records measured latency. The Serve canary
-runs a candidate as a Ray worker and is **not a sandbox**: an environment scrub
-does not prevent access to the Ray control plane. `--canary serve` is refused
-for non-stub proposers, with no override, until OMNI-48; it is also refused for
-Class-2 contracts. Passing offline gates does not remove that restriction.
+sandbox; the recording canary only records measured latency. The Serve canary's
+replicas are Ray workers, so they never run a candidate themselves: each
+forwards requests to the candidate in a sandbox worker (OMNI-48). `--canary
+serve` is still refused for non-stub proposers, with no override, until a human
+lifts that refusal (M19); it is also refused for Class-2 contracts. Passing offline gates does not remove that restriction.
 See [the execution model](docs/CODE_TOUR.md#5-the-gauntlet-gate-by-gate-sisgauntletpy).
 
 ### Provenance / episodic store (`sis/episodic.py`)

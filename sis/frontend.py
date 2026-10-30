@@ -41,7 +41,7 @@ Panel is imported lazily throughout, because it is an optional dependency
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, cast
 
 from sis import config, episodic, operator, settings
@@ -501,12 +501,22 @@ def _install_oauth(frontend: config.FrontendConfig) -> dict[str, Any]:
     return {}
 
 
-def serve(*, frontend: config.FrontendConfig | None = None, show: bool = False) -> None:
+def serve(
+    *,
+    frontend: config.FrontendConfig | None = None,
+    show: bool = False,
+    app: Callable[[], Any] | None = None,
+    title: str = TITLE,
+    port: int | None = None,
+) -> None:
     """Start the operator UI, or refuse to.
 
     The refusal cases are in :func:`sis.operator.check_servable` and are checked
     *before* anything binds a socket: no authentication on a non-loopback bind,
     or GitHub auth with an empty allowlist.
+
+    *app*, *title* and *port* let another read-only page (the twin viewer,
+    ``sis.viewer``) be served under the same rules and the same allowlist.
     """
     import panel as pn
 
@@ -515,10 +525,10 @@ def serve(*, frontend: config.FrontendConfig | None = None, show: bool = False) 
     extra = _install_oauth(resolved)
 
     pn.serve(
-        build_app,
-        port=resolved.port,
+        build_app if app is None else app,
+        port=resolved.port if port is None else port,
         address=resolved.bind,
-        title=TITLE,
+        title=title,
         show=show,
         **extra,
     )

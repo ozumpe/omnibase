@@ -11,6 +11,8 @@ Usage:
 
 Exit code is 0 only if every *configured* integration responds OK; missing
 integrations are reported as SKIP (not a failure). Tokens are never printed.
+A real proposer counts as configured: its key and model are checked with a
+model lookup, which costs nothing (OMNI-82).
 
 ``--deep`` additionally lists the Jira project's workflow statuses and checks
 that the ones the org transitions to (``In Progress``, ``Ready for Review``,
@@ -206,6 +208,30 @@ def check_pager(settings: Settings) -> bool | None:
     return True
 
 
+def check_llm() -> bool | None:
+    """The proposer's key and model (``LLMClient.check``). Read-only, and free.
+
+    A credential like the others (OMNI-82, L37). The scheduled run of
+    2026-10-29 started with a key the API rejected; this check passed it, and
+    every cycle then failed inside the SWE's step after filing its spec, epic
+    and story. The stub proposer calls no model, so it needs no key.
+    """
+    from sis import config, llm
+
+    backend = config.get("proposer.backend")
+    if backend == "stub":
+        _line(SKIP, "LLM", "stub proposer, no model is called")
+        return None
+    try:
+        client = llm.get_llm_client()   # an unpriced model is refused here (L25)
+        name = client.check()
+    except Exception as exc:  # noqa: BLE001
+        _line(FAIL, "LLM", _summarise(exc))
+        return False
+    _line(OK, "LLM", f"{client.model} ({name}) for proposer.backend={backend}")
+    return True
+
+
 def check_sensor() -> bool | None:
     """EIA's bulk file answers (HEAD, no download), and what the local trace holds.
 
@@ -250,6 +276,7 @@ def main() -> int:
         check_github(settings),
         check_aws(settings),
         check_pager(settings),
+        check_llm(),
     ]
     if deep:
         results.append(check_jira_workflow(settings))

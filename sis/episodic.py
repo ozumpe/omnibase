@@ -55,9 +55,14 @@ NEUTRAL_OUTCOMES: dict[str, str] = {
 # a NEUTRAL_OUTCOMES gate: the SWE says which case it is.
 NO_GAIN = "no_gain"
 
-# Every neutral cycle status. Each is also evidence that the target has
-# converged: loop.converged_after of them in a row stops the loop (OMNI-138).
+# Every neutral cycle status: no bug, no breaker count.
 NEUTRAL_STATUSES = frozenset({*NEUTRAL_OUTCOMES.values(), NO_GAIN})
+
+# The neutral statuses that are evidence the target has converged:
+# loop.converged_after of them in a row stop the loop (OMNI-138). Not
+# "inconclusive", which only a candidate that looked faster reaches (L50,
+# OMNI-145): AWS run #5 stopped as "converged" on one that measured 0.83.
+CONVERGED_STATUSES = frozenset({NEUTRAL_OUTCOMES["noop"], NO_GAIN})
 
 
 def neutral_status(reason: str | None) -> str | None:

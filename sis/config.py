@@ -64,6 +64,7 @@ committed, so anything in it is public by construction.
 from __future__ import annotations
 
 import json
+import math
 import os
 import unicodedata
 from collections.abc import Iterator, Mapping
@@ -310,9 +311,10 @@ SCHEMA: tuple[Key, ...] = (
         "(OMNI-130)."),
     Key("loop", "converged_after", ConfigTier.SOFT, Kind.INT, 3,
         "SIS_LOOP_CONVERGED_AFTER",
-        "Neutral cycles in a row (no change, inconclusive, no gain) after which "
-        "the loop stops: the target has converged. Not a breaker trip; nothing "
-        "to reset (OMNI-138)."),
+        "Cycles in a row that found nothing to improve (no change, no gain) "
+        "after which the loop stops: the target has converged. An inconclusive "
+        "benchmark resets the count (OMNI-145). Not a breaker trip; nothing to "
+        "reset (OMNI-138)."),
     Key("loop", "artifact_sync_every", ConfigTier.SOFT, Kind.INT, 1,
         "SIS_LOOP_ARTIFACT_SYNC_EVERY",
         "Cycles between syncs of the run's episodic log, audit and console log to "
@@ -429,6 +431,10 @@ def _parse_number(key: Key, label: str, raw: object) -> float | int:
         value = cast(raw)
     except (TypeError, ValueError):
         raise ValueError(f"{label}={raw!r} is not a valid number") from None
+    # A threshold compared with NaN is never crossed, so `nan` turned the spend
+    # cap off; an infinite one is the same (L17, OMNI-66).
+    if not math.isfinite(value):
+        raise ValueError(f"{label}={raw!r} must be a finite number")
     # A mistyped spend cap must never quietly become the permissive default —
     # the reason this validation exists at all (KNOWN_ISSUES.md M5).
     if value < 0:
