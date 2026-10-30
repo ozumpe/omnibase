@@ -262,7 +262,13 @@ internal target before it models anything external.
     **backtest gate** (`sis/backtest.py`, recorded-episode fixtures under
     `specs/<name>/`, held-out split) are the anti-gaming layer for targets with
     no reference oracle to differ against — domain laws over generated inputs,
-    and "does it reproduce recorded reality", respectively.
+    and "does it reproduce recorded reality", respectively. **A forecast must
+    also beat a baseline on average** (`BacktestSkill`, OMNI-163): a contract
+    may name a baseline in its oracle (persistence) and a margin, and the
+    candidate's mean absolute error over the held-out episodes must be at least
+    that far below the baseline's. A per-episode tolerance cannot separate the
+    two, because both miss a jump week alike. The baseline runs in the harness
+    on its own copy of the arguments, and a rejection shows neither error (M31).
   - **Candidate output is compared only as plain values, and never shares an
     input object with the other side** (OMNI-46/47). `sis/canonical.py`
     rebuilds output from exact builtins before every `==` — differential,

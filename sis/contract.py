@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
 
-from sis.backtest import Backtest
+from sis.backtest import Backtest, BacktestSkill, check_skill
 from sis.invariant import DEFAULT_INVARIANT_EXAMPLES, Invariant
 from sis.paths import PROJECT_ROOT
 from sis.slo import DomainSLO
@@ -114,6 +114,11 @@ class Contract(Protocol):
     @property
     def backtests(self) -> tuple[Backtest, ...]:
         """Recorded episodes the candidate must reproduce."""
+        ...
+
+    @property
+    def skill(self) -> BacktestSkill | None:
+        """A baseline the candidate must beat on the held-out backtests, or None."""
         ...
 
     @property
@@ -267,6 +272,8 @@ class OptimizationContract:
     # (docs/OMNITRACK_VISION.md, Phases A/B); its first real fixtures arrive
     # with the first modelled target.
     backtests: tuple[Backtest, ...] = ()
+    # A baseline to beat on average over the held-out backtests (OMNI-163).
+    skill: BacktestSkill | None = None
     # Almost always DETERMINISTIC. A stochastic *optimisation* is a real cell in
     # the grid, though — "this Monte Carlo simulation is too slow" — which is
     # precisely why determinism is a field here rather than a third contract
@@ -325,6 +332,7 @@ class OptimizationContract:
                 f"{sorted({n for n in names if names.count(n) > 1})} — names identify a "
                 "fixture in the episodic log, so they have to be unique to be useful"
             )
+        check_skill(self.skill, self.backtests, contract=self.name, has_oracle=True)
 
     @property
     def slo(self) -> DomainSLO | None:
@@ -420,6 +428,9 @@ class FeatureContract:
     # backtest comparators, which take precedence over the shared library.
     oracle_path: str | None = None
     backtests: tuple[Backtest, ...] = ()
+    # A baseline to beat on average over the held-out backtests (OMNI-163): a
+    # forecast is judged against persistence, not only episode by episode.
+    skill: BacktestSkill | None = None
     determinism: Determinism = Determinism.DETERMINISTIC
     invariants: tuple[Invariant, ...] = ()
     # Mirrors ``diff_trials``' role: statistical power is a property of the
@@ -451,6 +462,8 @@ class FeatureContract:
                 f"contract {self.name!r} has duplicate backtest names: "
                 f"{sorted({n for n in names if names.count(n) > 1})}"
             )
+        check_skill(self.skill, self.backtests, contract=self.name,
+                    has_oracle=self.oracle_path is not None)
 
     def gate_profile(self) -> tuple[GateName, ...]:
         """The Class-2 profile: the right shape, the spec's cases, and history."""

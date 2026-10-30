@@ -75,6 +75,8 @@ EXIT_MISMATCH = 3       # candidate did not reproduce the fixture
 EXIT_NO_ENTRY = 4       # candidate does not export the contract's entry point
 EXIT_NO_COMPARATOR = 5  # the named comparator does not exist (harness fault)
 EXIT_BAD_FIXTURE = 6    # fixture/expect file malformed or wrong schema
+EXIT_NO_SKILL = 7       # candidate did not beat the baseline on average (BacktestSkill)
+EXIT_NO_BASELINE = 8    # the named baseline does not exist (harness fault)
 
 
 class Split(str, Enum):
@@ -120,6 +122,51 @@ class Backtest:
             raise ValueError(f"tolerance must be >= 0, got {self.tolerance}")
         if not self.compare:
             raise ValueError(f"backtest {self.name!r} names no comparator")
+
+
+@dataclass(frozen=True)
+class BacktestSkill:
+    """Beat a baseline on average over the held-out episodes (OMNI-163).
+
+    Each backtest asks whether one episode is reproduced within a tolerance. For
+    a forecast that is the wrong question on its own: the autumn-2022 jump in
+    California's price is missed by about $0.60 by persistence and by a model
+    that beats persistence by a fifth over 355 weeks alike, so no tolerance
+    separates the two. This asks the question that does: over every held-out
+    episode, is the candidate's mean absolute error at least *margin* below
+    the baseline's? The vision's "must beat climatology" (no-op analogue,
+    docs/OMNITRACK_VISION.md §3), for a deterministic forecast.
+
+    *baseline* names a function in the contract's oracle, called with each
+    episode's arguments like the entry point. It is trusted code and runs in
+    the harness, never in the candidate's worker. Both outputs and the recorded
+    outcome must be plain numbers.
+    """
+
+    baseline: str
+    margin: float     # 0.10: mean absolute error at least 10% below the baseline's
+
+    def __post_init__(self) -> None:
+        if not self.baseline:
+            raise ValueError("a skill check names the baseline it must beat")
+        if not 0.0 <= self.margin < 1.0:
+            raise ValueError(f"margin must be in [0.0, 1.0), got {self.margin}")
+
+
+def check_skill(
+    skill: BacktestSkill | None, backtests: tuple[Backtest, ...], *, contract: str,
+    has_oracle: bool,
+) -> None:
+    """Refuse a skill check that could never judge anything, at declaration."""
+    if skill is None:
+        return
+    if not has_oracle:
+        raise ValueError(f"contract {contract!r}: its skill check names baseline "
+                         f"{skill.baseline!r}, which is resolved in the contract's oracle "
+                         "module, but it has none")
+    if not holdout(backtests):
+        raise ValueError(f"contract {contract!r}: a skill check is judged on the held-out "
+                         "backtests, and it declares none")
 
 
 @dataclass(frozen=True)
@@ -222,6 +269,7 @@ def build_script(
     entry: str,
     plan: list[dict[str, Any]],
     nonce: str = "",
+    skill: BacktestSkill | None = None,
 ) -> str:
     """Build the backtest script, which the gate runs in its harness process.
 
@@ -245,11 +293,19 @@ def build_script(
     rebuilt from plain builtins before a comparator sees it, since a comparator
     that does ``actual == expected`` would otherwise run the candidate's own
     ``__eq__`` (OMNI-46, H4).
+
+    With *skill*, the held-out episodes are also scored against the contract's
+    baseline once every episode has passed its own comparator, and the
+    candidate must beat it on average (:class:`BacktestSkill`). The baseline
+    gets its own copy of the arguments (M10), and a rejection says neither
+    error: both are measured on held-out answers (M31).
     """
     verdict = f"OK {nonce}" if nonce else "OK"
+    skill_plan = None if skill is None else {"baseline": skill.baseline,
+                                             "margin": skill.margin}
     return textwrap.dedent(
         f"""\
-        import sys, json, importlib.util
+        import sys, json, copy, math, importlib.util
 
         def _load(path, name):
             spec = importlib.util.spec_from_file_location(name, path)
@@ -272,6 +328,19 @@ def build_script(
         canon.guard_exports(cand, [{entry!r}])
         entry_fn = getattr(cand, {entry!r})
 
+        skill = {skill_plan!r}
+        if skill is not None:
+            baseline_fn = getattr(oracle, skill["baseline"], None) if oracle else None
+            if not callable(baseline_fn):
+                print("NOBASELINE", skill["baseline"])
+                sys.exit({EXIT_NO_BASELINE})
+        cand_error = base_error = 0.0
+        scored = 0
+
+        def _number(value):
+            return (isinstance(value, (int, float)) and not isinstance(value, bool)
+                    and math.isfinite(value))
+
         for bt in {plan!r}:
             try:
                 with open(bt["fixture"], encoding="utf-8") as fh:
@@ -291,6 +360,10 @@ def build_script(
                 print("NOCOMPARATOR", bt["name"], bt["compare"])
                 sys.exit({EXIT_NO_COMPARATOR})
 
+            scoring = skill is not None and bt["split"] == "holdout"
+            # The baseline's own copy, taken before the candidate is called: a
+            # changed argument list is mirrored back from the worker (M10).
+            base_args = copy.deepcopy(args) if scoring else None
             try:
                 actual = canon.canonical(entry_fn(*args))
             except canon.NotPlainError as exc:
@@ -312,6 +385,33 @@ def build_script(
                     "detail": str(detail),
                 }}))
                 sys.exit({EXIT_MISMATCH})
+            if not scoring:
+                continue
+            if not (_number(actual) and _number(expected)):
+                print("MISMATCH", json.dumps({{
+                    "backtest": bt["name"],
+                    "split": bt["split"],
+                    "comparator": "skill",
+                    "detail": "the skill check scores numbers, and this output or the "
+                              "recorded outcome is not one",
+                }}))
+                sys.exit({EXIT_MISMATCH})
+            base = canon.canonical(baseline_fn(*base_args))
+            if not _number(base):
+                print("NOBASELINE", skill["baseline"], "returned something other than a number")
+                sys.exit({EXIT_NO_BASELINE})
+            cand_error += abs(actual - expected)
+            base_error += abs(base - expected)
+            scored += 1
+
+        if scored and cand_error > (1.0 - skill["margin"]) * base_error:
+            # Neither error is said: both are measured on held-out answers (M31).
+            print("NOSKILL", json.dumps({{
+                "baseline": skill["baseline"],
+                "margin": skill["margin"],
+                "episodes": scored,
+            }}))
+            sys.exit({EXIT_NO_SKILL})
 
         print({verdict!r})
         """

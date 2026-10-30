@@ -25,13 +25,14 @@ from sis.backtest import (
     DEFAULT_TOLERANCE,
     FIXTURE_SCHEMA,
     Backtest,
+    BacktestSkill,
     Split,
     build_script,
     holdout,
     parse_expectation,
     parse_fixture,
 )
-from sis.contract import OptimizationContract, default_contract
+from sis.contract import ROMAN, OptimizationContract, default_contract
 from sis.episodic import gate_from_reason
 from sis.paths import COMPARATORS_PATH, PROJECT_ROOT
 from sis.policy import ChangeTier, classify
@@ -593,3 +594,100 @@ def test_a_candidate_that_raises_on_a_recorded_input_fails_the_backtest(
     assert not result.reason.startswith("harness"), result.reason
     assert "did not reproduce recorded history" in result.reason
     assert "IndexError" in result.reason and "past the table" in result.reason
+
+
+# --- beating a baseline on average (OMNI-163) -------------------------------
+
+
+def _episodes(tmp_path: pathlib.Path, recorded: dict[int, float],
+              split: Split = Split.HOLDOUT) -> tuple[Backtest, ...]:
+    """One loose-tolerance episode per *n*: sum_of_divisors(n), recorded as *recorded[n]*."""
+    out = []
+    for n, value in recorded.items():
+        fixture = _write_fixture(tmp_path / f"f{n}{split.value}.json", [n])
+        expect = _write_expect(tmp_path / f"e{n}{split.value}.json", value)
+        out.append(Backtest(name=f"n{n}{split.value}", fixture=fixture, expect=expect,
+                            split=split, tolerance=0.5))
+    return tuple(out)
+
+
+# sum_of_divisors(6) == 12 and (10) == 18; the records sit 0.5 above each.
+_RECORDED = {6: 12.5, 10: 18.5}
+_BASELINES = (
+    "def far(n):\n    return float(n)\n"                 # off by 6.5 and 8.5
+    "def near(n):\n    return 12.45 if n == 6 else 18.45\n"  # off by 0.05 each
+    "def words(n):\n    return 'twelve'\n"
+)
+
+
+def _skill_gate(tmp_path: pathlib.Path, backtests: tuple[Backtest, ...],
+                baseline: str, margin: float = 0.10) -> gauntlet.Result | None:
+    spec = replace(default_contract(), backtests=backtests,
+                   skill=BacktestSkill(baseline=baseline, margin=margin))
+    return gauntlet._gate_backtest(_ctx(tmp_path, spec, oracle_source=_BASELINES))
+
+
+def test_a_candidate_that_beats_the_baseline_on_average_passes(tmp_path: pathlib.Path) -> None:
+    assert _skill_gate(tmp_path, _episodes(tmp_path, _RECORDED), "far") is None
+
+
+def test_a_candidate_that_reproduces_each_episode_but_not_better_than_the_baseline_fails(
+    tmp_path: pathlib.Path,
+) -> None:
+    # Every episode is within its tolerance; on average the baseline is closer.
+    # That is the case a per-episode check cannot catch: persistence and a
+    # model both missing the jump week by about $0.60 (OMNI-163).
+    backtests = _episodes(tmp_path, _RECORDED)
+    assert gauntlet._gate_backtest(_ctx(
+        tmp_path, replace(default_contract(), backtests=backtests))) is None
+    result = _skill_gate(tmp_path, backtests, "near")
+    assert result is not None and not result.passed
+    assert "did not beat the baseline" in result.reason
+    assert gate_from_reason(result.reason) == "backtest"
+    # Both errors are measured on held-out answers: neither may reach a prompt (M31).
+    for value in ("12.5", "18.5", "0.5", "0.05", "12.45"):
+        assert value not in result.reason, value
+    assert '"episodes": 2' in result.reason and "near" in result.reason
+
+
+def test_the_margin_is_how_far_below_the_baseline_the_candidate_must_be(
+    tmp_path: pathlib.Path,
+) -> None:
+    # Candidate off by 0.5 + 0.5, the far baseline by 6.5 + 8.5: 93% better.
+    backtests = _episodes(tmp_path, _RECORDED)
+    assert _skill_gate(tmp_path, backtests, "far", margin=0.9) is None
+    assert _skill_gate(tmp_path, backtests, "far", margin=0.95) is not None
+
+
+def test_only_held_out_episodes_are_scored(tmp_path: pathlib.Path) -> None:
+    # A training episode the baseline gets right does not count against it.
+    backtests = (_episodes(tmp_path, {6: 12.5}) +
+                 _episodes(tmp_path, {10: 18.45}, split=Split.TRAIN))
+    spec = replace(default_contract(), backtests=backtests,
+                   skill=BacktestSkill(baseline="far", margin=0.1))
+    assert gauntlet._gate_backtest(_ctx(tmp_path, spec, oracle_source=_BASELINES)) is None
+
+
+@pytest.mark.parametrize("baseline", ["missing", "words"])
+def test_a_baseline_that_is_missing_or_not_a_number_is_a_harness_fault(
+    tmp_path: pathlib.Path, baseline: str,
+) -> None:
+    result = _skill_gate(tmp_path, _episodes(tmp_path, _RECORDED), baseline)
+    assert result is not None and result.reason.startswith("harness:")
+    assert gate_from_reason(result.reason) == "harness"
+
+
+def test_a_skill_check_that_could_never_judge_is_refused_at_declaration(
+    tmp_path: pathlib.Path,
+) -> None:
+    with pytest.raises(ValueError, match="margin"):
+        BacktestSkill(baseline="far", margin=1.0)
+    with pytest.raises(ValueError, match="baseline"):
+        BacktestSkill(baseline="", margin=0.1)
+    train_only = _episodes(tmp_path, {6: 12.5}, split=Split.TRAIN)
+    with pytest.raises(ValueError, match="held-out"):
+        replace(default_contract(), backtests=train_only,
+                skill=BacktestSkill(baseline="far", margin=0.1))
+    with pytest.raises(ValueError, match="oracle"):
+        replace(ROMAN, oracle_path=None, backtests=_episodes(tmp_path, {6: 12.5}),
+                skill=BacktestSkill(baseline="far", margin=0.1))
