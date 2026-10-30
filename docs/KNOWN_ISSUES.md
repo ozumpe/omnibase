@@ -55,7 +55,7 @@ reference with no link target below.
 > | L21, L23 | [OMNI-61](https://olafzumpe.atlassian.net/browse/OMNI-61) (brake state fails closed; `sis.admin`) — **fixed** |
 > | L24 | [OMNI-62](https://olafzumpe.atlassian.net/browse/OMNI-62) (Notifier port) — **fixed** |
 > | M7 | [OMNI-88] — **won't fix** for now (label `wont-fix`); see the Won't fix section |
-> | L15–L20, L22, L25–L29, L31–L38, L40–L43 | one ticket each, [OMNI-64]–[OMNI-87], on each entry below (L15 and L33 **fixed** 2026-09-29, L34 2026-09-30, L19 2026-10-15, L17 and L18 2026-10-26, L25 2026-10-27, L16 2026-10-28). Each is linked (Relates) in Jira to the ticket it should ship with. |
+> | L15–L20, L22, L25–L29, L31–L38, L40–L43 | one ticket each, [OMNI-64]–[OMNI-87], on each entry below (L15 and L33 **fixed** 2026-09-29, L34 2026-09-30, L19 2026-10-15, L17 and L18 2026-10-26, L25 2026-10-27, L16 2026-10-28, L37 2026-10-30). Each is linked (Relates) in Jira to the ticket it should ship with. |
 > | L30 | [OMNI-55], with M16 — **fixed** (2026-10-08) |
 > | L39 | [OMNI-42] — **fixed** (2026-10-15, with OMNI-68) |
 > | L55, L57 | [OMNI-166], [OMNI-172], from the weekly code reviews of 2026-10-25 and 2026-10-26 |
@@ -181,10 +181,6 @@ None open.
 - [OMNI-81] **L36** — `scripts/aws_secret.py`'s routing guard checks the Jira project
   and GitHub repo but not the Confluence space, which defaults to the real
   `SD` space. Fix: add the same allowlist check for the Confluence space key.
-- [OMNI-82] **L37** — `scripts/check_connections.py` doesn't preflight the Anthropic
-  API key/model; a bad `SIS_LLM_MODEL` or key only fails inside
-  `SWE.implement`, after Jira/Confluence artifacts already exist for the
-  cycle. Fix: add an Anthropic check to `--deep`.
 - [OMNI-83] **L38** — `Dockerfile.gauntlet` installs `mypy`/`pytest`/`hypothesis`
   unpinned, so the docker sandbox's gate toolchain can drift from
   `poetry.lock` (and thus from what CI and the subprocess sandbox actually
@@ -280,6 +276,17 @@ None open.
   Next time it fails, keep the assertion's `reason` before changing anything.
 
 ## Resolved (Low)
+
+- [OMNI-82] **L37** — `scripts/check_connections.py` doesn't preflight the Anthropic
+  API key/model; a bad `SIS_LLM_MODEL` or key only fails inside
+  `SWE.implement`, after Jira/Confluence artifacts already exist for the
+  cycle. Fix: add an Anthropic check to `--deep`. **Fixed 2026-10-30 (OMNI-82):** the
+  scheduled run of 2026-10-29 (`runs/20261029-1457/`) did start with a key
+  the API rejected, and all three cycles failed (OMNI-175). The preflight
+  now checks a real proposer's key and model with `LLMClient.check`
+  (`GET /v1/models/{model}`, free, read-only), without `--deep` too, so the
+  scheduled runner stops before any spend. A stub proposer skips it.
+  Regression tests in `tests/test_preflight_llm.py` fail without the fix.
 
 - [OMNI-127] **L46** — The proposer is not told which candidates were already
   rejected, so it resubmits identical code and is billed again *(found
