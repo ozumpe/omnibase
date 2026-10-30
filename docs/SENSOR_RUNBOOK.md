@@ -1,7 +1,7 @@
 # Sensor capture and replay
 
 The sensor implementation reads observations, not a fuel-market model. The
-current EIA adapter captures five weekly series into a local trace, and
+current EIA adapter captures five weekly series and one daily one into a local trace, and
 generated scenarios (OMNI-34) replay through the simulated sensor, and a
 predictor's error can be computed on either (OMNI-36); approved domain
 fixtures (OMNI-35) remain separate work. No control-loop consumer uses the
@@ -30,6 +30,16 @@ backend nor starting `main.py` schedules them.
 | `PET.EMM_EPMRR_PTE_Y05LA_DPG.W` | Los Angeles regular reformulated retail price | Dollars per Gallon |
 | `PET.EMM_EPMRR_PTE_Y05SF_DPG.W` | San Francisco regular reformulated retail price | Dollars per Gallon |
 | `PET.EMM_EPMRR_PTE_NUS_DPG.W` | US regular reformulated retail price | Dollars per Gallon |
+| `PET.EER_EPMRR_PF4_Y05LA_DPG.D` | Los Angeles RBOB spot price, daily (licensed, see below) | Dollars per Gallon |
+
+The Los Angeles spot price is Thomson Reuters' data, which EIA republishes
+under licence. EIA's reuse policy puts it under "Protected materials", not the
+public-domain line: it may be modelled, and its raw values may not be
+redistributed. The trace is gitignored. A fixture committed under `specs/`
+shows only `EIA_PUBLIC_SERIES` (`scripts/build_fixture.py`), so never this
+series. Do not paste its values into a PR, a ticket or a public log. Spot
+prices are released once a week on Wednesday, so a day's value is taken as
+known on the first Thursday at least three days later, at 17:00 ET.
 
 Stocks and prices have different reporting geographies and anchor days. This
 adapter does not capture production, inter-PADD transfers, traffic or station

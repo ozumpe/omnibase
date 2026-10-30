@@ -18,7 +18,7 @@ from typing import Any
 import pytest
 
 from sis import gauntlet
-from sis.adapters_real import EASTERN, EIA_RULES, eia_period, eia_published
+from sis.adapters_real import EASTERN, EIA_PUBLIC_SERIES, EIA_RULES, eia_period, eia_published
 from sis.backtest import Backtest, parse_expectation, parse_fixture
 from sis.contract import FeatureContract
 from sis.fixture_builder import CALENDAR_FILE, FixtureRefused, Question, ReleaseCalendar, build
@@ -337,3 +337,48 @@ def test_the_script_builds_from_a_trace_and_stages_it_for_a_human(
     staged = contract_author.load_staged("ca_price_next_week")
     assert f"digest: {staged.digest}" in out and "17 episodes" in out
     assert _tree(promoted) == before
+
+
+# --- a licensed series stays out of a public fixture (OMNI-163) ------------------------
+
+SPOT = "PET.EER_EPMRR_PF4_Y05LA_DPG.D"
+
+
+def test_a_series_the_question_does_not_show_is_left_out_and_needs_no_release_evidence(
+) -> None:
+    # The LA spot price is Thomson Reuters' data under licence to EIA: modelled,
+    # never redistributed, so the public fixture under specs/ must not hold it.
+    # The calendar has no entry for it, and the build must not ask for one.
+    weekdays = [d for d in _days("2021-06-07", "2022-12-30", 1) if d.weekday() < 5]
+    lines = capture_lines(
+        [], [Fetched(STOCKS, "Thousand Barrels", _series(FRIDAYS, STOCK_LEVELS, 27000.0)),
+             Fetched(CA, "Dollars per Gallon", _series(MONDAYS, CA_PRICES, 4.60)),
+             Fetched(US, "Dollars per Gallon", _series(MONDAYS, US_PRICES, 3.90)),
+             Fetched(SPOT, "Dollars per Gallon", _series(weekdays, {}, 3.25))],
+        EIA_RULES, capture="eia-20261015T020000.000000Z-abcdef01", fetched_at=FETCHED,
+        published=eia_published,
+        provenance={"url": "https://www.eia.gov/opendata/bulk/PET.zip", "sha256": "ab" * 32,
+                    "attribution": "Source: U.S. Energy Information Administration (Oct 2026)"})
+    with pytest.raises(FixtureRefused, match=SPOT):
+        build(lines, EIA_RULES, _calendar(), QUESTION, name="n", spec_ref="OMNI-163")
+    public = Question(target=CA, first=QUESTION.first, last=QUESTION.last,
+                      inputs=EIA_PUBLIC_SERIES)
+    files = build(lines, EIA_RULES, _calendar(), public, name="n", spec_ref="OMNI-163").files
+    assert not any(SPOT in body or "3.25" in body for body in files.values())
+    # The episodes are what a trace without it gives (the README names the trace).
+    without = build(_trace(), EIA_RULES, _calendar(), public, name="n", spec_ref="OMNI-163").files
+    assert {k: v for k, v in files.items() if k != "README.md"} == \
+        {k: v for k, v in without.items() if k != "README.md"}
+
+
+def test_the_shipped_build_shows_only_series_that_may_be_redistributed() -> None:
+    import importlib.util
+
+    from sis.paths import PROJECT_ROOT
+    spec = importlib.util.spec_from_file_location(
+        "build_fixture", PROJECT_ROOT / "scripts" / "build_fixture.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.QUESTION.inputs == EIA_PUBLIC_SERIES
+    assert SPOT not in EIA_PUBLIC_SERIES and {CA, US, STOCKS} <= EIA_PUBLIC_SERIES

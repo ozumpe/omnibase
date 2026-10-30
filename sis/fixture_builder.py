@@ -118,6 +118,10 @@ class Question:
     last: datetime.date           # the last week predicted, included
     lookback: datetime.timedelta = datetime.timedelta(weeks=52)
     horizon: datetime.timedelta = datetime.timedelta(weeks=1)
+    # The series an episode shows, the target always among them. A fixture
+    # committed under specs/ is public, so it names only series that may be
+    # redistributed (OMNI-163); None shows every series in the trace.
+    inputs: frozenset[str] | None = None
 
 
 def _key(item: Reading | Absent) -> tuple[str, datetime.datetime, datetime.datetime, str]:
@@ -181,8 +185,10 @@ def build(lines: Sequence[Mapping[str, Any]], rules: SourceRules, calendar: Rele
     # outside every lookback, or after the last week asked about, is never shown.
     first_shown = question.first - question.horizon - question.lookback
     every: list[Reading | Absent] = [*readings, *absent]
+    inputs = None if question.inputs is None else question.inputs | {question.target}
     shown = [item for item in every
-             if first_shown <= item.event_time.astimezone(calendar.timezone).date()
+             if (inputs is None or item.series in inputs)
+             and first_shown <= item.event_time.astimezone(calendar.timezone).date()
              <= question.last]
     adjusted = [_adjusted(item, calendar, _key(item) in flagged) for item in shown]
     targets = sorted((r for r in adjusted if isinstance(r, Reading)

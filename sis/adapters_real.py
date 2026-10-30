@@ -774,6 +774,13 @@ class EIASeries:
     rule: SeriesRule
     release_days: int
     release_at: datetime.time
+    # A series released once a week, whatever day its value describes: out on
+    # the first such weekday (Monday 0) on or after period + ``release_days``.
+    release_weekday: int | None = None
+    # False for a series EIA licenses from a third party: it may be modelled,
+    # and its raw values may not be redistributed (OMNI-163). A public fixture
+    # never shows it.
+    redistributable: bool = True
 
 
 def _weekly_stocks() -> EIASeries:
@@ -793,6 +800,19 @@ def _weekly_retail() -> EIASeries:
     return EIASeries(SeriesRule("Dollars per Gallon", 0.5, 15.0), 2, datetime.time(17))
 
 
+def _daily_spot() -> EIASeries:
+    # Spot Prices: a daily price, released once a week on Wednesday, through the
+    # Monday before in 2022 and the Tuesday before now (ALFRED vintages of
+    # DGASUSGULF, the same release: the 2022-09-28 vintage ends 2022-09-26, the
+    # 2026-10-21 one 2026-10-20). Taken as the first Thursday at least three days
+    # after the day, at 5 p.m.: a Monday's price on that Thursday, a Tuesday's a
+    # week later. A holiday moves the release to Thursday, still before 5 p.m.
+    # Thomson Reuters' data under licence to EIA ("Protected materials", checked
+    # by Olaf on 2026-10-30): modelled here, never redistributed.
+    return EIASeries(SeriesRule("Dollars per Gallon", 0.1, 15.0), 3, datetime.time(17),
+                     release_weekday=3, redistributable=False)
+
+
 # EIA's own ids, as the bulk file writes them. A human adds a series here, with
 # its range and its release; one the adapter did not declare is refused.
 EIA_SERIES: Mapping[str, EIASeries] = {
@@ -801,7 +821,11 @@ EIA_SERIES: Mapping[str, EIASeries] = {
     "PET.EMM_EPMRR_PTE_Y05LA_DPG.W": _weekly_retail(),  # Los Angeles
     "PET.EMM_EPMRR_PTE_Y05SF_DPG.W": _weekly_retail(),  # San Francisco
     "PET.EMM_EPMRR_PTE_NUS_DPG.W": _weekly_retail(),    # United States
+    "PET.EER_EPMRR_PF4_Y05LA_DPG.D": _daily_spot(),     # Los Angeles RBOB, spot (licensed)
 }
+# The series a public fixture may show: every one EIA may let us redistribute.
+EIA_PUBLIC_SERIES = frozenset(series for series, spec in EIA_SERIES.items()
+                              if spec.redistributable)
 EIA_RULES = SourceRules("eia", {series: spec.rule for series, spec in EIA_SERIES.items()})
 
 
@@ -846,6 +870,8 @@ def eia_published(series: str, period: datetime.datetime) -> datetime.datetime:
     """When a value of *series* for *period* is taken to have been out (:class:`EIASeries`)."""
     spec = EIA_SERIES[series]
     day = period.astimezone(EASTERN).date() + datetime.timedelta(days=spec.release_days)
+    if spec.release_weekday is not None:
+        day += datetime.timedelta(days=(spec.release_weekday - day.weekday()) % 7)
     return datetime.datetime.combine(day, spec.release_at, tzinfo=EASTERN)
 
 

@@ -29,14 +29,17 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from sis import sensor_trace  # noqa: E402
-from sis.adapters_real import EIA_RULES, EIA_TRACE  # noqa: E402
+from sis.adapters_real import EIA_PUBLIC_SERIES, EIA_RULES, EIA_TRACE  # noqa: E402
 from sis.contract_author import stage  # noqa: E402
 from sis.fixture_builder import FixtureRefused, Question, ReleaseCalendar, build  # noqa: E402
 
 CALENDAR = pathlib.Path(__file__).resolve().parent / "data" / "eia_release_calendar_2021_2022.json"
 NAME = "ca_price_next_week"
+# The fixture is committed under specs/, so it shows only what may be
+# redistributed: never a licensed series such as the LA spot price (OMNI-163).
 QUESTION = Question(target="PET.EMM_EPMRR_PTE_SCA_DPG.W",
-                    first=datetime.date(2022, 8, 8), last=datetime.date(2022, 11, 28))
+                    first=datetime.date(2022, 8, 8), last=datetime.date(2022, 11, 28),
+                    inputs=EIA_PUBLIC_SERIES)
 
 
 def main(argv: list[str] | None = None) -> int:

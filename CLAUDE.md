@@ -73,7 +73,13 @@ internal target before it models anything external.
   triggers (D9).
   **The real sensor is `EIASensor`** (OMNI-33, `sis/adapters_real.py`): EIA's
   bulk file `PET.zip` (no key), five weekly series (PADD 5 gasoline stocks;
-  California, Los Angeles, San Francisco and US retail prices).
+  California, Los Angeles, San Francisco and US retail prices) and, since
+  OMNI-163, the daily Los Angeles RBOB spot price. **The spot price is
+  Thomson Reuters' data under licence to EIA** ("Protected materials", checked
+  by Olaf on 2026-10-30): it may be modelled, never redistributed. It is
+  `redistributable=False`, the trace is gitignored, and a public fixture shows
+  only `EIA_PUBLIC_SERIES`; one that needs spot lives beside `specs/`,
+  gitignored, with only its digest in git.
   `scripts/capture_sensor.py` fetches it and appends to an append-only trace,
   `runtime/sensor_traces/eia.jsonl`, in D12's capture format
   (`sis/sensor_trace.py`, POLICY-FORBIDDEN). `read()` answers from the trace
