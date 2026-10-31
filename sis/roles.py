@@ -774,8 +774,15 @@ class SWE(Role):
     def _failed_after_proposal(
         self, story_id: str, exc: Exception, paid: dict[str, Any],
     ) -> dict[str, Any]:
-        """The failed result for an error that came after the proposal was asked for."""
-        reason = episodic.error_reason(exc, "in the SWE's step, after the proposal")
+        """The failed result for an error that came after the proposal was asked for.
+
+        An error the proposer itself raised (a rejected key, a rate limit, a
+        5xx) is named as the proposer's: no proposal came back, so the steps
+        after one are the wrong place to look (OMNI-175).
+        """
+        where = ("in the proposer, while asking for the proposal" if paid.get("proposing")
+                 else "in the SWE's step, after the proposal")
+        reason = episodic.error_reason(exc, where)
         # Each of these may be what is failing, so none may stop the cost
         # from getting back.
         with contextlib.suppress(Exception):
@@ -867,6 +874,7 @@ class SWE(Role):
                     if isinstance(spec, contract.OptimizationContract) else 0.0)
         # From here on an error is reported with what the proposal cost (M16).
         paid["contract"] = spec.name
+        paid["proposing"] = True
         try:
             candidate = proposer.propose(current_source, baseline, contract=spec,
                                          history=feature["attempts"] if feature else ())
@@ -879,6 +887,7 @@ class SWE(Role):
             return {"passed": False, "reason": reason, "pr_id": None,
                     "cost_usd": proposer.last_cost_usd(), "candidate_sha": None,
                     "contract": spec.name, "model": proposer.last_model()}
+        paid["proposing"] = False
         # The model this cycle called, None for the stub: what the episodic log
         # records, rather than whatever is configured (L53, OMNI-150).
         model = proposer.last_model()
