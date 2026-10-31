@@ -175,6 +175,7 @@ if [ -z "$ANTHROPIC_API_KEY" ] || [ "$ANTHROPIC_API_KEY" = null ]; then
   echo "[scheduled] no Anthropic key in the secret" | tee -a "$log"
   echo "{end} 1" | tee -a "$log"; exit 1
 fi
+echo "[scheduled] Anthropic key from the secret ends ...${{ANTHROPIC_API_KEY: -4}}" | tee -a "$log"
 if ! poetry run python scripts/check_connections.py --deep 2>&1 | sed -u 's/^/[check] /' \\
     | tee -a "$log"; then
   echo "[scheduled] check_connections failed; nothing was spent" | tee -a "$log"

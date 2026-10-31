@@ -77,6 +77,8 @@ def test_the_runner_reads_the_key_on_the_box_and_never_prints_it() -> None:
     # A secret the box cannot read says why (the CLI's error carries no value),
     # rather than looking like a secret with no key in it.
     assert "could not read the secret" in script and "unset secret" in script
+    # Only the key's last four characters are shown, to compare with the console.
+    assert "${ANTHROPIC_API_KEY: -4}" in script
 
 
 def test_the_start_refuses_a_second_loop_and_writes_a_valid_script(tmp_path: pathlib.Path) -> None:

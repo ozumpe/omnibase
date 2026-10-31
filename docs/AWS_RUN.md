@@ -151,7 +151,13 @@ which of the loop's PRs are still open, and waits for them (OMNI-136).
 
 Builds the secret from `secrets.local.yml` + `$ANTHROPIC_API_KEY` and uploads
 it directly. No plaintext JSON file is written, and nothing is printed but the
-routing and ✓/✗. Run it without `--upload` first to see what it would send:
+routing and ✓/✗. The key comes from `$ANTHROPIC_API_KEY`, or, when that is
+unset, from an `anthropic: {api_key: ...}` block in `secrets.local.yml`; the
+helper names the source and the key's last four characters (compare them with
+the Anthropic console), warns when the two differ, and asks Anthropic whether
+it accepts the key before uploading (free, `GET /v1/models`; `--skip-key-check`
+to upload anyway). A stale key exported in the shell used to be uploaded
+silently. Run it without `--upload` first to see what it would send:
 
 ```bash
 poetry run python scripts/aws_secret.py
