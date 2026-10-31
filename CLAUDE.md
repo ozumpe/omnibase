@@ -579,494 +579,110 @@ internal target before it models anything external.
   live runs — don't put planning there.
 
 ## Current status — where to pick up
-Released through **v0.5.0** (2026-10-30): omnitrack Phase A's milestone and
-the fixes since v0.4.0. OMNI-35: the first recorded fixture,
-`specs/ca_price_next_week` (California autumn 2022, from a real capture, the
-release calendar checked). OMNI-36's autumn-2022 errors against persistence
-were measured from that capture, and Phase A (OMNI-30) is closed. OMNI-40: the
-twin viewer. OMNI-48: the Serve canary serves its candidate from a sandbox
-worker (H3). With them OMNI-66/67 (L17, L18), OMNI-170/171 (M34, M35),
-OMNI-173 (L60), OMNI-71 (L25), OMNI-65 (L16), OMNI-145 (L50), OMNI-127 (L46)
-and OMNI-82 (L37). Before that, **v0.4.0** (2026-10-26): the omnitrack Phase-A sensor work,
-the first code that reads the outside world. OMNI-31: the `Sensor` port.
-OMNI-32: the sanitising door. OMNI-33: `EIASensor` and its trace. OMNI-35:
-the fixture tooling. OMNI-34: the scenario generator. OMNI-36: the
-prediction-error report. With them, the fixes from the review after v0.3.7
-(OMNI-155–162: H10–H13, M29–M31, L54), OMNI-54/68/42 (M14, L19, L39),
-OMNI-52 (M12), OMNI-164/165/167 (M32, M33, L56) and the scheduled AWS runs
-(OMNI-168/169). Before that, **v0.3.7** (2026-10-08):
-v0.3.6 plus the hardening after the
-seventh AWS run, most of it gate integrity. OMNI-151: one loop per box.
-OMNI-152: no benchmark input is timed twice (H7). OMNI-153: a timed batch
-runs no Python per call in the worker (H8). OMNI-154: one CPU for each
-benchmark worker (H9). OMNI-55: an exception inside a cycle is an outcome,
-and its spend is charged (M16, L30). Before that, **v0.3.6** (2026-09-30):
-v0.3.5 plus the fixes from the sixth
-AWS run, the first Class-2 run (`roman`, built at the first attempt).
-OMNI-149: a built feature's convergence check comes before planning, so it
-files nothing. OMNI-148: a feature's intake says "Build". OMNI-150: the log
-names only a model that was called. OMNI-79: a GitHub read fails loudly unless
-the file is truly absent. Before that, **v0.3.5** (2026-09-29): v0.3.4 plus the two blockers before
-omnitrack Phase A. OMNI-146: the interface, acceptance, invariant and backtest
-gates judge the candidate from outside its process too (M8). OMNI-147: the loop
-builds a Class-2 feature from its spec (`--contract roman`). With them, OMNI-56,
-OMNI-64 and OMNI-78 (M17, L15, L33). Before that, **v0.3.4** (2026-09-29): v0.3.3
-plus OMNI-45, gate integrity. The Class-1 benchmark times its candidate from outside the
-candidate's process (H2), the exam files are protected (M9), a zero exit is no
-longer a verdict (M8 partly, the rest is OMNI-146), and a candidate's own
-exception counts against it (M11). Before that, **v0.3.3** (2026-09-29): v0.3.2
-plus the hardening the fifth AWS run called for. OMNI-140: the loop syncs the
-run's dataset to S3 itself, every cycle and when it stops. OMNI-139: the runbook runs the loop inside tmux
-and tees the console, so a dropped SSM session no longer kills it, and SIGHUP is
-a graceful stop. Before that, **v0.3.2** (2026-09-29): v0.3.1 plus the fixes
-from the fourth AWS run. OMNI-138: a converged target stops the loop politely instead
-of tripping the breaker. OMNI-135: a feature is planned once (one spec, epic
-and story, not one per cycle), and a restart or a new box carries on a
-half-built feature from its branch. OMNI-137 rides along: a new release tag
-now builds a new box. Before that, **v0.3.1** (2026-09-29): v0.3.0 plus
-OMNI-136, the fix from the third AWS run (the loop asks GitHub which of its
-PRs are still open before every cycle, so a rebuilt box no longer opens a
-second, conflicting PR), and the restructured runbook with a working
-rehearsal (OMNI-29). Before that, **v0.3.0** (2026-09-27): staged delivery's phases 0 and 1
-(OMNI-129 sandbox worker, OMNI-130 feature branches), plus OMNI-126/57 (the
-hold survives a restart; a declined PR releases it). Before that, **v0.2.1**
-(2026-09-27): v0.2.0 plus the fixes from the first
-AWS run (OMNI-121–124) and commit-lint's large-message fix (OMNI-125). The
-AWS box runs the latest release tag, not `develop`. v0.2.0 (2026-09-26, OMNI-63) was the
-first release since v0.1.4 (2026-07-05) and carried everything below through
-the OMNI-29 prerequisites. The
-bootstrap skeleton (original "first task") is **done**, plus much more:
-- Actor org + SelfModel + Workspace; one intake→deploy cycle runs locally and stops at
-  the human PR merge.
-- Gauntlet hardened: differential-correctness anti-gaming, per-gate timeout, subprocess
-  sandbox (default) and kernel-enforced docker sandbox (built + verified on a live daemon).
-- Real Claude proposer behind `SIS_PROPOSER=claude`; default stub is offline.
-- Ports/adapters (in-memory + real Confluence/Jira/GitHub/AWS), secrets layer, CEO spend
-  brakes, change-authorization policy.
-- Episodic/provenance store (`sis/episodic.py`) behind a port: `jsonl` default +
-  optional `duckdb` SQL analytics + `none`; every cycle outcome recorded.
-- Failures become artifacts: every rolled-back/rejected cycle, and every circuit-breaker
-  trip, files a bug via `DevOps.file_bug` — outcomes aren't log-only.
-- The CEO writes the top-level charter once at bootstrap (`CEO.set_charter`);
-  provenance roots at it (`charter → spec → epic → story → outcome`).
-- **Level 2 validated (2026-07-25): real cycles ran end-to-end against a live tenant**
-  (scratch Jira project `TES` + throwaway repo `ozumpe/testrun`), including re-runs.
-  Live-tenant fixes, each with a regression test: Confluence duplicate-title 400 →
-  `create_page` updates the existing page in place; cross-space parent 404 → parent
-  dropped (provenance lives in the SelfModel); cycles start from the target as merged
-  on the base branch (`VersionControl.live_target_source`) instead of the stale local
-  file, so a merged optimisation is built upon, not re-proposed.
-- **Post-Level-2 hardening (on `develop`): the full-review High/Medium list is closed.**
-  H1 — `gauntlet.validate()` now benchmarks against the cycle's baseline source, not
-  the stale local file, so a post-merge no-op can't pass every gate. A candidate
-  identical to the baseline is rejected as a benign `no_change` outcome — no bug filed,
-  no breaker increment (the CEO's `record_neutral` still records spend). A real
-  (non-stub) proposer now REQUIRES `SIS_SANDBOX=docker` (M1), the SWE forks from the
-  configured base branch (M4), and the `cost.py` pricing table is verified against
-  published rates (L3).
-- The CEO spend brakes are env-configurable (`SIS_BUDGET_USD` + the other
-  thresholds), so a first real run can set a deliberately tiny cap without
-  editing source (M5).
-- **The engine is target-agnostic (L5 closed, 2026-08-06).** Nothing in `sis/`
-  knows a target by name. `sis/contract.py` holds each target's entry point,
-  margin and trial count; `specs/<name>/` holds its reference oracle, benchmark
-  inputs and acceptance tests as a module the gauntlet copies into the sandbox.
-  `specs/` is POLICY-FORBIDDEN — the implementer cannot edit its own exam. The
-  proposer prompt is contract-derived too, so the LLM is told to write the right
-  function for whichever target is active. **Two targets ship** and both run the
-  full loop on the same engine: `runtime/target.py` (`sum_of_divisors`) and
-  `runtime/sort_target.py` (`sort_numbers`). Select with
-  `--contract <name>` / `run_cycle(contract_name=...)`. A third target is a new
-  `specs/` directory plus a registry entry, not an engine change. A third
-  contract, `roman`, is a feature (Class 2), which the loop builds rather than
-  optimises (OMNI-147, see Hard rules). A fourth, `ca_price_persistence`, is
-  the first omnitrack predictor (Class 2, OMNI-36).
-- **The sort is served over HTTP behind Ray Serve** (`sis/serving.py`, OMNI-11):
-  blue and green run simultaneously with *different source* (`/sort`,
-  `/sort-green`), each response carrying its own `version`/`slot`. Stateless by
-  construction. `python -m sis.serving`; see RUNBOOK Level 0b. **A replica is
-  not the gauntlet sandbox** — OMNI-13 closed the credential half (green's env
-  is scrubbed) but egress stays open by construction, since a replica must
-  answer HTTP. Treat it as a credential boundary, never as a sandbox.
-- **Synthetic load** (`sis/loadgen.py`, OMNI-12): concurrent, varied, valid
-  traffic against the served target, inputs from the contract's oracle so the
-  online and offline gates share one definition of a valid input. Observations
-  feed `InMemoryCloud.observe()`. `python -m sis.loadgen`; RUNBOOK Level 0c.
-  Measured: the candidate is ~5x faster in isolation but only ~30% faster at
-  p95 under 8-way load — the GIL makes both queue-bound. That gap is why the
-  canary exists.
-- **`ServeCloud`** (`sis/serve_cloud.py`, OMNI-13): the third `Cloud` adapter —
-  real weighted split, real shadow dispatch, real per-version windows.
-  `python -m sis.serve_cloud` runs serve → load → verdict in one command
-  (RUNBOOK Level 0d). Three things worth knowing:
-  - **Ray Serve has no weighted split**, so it is a component: `CanaryRouter`
-    in `sis/serving.py`, also the only place that sees both versions answer and
-    therefore the only place a *paired* sample can be recorded.
-  - **Green is a separate Serve application** the router attaches to. The
-    one-app topology was built first and measured to **restart the blue
-    replica** on every canary deploy — cycling the stable version at the moment
-    it becomes the baseline. Regression-tested.
-  - **Green's `runtime_env` is scrubbed** (every non-allowlisted env var
-    blanked, since Ray *merges* `env_vars` rather than replacing them), so
-    candidate code cannot read a credential. **Egress stays open by
-    construction** — a replica must answer HTTP. A credential boundary, not the
-    gauntlet's sandbox.
-- **The loop closes on a human merge** (`DevOps.observe_merge`, OMNI-15).
-  `loop.serve(watch_merges=True)` (default) polls the pending PR while a canary
-  holds green; when a human merges, the candidate is promoted, green is released
-  and the next cycle starts — previously `--loop` ran one cycle and idled
-  forever, because `Cloud.promote()` had no caller at all. Provenance now
-  terminates in `promote` instead of stopping at `canary`. A PR closed
-  without merging releases the hold and is logged as `human_declined`, never
-  a failure (OMNI-57), and the hold survives a
-  restart (OMNI-126): with the real GitHub adapter the pending PR is kept
-  in the episodic state, and `bootstrap()` restores it and checks it before
-  any cycle, so a new process never re-proposes a change still in review.
-  **The VCS is the source of truth for what awaits a human** (OMNI-136):
-  that file lives on the box, and the third AWS run's rebuilt box opened
-  testrun #14 beside #13. Before every cycle (`loop.serve` and a single
-  `main.py` run), `org.hold_for_open_prs` asks `VersionControl.open_prs()`
-  and holds for the oldest open PR on a `feature/` branch, one at a time
-  until all are decided. A failed listing holds (fail closed). Deliberately
-  not in `bootstrap()`, which tools that never start a cycle also call.
-  **A converged target stops the loop, politely** (OMNI-138): a new feature
-  whose first step cannot beat the base is the neutral `no_gain` (no bug, no
-  breaker count), and `loop.converged_after` no-change or no-gain cycles in
-  a row end `loop.serve` with "*contract* has converged" and a WARNING page.
-  Before, the fourth AWS run's finished `sum_of_divisors` filed three bugs and
-  tripped the breaker. An inconclusive benchmark is neutral too but resets
-  that count (OMNI-145, L50): only a candidate that looked faster reaches it,
-  and AWS run #5 stopped as "converged" on one that measured 0.83.
-  **The run's dataset syncs itself** (OMNI-140, `sis/artifact_sync.py`):
-  `loop.serve` uploads the episodic log, its state, the operator audit and the
-  console log (`runtime/loop.log`, which the runbook tees, OMNI-139) to
-  `adapters.artifacts_bucket` (`runs/<start time>/`, the box's
-  `SIS_ARTIFACTS_BUCKET`) every `loop.artifact_sync_every` cycles (default 1)
-  and once more when it stops for any reason, a crash included. A failed
-  sync warns and never stops the loop. Before, a box replaced ahead of a hand
-  sync took its log: run #3's, and the first cycle of run #5. Only `--loop`
-  syncs; a single `main.py` run still needs the runbook's command.
-  **The loop outlives its SSM session** (OMNI-139): the runbook runs step 5
-  inside tmux (`tmux new-session -A -s sis`, installed by the bootstrap) and
-  tees the console to `runtime/loop.log` (`python -u … | tee -i -a`). A closed
-  terminal (SIGHUP) is now a graceful stop like SIGTERM: the cycle in flight
-  finishes and the dataset syncs. A crash leaves a `[loop] crashed:` line in
-  the log. Unverified on EC2: whether an SSM-agent restart takes tmux with it.
-- **`DevOps.canary()` can judge a candidate against real traffic**
-  (`canary_backend="serve"`, OMNI-14; `--canary serve` / `SIS_CANARY=serve`;
-  RUNBOOK Level 0e) — `sis.loadgen` fills the window itself (nothing external
-  calls the target yet), forces `SHADOW` mode when the contract has no
-  invariants (a split would have no live correctness signal), and a live
-  rejection now changes the cycle's own outcome (`org.cycle_outcome`, pure) —
-  QA approval alone no longer decides success. `DevOps` holds one `ServeCloud`
-  per contract (`Workspace.cloud` is a single, contract-agnostic slot;
-  `ServeCloud` needs a contract at construction) and opts in per call, so the
-  legacy in-memory recording — and a zero-setup `main.py` — stay the default.
-- **Class 2 (feature construction) shipped — the engine verifies two kinds of
-  target now, not one** (OMNI-3 epic, closed 2026-08-11 except two low/parked
-  items). Since OMNI-147 (2026-09-29) the loop builds one too: `--contract
-  roman` (see Hard rules). `Contract.gate_profile()` (`sis/contract.py`) is what lets a
-  `FeatureContract` and an `OptimizationContract` flow through one
-  `gauntlet.validate()` with different gate stacks — see Hard rules above.
-  Landed as five stories:
-  - **OMNI-19 — `BacktestGate`** (`sis/backtest.py`): recorded episodes under
-    `specs/<name>/`, a held-out `Split`, and a comparator *named* by the
-    contract and resolved inside the sandbox (`specs/comparators.py` shared,
-    or contract-local) — the seam where a future stochastic contract plugs in
-    a proper scoring rule instead of `within_tolerance` without the gate
-    itself changing. Re-prioritised ahead of OMNI-17/18 because
-    `docs/OMNITRACK_VISION.md`'s Phases A/B (comparing model output against
-    recorded reality) *are* this gate.
-  - **OMNI-23 — `Clock` port** (`sis/clock.py`): `WallClock` (default) and
-    `ReplayClock` (event time driven by a trace), so a backtest fixture's
-    `event_time` is a parsed, timezone-aware instant, not an incidental string
-    — landed ahead of the fixtures that need it, because a fixture recorded
-    without event time can never be replayed and history can't be re-recorded.
-  - **OMNI-17 — `FeatureContract` + contract-selected gate profile**: adds
-    `determinism: Determinism` (default `DETERMINISTIC`) as a field on *any*
-    contract rather than a third contract class — a slow Monte Carlo
-    simulation is a stochastic Class-1 optimisation, which a linear
-    Class-1→2→3 ladder has nowhere to put. A `STOCHASTIC` contract's interface
-    gate additionally requires a `seed` parameter on the entry point. First
-    Class-2 target: `roman` (`to_roman`/`from_roman`, `specs/roman/`).
-  - **OMNI-18 — `InvariantGate`** (`sis/invariant.py`, Hypothesis): domain
-    laws over generated inputs, resolved by name inside the sandbox exactly
-    like `Backtest.compare`. Two predicate shapes — `check(args, output)` is
-    also usable by the live canary (`sis.canary.BoundInvariant`); `check(args,
-    output, impl)` gets the candidate module *and* its bound entry (for a
-    round-trip law that must call a sibling export) and is offline-only by
-    construction, since re-invoking a candidate on a live response would
-    change what production does. Every run is seeded and the seed rides in
-    the reject reason, because Hypothesis's example database is disabled in
-    the sandbox — the seed is the only way to reproduce a shrunk
-    counterexample later.
-  - **OMNI-21 + OMNI-26 — contract-author, the only write path into `specs/`**
-    (`sis/contract_author.py`): draft (in-process) → stage
-    (`runtime/contract_staging/`, loop-writable, no gate reads it) →
-    `specs/` (`promote()` raises `RequiresHumanApproval`, no override, no
-    `force`). Worked examples stated in a spec (`` `f(4) -> "IV"` ``) transcribe
-    into real parametrised assertions — values only, via `ast.literal_eval`,
-    **never `eval`**, since a spec page is prose an outside author can
-    influence. Prose criteria/laws draft as `NotImplementedError` stubs; the
-    system cannot invent domain laws, so a skeleton that guessed would produce
-    an exam that looks authored and checks nothing. `check_discrimination`
-    runs the drafted exam against a null implementation before a human sees
-    it and reports (not enforces) whether it asserts anything — a code-review
-    pass on the initial OMNI-26 landing found the first version of this check
-    read pytest's *exit code*, which a `NotImplementedError` stub always makes
-    non-zero, so it reported "discriminates" for exams asserting nothing; it
-    now parses JUnit XML per-test. That review also found unescaped spec
-    prose could break out of a generated docstring and execute at stage time
-    (fixed: `repr`, never raw interpolation) and that the check bypassed the
-    M1 sandbox backstop (fixed: `gauntlet.ensure_sandbox_ready()`, one
-    precondition called by every executor of generated code).
-  - **Epic closed 2026-08-27.** Two stories were detached to standalone
-    backlog items rather than closed with it, since both are still wanted and
-    neither is on the critical path: OMNI-24 (`SloGate` — a latency budget,
-    explicitly *not* a correctness gate; **shipped 2026-09-25**, see Hard
-    rules) and OMNI-20 (`ToolchainAdapter` — language genericity), parked.
-- **`docs/OMNITRACK_VISION.md`** sequences what comes after Class 2: five new
-  components (`Sensor`+`Clock` ports, the determinism axis above,
-  stateful-actor swap, per-actor deploy slots, an emergence gate) across
-  phases A–F, plus a 13-decision register (D0–D12, each with a
-  recommendation and a "decide by" phase). Of the five components only E1 has
-  code: its `Clock` half (`sis/clock.py`, OMNI-23) and, since OMNI-31, the
-  `Sensor` port with `SimSensor`. **Phase A is filed as OMNI-30**: what is
-  left of it is the first `RealSensor`, scenario generation, the first
-  recorded fixture and the prediction-error report. The sanitising boundary
-  the real sensor reads through is built (OMNI-32).
-  - **The register is fully settled as of 2026-08-28: all of D0–D12 are
-    decided** (D0 revised 2026-09-24). Read the doc for the full text; the
-    load-bearing ones:
-    - **D0 — the California gasoline market first, Iowa's spirits supply chain
-      second** (revised 2026-09-24; OMNI-25, which stays Done). Supersedes
-      regional air traffic (2026-08-14): air traffic was always an example of
-      the idea, and as a proof of concept of a server that adapts itself to new
-      tasks, a passive airspace twin was of limited use. Fuel is a supply chain
-      with public data at every level, still being published, with recorded
-      shocks and no optics problem; the US publishes it by area, not station,
-      so the first twin is an area twin, and California is where area effects
-      show most clearly. First fixture, verified in EIA's weekly series: the
-      California premium over the US reformulated price doubled ($1.03 → $2.03)
-      in the four weeks to 3 Oct 2022 while West Coast stocks bottomed. Iowa's
-      liquor sales table (BigQuery public copy) reaches every store and vendor,
-      so it is where the entity-level twin becomes possible; it is second
-      because it needs per-actor slots (Phase D), and because a second domain
-      arriving as a spec *is* the "adapts to new tasks" test (OMNI-39). The
-      doc's D0 entry has the verified source inventory and what the choice
-      costs — weekly cadence means few data points, series anchored on
-      different weekdays, and every reading carrying two times (the week it
-      describes, and when it became known). **Data-source licences and terms
-      are checked by a human** before any adapter is written.
-    - **D2 — twin state is externalised** behind a `StateStore` port, DuckDB
-      and human-readable, with an *optional, non-default* per-transition log
-      carrying clock time + cause so reasoning can be replayed.
-    - **D3 — runtime LLMs are allowed**, against the original recommendation,
-      but only within mockable boundaries: each LLM-dependent actor gets its
-      own LLM interface that tests can stub with canned responses; responses
-      are schema-constrained and treated as untrusted input; runtime calls
-      must come under the CEO brakes (which today meter only the proposer).
-      **Known gap:** an LLM-backed actor is STOCHASTIC on the E2 axis, but
-      E2 requires determinism under seed, which no LLM API provides
-      (temperature 0 is not determinism). First such actor needs its own
-      design note.
-    - **D4 — recorded, human-approved real data is the preferred promotion
-      evidence**; simulated data only where no recording exists; and a
-      candidate faces real traffic before promotion, judged on error rate,
-      format/volume handling, and responses landing in an expected range.
-    - **D7 — the simulator is an improvable target**, but improvements are
-      judged only against held-out *real* traces, never its own output, with
-      the copy that generates gauntlet inputs pinned and FORBIDDEN.
-    - **D9 — two triggers, deliberately not one — but both spend.** An
-      *absolute* error budget answers "is the twin fit for purpose now"
-      (→ alert a human, downgrade confidence, *and* start a cycle — a harder
-      world absolutely triggers an improvement, since the twin must adapt to
-      the world as it now is); *skill vs climatology* answers "is there
-      headroom a code change could capture" (→ spend LLM budget on a cycle,
-      no human alert needed). They stay separate triggers because they detect
-      different situations — a world that got harder is not a model that got
-      worse — not because one of them is forbidden to spend.
-    - **D10 — the emergence gate (E5) ships advisory, not blocking.** E5 has
-      no oracle and cannot attribute system-level degradation to an actor, so
-      a blocking version would be switched off the first time it fails good
-      work inexplicably — worse than advisory. It flips to blocking only when
-      its measured false-positive rate (from the episodic store: candidates
-      E5 flagged that a human merged anyway with no system-level problem) is
-      low enough to live with; the flip is a human config change, never the
-      loop's. The mandatory human merge is the enforcement in the meantime.
-    - **D8 / D12 — humans decide, actors may propose.** The loop can propose
-      the actor decomposition and its own exam; a human reviews, edits,
-      approves or rejects. `specs/` write access stays with the
-      human-approved path.
-- **Configuration is one schema (OMNI-27, PR #92, merged 2026-08-16).** `sis/config.py` declares
-  every knob once; `config.yml` is generated from it and committed; precedence
-  is CLI flag > env var > file > built-in default; `main.py --show-config`
-  prints the effective values *and their source*. Every legacy `SIS_*` var
-  still works as the env layer. Both files are POLICY-FORBIDDEN. See the
-  Operational quick reference above for how to add a knob. Two silent failure
-  modes closed on the way: `SIS_SANDBOX=dcoker` used to compare unequal to
-  `"docker"` and run untrusted code in the *soft* sandbox saying nothing, and
-  `SIS_ALLOW_STRICT_CHANGES=yes` used to mean "disabled". Both now raise.
-- **Operator frontend (OMNI-28, PR #93 + the 2026-08-28 slice).** Panel
-  (`sis/frontend.py`, `poetry install --with ui`, `python -m sis.frontend`)
-  renders system state, the CEO's brakes, episodic history, and every config
-  key with its tier and *source*. Things worth knowing:
-  - **Four independent reads, four sections that degrade separately.**
-    SelfModel snapshot and brakes (`CEO.economics()` + `CEO.state_snapshot()`)
-    need a cluster; episodic history (`EpisodicStore.summary()`, incl. the
-    `rejected_by_gate` breakdown) and the config view do not. A console is most
-    useful when something is already broken, so one shared failure path that
-    blanks the page was the thing to avoid. The brakes are read from the *live
-    actor* rather than recomputed from the console's own config, because the
-    CEO snapshots its thresholds at creation and the two can legitimately
-    disagree.
-  - **The tier gate is in `sis/operator.py`, not the browser.** A disabled
-    widget is a courtesy; `save_edits()` refuses a `forbidden_` key and an
-    unjustified `strict_` key whatever the caller sends, and edits are
-    all-or-nothing so a rejected third edit leaves the first two unwritten.
-  - **A `strict_` edit carries an `Approval`, not a boolean** —
-    `policy.Justification.HUMAN_REQUEST` plus a written note of at least
-    `MIN_JUSTIFICATION_CHARS`. Reusing the policy's enum is deliberate: the
-    loop's "a human asked for this" and the console's are the same claim, and
-    one being an enum while the other is a bool is how two meanings of
-    "approved" diverge. Confirmation and reason stay separate claims — prose
-    without a tick is refused, a tick without prose is refused, and `soft_`
-    keys demand neither (a console that wanted a justification to change a poll
-    interval would just train people to type "x").
-  - **Every committed change lands in `runtime/operator_audit.jsonl`**
-    (gitignored): timestamp, key, tier, file-layer before/after, justification.
-    Written by `save_edits()` itself, so the record is a property of the write
-    path rather than of the caller remembering to log. `soft_` edits included —
-    a log of only `strict_` edits can't answer "what changed here last week".
-    A refused edit is never audited; corrupt lines are skipped on read.
-  - **Operator edits land in `config.yml` itself** — no gitignored overlay, so
-    a changed knob stays a reviewable diff. That cost one guarantee and
-    replaced it with a sharper one: `render_config_file(values)` now renders
-    current values and the drift test re-renders from the file's *own* values
-    (still catching added/removed keys, stale docs, wrong tier prefix,
-    reordering), while a new test pins that **no `forbidden_` key may differ
-    from its default** — so deleting `config.yml` can never weaken a guardrail.
-  - **Auth is GitHub OAuth, and the settings that govern it are `forbidden_`**
-    (`frontend.auth`/`allowed_logins`/`bind`): an operator who could append a
-    login through the UI those settings guard would be escalating through its
-    own front door. Empty allowlist denies everyone; `auth: none` is refused on
-    a non-loopback bind (same shape as the M1 sandbox rule). Credentials go in
-    `secrets.local.yml`, never `config.yml`.
-  - **A shadowed key is shown as shadowed.** `config.yml` is the third of four
-    layers, so an edit to a key currently set by `SIS_*` saves correctly and
-    changes nothing; the UI says so at the point of editing.
-  - Design + the Caddy/TLS decision: `docs/OPERATOR_FRONTEND.md`. Deployment
-    artifacts (`Dockerfile.frontend`, `Caddyfile`) are deliberately not in this
-    slice.
-- **Staged delivery is the new direction** (epic
-  [OMNI-128](https://olafzumpe.atlassian.net/browse/OMNI-128), decided
-  2026-09-27; design in `docs/STAGED_DELIVERY.md`). One PR per candidate,
-  followed by a wait for a human, capped the loop at the speed of human
-  review. Instead:
-  - the agent iterates on its own feature branches, committing only versions
-    that passed the gauntlet and its own review;
-  - one PR per finished feature goes to `develop`, merged by a human by
-    default, with AI approval an opt-in `forbidden_` key;
-  - `develop` → `main` is a human release PR.
+Latest release: **v0.5.0** (2026-10-30). What each release carried, and what
+is on `develop` since, is in `CHANGELOG.md`; the AWS box runs the latest
+release tag, not `develop`. **What to work on next is in Jira**
+([`OMNI`](https://olafzumpe.atlassian.net/browse/OMNI)): check the board, not
+this file. Defects are in `docs/KNOWN_ISSUES.md`. Neither list is copied here,
+because a copy is what drifts.
 
-  **Phase 0 is built:** `sis/sandbox_worker.py` (OMNI-129) serves a candidate
-  hot from the sandbox. It is tested in both sandbox modes, including that a
-  docker candidate cannot reach the network, Ray or the host's environment.
-- 1486 tests (`pytest -m "not serve" -n auto`, the default; the 63
-  Ray-Serve-integration tests run separately, see Operational quick reference
-  above; 1549 total, recounted 2026-10-25 with OMNI-36); `ruff`/`mypy --strict`/`pytest` clean;
-  CI green; `feature → develop → main` enforced by both the client-side
-  pre-push hook and active server-side rulesets.
-- **Known test flakes** — re-run, then file or update the ticket; never
-  call a failure environment noise. Open: L58
-  (`test_fast_on_typical_inputs_but_slower_in_total_is_rejected`, OMNI-141)
-  and L59 (`test_a_feature_is_planned_once_and_carried_on_after_a_restart`,
-  OMNI-174), each seen once under `-n auto`. (Fixed:
-  `test_a_drafted_skeleton_stages_without_touching_specs`, OMNI-42, which
-  raced `specs/__pycache__` and two tests that promoted into the real
-  `specs/`; and L60, a docker test that failed as root, OMNI-173.)
-  `test_correct_but_not_faster_is_rejected` is **not** test-only: on a heavily
-  loaded machine the benchmark can accept its candidate, which is a few
-  percent slower than the baseline (M7,
+Where things stand (2026-10-31):
+- **omnitrack Phase A is done** (epic OMNI-30): the `Sensor` port, the
+  sanitising door, `EIASensor` and its trace, the scenario generator, the first
+  recorded fixture (`specs/ca_price_next_week`) and the prediction-error report.
+  **OMNI-163, the first gated omnitrack contract** (`ca_price_wholesale`, which
+  must beat persistence on held-out history), is on `develop`; its private
+  fixture still needs a human-checked 2018–2026 calendar and a promotion, and
+  L61–L63 should be fixed first. What comes next, and the settled decision
+  register D0–D12, is `docs/OMNITRACK_VISION.md`: read it before designing
+  anything the twin touches. Data-source licences and terms are checked by a
+  human before any adapter is written (D0). Iowa's spirits supply chain
+  (OMNI-39) is a placeholder epic.
+- **Staged delivery is where engine work continues** (epic OMNI-128,
+  `docs/STAGED_DELIVERY.md`). Built: the sandbox worker (OMNI-129), now behind
+  every gate but SLO and behind the Serve canary (OMNI-48), and feature
+  branches (OMNI-130, hardened by OMNI-135). Next: OMNI-133 (`develop`
+  blue/green), OMNI-131 (the agent's own review), OMNI-132 (AI approval),
+  OMNI-134 (dynamic feature size). OMNI-142 (holds per contract) matters only
+  once two contracts run at the same time.
+- **Open epics from the 2026-09-26 review:** OMNI-43 (gate integrity; left:
+  L42, OMNI-86) and OMNI-44 (Serve-canary isolation; left: OMNI-50, M20/M21).
+- **Elsewhere on the board:** OMNI-38 (wire the live SLO-breach trigger into
+  `main.py --loop`) and OMNI-20 (`ToolchainAdapter`, parked).
+- **Not yet scheduled:** the atomic actor swap for internal, never-served
+  actors, which `docs/SERVE_CANARY.md` scopes out and which has no design doc
+  yet. E3/D2 in `docs/OMNITRACK_VISION.md` either is that design or subsumes
+  it, so whoever schedules either writes the one document, and drain/handoff
+  machinery is not built twice. D2 (state behind a `StateStore` port) already
+  answers its central question.
+
+**Before trusting a gauntlet verdict:** every gate but SLO judges its candidate
+from outside the candidate's process (H2, M8), and the exam files are protected
+(M9). **The SLO gate still runs its candidate in-process** (L42,
+[OMNI-86](https://olafzumpe.atlassian.net/browse/OMNI-86)); no shipped contract
+declares an SLO yet. The Serve canary serves its candidate from a sandbox
+worker (OMNI-48), but `--canary serve` is still refused with any non-stub
+proposer (OMNI-49, no override) until a human lifts that.
+
+**Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L);
+its High, Medium and Low sections are the open list. Reference the IDs in
+commits and PRs. **Every entry starts with its Jira ticket**, open, won't-fix
+and resolved alike, and `tests/test_known_issues.py` fails on an entry without
+one. File the ticket first, then the entry; when it is fixed, move it to
+"Resolved" and add a line to `CHANGELOG.md`.
+
+**Tests.** `poetry run pytest` runs the fast half, the serve half runs
+separately (Operational quick reference above), and CI runs both. No count is
+kept here: CI's is the one that matters, and a hand-kept one drifted.
+**Known test flakes**: re-run, then file or update the ticket; never call a
+failure environment noise.
+- Open: L58 (`test_fast_on_typical_inputs_but_slower_in_total_is_rejected`,
+  OMNI-141) and L59 (`test_a_feature_is_planned_once_and_carried_on_after_a_restart`,
+  OMNI-174), each seen once under `-n auto`.
+- `test_correct_but_not_faster_is_rejected` is **not** test-only: on a heavily
+  loaded machine the benchmark can accept its candidate, which is a few percent
+  slower than the baseline (M7,
   [OMNI-88](https://olafzumpe.atlassian.net/browse/OMNI-88), won't-fix for
-  now). CI did so once, on 2026-10-08, through a test with the same candidate. (The Serve
-  flake in `test_promotion_makes_the_candidate_the_new_baseline` was not a
-  replica race but the 5% default canary weight — fixed in #110, see
-  "Writing a Serve test" above.)
-- **A former flake was a real gate defect, now fixed** —
-  [OMNI-41](https://olafzumpe.atlassian.net/browse/OMNI-41), Done 2026-09-26.
-  `test_correct_but_not_faster_is_rejected` flaked because the Class-1
-  benchmark decided on one noisy block-vs-block comparison. Fixing it found a
-  worse hole: the gate replayed `BENCH_INPUTS` five times and kept the best,
-  so a **naive** implementation under `@functools.cache` measured 25ns and
-  passed every gate (reproduced 3/3; now
-  `test_memoised_naive_impl_cannot_game_a_replayed_workload`). See Hard rules
-  for the redesign — whose own first cut was broken by an adversarial
-  pre-merge review within the hour (median rule accepted a 2x-slower
-  candidate; an `atexit` print forged the verdict), both now regression
-  tests. The measurement that shaped it, worth knowing before
-  touching the gate again: **a larger timing window makes pairing worse, not
-  better** — drift cancels in a ratio only as far as the two halves are
-  adjacent in time (under 17× CPU oversubscription, 9 pairs × 10 inputs gave
-  intervals up to [0.19, 1.18]; 99 pairs × 1 input gave [0.922, 0.934]). The
-  former flake now passes 50/50 run concurrently under `-n auto`, and the test
-  stays as a permanent regression test.
+  now). CI did so once, on 2026-10-08.
+- Before touching the benchmark gate, know what shaped it (OMNI-41): **a
+  larger timing window makes pairing worse, not better.** Drift cancels in a
+  ratio only as far as the two halves are adjacent in time: under 17× CPU
+  oversubscription, 9 pairs × 10 inputs gave intervals up to [0.19, 1.18];
+  99 pairs × 1 input gave [0.922, 0.934].
 
-**Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L
-severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
-the IDs in commits/PRs. **Open after a 2026-09-26 multi-dimension review with
-adversarial verification: M13, M20–M23,
-L20, L22, L26, L28, L29, L31, L32, L35, L36, L38, L40–L43; plus L48–L49 from the fifth
-AWS run (OMNI-143/144); L55 and L57 from the weekly code reviews
-(OMNI-166/172); L58 and L59, two tests that failed once under `-n auto`
-(OMNI-141/174)** (M7 is won't-fix for now; H4, M10, M15, M19, L21, L23
-and L24 fixed 2026-09-26, OMNI-46/47/51/49/61/62; H5, H6, M24 and L44, found
-in the first AWS run, and L45, found releasing it, fixed 2026-09-27,
-OMNI-121–125; M18 and M25, the second run's duplicate PR, fixed the same day,
-OMNI-57/126; M26, the third run's conflicting second PR, and M27, the fourth run's
-breaker trip on a converged target, fixed 2026-09-29, OMNI-136/138; H2, M8, M9
-and M11 fixed the same day, OMNI-45/146, and M17, L15 and L33 with OMNI-147,
-OMNI-56/64/78; L34 and L51–L53, the last three from the sixth run, fixed
-2026-09-30, OMNI-79/148–150; M28, from the seventh, the same day, OMNI-151;
-H7, the benchmark's repeated inputs, H8, the worker loop a candidate could
-make cheaper, and H9, a batch spread over several cores, fixed 2026-10-08,
-OMNI-152/153/154; M16 and L30, spend lost when a cycle raises, the same day,
-OMNI-55; H10–H13, M29 and L54, from the review of that release and the
-sensor work, fixed 2026-10-13, OMNI-155–160; M30, M31, M14, L19 and L39 fixed
-2026-10-15, OMNI-161/162/54/68/42; M12, a `soft_` config edit rewriting
-`forbidden_` keys, 2026-10-25, OMNI-52; M32, a fixture showing an earlier
-vintage of the week it predicts, the same day, OMNI-164; M33, a staged
-manifest's name placing a promoted exam outside `specs/<name>/`, the same day,
-OMNI-165; L56, an adapter declaring the simulated source, the same day, OMNI-167;
-L17, a `nan` spend cap, 2026-10-26, OMNI-66; L18, a guardrail path in
-another case, the same day, OMNI-67; M34, a predictor shown the value it was
-asked for, and M35, a scheduled run losing its loop in a long log, 2026-10-27,
-OMNI-170/171; L60, a docker test that failed as root, the same day, OMNI-173; L25, an
-unpriced model billed at another's rate, the same day, OMNI-71; L16, a
-sandbox self-check a candidate could break through the scratch, 2026-10-28,
-OMNI-65; L50, an inconclusive cycle counted toward "converged", the same day,
-OMNI-145; L46, the second run's identical resubmission judged and billed
-twice, 2026-10-29, OMNI-127; L37, a preflight that passed a rejected
-Anthropic key, 2026-10-30, OMNI-82; L27, a candidate's own "timed out" read
-as a harness timeout, 2026-10-31, OMNI-73). The headline, before trusting any
-gauntlet verdict: every gate but SLO now judges its candidate from outside the
-candidate's process (H2, M8), and the exam files are protected (M9). **The SLO
-gate still runs its candidate in-process** (L42,
-[OMNI-86](https://olafzumpe.atlassian.net/browse/OMNI-86); no shipped contract
-declares an SLO yet). Separately, the
-Serve canary used to run candidate code as a full Ray worker in the
-control-plane cluster, before human review (H3, epic
-[OMNI-44](https://olafzumpe.atlassian.net/browse/OMNI-44)). Since OMNI-48
-(2026-10-27) it serves the candidate from a sandbox worker, but the loop still
-refuses `--canary serve` with any non-stub proposer (OMNI-49, no override)
-until a human lifts that. M12–M23 are
-guardrail/loop gaps with one story each (OMNI-51–59). **Every KNOWN_ISSUES
-entry starts with its Jira ticket** — open, won't-fix and resolved alike (the
-open Lows are OMNI-64–87; the rest backfilled 2026-09-26 as OMNI-88–120,
-label `backfilled`), and `tests/test_known_issues.py` fails on an entry
-without one. File the ticket first, then the entry. L5 (the target
-contract / benchmark oracle) resolved 2026-08-06. Planned work lives in Jira
-([`OMNI`](https://olafzumpe.atlassian.net/browse/OMNI)), defects here.
+**How the loop behaves around a human** (each pinned by a test; the history is
+in `CHANGELOG.md`):
+- **It closes on a human merge** (`DevOps.observe_merge`, OMNI-15): while a
+  canary holds green, `loop.serve(watch_merges=True)` polls the pending PR; a
+  merge promotes the candidate and starts the next cycle. A PR closed without
+  merging releases the hold as `human_declined`, never a failure (OMNI-57).
+- **The VCS is the source of truth for what awaits a human** (OMNI-136):
+  before every cycle (`loop.serve` and a single `main.py` run),
+  `org.hold_for_open_prs` asks `VersionControl.open_prs()` and holds for the
+  oldest open PR on a `feature/` branch. A failed listing holds (fail closed).
+  Deliberately not in `bootstrap()`, which tools that never start a cycle also
+  call. The real GitHub adapter also keeps the pending PR in the episodic
+  state, checked at boot (OMNI-126).
+- **A feature is planned once and survives a restart** (OMNI-135): its spec
+  page, epic and story are reused until its PR opens (`CTO.open_plan`). Each
+  step's commit carries trailers (`feature.step_message`), and a restarted
+  process finds a branch no PR was opened from
+  (`VersionControl.unproposed_branches`) and rebuilds the feature from it,
+  skipping a branch the base has moved past or one with a commit that is not
+  a loop step.
+- **A converged target stops the loop politely** (OMNI-138):
+  `loop.converged_after` no-change or no-gain cycles in a row end `loop.serve`
+  with "*contract* has converged" and a WARNING page. An inconclusive
+  benchmark is neutral too but resets that count (OMNI-145).
+- **The run's dataset syncs itself** (OMNI-140, `sis/artifact_sync.py`) every
+  `loop.artifact_sync_every` cycles and when the loop stops for any reason;
+  a failed sync warns and never stops the loop. Only `--loop` syncs. On AWS
+  the loop runs inside tmux and tees `runtime/loop.log` (OMNI-139), and
+  SIGHUP is a graceful stop like SIGTERM.
+- **The Serve canary**: Ray Serve has no weighted split, so `CanaryRouter`
+  (`sis/serving.py`) is the split and the only place a paired sample can be
+  recorded; green is a separate Serve application, because one app restarted
+  blue on every canary deploy (`docs/SERVE_CANARY.md`).
 
 Two traps L5 surfaced, both worth knowing before writing similar code:
 - **Anti-gaming is only as strong as the input distribution.** A candidate that
@@ -1076,282 +692,3 @@ Two traps L5 surfaced, both worth knowing before writing similar code:
   their own processes, inheriting the driver's environment when *created* — so
   anything exported after `bootstrap()` (including `monkeypatch.setenv`) is
   invisible. Per-cycle configuration must be passed as an argument.
-
-- **First real-life test PASSED (2026-07-28): the full loop ran end-to-end with a
-  real Claude proposer + real adapters + the kernel-enforced docker sandbox.** Cycle
-  `cb4f6fe13ed7`: `claude-opus-4-8` proposed the O(√n) `isqrt` form against the naive
-  baseline (re-seeded on `testrun/main`), the gauntlet passed **inside docker**
-  (192.4µs → 1.6µs, 99.2% faster), and it filed Confluence spec `6356994`, Jira
-  `TES-20`, GitHub `testrun` PR #4, stopping at `verified_awaiting_human_merge`. Cost
-  $0.014375, reconciled against the Anthropic console. Details in
-  `docs/KNOWN_ISSUES.md` ("Sequencing for the first real-life test").
-
-**Next — the milestone plan is in Jira ([`OMNI`](https://olafzumpe.atlassian.net/browse/OMNI)),
-not here.** Check the board for current status rather than trusting this list.
-**Last reconciled against a live query on 2026-10-30** (175 issues, OMNI-1
-through OMNI-175; 136 Done, 3 In Progress (the epics OMNI-43, OMNI-44,
-OMNI-128), 36 To Do):
-
-1. ~~**[OMNI-1](https://olafzumpe.atlassian.net/browse/OMNI-1) — L5 target
-   contract** (Class 1)~~ — **done 2026-08-06** (OMNI-4/5/6/7). Two targets ship
-   and the engine names neither. Design: `docs/CLASS2_CONTRACT.md`.
-2. ~~**[OMNI-2](https://olafzumpe.atlassian.net/browse/OMNI-2) — Ray Serve
-   canary.**~~ — **done 2026-08-09** (OMNI-8/9/11/12/13/14/15). The full
-   mechanism works end to end: `DevOps.canary(canary_backend="serve")` deploys
-   behind Ray Serve, fills the window itself, `evaluate_canary()` decides — a
-   live rejection now changes the cycle's outcome — and a human merge is
-   observed and promotes automatically. Opt-in; the legacy in-memory path
-   stays the default. Design: `docs/SERVE_CANARY.md`.
-3. ~~**[OMNI-3](https://olafzumpe.atlassian.net/browse/OMNI-3) — Class 2**,
-   feature construction~~ — **done 2026-08-11, epic closed 2026-08-27**
-   (OMNI-17/18/19/21/23/26; see "Current status" above for what each landed).
-   `FeatureContract` + the contract-selected gate profile, `InvariantGate`,
-   `BacktestGate`, the `Clock` port, and the contract-author write path all
-   shipped. OMNI-24 (`SloGate`, Low) and OMNI-20 (`ToolchainAdapter`,
-   Low/parked) were **detached** to standalone backlog items rather than closed
-   with the epic — both still wanted, neither on the omnitrack critical path.
-   OMNI-24 has since shipped (2026-09-25); OMNI-20 stays parked.
-   Design: `docs/CLASS2_CONTRACT.md`.
-4. ~~**[OMNI-25](https://olafzumpe.atlassian.net/browse/OMNI-25) — D0: pick
-   omnitrack's first domain**~~ — **Done 2026-08-14 (regional air traffic),
-   revised 2026-09-24: the California gasoline market first, Iowa's spirits
-   supply chain second** — see "Current status" above for why. It fixes the
-   first `RealSensor` adapter (EIA) and the domain of Phase A. D8 (who
-   decomposes it into modelled actors) was a separate decision, since settled
-   with the rest of the register (2026-08-28): humans decide, actors may
-   propose.
-5. ~~**[OMNI-27](https://olafzumpe.atlassian.net/browse/OMNI-27) — unified
-   config**~~ — **done 2026-08-16**, PR #92 merged to `develop`. One schema,
-   `config.yml`, env/CLI override; see "Current status" above.
-6. ~~**[OMNI-28](https://olafzumpe.atlassian.net/browse/OMNI-28) — operator
-   frontend.**~~ — **done 2026-08-28.** **First slice in PR #93** — Panel app,
-   tier-gated write path, GitHub OAuth, `frontend.*` schema keys. **Second
-   slice 2026-08-28** (PRs #97/#98) closed
-   the three parts of the ticket the first left out: the CEO brake panel, the
-   episodic-history panel, and the justification a `strict_` edit now carries
-   (plus `runtime/operator_audit.jsonl`). See "Current status" above for what
-   each decision cost. **The exposure question is answered: not exposed**
-   (OMNI-29, `docs/AWS_RUN.md`) — zero ingress, loopback bind, reached over SSM
-   port forwarding. `Caddyfile` and `Dockerfile.frontend` are therefore
-   *parked, not pending*: the first has no deployment to serve, the second no
-   consumer (the AWS run executes the engine directly on the box). One
-   consequence to know before starting the console anywhere: the committed
-   `config.yml` ships `forbidden_auth: "github"` with an empty allowlist, so it
-   **refuses to start** until `SIS_FRONTEND_AUTH=none` is set in the
-   environment — the only route in, since both keys are `forbidden_` and so
-   editable neither through the UI nor in the file. Design:
-   `docs/OPERATOR_FRONTEND.md`.
-
-7. **[OMNI-29](https://olafzumpe.atlassian.net/browse/OMNI-29) — first AWS
-   run** (one node, a few supervised cycles — watch the provenance graph and
-   the bill). **Done 2026-09-27.** The box ran release `v0.2.0` end to end:
-   real Claude proposer in the docker sandbox, real Confluence/Jira/GitHub
-   artifacts (`TES-43`…`TES-53`), three cycles all rejected by the benchmark
-   gate with tight intervals (ratios 1.34 / 0.93 / 1.04), breaker tripped on
-   the third, **$0.107 of a $1.00 budget**; artifacts in
-   `s3://sis-first-run-artifacts-696644743351/runs/20260927-0007/`, console
-   log attached to OMNI-29. It ran the *default* contract, not `sort`
-   (OMNI-121), and its page reached nobody — 0 confirmed SNS subscriptions
-   passed the preflight (OMNI-122). All four findings fixed 2026-09-27
-   (OMNI-121–124), incl. the console now saying why a cycle rolled back and
-   why the loop stopped.
-   History: designed 2026-08-16 (PR #94), pre-flighted
-   2026-08-30 (PR #99). `docs/AWS_RUN.md` is the design note and runbook,
-   `infra/aws/` a small Terraform-language config driven with **OpenTofu**
-   (`tofu`) — same HCL, provider and state format, but MPL-2.0 rather than
-   BSL-1.1, the same stance DESIGN.md §2 took for the runtime. One m7i.xlarge,
-   **zero ingress ports** (SSM Session Manager only; the OMNI-28 console stays
-   loopback-bound, reached over SSM port forwarding), instance role + one
-   Secrets Manager secret whose value never enters the state file, episodic log
-   synced to S3 as the run's durable artifact, and two *independent* spend
-   brakes (`SIS_BUDGET_USD` in the loop; an AWS Budget alarm in billing). The
-   pre-flight fixed two boot-time defects that would each have cost a full
-   instance lifecycle: `user_data` racing Ubuntu's `unattended-upgrades` for
-   the dpkg lock, and SSM sessions landing as `ssm-user` rather than `ubuntu`
-   (every runbook step now starts with `sudo -iu ubuntu`). The box clones
-   the release tag in `var.repo_ref` (`v0.5.0`; a branch needs
-   `allow_branch_ref = true`, OMNI-63) and every run records the commit it
-   ran; run day uses `--contract sort`. **Rehearsed
-   2026-09-23** on a local Ubuntu 24.04 box (`scripts/rehearse_aws_run.sh`),
-   which found two more defects no read-through could: the docker sandbox
-   could not read its temp dir on native Linux (it now runs as the host uid),
-   and the bootstrap did not install the `ui` group the console needs.
-   `tofu plan` was clean against the account, and it was **applied for the run
-   on 2026-09-27**. The whole sequence is `docs/AWS_RUN.md` "Run day":
-   three tokens (Atlassian, GitHub PAT, Anthropic), `tofu apply`,
-   `scripts/aws_secret.py --upload`, the supervised cycles, `tofu destroy`.
-   Explicitly **not** RUNBOOK Level 4: no autostart, no autonomy — a human
-   starts, watches, and stops it, or (OMNI-168) a scheduled task does, through
-   `scripts/aws_scheduled_run.py`: it starts only a *stopped* box, interrupts
-   a loop that holds for a PR or passes its time limit, and always stops the
-   instance. With `--box ephemeral` (OMNI-169) it builds the box itself with
-   `tofu apply` on `infra/aws/box` (state and lock in the artifacts bucket)
-   and always destroys it; the base (`infra/aws`, `create_instance = false`:
-   secret, pager, bucket, role, budget) stays human, so the task's keys
-   (`infra/aws/scheduled_runner_policy.json`) launch and terminate one tagged
-   box and create no IAM. Merges, the base's `tofu` and re-seeding stay human
-   (AWS_RUN.md "Scheduled runs").
-
-8. **[OMNI-30](https://olafzumpe.atlassian.net/browse/OMNI-30) — omnitrack
-   Phase A: the `Sensor` port.** **Done 2026-10-30**, filed 2026-08-27 — the first epic of
-   omnitrack proper, unblocked by D0 and by OMNI-3 closing; **re-scoped
-   2026-09-24 to the California gasoline market** with the D0 revision (no
-   Phase-A code existed, so nothing was thrown away). `Sensor` port +
-   `SimSensor` default + an EIA `RealSensor`, the first recorded fixture, and
-   prediction error computed but not yet acted on (that is Phase B).
-   **Sanitising sensor input is its own story that lands before any real
-   adapter, not later hardening** — public statistics carry free text,
-   non-numeric markers and moving endpoints, and the second application's
-   store names are written by outsiders; all of it can reach scenario
-   libraries, backtest fixtures and potentially LLM prompts. Eight stories;
-   OMNI-31–36 and OMNI-40 Done, OMNI-163 `To Do`:
-   - ~~[OMNI-31](https://olafzumpe.atlassian.net/browse/OMNI-31) (High) — `Sensor`
-     port + `SimSensor` default adapter; a reading carries two times, `event_time`
-     and `known_at`.~~ **Built 2026-10-09.**
-   - ~~[OMNI-32](https://olafzumpe.atlassian.net/browse/OMNI-32) (High) — sensor
-     input is untrusted: the sanitisation boundary, before any real adapter.~~
-     **Built 2026-10-09.**
-   - ~~[OMNI-33](https://olafzumpe.atlassian.net/browse/OMNI-33) (Medium) —
-     EIA `RealSensor`, and settle the trace capture format (D12), vintages and
-     reconstructed `known_at` for backfilled history included.~~ **Built
-     2026-10-13** (`EIASensor`, `sis/sensor_trace.py`).
-   - [OMNI-34](https://olafzumpe.atlassian.net/browse/OMNI-34) (Medium) —
-     `SimSensor` scenario generation (supply, outage, demand and data-event
-     scenarios): refutation inputs, and the gauntlet's input generator (D7).
-     **Built 2026-10-25:** seeded scenarios in `specs/scenarios.py`
-     (the pinned copy, FORBIDDEN) and `runtime/scenarios.py` (the working
-     copy, SOFT); `sis/scenarios.py` drives a `SimSensor` from one; the
-     invariant gate draws them through `fuel_scenario_states`; a fixture
-     holding source `sim` is refused (D4). Driving the twin is OMNI-36's.
-     Merged 2026-10-25 (PR #171).
-   - [OMNI-35](https://olafzumpe.atlassian.net/browse/OMNI-35) (High) — the first
-     recorded fixture, California autumn 2022, plus the clock-cadence check
-     carried over from OMNI-25 (Friday stocks vs Monday prices; replay ordered
-     by when a value became known). **Tooling built 2026-10-15:** a replay runs
-     on `known_at` (`sis/replay.py`, `as_of`); `sis/fixture_builder.py` +
-     `scripts/build_fixture.py` build 17 held-out episodes ("given everything
-     known when a week's California price became known, next week's price")
-     after checking every reconstructed `known_at` against a release calendar a
-     human verified (`scripts/data/eia_release_calendar_2021_2022.json`), and
-     stage them for `python -m sis.contract_author promote` (OMNI-68). Data
-     only: no contract gates on it (persistence would fail it). **The real
-     fixture is promoted** (PR #182, 2026-10-26, in v0.5.0):
-     `specs/ca_price_next_week`, from a capture on Olaf's Mac, the calendar
-     checked and two captures agreeing. Fixed first: OMNI-161 (M30),
-     OMNI-162 (M31), OMNI-68/54/42.
-   - [OMNI-163](https://olafzumpe.atlassian.net/browse/OMNI-163) (High) — the
-     PADD 5 inventory fixture and **the first gated omnitrack contract**,
-     after OMNI-35.
-   - [OMNI-36](https://olafzumpe.atlassian.net/browse/OMNI-36) (Medium) —
-     prediction error computed and reported against a persistence baseline: the
-     Phase-A milestone, with nothing acting on it yet. **Built 2026-10-25**
-     (PR #174, in v0.4.0): `sis/prediction_error.py` (questions, signed error, bias/MAE/RMSE,
-     telemetry and SelfModel provenance), the persistence contract
-     `ca_price_persistence`, and `scripts/prediction_error.py` (autumn 2022
-     from a trace, or a scenario). Autumn 2022 from the OMNI-35 capture, 18
-     weeks: bias +$0.050, MAE $0.179, RMSE $0.232 a gallon.
-   - [OMNI-40](https://olafzumpe.atlassian.net/browse/OMNI-40) (Medium, filed
-     2026-09-25, off the critical path) — the twin viewer: a separate read-only
-     Panel app (not a console tab) that draws the chain as physical things
-     (tank, pump), marks not-yet-sensed nodes, replays in time with a
-     "what was published by then" toggle, and plots prediction vs reality.
-     **Slices 1–2 built 2026-10-27** (`python -m sis.viewer`, see the
-     Operational quick reference); a **geo heat map** is the deferred third slice —
-     a true point map for Iowa (`store_location`), likely for PeMS detectors
-     (coordinates unverified), but only a choropleth for US fuel prices, which
-     are published by area, not station.
-
-9. **[OMNI-39](https://olafzumpe.atlassian.net/browse/OMNI-39) — omnitrack
-   second application: Iowa's spirits supply chain**, an entity-level twin.
-   `To Do`, Low, filed 2026-09-24 as a placeholder epic — deliberately not
-   broken into stories until Phases A–C exist to write them against.
-
-10. **[OMNI-128](https://olafzumpe.atlassian.net/browse/OMNI-128) — staged
-    delivery** (epic, High, filed 2026-09-27). This is where work continues;
-    see `docs/STAGED_DELIVERY.md`. In order:
-    - OMNI-129 (phase 0), the sandbox worker. **Done.** The benchmark and the
-      interface, acceptance, invariant and backtest gates use it (OMNI-45,
-      OMNI-146), and so does the Serve canary (OMNI-48, 2026-10-27).
-    - OMNI-130 (phase 1), feature branches. **Built:**
-      - each passing step is committed to an agent-owned branch;
-      - after `loop.feature_max_steps` steps (default 3), or when a step finds
-        no further gain, one PR goes to the base branch with every step in
-        its description;
-      - the prompt carries the earlier attempts, a Class-1 rejection with no
-        feature in progress included, and a candidate already rejected
-        against the same baseline keeps its verdict without a second run
-        (OMNI-127, L46);
-      - the test suite runs one-step features (`conftest.py`).
-      **OMNI-135 (hardening, Done 2026-09-29)**, two of its three parts, in `v0.3.2`:
-      - one plan per feature: the spec page, epic and story are written when a
-        feature starts and reused until its PR opens (`CTO.open_plan`). The
-        fourth AWS run filed 22 TES issues for six cycles;
-      - a restart carries on a half-built feature. Each step's commit carries
-        trailers (`feature.step_message`): the contract, the plan's ids and the
-        timings. A restarted process finds the branch on GitHub
-        (`VersionControl.unproposed_branches`), a branch no PR was ever opened
-        from, and rebuilds the feature from its commits. It skips any branch
-        the base has moved past, or that has a commit that is not a loop step.
-        The VCS is the source of truth here, as for open PRs (OMNI-136): a new
-        release replaces the box (OMNI-137).
-      - Not built, split out as
-        [OMNI-142](https://olafzumpe.atlassian.net/browse/OMNI-142) (Low):
-        holds per contract. The single green slot still holds every contract,
-        which matters only once two contracts run at the same time.
-    - Done since: Olaf's `testrun` preparation, v0.3.0 and AWS runs #3–#7,
-      and OMNI-45 (gate isolation, which unblocked OMNI-132).
-    - Done 2026-10-27: OMNI-48 (the canary onto the worker).
-    - Next: OMNI-133 (`develop`
-      blue/green), OMNI-131 (the agent's own review), OMNI-132 (AI
-      approval) and OMNI-134 (dynamic feature size).
-
-Also on the board, outside the numbered epics:
-- [OMNI-37](https://olafzumpe.atlassian.net/browse/OMNI-37) — **Done
-  2026-09-25** (PR #106): a broken sandbox is never blamed on the candidate
-  (see Hard rules). Found in the OMNI-29 rehearsal (2026-09-23).
-- [OMNI-38](https://olafzumpe.atlassian.net/browse/OMNI-38) (Low, `To Do`) —
-  wire the live SLO-breach trigger into `main.py --loop`. Also from the
-  rehearsal.
-- [OMNI-41](https://olafzumpe.atlassian.net/browse/OMNI-41) — **Done
-  2026-09-26**: the Class-1 benchmark gate decides from paired samples over
-  fresh inputs, with an *inconclusive* verdict; it also closed a memoisation
-  gaming hole (see Hard rules and the flake note above).
-- [OMNI-42](https://olafzumpe.atlassian.net/browse/OMNI-42) — **Done
-  2026-10-15** (with OMNI-68): the `specs/` listing race in a
-  contract-author test, and its second cause (L39).
-- [OMNI-141](https://olafzumpe.atlassian.net/browse/OMNI-141) (Low, `To Do`)
-  — `test_fast_on_typical_inputs_but_slower_in_total_is_rejected` can come
-  out inconclusive under `-n auto`.
-
-Filed 2026-09-26 from the multi-dimension review, all `To Do`. KNOWN_ISSUES
-has the defect write-ups and the ID → ticket table:
-- **[OMNI-43](https://olafzumpe.atlassian.net/browse/OMNI-43) (epic, High) —
-  gate integrity.** OMNI-45 worker-process isolation (H2/M8/M9/M11) and its
-  second half OMNI-146 (M8), OMNI-46 canonicalise output before comparing
-  (H4), OMNI-47 deep-copy shared arguments (M10). All done 2026-09-29; what is
-  left is the SLO gate's in-process timing (L42, OMNI-86).
-- **[OMNI-44](https://olafzumpe.atlassian.net/browse/OMNI-44) (epic, High) —
-  Serve-canary isolation.** OMNI-48 green not a Ray worker (H3, done
-  2026-10-27), OMNI-49 refuse `--canary serve` with a real proposer (M19,
-  done; still in force until a human lifts it), OMNI-50
-  paired canary statistics and an error-rate check (M20/M21).
-- **Standalone:** ~~OMNI-51 contract target path through the VCS port (M15)~~
-  — done 2026-09-26 (run day uses `sort`, so it was a hard prerequisite),
-  ~~OMNI-52 config YAML injection (M12)~~ (done 2026-10-25), OMNI-53 OAuth never
-  installed (M13), OMNI-54 worked examples limited to the public API (M14),
-  ~~OMNI-55 spend lost on exceptions (M16)~~ (done 2026-10-08), OMNI-56 QA-stage reject reason
-  (M17), ~~OMNI-57 PR closed without merging (M18)~~ (done 2026-09-27, with
-  OMNI-126), OMNI-58 Serve baseline from
-  the merged target (M22, unblocked by OMNI-51), OMNI-59 tests inherit `SIS_*`
-  env (M23).
-- **Before OMNI-29 (run day):** OMNI-60–63, filed with OMNI-51 as its
-  prerequisites (each `Blocks` OMNI-29). All done 2026-09-26: OMNI-60 (CI
-  fast path), OMNI-61 (brake state, `sis.admin`), OMNI-62 (SNS pager), OMNI-63
-  (the box runs release tag `v0.2.0`; run day uses `--contract sort`).
-
-Not yet scheduled: the **atomic actor swap** for internal, never-served actors,
-which `docs/SERVE_CANARY.md` scopes out and which has no design doc yet. E3/D2 in
-`docs/OMNITRACK_VISION.md` either is that design or subsumes it — whoever
-schedules either piece writes the one document, so drain/handoff machinery isn't
-built twice. With D2 now decided (state externalised behind a `StateStore` port),
-that document has its central question already answered.
