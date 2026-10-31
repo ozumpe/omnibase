@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import re
 import uuid
 from collections import Counter
 from dataclasses import asdict, dataclass, fields
@@ -420,6 +421,12 @@ def get_episodic_store(kind: str | None = None) -> EpisodicStore:
 # --------------------------------------------------------------------------
 
 
+# What the gauntlet says when a gate runs out of time: "<gate> gate timed out"
+# (gauntlet._timed_out and the worker gates) or the sandbox's own
+# "gauntlet sandbox timed out after Ns".
+_HARNESS_TIMEOUT = re.compile(r"(?:[\w-]+ gate|gauntlet sandbox) timed out\b")
+
+
 def gate_from_reason(reason: str | None) -> str | None:
     """Best-effort: which gauntlet gate produced a rejection reason."""
     if not reason:
@@ -431,8 +438,11 @@ def gate_from_reason(reason: str | None) -> str | None:
     if r.startswith("error:"):
         return "error"
     # Timeout first: a timed-out gate's reason names the gate ("mypy gate timed
-    # out"), so this must win over the gate-name checks below (L12).
-    if "timed out" in r or "timeout" in r:
+    # out"), so this must win over the gate-name checks below (L12). Only the
+    # harness's own reasons, which start with it: further in, the words are
+    # what the candidate raised or returned, and a candidate that says "timed
+    # out" must not turn its failure into the harness's (L27, OMNI-73).
+    if _HARNESS_TIMEOUT.match(r):
         return "timeout"
     # Harness faults next: their reason names the gate that could not run
     # ("... the pytest gate cannot run"), so this must win over the gate-name

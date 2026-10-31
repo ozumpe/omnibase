@@ -55,7 +55,7 @@ reference with no link target below.
 > | L21, L23 | [OMNI-61](https://olafzumpe.atlassian.net/browse/OMNI-61) (brake state fails closed; `sis.admin`) — **fixed** |
 > | L24 | [OMNI-62](https://olafzumpe.atlassian.net/browse/OMNI-62) (Notifier port) — **fixed** |
 > | M7 | [OMNI-88] — **won't fix** for now (label `wont-fix`); see the Won't fix section |
-> | L15–L20, L22, L25–L29, L31–L38, L40–L43 | one ticket each, [OMNI-64]–[OMNI-87], on each entry below (L15 and L33 **fixed** 2026-09-29, L34 2026-09-30, L19 2026-10-15, L17 and L18 2026-10-26, L25 2026-10-27, L16 2026-10-28, L37 2026-10-30). Each is linked (Relates) in Jira to the ticket it should ship with. |
+> | L15–L20, L22, L25–L29, L31–L38, L40–L43 | one ticket each, [OMNI-64]–[OMNI-87], on each entry below (L15 and L33 **fixed** 2026-09-29, L34 2026-09-30, L19 2026-10-15, L17 and L18 2026-10-26, L25 2026-10-27, L16 2026-10-28, L37 2026-10-30, L27 2026-10-31). Each is linked (Relates) in Jira to the ticket it should ship with. |
 > | L30 | [OMNI-55], with M16 — **fixed** (2026-10-08) |
 > | L39 | [OMNI-42] — **fixed** (2026-10-15, with OMNI-68) |
 > | L55, L57 | [OMNI-166], [OMNI-172], from the weekly code reviews of 2026-10-25 and 2026-10-26 |
@@ -151,10 +151,6 @@ None open.
   PR as part of recording the rejected outcome.
 - [OMNI-72] **L26** — A live-canary rejection files two bugs for the same event. Fix:
   file one.
-- [OMNI-73] **L27** — `episodic.gate_from_reason` matches `"timed out"`/`"timeout"`
-  anywhere in the reject reason, including text a candidate itself printed,
-  so a counted correctness failure can be mislabelled as an infrastructure
-  timeout. Fix: match only the harness's own timeout sentinel.
 - [OMNI-74] **L28** — Candidate return values are unpickled by value inside the
   (unscrubbed) router and DevOps processes during a live canary — a second,
   more roundabout way for candidate code to run outside any sandbox, lower
@@ -276,6 +272,18 @@ None open.
   Next time it fails, keep the assertion's `reason` before changing anything.
 
 ## Resolved (Low)
+
+- [OMNI-73] **L27** — `episodic.gate_from_reason` matches `"timed out"`/`"timeout"`
+  anywhere in the reject reason, including text a candidate itself printed,
+  so a counted correctness failure can be mislabelled as an infrastructure
+  timeout. Fix: match only the harness's own timeout sentinel. **Fixed
+  2026-10-31 (OMNI-73):** only a reason that starts with the harness's own
+  words is a timeout (`<gate> gate timed out`, `gauntlet sandbox timed out`).
+  It mattered beyond the analytics: `feature.with_rejection` treats a timeout
+  as not the candidate's doing, so a candidate whose failure said "timed out"
+  was not remembered, and the same code would be judged and billed again
+  (L46). Regression tests in `tests/test_episodic.py` and
+  `tests/test_feature.py` fail without the fix.
 
 - [OMNI-82] **L37** — `scripts/check_connections.py` doesn't preflight the Anthropic
   API key/model; a bad `SIS_LLM_MODEL` or key only fails inside
