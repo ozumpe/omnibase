@@ -1016,7 +1016,7 @@ bootstrap skeleton (original "first task") is **done**, plus much more:
 severity) from the 2026-07-25 full review + a 2026-07-28 second pass — reference
 the IDs in commits/PRs. **Open after a 2026-09-26 multi-dimension review with
 adversarial verification: M13, M20–M23,
-L20, L22, L26–L29, L31, L32, L35, L36, L38, L40–L43; plus L48–L49 from the fifth
+L20, L22, L26, L28, L29, L31, L32, L35, L36, L38, L40–L43; plus L48–L49 from the fifth
 AWS run (OMNI-143/144); L55 and L57 from the weekly code reviews
 (OMNI-166/172); L58 and L59, two tests that failed once under `-n auto`
 (OMNI-141/174)** (M7 is won't-fix for now; H4, M10, M15, M19, L21, L23
@@ -1047,7 +1047,8 @@ sandbox self-check a candidate could break through the scratch, 2026-10-28,
 OMNI-65; L50, an inconclusive cycle counted toward "converged", the same day,
 OMNI-145; L46, the second run's identical resubmission judged and billed
 twice, 2026-10-29, OMNI-127; L37, a preflight that passed a rejected
-Anthropic key, 2026-10-30, OMNI-82). The headline, before trusting any
+Anthropic key, 2026-10-30, OMNI-82; L27, a candidate's own "timed out" read
+as a harness timeout, 2026-10-31, OMNI-73). The headline, before trusting any
 gauntlet verdict: every gate but SLO now judges its candidate from outside the
 candidate's process (H2, M8), and the exam files are protected (M9). **The SLO
 gate still runs its candidate in-process** (L42,
