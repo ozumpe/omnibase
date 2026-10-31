@@ -61,6 +61,7 @@ reference with no link target below.
 > | L55, L57 | [OMNI-166], [OMNI-172], from the weekly code reviews of 2026-10-25 and 2026-10-26 |
 > | L58, L59 | [OMNI-141], [OMNI-174]: tests that failed once under `-n auto` |
 > | L60 | [OMNI-173] — **fixed** (2026-10-27) |
+> | L61–L68 | [OMNI-176]–[OMNI-183], one each, from the code and documentation review of 2026-10-31 (develop @ 83bb43c); its documentation findings were fixed with [OMNI-184] |
 
 ## High
 
@@ -270,6 +271,76 @@ None open.
   cluster, and the suite runs with `episodic.store=none`. The suspect, not
   proven, is a sandboxed gate timing out under heavy load in the first cycle.
   Next time it fails, keep the assertion's `reason` before changing anything.
+- [OMNI-176] **L61** — A malformed `private.json` stops the loop and every
+  role actor, not just its contract *(found 2026-10-31 by code review;
+  latent: no `private.json` is committed yet)*. `sis/contract.py` builds
+  `CA_PRICE_WHOLESALE` at import, as soon as
+  `specs/ca_price_wholesale/private.json` exists, and
+  `backtest.private_backtests` reads each episode's keys unchecked. A missing
+  key, a non-dict episode or a truncated file raises `KeyError`, `TypeError`
+  or `JSONDecodeError` (a wrong schema raises `ValueError`), and any of them
+  stops `import sis.contract`: `main.py`, `sis.org`, `sis.roles` and
+  `sis.gauntlet` fail, so `roman` and `sort` cannot run either. `sis.admin`
+  and the console do not import it, so pausing still works. Fix: validate the
+  index and raise `ValueError` naming the file and episode; decide whether a
+  bad index should disable only that contract, loudly.
+- [OMNI-177] **L62** — The AWS box never fetches `ca_price_wholesale`'s
+  private fixtures *(found 2026-10-31 by code review; latent until
+  `private.json` is promoted)*. `specs/ca_price_wholesale/private/` is
+  gitignored and kept in the artifacts bucket (OMNI-163), and
+  `docs/SENSOR_RUNBOOK.md` says to sync it back on another machine. Neither
+  `docs/AWS_RUN.md`, the bootstrap nor `scripts/aws_scheduled_run.py` does.
+  A box cloned from a tag with `private.json` registers the contract, and
+  every `--contract ca_price_wholesale` cycle fails as `harness: ...
+  references a missing file`, which counts toward the breaker and pages.
+  Fix: add the sync to the runbook and the scheduled run in the PR that
+  promotes `private.json`, and check both principals may read that prefix.
+- [OMNI-178] **L63** — The default `ca_price_wholesale` build is refused on a
+  trace captured after the release calendar ends *(found 2026-10-31 by code
+  review)*. Without `--last`, `scripts/build_fixture.py` asks up to the
+  trace's newest week. `eia_release_calendar_2018_2026.json` ends with the
+  periods of 2026-10-23 (stocks), 2026-10-26 (retail) and 2026-10-27 (spot),
+  and every box backfills its first capture as `reconstructed`, which
+  `fixture_builder._adjusted` refuses outside the calendar. So the documented
+  command fails on any trace captured after about 2026-10-28. It fails closed
+  with a clear reason. Fix: cap the default at the calendar's coverage and say
+  so, or document `--last`.
+- [OMNI-179] **L64** — `gauntlet._attribute` still treats `"timed out"`
+  anywhere in a reason as a timeout *(found 2026-10-31 by code review; L27's
+  other half)*. L27 made `episodic.gate_from_reason` match only the harness's
+  own words (`_HARNESS_TIMEOUT`); `_attribute` still tests the substring, so a
+  failure quoting the candidate's `ReadTimeout: timed out` skips the
+  probe-before-blame self-check (OMNI-37). The candidate is blamed either way
+  and gains nothing, but a broken sandbox goes unnoticed on that path. Fix:
+  one classifier both modules use, with a test.
+- [OMNI-180] **L65** — A backtest fixture that is not UTF-8 is reported as a
+  generic gate error *(found 2026-10-31 by code review)*. Since OMNI-163,
+  `_gate_backtest` decodes the bytes it digested before its `try`, so a
+  `UnicodeDecodeError` no longer becomes `harness: backtest '<name>' has a
+  malformed fixture` but `harness: the backtest gate raised (...)`, naming
+  neither the backtest nor the file. Still a harness verdict. Fix: decode
+  inside the `try`.
+- [OMNI-181] **L66** — `scripts/aws_secret.py`'s `check_anthropic_key` ends
+  in a traceback when the connection drops mid-response *(found 2026-10-31 by
+  code review)*. It catches `URLError` and `TimeoutError`;
+  `http.client.RemoteDisconnected` and `ConnectionResetError` escape. Nothing
+  is uploaded either way. Fix: catch `OSError` and
+  `http.client.HTTPException`.
+- [OMNI-182] **L67** — An error in the proposal cut-off handler is blamed on
+  the proposer *(found 2026-10-31 by code review; OMNI-175's follow-up)*.
+  `SWE._implement` sets `paid["proposing"]` before `proposer.propose()` and
+  clears it only on success, so if the Workspace call inside the
+  `ProposalCutOff` branch raises, the error reads "in the proposer, while
+  asking for the proposal". Only the label is wrong; cost and breaker count
+  are kept. Fix: scope the flag to the `propose()` call itself.
+- [OMNI-183] **L68** — Three small cleanups from OMNI-163 *(found 2026-10-31
+  by code review; nothing wrong today)*: three sha256 helpers for one
+  integrity check (`gauntlet.py` hashes inline beside its own `_digest`;
+  `fixture_builder._digest`, `contract_author._sha256`); `last` stated in both
+  `Question` and `Fixture` in `scripts/build_fixture.py`, with a placeholder
+  `2020-01-06` that is always overwritten; and `private_backtests(root=)`,
+  which no caller passes and the gate ignores, while its docstring says
+  *index* is repo-relative and a test passes an absolute path.
 
 ## Resolved (Low)
 
@@ -2052,3 +2123,12 @@ any long-lived cluster exists.
 [OMNI-172]: https://olafzumpe.atlassian.net/browse/OMNI-172
 [OMNI-173]: https://olafzumpe.atlassian.net/browse/OMNI-173
 [OMNI-174]: https://olafzumpe.atlassian.net/browse/OMNI-174
+[OMNI-176]: https://olafzumpe.atlassian.net/browse/OMNI-176
+[OMNI-177]: https://olafzumpe.atlassian.net/browse/OMNI-177
+[OMNI-178]: https://olafzumpe.atlassian.net/browse/OMNI-178
+[OMNI-179]: https://olafzumpe.atlassian.net/browse/OMNI-179
+[OMNI-180]: https://olafzumpe.atlassian.net/browse/OMNI-180
+[OMNI-181]: https://olafzumpe.atlassian.net/browse/OMNI-181
+[OMNI-182]: https://olafzumpe.atlassian.net/browse/OMNI-182
+[OMNI-183]: https://olafzumpe.atlassian.net/browse/OMNI-183
+[OMNI-184]: https://olafzumpe.atlassian.net/browse/OMNI-184

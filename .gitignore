@@ -49,10 +49,12 @@ runtime/sensor_traces/
 .claude-code-gui/
 
 # Terraform (infra/aws). State records resource attributes and terraform.tfvars
-# holds the alert email; neither belongs in a public repo. The .terraform.lock.hcl
-# provider lock IS committed, by Terraform convention.
+# holds the alert email; neither belongs in a public repo. A saved plan
+# (`tofu plan -out`) holds the same attributes in plain text. The
+# .terraform.lock.hcl provider lock IS committed, by Terraform convention.
 *.tfstate
 *.tfstate.*
+*.tfplan
 .terraform/
 terraform.tfvars
 
