@@ -49,6 +49,7 @@ def no_upload(monkeypatch):  # type: ignore[no-untyped-def]
         return "v-test"
 
     monkeypatch.setattr(aws_secret, "upload", fake)
+    monkeypatch.setattr(aws_secret, "check_anthropic_key", lambda key: None)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     return calls
 
@@ -126,3 +127,54 @@ def test_missing_secrets_file_is_reported(
 ) -> None:
     assert aws_secret.main(["--secrets-file", str(tmp_path / "nope.yml")]) == 1
     assert "not found" in capsys.readouterr().out
+
+
+def test_the_shell_key_wins_but_a_different_file_key_is_named() -> None:
+    raw = {"anthropic": {"api_key": "sk-ant-from-the-file-AAAA"}}
+    key, source, warnings = aws_secret.resolve_anthropic_key(
+        raw, {"ANTHROPIC_API_KEY": "sk-ant-from-the-shell-BBBB\n"})
+    assert key == "sk-ant-from-the-shell-BBBB"           # trimmed
+    assert source == "$ANTHROPIC_API_KEY"
+    [warning] = warnings
+    assert "…BBBB" in warning and "…AAAA" in warning
+    assert "from-the" not in warning                      # only the last four
+
+
+def test_the_file_key_is_used_when_the_shell_has_none() -> None:
+    raw = {"anthropic": {"api_key": "  sk-ant-from-the-file-AAAA  "}}
+    key, source, warnings = aws_secret.resolve_anthropic_key(raw, {})
+    assert key == "sk-ant-from-the-file-AAAA"
+    assert "secrets file" in source and warnings == []
+
+
+def test_a_key_anthropic_rejects_is_not_uploaded(
+    tmp_path: pathlib.Path, no_upload: list[Any], capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", _TOKENS[2])
+    monkeypatch.setattr(aws_secret, "check_anthropic_key",
+                        lambda key: "Anthropic rejected it (401 invalid x-api-key)")
+    assert aws_secret.main(["--upload", "--secrets-file", str(_secrets(tmp_path))]) == 1
+    out = capsys.readouterr().out
+    assert "401" in out and "…cret" in out
+    assert not any(token in out for token in _TOKENS)
+    assert no_upload == []
+
+
+def test_skip_key_check_uploads_without_asking(
+    tmp_path: pathlib.Path, no_upload: list[Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", _TOKENS[2])
+
+    def boom(key: str) -> str:
+        raise AssertionError("checked despite --skip-key-check")
+
+    monkeypatch.setattr(aws_secret, "check_anthropic_key", boom)
+    assert aws_secret.main(["--upload", "--skip-key-check",
+                            "--secrets-file", str(_secrets(tmp_path))]) == 0
+    assert len(no_upload) == 1
+
+
+@pytest.mark.parametrize("key", ["not-a-key", "sk-ant-has a space"])
+def test_a_malformed_key_is_refused_without_a_request(key: str) -> None:
+    assert "does not look like" in str(aws_secret.check_anthropic_key(key))
