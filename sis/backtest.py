@@ -203,7 +203,12 @@ def private_backtests(
     ``specs/`` by the same human promotion as the fixtures it lists.
     """
     path = (root or PROJECT_ROOT) / index
-    data = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        # A truncated or garbled index is a ValueError like a wrong schema, so
+        # its caller can tell "this index is bad" from a bug (OMNI-176, L61).
+        raise ValueError(f"{index}: cannot be read as JSON ({type(exc).__name__})") from None
     if not isinstance(data, dict) or data.get("schema") != PRIVATE_INDEX_SCHEMA:
         raise ValueError(f"{index}: not a schema-{PRIVATE_INDEX_SCHEMA} private index")
     base = Path(index).parent
@@ -211,19 +216,27 @@ def private_backtests(
     if not isinstance(episodes, list) or not episodes:
         raise ValueError(f"{index}: lists no episodes")
     out = []
-    for episode in episodes:
+    keys = ("name", "fixture", "expect", "fixture_sha256", "expect_sha256")
+    for number, episode in enumerate(episodes):
+        if not isinstance(episode, dict):
+            raise ValueError(f"{index}: episode {number} is not an object")
+        lacking = [key for key in keys if not isinstance(episode.get(key), str)
+                   or not episode[key]]
+        if lacking:
+            raise ValueError(f"{index}: episode {number} has no string "
+                             f"{', '.join(lacking)}")
         files = {}
         for key in ("fixture", "expect"):
-            relative = Path(str(episode[key]))
+            relative = Path(episode[key])
             if relative.is_absolute() or ".." in relative.parts \
                     or relative.parts[:1] != (PRIVATE_DIR,):
                 raise ValueError(f"{index}: {relative} is not inside {PRIVATE_DIR}/")
             files[key] = (base / relative).as_posix()
         out.append(Backtest(
-            name=str(episode["name"]), fixture=files["fixture"], expect=files["expect"],
+            name=episode["name"], fixture=files["fixture"], expect=files["expect"],
             split=Split.HOLDOUT, compare=compare, tolerance=tolerance,
-            fixture_sha256=str(episode["fixture_sha256"]),
-            expect_sha256=str(episode["expect_sha256"])))
+            fixture_sha256=episode["fixture_sha256"],
+            expect_sha256=episode["expect_sha256"]))
     return tuple(out)
 
 

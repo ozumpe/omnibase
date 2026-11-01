@@ -95,6 +95,75 @@ def test_the_contract_waits_for_its_promoted_fixture() -> None:
     assert all(c.name != "ca_price_wholesale" for c in FEATURE_CONTRACTS)
 
 
+def _malformed(entry: dict[str, Any]) -> list[tuple[bytes, str]]:
+    """Index bodies a promotion could leave broken, each with what the refusal names."""
+    def index(*episodes: object) -> bytes:
+        return json.dumps({"schema": 1, "episodes": list(episodes)}).encode()
+
+    def without(key: str) -> dict[str, Any]:
+        return {k: v for k, v in entry.items() if k != key}
+
+    return [
+        (index(entry)[:40], "cannot be read as JSON"),                 # truncated
+        (b"\xff\xfe" + index(entry), "cannot be read as JSON"),        # not UTF-8
+        (index(entry, ["private/a.json"]), "episode 1 is not an object"),
+        (index(without("expect")), "episode 0 has no string expect"),
+        (index(without("name"), entry), "episode 0 has no string name"),
+        (index({**entry, "fixture_sha256": 7}), "episode 0 has no string fixture_sha256"),
+        (index({**entry, "fixture": None}), "episode 0 has no string fixture"),
+    ]
+
+
+def test_a_malformed_index_is_refused_naming_the_file_and_the_episode(
+        tmp_path: pathlib.Path) -> None:
+    # OMNI-176 (L61): these raised KeyError, TypeError or JSONDecodeError
+    # rather than a ValueError that says which file and which episode.
+    from sis.backtest import private_backtests
+
+    good = json.loads((pathlib.Path(_fixture(tmp_path))).read_text(encoding="utf-8"))
+    index = tmp_path / PRIVATE_INDEX
+    for body, says in _malformed(good["episodes"][0]):
+        index.write_bytes(body)
+        with pytest.raises(ValueError) as refused:
+            private_backtests(str(index))
+        assert str(index) in str(refused.value) and says in str(refused.value), body
+
+
+def test_a_malformed_index_makes_only_its_own_contract_unavailable(
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # sis.contract builds the wholesale contract at import, and the loop and
+    # every role actor import it: a bad index stopped roman and sort as well.
+    from sis import backtest, contract
+
+    root = tmp_path / "repo"
+    (root / CA_PRICE_WHOLESALE_INDEX).parent.mkdir(parents=True)
+    monkeypatch.setattr(contract, "PROJECT_ROOT", root)
+    monkeypatch.setattr(backtest, "PROJECT_ROOT", root)
+    good = json.loads(pathlib.Path(_fixture(tmp_path)).read_text(encoding="utf-8"))
+    for body, says in _malformed(good["episodes"][0]):
+        (root / CA_PRICE_WHOLESALE_INDEX).write_bytes(body)
+        wholesale, problem = contract._promoted_wholesale()
+        assert wholesale is None and problem is not None and says in problem, body
+    # A sound index still registers it, and no index means simply absent.
+    (root / CA_PRICE_WHOLESALE_INDEX).write_text(json.dumps(good), encoding="utf-8")
+    wholesale, problem = contract._promoted_wholesale()
+    assert wholesale is not None and wholesale.name == "ca_price_wholesale" and problem is None
+    (root / CA_PRICE_WHOLESALE_INDEX).unlink()
+    assert contract._promoted_wholesale() == (None, None)
+    # Choosing it then says why, rather than "not a registered contract".
+    from sis.roles import unknown_contract
+
+    monkeypatch.setitem(contract.UNAVAILABLE, "ca_price_wholesale", problem_text := "bad index")
+    assert unknown_contract("contract_name", "ca_price_wholesale", ["roman"]) == \
+        f"contract_name='ca_price_wholesale' is unavailable: {problem_text}"
+    assert "not a registered contract" in unknown_contract("contract_name", "romna", ["roman"])
+    monkeypatch.delitem(contract.UNAVAILABLE, "ca_price_wholesale")
+    # Today's registry: nothing is unavailable, and the others are all there.
+    assert contract.UNAVAILABLE == {}
+    assert {"roman", "sort", "sum_of_divisors"} <= {
+        c.name for c in contract.REGISTERED_CONTRACTS}
+
+
 def test_its_files_are_classified() -> None:
     assert policy.classify("runtime/ca_price_wholesale.py") is policy.ChangeTier.SOFT
     for path in ("specs/ca_price_wholesale/oracle.py", "specs/ca_price_wholesale/tests.py",

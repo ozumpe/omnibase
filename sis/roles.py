@@ -227,6 +227,17 @@ def unreadable_brake_state(detail: str) -> dict[str, Any]:
     }
 
 
+def unknown_contract(source: str, wanted: str, known: list[str]) -> str:
+    """Why *wanted* cannot be chosen: unavailable, with its reason, or unknown.
+
+    A declared contract that cannot be judged now (a malformed promoted index,
+    OMNI-176) is named with its reason, so it never reads as a typo.
+    """
+    if wanted in contract.UNAVAILABLE:
+        return f"{source}={wanted!r} is unavailable: {contract.UNAVAILABLE[wanted]}"
+    return f"{source}={wanted!r} is not a registered contract; known: {known}"
+
+
 def _version_for(pr: PullRequest) -> str:
     """The deployed-version string for a PR's candidate. Pure.
 
@@ -306,8 +317,7 @@ class Role:
             if named is None:
                 known = [c.name for c in ray.get(self._sm.contracts.remote())]
                 source = "contract_name" if name else "contracts.default"
-                raise ValueError(
-                    f"{source}={wanted!r} is not a registered contract; known: {known}")
+                raise ValueError(unknown_contract(source, wanted, known))
             return named
         registered: contract.Contract | None = ray.get(
             self._sm.contract_for.remote(_TARGET_REL))

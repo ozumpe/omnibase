@@ -281,7 +281,8 @@ internal target before it models anything external.
     price from the LA spot price, stocks and the season, judged on every week
     from 2020 (each within 15%, and a mean absolute error at least 10% below
     persistence's). Its fixture is private, so the contract is registered only
-    once `specs/ca_price_wholesale/private.json` is promoted.
+    once `specs/ca_price_wholesale/private.json` is promoted; a malformed one
+    makes only this contract unavailable, with the reason (OMNI-176).
   - **Candidate output is compared only as plain values, and never shares an
     input object with the other side** (OMNI-46/47). `sis/canonical.py`
     rebuilds output from exact builtins before every `==` — differential,
@@ -593,7 +594,7 @@ Where things stand (2026-10-31):
   **OMNI-163, the first gated omnitrack contract** (`ca_price_wholesale`, which
   must beat persistence on held-out history), is on `develop`; its private
   fixture still needs a human-checked 2018–2026 calendar and a promotion, and
-  L61 and L62 should be fixed first (L63 is fixed). What comes next, and the settled decision
+  L62 should be fixed first (L61 and L63 are fixed). What comes next, and the settled decision
   register D0–D12, is `docs/OMNITRACK_VISION.md`: read it before designing
   anything the twin touches. Data-source licences and terms are checked by a
   human before any adapter is written (D0). Iowa's spirits supply chain
@@ -637,8 +638,9 @@ kept here: CI's is the one that matters, and a hand-kept one drifted.
 **Known test flakes**: re-run, then file or update the ticket; never call a
 failure environment noise.
 - Open: L58 (`test_fast_on_typical_inputs_but_slower_in_total_is_rejected`,
-  OMNI-141) and L59 (`test_a_feature_is_planned_once_and_carried_on_after_a_restart`,
-  OMNI-174), each seen once under `-n auto`.
+  OMNI-141), L59 (`test_a_feature_is_planned_once_and_carried_on_after_a_restart`,
+  OMNI-174) and L69 (four real cycles in `test_merge_observation.py` came out
+  inconclusive, OMNI-186), each seen once under `-n auto`.
 - `test_correct_but_not_faster_is_rejected` is **not** test-only: on a heavily
   loaded machine the benchmark can accept its candidate, which is a few percent
   slower than the baseline (M7,
