@@ -61,7 +61,7 @@ reference with no link target below.
 > | L55, L57 | [OMNI-166], [OMNI-172], from the weekly code reviews of 2026-10-25 and 2026-10-26 |
 > | L58, L59 | [OMNI-141], [OMNI-174]: tests that failed once under `-n auto` |
 > | L60 | [OMNI-173] — **fixed** (2026-10-27) |
-> | L61–L68 | [OMNI-176]–[OMNI-183], one each, from the code and documentation review of 2026-10-31 (develop @ 83bb43c); its documentation findings were fixed with [OMNI-184] |
+> | L61–L68 | [OMNI-176]–[OMNI-183], one each, from the code and documentation review of 2026-10-31 (develop @ 83bb43c); its documentation findings were fixed with [OMNI-184] (L63 **fixed** 2026-11-01) |
 
 ## High
 
@@ -295,16 +295,6 @@ None open.
   references a missing file`, which counts toward the breaker and pages.
   Fix: add the sync to the runbook and the scheduled run in the PR that
   promotes `private.json`, and check both principals may read that prefix.
-- [OMNI-178] **L63** — The default `ca_price_wholesale` build is refused on a
-  trace captured after the release calendar ends *(found 2026-10-31 by code
-  review)*. Without `--last`, `scripts/build_fixture.py` asks up to the
-  trace's newest week. `eia_release_calendar_2018_2026.json` ends with the
-  periods of 2026-10-23 (stocks), 2026-10-26 (retail) and 2026-10-27 (spot),
-  and every box backfills its first capture as `reconstructed`, which
-  `fixture_builder._adjusted` refuses outside the calendar. So the documented
-  command fails on any trace captured after about 2026-10-28. It fails closed
-  with a clear reason. Fix: cap the default at the calendar's coverage and say
-  so, or document `--last`.
 - [OMNI-179] **L64** — `gauntlet._attribute` still treats `"timed out"`
   anywhere in a reason as a timeout *(found 2026-10-31 by code review; L27's
   other half)*. L27 made `episodic.gate_from_reason` match only the harness's
@@ -344,6 +334,21 @@ None open.
 
 ## Resolved (Low)
 
+- [OMNI-178] **L63** — The default `ca_price_wholesale` build is refused on a
+  trace captured after the release calendar ends *(found 2026-10-31 by code
+  review)*. Without `--last`, `scripts/build_fixture.py` asks up to the
+  trace's newest week. `eia_release_calendar_2018_2026.json` ends with the
+  periods of 2026-10-23 (stocks), 2026-10-26 (retail) and 2026-10-27 (spot),
+  and every box backfills its first capture as `reconstructed`, which
+  `fixture_builder._adjusted` refuses outside the calendar. So the documented
+  command fails on any trace captured after about 2026-10-28. It fails closed
+  with a clear reason. Fix: cap the default at the calendar's coverage and say
+  so, or document `--last`. **Fixed
+  2026-11-01 (OMNI-178):** without `--last`, the build stops at the last week
+  whose every reconstructed value the calendar covers, and prints that week,
+  where the calendar ends and how far the trace goes. A gap inside the
+  calendar, a series it does not list, or an explicit `--last` past its end
+  is still refused.
 - [OMNI-73] **L27** — `episodic.gate_from_reason` matches `"timed out"`/`"timeout"`
   anywhere in the reject reason, including text a candidate itself printed,
   so a counted correctness failure can be mislabelled as an infrastructure
