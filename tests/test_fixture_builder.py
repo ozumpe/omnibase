@@ -459,6 +459,65 @@ def test_a_private_fixture_keeps_every_episode_under_private_with_its_digest_ind
     assert "Private." in public["README.md"]
 
 
+def test_by_default_the_build_stops_where_the_release_calendar_ends(
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    # OMNI-178 (L63): every box captures from scratch, so all its history is
+    # reconstructed, and a calendar ends somewhere. The documented command, with
+    # no --last, ran to the trace's last week and was refused for any trace
+    # captured after the calendar's end.
+    from dataclasses import replace
+
+    from sis import contract_author
+
+    monkeypatch.setattr(contract_author, "CONTRACT_STAGING_DIR", tmp_path / "staging")
+    script = _script()
+    shipped = script.FIXTURES["ca_price_wholesale"]
+    monkeypatch.setitem(script.FIXTURES, "ca_price_wholesale",
+                        replace(shipped, question=replace(WHOLESALE, last=WHOLESALE.first)))
+    trace = tmp_path / "eia.jsonl"
+    trace.write_text("".join(json.dumps(line, sort_keys=True) + "\n" for line in _spot_trace()),
+                     encoding="utf-8")
+    raw = json.loads(_spot_calendar().raw)
+    for report in raw["reports"].values():   # the calendar ends on Friday 14 October 2022
+        report["releases"] = {p: r for p, r in report["releases"].items() if p <= "2022-10-14"}
+    calendar = tmp_path / "calendar.json"
+    calendar.write_text(json.dumps(raw, sort_keys=True), encoding="utf-8")
+    args = ["--fixture", "ca_price_wholesale", "--trace", str(trace), "--calendar", str(calendar)]
+
+    assert script.main(args) == 0, capsys.readouterr().err
+    out = capsys.readouterr().out
+    # Monday 10 October is the last week whose every value shown is covered.
+    assert "last week: 2022-10-10, the last before 2022-10-17" in out
+    assert "the trace answers to 2022-12-26" in out
+    staged = contract_author.load_staged("ca_price_wholesale")
+    weeks = sorted(name.rsplit("/", 1)[1][:10] for name in staged.files
+                   if name.endswith("_fixture.json"))
+    assert weeks[0] == "2022-09-05" and weeks[-1] == "2022-10-10" and len(weeks) == 6
+    # The episodes are the ones an explicit --last gives.
+    explicit = build(_spot_trace(), EIA_RULES, ReleaseCalendar.parse(json.dumps(raw)),
+                     WHOLESALE, name="ca_price_wholesale", spec_ref="OMNI-163", private=True)
+    assert {k: (staged.directory / k).read_text(encoding="utf-8")
+            for k in staged.files if "/backtests/" in k} == \
+        {k: v for k, v in explicit.files.items() if "/backtests/" in k}
+
+    # An explicit --last past the end is still refused, and says why.
+    assert script.main([*args, "--last", "2022-10-17"]) == 1
+    assert "does not cover" in capsys.readouterr().err
+    # A gap inside the calendar is not its end: still refused, never cut short.
+    del raw["reports"]["gdu"]["releases"]["2022-09-26"]
+    calendar.write_text(json.dumps(raw, sort_keys=True), encoding="utf-8")
+    assert script.main(args) == 1
+    assert "2022-09-26: a reconstructed known_at the release calendar does not cover" in \
+        capsys.readouterr().err
+    # A calendar that ends before the first week asked about builds nothing.
+    for report in raw["reports"].values():
+        report["releases"] = {p: r for p, r in report["releases"].items() if p <= "2022-08-31"}
+    calendar.write_text(json.dumps(raw, sort_keys=True), encoding="utf-8")
+    assert script.main(args) == 1
+    assert "ends before 2022-09-05" in capsys.readouterr().err
+
+
 def test_the_wholesale_question_waits_for_mondays_spot_price() -> None:
     fixture = json.loads(_wholesale()["private/backtests/2022-10-03_fixture.json"])
     state = fixture["args"][0]

@@ -593,7 +593,7 @@ Where things stand (2026-10-31):
   **OMNI-163, the first gated omnitrack contract** (`ca_price_wholesale`, which
   must beat persistence on held-out history), is on `develop`; its private
   fixture still needs a human-checked 2018–2026 calendar and a promotion, and
-  L61–L63 should be fixed first. What comes next, and the settled decision
+  L61 and L62 should be fixed first (L63 is fixed). What comes next, and the settled decision
   register D0–D12, is `docs/OMNITRACK_VISION.md`: read it before designing
   anything the twin touches. Data-source licences and terms are checked by a
   human before any adapter is written (D0). Iowa's spirits supply chain

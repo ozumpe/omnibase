@@ -148,7 +148,11 @@ be committed. The steps are the same, with these differences:
    LA series. Only dates are kept.
 2. **Build:** `python scripts/build_fixture.py --fixture ca_price_wholesale`
    builds every week from 6 January 2020 to the last the trace answers (about
-   350 episodes, about 40 MB). Each question is asked on Thursday at 17:00 ET,
+   350 episodes, about 40 MB). A fresh capture backfills its history as
+   reconstructed, which needs the calendar, so the build stops at the last
+   week the calendar covers and prints it, with the week the trace goes to.
+   To build further, extend the calendar and have it checked again. `--last
+   YYYY-MM-DD` sets the last week yourself; one past the calendar is refused. Each question is asked on Thursday at 17:00 ET,
    a day after the retail price is out, when Monday's spot price is known.
    The episodes are staged under `private/`, with `private.json` listing the
    sha256 of each.
