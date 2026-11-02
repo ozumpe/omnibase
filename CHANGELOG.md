@@ -29,6 +29,10 @@ release renames that heading to the new tag.
 - OMNI-176 (L61): a malformed `private.json` makes only `ca_price_wholesale`
   unavailable, with a reason naming the file and the episode; before, it stopped
   `import sis.contract`, and with it the loop and every role actor.
+- OMNI-177 (L62): a scheduled AWS run of a contract with a committed
+  `private.json` fetches its private fixtures from the artifacts bucket and
+  checks each against its sha256 before anything is spent; before, every
+  cycle would have failed the backtest gate as a `harness:` fault.
 - OMNI-178 (L63): `scripts/build_fixture.py --fixture ca_price_wholesale`, with
   no `--last`, stops at the last week the release calendar covers and says so,
   instead of refusing a trace captured after the calendar ends.

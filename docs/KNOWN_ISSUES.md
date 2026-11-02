@@ -61,7 +61,7 @@ reference with no link target below.
 > | L55, L57 | [OMNI-166], [OMNI-172], from the weekly code reviews of 2026-10-25 and 2026-10-26 |
 > | L58, L59, L69 | [OMNI-141], [OMNI-174], [OMNI-186]: tests that failed once under `-n auto` |
 > | L60 | [OMNI-173] — **fixed** (2026-10-27) |
-> | L61–L68 | [OMNI-176]–[OMNI-183], one each, from the code and documentation review of 2026-10-31 (develop @ 83bb43c); its documentation findings were fixed with [OMNI-184] (L61 and L63 **fixed** 2026-11-01) |
+> | L61–L68 | [OMNI-176]–[OMNI-183], one each, from the code and documentation review of 2026-10-31 (develop @ 83bb43c); its documentation findings were fixed with [OMNI-184] (L61 and L63 **fixed** 2026-11-01, L62 2026-11-02) |
 
 ## High
 
@@ -282,17 +282,6 @@ None open.
   oversubscription the benchmark's interval widens past the margin. These
   tests are about merge observation, not timing. Next time, keep the cycle's
   `reason` (ratio and interval) before changing anything.
-- [OMNI-177] **L62** — The AWS box never fetches `ca_price_wholesale`'s
-  private fixtures *(found 2026-10-31 by code review; latent until
-  `private.json` is promoted)*. `specs/ca_price_wholesale/private/` is
-  gitignored and kept in the artifacts bucket (OMNI-163), and
-  `docs/SENSOR_RUNBOOK.md` says to sync it back on another machine. Neither
-  `docs/AWS_RUN.md`, the bootstrap nor `scripts/aws_scheduled_run.py` does.
-  A box cloned from a tag with `private.json` registers the contract, and
-  every `--contract ca_price_wholesale` cycle fails as `harness: ...
-  references a missing file`, which counts toward the breaker and pages.
-  Fix: add the sync to the runbook and the scheduled run in the PR that
-  promotes `private.json`, and check both principals may read that prefix.
 - [OMNI-179] **L64** — `gauntlet._attribute` still treats `"timed out"`
   anywhere in a reason as a timeout *(found 2026-10-31 by code review; L27's
   other half)*. L27 made `episodic.gate_from_reason` match only the harness's
@@ -332,6 +321,27 @@ None open.
 
 ## Resolved (Low)
 
+- [OMNI-177] **L62** — The AWS box never fetches `ca_price_wholesale`'s
+  private fixtures *(found 2026-10-31 by code review; latent until
+  `private.json` is promoted)*. `specs/ca_price_wholesale/private/` is
+  gitignored and kept in the artifacts bucket (OMNI-163), and
+  `docs/SENSOR_RUNBOOK.md` says to sync it back on another machine. Neither
+  `docs/AWS_RUN.md`, the bootstrap nor `scripts/aws_scheduled_run.py` does.
+  A box cloned from a tag with `private.json` registers the contract, and
+  every `--contract ca_price_wholesale` cycle fails as `harness: ...
+  references a missing file`, which counts toward the breaker and pages.
+  Fix: add the sync to the runbook and the scheduled run in the PR that
+  promotes `private.json`, and check both principals may read that prefix. **Fixed
+  2026-11-02 (OMNI-177):** the scheduled run's box-side script
+  (`aws_scheduled_run.private_fixture_lines`), when the run's contract has a
+  committed `specs/<contract>/private.json`, syncs `private/` from the
+  artifacts bucket and checks every listed file against its sha256 before the
+  key is read, the preflight or the loop. A missing bucket name, a failed
+  sync, or a missing or changed file ends the run with "nothing was spent";
+  the messages name files, never their contents. `docs/AWS_RUN.md` step 5a
+  has the same two commands for a run by hand. The instance role already
+  reads the whole bucket, and the scheduled-run principal needs nothing,
+  since the box does the fetch.
 - [OMNI-176] **L61** — A malformed `private.json` stops the loop and every
   role actor, not just its contract *(found 2026-10-31 by code review;
   latent: no `private.json` is committed yet)*. `sis/contract.py` builds

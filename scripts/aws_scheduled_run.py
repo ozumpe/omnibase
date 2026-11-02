@@ -140,6 +140,46 @@ def exit_marker(run_id: str) -> str:
 # on a script that is newer than the box. Each is sent inline.
 # --------------------------------------------------------------------------
 
+def private_fixture_lines(contract: str, end: str) -> str:
+    """Shell that fetches *contract*'s private fixtures and checks them (OMNI-177, L62).
+
+    A contract whose fixture is licensed keeps its episodes out of git, in
+    the artifacts bucket under ``specs/<contract>/private/`` (OMNI-163); a box
+    cloned from a tag has only the committed ``private.json``. Without the
+    files every cycle would fail in the backtest gate as a ``harness:`` fault,
+    counted in full and paged. So when the index is committed, the files are
+    synced from the bucket and each is checked against its sha256 in the index
+    before anything is spent; a failure ends the run with *end*. The messages
+    name files and digests only, never a value from them. A contract with no
+    private index does nothing here.
+    """
+    if not _CONTRACT.match(contract):
+        raise ValueError(f"contract {contract!r} is not a contract name")
+    spec = f"specs/{contract}"
+    digests = ('.episodes[] | "\\(.fixture_sha256)  \\(.fixture)", '
+               '"\\(.expect_sha256)  \\(.expect)"')
+    return f"""if [ -f {spec}/private.json ]; then
+  refuse() {{
+    echo "[scheduled] $1; nothing was spent" | tee -a "$log"
+    echo "{end} 1" | tee -a "$log"; exit 1
+  }}
+  [ -n "${{ARTIFACTS_BUCKET:-}}" ] \\
+    || refuse "{spec}/private.json is committed, but ARTIFACTS_BUCKET is not set"
+  aws s3 sync "s3://$ARTIFACTS_BUCKET/{spec}/private/" {spec}/private/ \\
+      --only-show-errors 2>"$HOME/.sis-private.err" \\
+    || refuse "could not fetch {spec}/private/ from the artifacts bucket: \\
+$(tr '\\n' ' ' < "$HOME/.sis-private.err" | tail -c 400)"
+  (cd {spec} && jq -r '{digests}' private.json \\
+      | sha256sum --check --strict --quiet) >"$HOME/.sis-private.err" 2>&1 \\
+    || refuse "{spec}/private/ does not match private.json: \\
+$(head -n 5 "$HOME/.sis-private.err" | tr '\\n' ' ' | tail -c 400)"
+  episodes=$(jq '.episodes | length' {spec}/private.json)
+  echo "[scheduled] {spec}/private/: $episodes episode(s) fetched and checked" \\
+    "against private.json" | tee -a "$log"
+fi
+"""
+
+
 def runner_script(cfg: RunConfig) -> str:
     """The script tmux runs as ``ubuntu``: AWS_RUN.md steps 5a to 5c.
 
@@ -152,6 +192,7 @@ def runner_script(cfg: RunConfig) -> str:
         flags += f" --brakes-breaker-threshold {cfg.breaker_threshold}"
     flags += f" --loop --loop-max-cycles {cfg.max_cycles}"
     start, end = start_marker(cfg.run_id), exit_marker(cfg.run_id)
+    fetch = private_fixture_lines(cfg.contract, end)
     return f"""#!/bin/bash
 # Written by scripts/aws_scheduled_run.py (OMNI-168) for run {cfg.run_id}. No secrets.
 set -o pipefail
@@ -162,7 +203,7 @@ echo "{start} $(date -u +%FT%TZ) $(git describe --tags --always --dirty)" | tee 
 export SIS_ENV=aws SIS_ADAPTERS=real SIS_AWS_SECRET_ID={cfg.secret_id}
 export SIS_SANDBOX=docker SIS_PROPOSER=claude
 export SIS_BUDGET_USD={cfg.budget_usd:.2f}
-if ! secret=$(aws secretsmanager get-secret-value --secret-id {cfg.secret_id} \\
+{fetch}if ! secret=$(aws secretsmanager get-secret-value --secret-id {cfg.secret_id} \\
     --query SecretString --output text 2>"$HOME/.sis-secret.err"); then
   why=$(tr '\\n' ' ' < "$HOME/.sis-secret.err" | tail -c 400)
   echo "[scheduled] could not read the secret: $why" | tee -a "$log"
