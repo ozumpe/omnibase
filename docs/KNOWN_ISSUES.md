@@ -59,9 +59,9 @@ reference with no link target below.
 > | L30 | [OMNI-55], with M16 — **fixed** (2026-10-08) |
 > | L39 | [OMNI-42] — **fixed** (2026-10-15, with OMNI-68) |
 > | L55, L57 | [OMNI-166], [OMNI-172], from the weekly code reviews of 2026-10-25 and 2026-10-26 |
-> | L58, L59 | [OMNI-141], [OMNI-174]: tests that failed once under `-n auto` |
+> | L58, L59, L69 | [OMNI-141], [OMNI-174], [OMNI-186]: tests that failed once under `-n auto` |
 > | L60 | [OMNI-173] — **fixed** (2026-10-27) |
-> | L61–L68 | [OMNI-176]–[OMNI-183], one each, from the code and documentation review of 2026-10-31 (develop @ 83bb43c); its documentation findings were fixed with [OMNI-184] (L63 **fixed** 2026-11-01) |
+> | L61–L68 | [OMNI-176]–[OMNI-183], one each, from the code and documentation review of 2026-10-31 (develop @ 83bb43c); its documentation findings were fixed with [OMNI-184] (L61 and L63 **fixed** 2026-11-01) |
 
 ## High
 
@@ -271,19 +271,17 @@ None open.
   cluster, and the suite runs with `episodic.store=none`. The suspect, not
   proven, is a sandboxed gate timing out under heavy load in the first cycle.
   Next time it fails, keep the assertion's `reason` before changing anything.
-- [OMNI-176] **L61** — A malformed `private.json` stops the loop and every
-  role actor, not just its contract *(found 2026-10-31 by code review;
-  latent: no `private.json` is committed yet)*. `sis/contract.py` builds
-  `CA_PRICE_WHOLESALE` at import, as soon as
-  `specs/ca_price_wholesale/private.json` exists, and
-  `backtest.private_backtests` reads each episode's keys unchecked. A missing
-  key, a non-dict episode or a truncated file raises `KeyError`, `TypeError`
-  or `JSONDecodeError` (a wrong schema raises `ValueError`), and any of them
-  stops `import sis.contract`: `main.py`, `sis.org`, `sis.roles` and
-  `sis.gauntlet` fail, so `roman` and `sort` cannot run either. `sis.admin`
-  and the console do not import it, so pausing still works. Fix: validate the
-  index and raise `ValueError` naming the file and episode; decide whether a
-  bad index should disable only that contract, loudly.
+- [OMNI-186] **L69** — Four `tests/test_merge_observation.py` tests that run
+  a real `sum_of_divisors` cycle came out `inconclusive` together in one full
+  `pytest -n auto` run *(seen 2026-11-01, on a 4-CPU box with a load average
+  of 11)*: `test_a_real_cycle_reaches_promotion`,
+  `test_a_restart_waits_for_the_last_runs_pr`,
+  `test_a_pr_merged_offline_is_promoted_at_startup` and
+  `test_a_pr_declined_offline_is_released_and_logged`. The file passed alone
+  and the suite passed on a re-run. The suspect, not proven, is L58's: under
+  oversubscription the benchmark's interval widens past the margin. These
+  tests are about merge observation, not timing. Next time, keep the cycle's
+  `reason` (ratio and interval) before changing anything.
 - [OMNI-177] **L62** — The AWS box never fetches `ca_price_wholesale`'s
   private fixtures *(found 2026-10-31 by code review; latent until
   `private.json` is promoted)*. `specs/ca_price_wholesale/private/` is
@@ -334,6 +332,25 @@ None open.
 
 ## Resolved (Low)
 
+- [OMNI-176] **L61** — A malformed `private.json` stops the loop and every
+  role actor, not just its contract *(found 2026-10-31 by code review;
+  latent: no `private.json` is committed yet)*. `sis/contract.py` builds
+  `CA_PRICE_WHOLESALE` at import, as soon as
+  `specs/ca_price_wholesale/private.json` exists, and
+  `backtest.private_backtests` reads each episode's keys unchecked. A missing
+  key, a non-dict episode or a truncated file raises `KeyError`, `TypeError`
+  or `JSONDecodeError` (a wrong schema raises `ValueError`), and any of them
+  stops `import sis.contract`: `main.py`, `sis.org`, `sis.roles` and
+  `sis.gauntlet` fail, so `roman` and `sort` cannot run either. `sis.admin`
+  and the console do not import it, so pausing still works. Fix: validate the
+  index and raise `ValueError` naming the file and episode; decide whether a
+  bad index should disable only that contract, loudly. **Fixed 2026-11-01
+  (OMNI-176):** `private_backtests` checks each episode and raises a
+  `ValueError` naming the index and the episode, for unreadable JSON too. A
+  bad index makes only `ca_price_wholesale` unavailable: `sis.contract`
+  prints why at import, `contract.UNAVAILABLE` keeps the reason, and choosing
+  the contract fails with it before any spend. The other contracts run. No
+  page is sent from an import; the refusal stops the run that asked for it.
 - [OMNI-178] **L63** — The default `ca_price_wholesale` build is refused on a
   trace captured after the release calendar ends *(found 2026-10-31 by code
   review)*. Without `--last`, `scripts/build_fixture.py` asks up to the
@@ -2137,3 +2154,4 @@ any long-lived cluster exists.
 [OMNI-182]: https://olafzumpe.atlassian.net/browse/OMNI-182
 [OMNI-183]: https://olafzumpe.atlassian.net/browse/OMNI-183
 [OMNI-184]: https://olafzumpe.atlassian.net/browse/OMNI-184
+[OMNI-186]: https://olafzumpe.atlassian.net/browse/OMNI-186

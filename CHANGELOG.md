@@ -26,6 +26,9 @@ release renames that heading to the new tag.
   as "in the SWE's step, after the proposal".
 - OMNI-73 (L27): only the harness's own words (`<gate> gate timed out`) make a
   timeout; a candidate's text that says "timed out" no longer does.
+- OMNI-176 (L61): a malformed `private.json` makes only `ca_price_wholesale`
+  unavailable, with a reason naming the file and the episode; before, it stopped
+  `import sis.contract`, and with it the loop and every role actor.
 - OMNI-178 (L63): `scripts/build_fixture.py --fixture ca_price_wholesale`, with
   no `--last`, stops at the last week the release calendar covers and says so,
   instead of refusing a trace captured after the calendar ends.

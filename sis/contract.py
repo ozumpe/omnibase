@@ -25,6 +25,7 @@ property, made structural rather than incidental.
 from __future__ import annotations
 
 import importlib.util
+import sys
 import types
 from dataclasses import dataclass
 from enum import Enum
@@ -618,11 +619,32 @@ def ca_price_wholesale(index: str = CA_PRICE_WHOLESALE_INDEX) -> FeatureContract
     )
 
 
-# Registered once its fixture is promoted: until ``private.json`` is in git
-# there is nothing to judge it on, and a skill check with no held-out episodes
-# is refused at declaration.
-CA_PRICE_WHOLESALE: FeatureContract | None = (
-    ca_price_wholesale() if (PROJECT_ROOT / CA_PRICE_WHOLESALE_INDEX).exists() else None)
+def _promoted_wholesale() -> tuple[FeatureContract | None, str | None]:
+    """The wholesale contract if its index is promoted and sound, else why not.
+
+    Until ``private.json`` is in git there is nothing to judge it on, and a
+    skill check with no held-out episodes is refused at declaration, so it is
+    simply absent. An index that is there but malformed makes only this
+    contract unavailable, with the reason: this module is imported by the loop
+    and every role actor, so raising here stopped ``roman`` and ``sort`` too
+    (OMNI-176, L61). Choosing the contract then fails with the reason
+    (:data:`UNAVAILABLE`), before any spend.
+    """
+    if not (PROJECT_ROOT / CA_PRICE_WHOLESALE_INDEX).exists():
+        return None, None
+    try:
+        return ca_price_wholesale(), None
+    except ValueError as exc:
+        print(f"[sis] contract 'ca_price_wholesale' is unavailable: {exc}", file=sys.stderr)
+        return None, str(exc)
+
+
+CA_PRICE_WHOLESALE, _WHOLESALE_PROBLEM = _promoted_wholesale()
+
+# Contracts that are declared but cannot be judged now, with the reason: named
+# in the refusal when one is chosen, so it never reads as a typo.
+UNAVAILABLE: dict[str, str] = (
+    {"ca_price_wholesale": _WHOLESALE_PROBLEM} if _WHOLESALE_PROBLEM else {})
 
 # Kept apart from DEFAULT_CONTRACTS, which are the served (Class-1) targets:
 # the Serve canary, the load generator and ``serve_cloud`` need a reference
