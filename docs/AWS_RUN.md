@@ -275,6 +275,23 @@ bucket, OMNI-140) and `ARTIFACTS_BUCKET` (for the commands below) are already
 set in this login shell by `/etc/profile.d/sis-run.sh`, which `user_data`
 writes.
 
+A contract whose fixture is private (`ca_price_wholesale`, once its
+`specs/ca_price_wholesale/private.json` is promoted, OMNI-163) needs its
+episodes from the bucket first: a clone has only the index, and without the
+files every cycle fails the backtest gate as a `harness:` fault (L62). Fetch
+them, and check each against the index, before step 5b:
+
+```bash
+d=specs/ca_price_wholesale
+aws s3 sync "s3://$ARTIFACTS_BUCKET/$d/private/" "$d/private/" --only-show-errors
+(cd "$d" && jq -r '.episodes[] | "\(.fixture_sha256)  \(.fixture)",
+  "\(.expect_sha256)  \(.expect)"' private.json | sha256sum --check --strict --quiet) \
+  && echo "private fixtures OK"
+```
+
+A scheduled run does this itself, and ends before any spend if it fails
+(OMNI-177).
+
 **b. Prove the wiring before spending anything.** The `Pager` line must show a
 ✓; it fails until [step 3](#3-confirm-the-pager-laptop--dont-click-the-link)
 is done.
@@ -533,8 +550,10 @@ as `instance destroyed: NO, take it down by hand`, and the script exits 1.
 
 On either kind of box it waits for SSM, and starts step 5c's loop in a tmux
 session `sis` with one `ssm send-command`: the environment of step 5a, then
-`check_connections.py --deep` (a failure ends the run before any spend; it
-checks the Anthropic key and model too, OMNI-82), then
+the private fixtures of a contract that has them, fetched and checked as in
+step 5a (OMNI-177), then `check_connections.py --deep` (a failure of either
+ends the run before any spend; it checks the Anthropic key and model too,
+OMNI-82), then
 `main.py … --loop --loop-max-cycles 10`, teed to `runtime/loop.log` between a
 `[scheduled] <run id> start` and `exit` line. It reads this run's part of the
 log every minute, presses Ctrl-C in the pane once when the loop holds for a PR

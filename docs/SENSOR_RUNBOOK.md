@@ -161,7 +161,9 @@ be committed. The steps are the same, with these differences:
 4. **Keep the private files in the artifacts bucket**, not in git:
    `aws s3 sync specs/ca_price_wholesale/private/
    s3://<artifacts bucket>/specs/ca_price_wholesale/private/`. On another
-   machine, sync them back into the same directory. The backtest gate checks
+   machine, sync them back into the same directory (`docs/AWS_RUN.md` step
+   5a has the commands; a scheduled AWS run fetches and checks them itself,
+   OMNI-177). The backtest gate checks
    every file against `private.json` and refuses a missing or different one as
    a `harness:` fault, so a verdict is only reached on the data a human
    promoted.
