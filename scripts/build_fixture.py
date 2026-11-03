@@ -158,8 +158,15 @@ def main(argv: list[str] | None = None) -> int:
     if note:
         print(note)
     staged = stage(draft)
-    episodes = sum(1 for name in staged.files if name.endswith("_fixture.json"))
-    print(f"staged {staged.name}: {episodes} episodes in {staged.directory}")
+    built = {name.rsplit("/", 1)[-1].removesuffix("_fixture.json")
+             for name in staged.files if name.endswith("_fixture.json")}
+    asked = [question.first + n * question.horizon
+             for n in range((question.last - question.first) // question.horizon + 1)]
+    skipped = [week.isoformat() for week in asked if week.isoformat() not in built]
+    print(f"staged {staged.name}: {len(built)} episodes in {staged.directory}")
+    if skipped:
+        print(f"skipped {len(skipped)} week(s), each already known when the question about "
+              f"it would be asked (listed in the README): {', '.join(skipped)}")
     if fixture.private:
         print(f"private: after promotion, upload specs/{staged.name}/private/ to the "
               f"artifacts bucket (docs/SENSOR_RUNBOOK.md); git keeps only "

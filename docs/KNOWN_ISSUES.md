@@ -900,7 +900,12 @@ any long-lived cluster exists.
   *first* vintage of the predicted week is known by then, which also covers
   the old check. Regression test: a late release plus a revision refuses the
   build, and fails without the fix; on schedule, the revision builds and no
-  input shows the predicted week.
+  input shows the predicted week. **Since 2026-11-02 (OMNI-163)** such a week
+  is skipped and listed in the README instead of refusing the build, since the
+  2020–2026 record has two catch-up releases (2022-06-27, 2026-09-21) with no
+  honest question; a build with every week skipped still refuses. The
+  regression test now asserts the week is skipped and no episode shows the
+  week it predicts.
 
 - [OMNI-52] **M12 — A `soft_` operator config edit can rewrite `forbidden_` keys through
   unescaped YAML rendering** *(found 2026-09-26; reproduced end to end
