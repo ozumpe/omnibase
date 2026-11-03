@@ -50,6 +50,17 @@ release renames that heading to the new tag.
 - OMNI-184: this changelog; the 2026-10-31 code and documentation review
   recorded as L61–L68 (OMNI-176–183); the empty `identifier.db` removed and
   `*.tfplan` ignored.
+- **OMNI-131: the agent reviews its own feature before its PR opens.**
+  `sis/review.py` (POLICY-FORBIDDEN) reviews the whole diff against the base.
+  Deterministic rules always run: the target must be a SOFT path, and the
+  diff may add no I/O or egress import or call. With a real proposer, a
+  reviewer model runs too, behind its own LLM interface, with a
+  schema-checked reply that fails closed. No PR opens without an approving
+  review, which is recorded on the PR and in the provenance graph. A review
+  that asks for changes sends the head back: the next cycle revises it
+  against the base (neutral `review_requested`). After
+  `loop.review_max_rounds` (default 3) the feature is given up as a counted
+  `review:` failure, with no PR. The review's cost is charged with the step.
 
 ## v0.5.0 — 2026-10-30
 

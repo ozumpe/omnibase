@@ -703,7 +703,10 @@ class CTO(Role):
             ray.get(self._ws.emit.remote("feature.resume_failed", contract=spec.name,
                                          error=detail))
             return None
-        found = feature_mod.resumable_feature(spec.name, branches)
+        # A branch given up after its review is not a feature to carry on (OMNI-131).
+        given_up = set(ray.get(self._sm.given_up_branches.remote()))
+        found = feature_mod.resumable_feature(
+            spec.name, [b for b in branches if b.name not in given_up])
         if found is None:
             return None
         feature, plan = found["feature"], found["plan"]
@@ -1114,6 +1117,7 @@ class SWE(Role):
                     "reason": f"review requested: round {rounds} of {limit}, "
                               f"{verdict.summary()}"}
         reason = f"review: not approved after {rounds} round(s), {verdict.summary()}"
+        ray.get(self._sm.give_up_branch.remote(feature["branch"]))
         ray.get(self._sm.set_feature.remote(spec.name, None))
         ray.get(self._sm.set_plan.remote(spec.name, None))
         ray.get(self._ws.transition.remote(story_id, IssueStatus.TBD, reason))
