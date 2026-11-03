@@ -2,7 +2,7 @@
  "schema": 1,
  "timezone": "America/New_York",
  "checked_by": "Olaf Zumpe",
- "checked_on": "11/02/2026",
+ "checked_on": "2026-11-02",
  "description": "When each EIA period from 2018-12-01 to 2026-10-28 was actually released, for OMNI-163's fixture's release check (sis/fixture_builder.py). Keys are the period's date (Friday week-ending for stocks, Monday for retail prices, the day for the spot price); values the release date, both in America/New_York. Drafted 2026-10-30 by scripts/draft_release_calendar.py; a human checks the dates against the sources and fills in checked_by and checked_on before any fixture is built.",
  "reports": {
   "wpsr": {
