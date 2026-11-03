@@ -8,7 +8,8 @@ one finished feature into ``develop``. This module puts each merge into service:
 - the merged version is started as **green** in a second worker, beside blue;
 - the host sends both the same shadow traffic, inputs from the contract's
   oracle, and judges green with :func:`sis.canary.evaluate_canary`
-  (``SHADOW``): agreement with the reference and with blue first, then latency;
+  (``SHADOW``): agreement with the reference and with blue first, then
+  latency, paired per exchange (OMNI-50);
 - green **passes**: blue and green switch. The switch is automatic, because a
   human already approved the merge;
 - green **fails**: it is retired and blue keeps serving. The caller pages a
@@ -18,7 +19,9 @@ one finished feature into ``develop``. This module puts each merge into service:
 **Blue never serves a version that failed its judgment.** A green that fails
 to load, raises, times out, answers wrongly or is slower is closed before it
 has answered a single call outside the judgment, and blue's worker is never
-touched. A fault on *blue's* side (it errs or dies under the window) is the
+touched. Nor does one whose latency could not be told apart from the limit
+(an inconclusive paired interval): it is retired as not judged, without a
+revert, and a human is paged. A fault on *blue's* side (it errs or dies under the window) is the
 harness's, not green's: nothing switches, nothing is reverted, and the caller
 pages a human (OMNI-37's rule, a broken sandbox is never blamed on the
 candidate).
@@ -58,10 +61,11 @@ DEFAULT_EXCHANGES = 120
 # target: a round trip is ~20 µs in the subprocess sandbox and ~350 µs in
 # docker on a Mac, against a few µs for `sort` (STAGED_DELIVERY.md, phase 0).
 DEFAULT_BATCH = 16
-# Green may be this much slower than blue at p95 before it fails: a merged
-# version already beat its baseline offline by the contract's margin, so here
-# latency only has to catch a real regression, not prove a gain. Without
-# slack, two equal versions fail about half the time on noise.
+# Green's total latency over the paired window may be this much above blue's
+# before it fails: a merged version already beat its baseline offline by the
+# contract's margin, so here latency only has to catch a real regression, not
+# prove a gain. The decision is paired (OMNI-50): each exchange times both
+# sides on the same batch, so drift on the host cancels in the ratio.
 DEFAULT_LATENCY_SLACK = 0.25
 
 REFERENCE_LAW = "agrees_with_reference"
@@ -135,11 +139,14 @@ def judge_window(
     failure (``live error rate``); a failed call on blue is a harness fault,
     and no verdict is reached. Otherwise :func:`evaluate_canary` decides, in
     ``SHADOW`` mode, with the reference as its law and each exchange's host
-    time as one latency observation per side.
+    times as one ``(green, blue)`` latency pair. An inconclusive latency
+    interval is reported as ``harness``: nothing was shown against green, and
+    nothing showed it may serve.
     """
     samples: list[LiveSample] = []
     blue_latencies: list[float] = []
     green_latencies: list[float] = []
+    pairs: list[tuple[float, float]] = []
     green_errors = 0
     first_green_error: str | None = None
     calls = 0
@@ -159,15 +166,16 @@ def judge_window(
                                       baseline_response=b.value))
         blue_latencies.append(blue.elapsed_s)
         green_latencies.append(green.elapsed_s)
+        pairs.append((green.elapsed_s, blue.elapsed_s))
     if green_errors:
         return None, (f"live error rate: green failed {green_errors} of {calls} calls "
                       f"(first: {first_green_error})"), False
     verdict = evaluate_canary(
         [_ReferenceLaw(reference)], samples, blue_latencies, green_latencies,
         version=version, mode=CanaryMode.SHADOW,
-        max_latency_ratio=1.0 + latency_slack,
+        max_latency_ratio=1.0 + latency_slack, pairs=pairs, latency_tolerance=0.0,
     )
-    return verdict, verdict.reason, False
+    return verdict, verdict.reason, verdict.inconclusive
 
 
 class DevelopPlatform:

@@ -46,6 +46,9 @@ ACCEPTED_OUTCOMES = frozenset({"verified_awaiting_human_merge", "promoted", "fea
 NEUTRAL_OUTCOMES: dict[str, str] = {
     "noop": "no_change",
     "benchmark_inconclusive": "inconclusive",
+    # The live canary's paired latency interval could not tell (OMNI-50, M20):
+    # the same fact as an inconclusive benchmark, and the same status.
+    "canary_inconclusive": "inconclusive",
 }
 
 
@@ -102,7 +105,8 @@ class EpisodicEvent:
     #            | error     (an exception inside the cycle, OMNI-55: no gate's
     #                         verdict at all)
     #            | canary_evidence | canary_invariant | canary_disagreement
-    #            | canary_regression  (evaluate_canary, OMNI-14: the ONLINE
+    #            | canary_regression | canary_errors | canary_inconclusive
+    #                         (evaluate_canary, OMNI-14/50: the ONLINE
     #                         analogue of correctness/benchmark, named
     #                         distinctly so rejected_by_gate can tell whether
     #                         the sandbox or live traffic caught it)
@@ -503,7 +507,11 @@ def gate_from_reason(reason: str | None) -> str | None:
         return "canary_invariant"
     if r.startswith("response disagreement"):
         return "canary_disagreement"
-    if r.startswith("live "):  # "live p95/p99 regression: ..."
+    if r.startswith("live error rate"):  # green failed more often (OMNI-50, M21)
+        return "canary_errors"
+    if r.startswith("live latency inconclusive"):  # neutral (OMNI-50, M20)
+        return "canary_inconclusive"
+    if r.startswith("live "):  # "live latency/p95/p99 regression: ..."
         return "canary_regression"
     if "syntaxerror" in r:
         return "ast"

@@ -13,6 +13,12 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+- OMNI-50 (M20, M21): the live canary decides latency on paired samples, the
+  offline benchmark's paired bootstrap on total cost, with an inconclusive
+  interval neutral; an equal-speed candidate is rejected in about 2% of
+  simulated windows, not 56%. It also judges error rate (green may fail no
+  more often than blue), and a request green failed is a disagreement, not a
+  dropped sample. `develop`'s blue/green uses the same paired rule.
 - **OMNI-163: the first gated omnitrack contract.** `ca_price_wholesale`
   predicts next week's California retail price and must beat persistence: a
   `BacktestSkill` on the backtest gate requires a mean absolute error at least

@@ -1332,12 +1332,28 @@ class DevOps(Role):
         # waiting on organic traffic that will never arrive.
         cloud.warm_up(LIVE_CANARY_REQUESTS, concurrency=LIVE_CANARY_CONCURRENCY)
 
-        blue_latencies, _ = cloud.live_window(str(cloud.live_version()))
-        green_latencies, _ = cloud.live_window(version)
+        # Both error counts are evidence (OMNI-50, M21): they used to be thrown
+        # away here, so a third of green's calls could fail and still pass.
+        blue_latencies, blue_errors = cloud.live_window(str(cloud.live_version()))
+        green_latencies, green_errors = cloud.live_window(version)
         verdict = evaluate_canary(
             [], cloud.live_samples(), blue_latencies, green_latencies,
             version=version, mode=CanaryMode.SHADOW,
-            min_samples=min(DEFAULT_MIN_CANARY_SAMPLES, LIVE_CANARY_REQUESTS))
+            min_samples=min(DEFAULT_MIN_CANARY_SAMPLES, LIVE_CANARY_REQUESTS),
+            baseline_errors=blue_errors, candidate_errors=green_errors)
+
+        if verdict.inconclusive:
+            # The paired latency interval could not tell (OMNI-50, M20). Not a
+            # rejection: no bug, and the cycle is neutral (org.run_cycle reads
+            # the reason through episodic.neutral_status). Green is retired all
+            # the same, because nothing showed that it may serve.
+            self.retire_canary(version, pr.id)
+            ray.get(self._sm.record.remote(
+                "canary_inconclusive", version, pr=pr.id, reason=verdict.reason))
+            return {"version": version, "slot": "green", "live": False,
+                    "latency_seconds": candidate_latency, "canary_passed": False,
+                    "inconclusive": True, "reason": verdict.reason,
+                    "verdict": asdict(verdict)}
 
         if not verdict.passed:
             self.retire_canary(version, pr.id)

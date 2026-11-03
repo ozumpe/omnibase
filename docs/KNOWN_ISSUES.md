@@ -42,7 +42,7 @@ reference with no link target below.
 > | H8 | [OMNI-153] (epic OMNI-43), found 2026-10-08 — **fixed** the same day |
 > | H9 | [OMNI-154] (epic OMNI-43), found 2026-10-08 — **fixed** the same day |
 > | M19 | [OMNI-49](https://olafzumpe.atlassian.net/browse/OMNI-49) (epic OMNI-44) — **fixed** (by refusal; isolation is H3) |
-> | M20, M21 | [OMNI-50](https://olafzumpe.atlassian.net/browse/OMNI-50) (epic OMNI-44) |
+> | M20, M21 | [OMNI-50](https://olafzumpe.atlassian.net/browse/OMNI-50) (epic OMNI-44) — **fixed** (2026-11-03) |
 > | M15 | [OMNI-51](https://olafzumpe.atlassian.net/browse/OMNI-51) — **fixed** |
 > | M12 | [OMNI-52](https://olafzumpe.atlassian.net/browse/OMNI-52) — **fixed** (2026-10-25) |
 > | M13 | [OMNI-53](https://olafzumpe.atlassian.net/browse/OMNI-53) |
@@ -87,39 +87,6 @@ None open.
   `oauth_provider`, `oauth_key`/`oauth_secret` and a `cookie_secret` to
   `pn.serve`; enable signed sessions; add a test asserting the built server's
   `auth_provider` is not `NullAuth`.
-
-- [OMNI-50] **M20 — The live canary's p95/p99 gate is close to a coin flip for targets
-  where dispatch overhead dominates compute** *(found 2026-09-26; simulated
-  through the real `evaluate_canary`)* — Gate 4 compares nearest-rank p95/p99
-  of two **unpaired** marginal latency arrays (~150 samples) at
-  `max_latency_ratio=1.0` with no allowance on p95 (only p99 got the #107
-  10% allowance). `tests/test_live_canary.py` already documents "there is no
-  candidate that reliably passes here." Simulated (lognormal σ=0.35, n=150,
-  2000 trials) through `evaluate_canary` itself: an equal-speed candidate is
-  rejected **~56%** of the time (mostly on p95); a candidate ~3% slower still
-  passes **~44%** of the time. Every false reject counts in full toward the
-  circuit breaker and files a bug. Fix: store paired `(blue, green)`
-  latencies per shadow sample (the router already has both in hand; it
-  throws the pairing away when it records each side separately) and decide
-  the way `gauntlet.benchmark_decision` does — a paired-bootstrap accept /
-  reject / inconclusive, inconclusive neutral.
-
-- [OMNI-50] **M21 — The live canary never judges error rate, and SHADOW mode drops any
-  pair where green failed** *(found 2026-09-26 from three independent
-  reviews; simulated through the real `evaluate_canary`)* — `_canary_live`
-  (`sis/roles.py`) discards both error counts that `live_window` returns;
-  `evaluate_canary` (`sis/canary.py`) has no error-rate parameter at all; and
-  `CanaryRouter.route` only records a `LiveSample` when *both* sides
-  succeeded, so a request where green raised never reaches the agreement
-  gate (survivorship bias) — yet green's failed calls still land in its
-  latency array, and because failures return fast, they pull green's
-  percentiles *down*. Simulated: 105 paired samples plus 45 fast green
-  errors (dropped from pairing, counted in latency) still returns
-  `passed=True`. The evidence floor (`min(100, 150)=100`) leaves room for up
-  to a third of live traffic to fail on green and still certify it. Fix:
-  pass both error counts into `evaluate_canary` and reject when green's error
-  rate exceeds blue's; in SHADOW, record a blue-ok/green-error pair as a
-  disagreement rather than dropping it.
 
 - [OMNI-58] **M22 — The Serve baseline (blue) is the local target file, not the merged
   base, and reverts to it whenever `ServeCloud` is rebuilt** *(found
@@ -792,6 +759,58 @@ any long-lived cluster exists.
   front.
 
 ## Resolved
+
+- [OMNI-50] **M20 — The live canary's p95/p99 gate is close to a coin flip for targets
+  where dispatch overhead dominates compute** *(found 2026-09-26; simulated
+  through the real `evaluate_canary`)* — Gate 4 compares nearest-rank p95/p99
+  of two **unpaired** marginal latency arrays (~150 samples) at
+  `max_latency_ratio=1.0` with no allowance on p95 (only p99 got the #107
+  10% allowance). `tests/test_live_canary.py` already documents "there is no
+  candidate that reliably passes here." Simulated (lognormal σ=0.35, n=150,
+  2000 trials) through `evaluate_canary` itself: an equal-speed candidate is
+  rejected **~56%** of the time (mostly on p95); a candidate ~3% slower still
+  passes **~44%** of the time. Every false reject counts in full toward the
+  circuit breaker and files a bug. Fix: store paired `(blue, green)`
+  latencies per shadow sample (the router already has both in hand; it
+  throws the pairing away when it records each side separately) and decide
+  the way `gauntlet.benchmark_decision` does — a paired-bootstrap accept /
+  reject / inconclusive, inconclusive neutral. **Fixed 2026-11-03
+  (OMNI-50):** the router records blue's and green's latency on each shadow
+  sample, and `evaluate_canary` decides a paired window with
+  `gauntlet.benchmark_decision` on total cost against `max_latency_ratio ×
+  (1 + latency_tolerance)` (default 1.10), 90% interval: pass, fail, or
+  inconclusive, which DevOps retires without a bug and `run_cycle` records as
+  the neutral `inconclusive`. On M20's simulation (200 windows) an
+  equal-speed candidate is now rejected in under 5% (about 2%), about a
+  quarter inconclusive; a 30%-slower one is always rejected
+  (`tests/test_canary.py`, which also pins the old rule at over 40% on the
+  same windows). `develop`'s blue/green (OMNI-133) decides on its per-exchange
+  pairs the same way; an inconclusive interval there is "not judged". An
+  unpaired SPLIT window keeps the percentile rule.
+
+- [OMNI-50] **M21 — The live canary never judges error rate, and SHADOW mode drops any
+  pair where green failed** *(found 2026-09-26 from three independent
+  reviews; simulated through the real `evaluate_canary`)* — `_canary_live`
+  (`sis/roles.py`) discards both error counts that `live_window` returns;
+  `evaluate_canary` (`sis/canary.py`) has no error-rate parameter at all; and
+  `CanaryRouter.route` only records a `LiveSample` when *both* sides
+  succeeded, so a request where green raised never reaches the agreement
+  gate (survivorship bias) — yet green's failed calls still land in its
+  latency array, and because failures return fast, they pull green's
+  percentiles *down*. Simulated: 105 paired samples plus 45 fast green
+  errors (dropped from pairing, counted in latency) still returns
+  `passed=True`. The evidence floor (`min(100, 150)=100`) leaves room for up
+  to a third of live traffic to fail on green and still certify it. Fix:
+  pass both error counts into `evaluate_canary` and reject when green's error
+  rate exceeds blue's; in SHADOW, record a blue-ok/green-error pair as a
+  disagreement rather than dropping it. **Fixed 2026-11-03 (OMNI-50):**
+  `_judge_live` passes both counts; `evaluate_canary` rejects when green's
+  error rate exceeds blue's (`live error rate: ...`, episodic gate
+  `canary_errors`), before any other judgment of green; the router records a
+  request blue answered and green failed as a sample with `candidate_error`,
+  which the agreement gate counts as a disagreement and the latency pairs
+  leave out. M21's simulation (105 pairs plus 45 fast green errors) is
+  rejected.
 
 - [OMNI-48] **H3 — A Serve-canary candidate runs as a full Ray control-plane worker, not
   in any sandbox** *(found 2026-09-26 by a multi-dimension review; confirmed by

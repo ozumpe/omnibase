@@ -150,12 +150,14 @@ first cycle:
   first. `evaluate_canary` then decides in `SHADOW` mode:
   - every answer must equal the reference and blue's (plain values, JSON-decoded);
   - no call may fail (the error rate);
-  - green's p95 per exchange may be at most 25% above blue's (p99 has a further
-    10%).
+  - green's total time over the 120 exchanges may be at most 25% above blue's,
+    decided on the paired `(green, blue)` time of each exchange with a
+    bootstrap interval (OMNI-50): over the limit fails, an interval that
+    straddles it is inconclusive.
 
   A merged version already beat its baseline offline, so the latency check
-  only has to catch a regression; without slack, two equal versions would fail
-  on noise.
+  only has to catch a regression. An inconclusive interval is recorded as not
+  judged: green is retired without a revert PR, and a human is paged.
 - **Pass:** blue and green switch, automatically, because a human already
   approved the merge.
 - **Fail:** green is retired before it serves anything, and blue keeps serving.
@@ -181,8 +183,6 @@ SelfModel's `develop_blue` slot names what blue serves.
 - Blue lives as long as the loop process. A restart serves the base branch's
   head again, which then includes every merge, judged or not.
 - A revert PR does not hold the loop (only `feature/` PRs do, OMNI-136).
-- The latency check is `evaluate_canary`'s percentile comparison. OMNI-50's
-  paired statistics will replace it for both canaries.
 - `main`'s own blue/green comes later, with the same machinery.
 
 ## Risks

@@ -210,8 +210,10 @@ def test_retire_canary_routes_a_live_pr_through_its_own_backend(handles) -> None
     # from a different direction: sum_of_divisors' actual compute time
     # (microseconds) is dwarfed by real Ray Serve dispatch overhead (tens of
     # milliseconds per request), so even a genuine 100x algorithmic advantage
-    # doesn't reliably clear evaluate_canary's live p95 gate. There is no
-    # candidate that reliably passes here, so this test doesn't require one --
+    # didn't reliably clear evaluate_canary's old unpaired p95 gate (M20).
+    # The paired decision (OMNI-50) can still come out inconclusive on a
+    # window that dispatch overhead dominates, so this test doesn't require a
+    # pass --
     # it asserts what it actually cares about (retire_canary's routing), which
     # holds identically whether _canary_live already auto-retired on a failed
     # verdict or this call is the first release.
