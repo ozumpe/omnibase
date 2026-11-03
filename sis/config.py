@@ -301,6 +301,15 @@ SCHEMA: tuple[Key, ...] = (
         "'serve' judges the canary against real Ray Serve traffic; unset uses "
         "the legacy in-memory recording.",
         choices=("serve", "legacy")),
+    # Strict: on, it serves every merge into develop as green and judges it
+    # before it replaces blue; off removes that check.
+    Key("canary", "develop_blue_green", ConfigTier.STRICT, Kind.BOOL, False,
+        "SIS_DEVELOP_BLUE_GREEN",
+        "In --loop mode, serve the head of develop as blue in a sandbox worker, "
+        "deploy each observed merge as green and judge it on shadow traffic from "
+        "the contract's oracle: a pass switches blue and green, a failure retires "
+        "green, pages a human and opens a revert PR (OMNI-133). Class-1 contracts "
+        "only."),
 
     # --- loop: pacing. Genuinely soft — nothing here weakens a check. --------
     Key("loop", "interval_seconds", ConfigTier.SOFT, Kind.FLOAT, 30.0,
@@ -792,6 +801,7 @@ class ProposerConfig:
 @dataclass(frozen=True)
 class CanaryConfig:
     backend: str | None
+    develop_blue_green: bool
 
 
 @dataclass(frozen=True)

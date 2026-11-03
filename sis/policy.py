@@ -56,6 +56,7 @@ GUARDRAIL_PATHS: tuple[str, ...] = (
     # could serve itself outside the sandbox, or forge what the host reads.
     "sis/sandbox_worker.py",
     "sis/sandbox_worker_main.py",
+    "sis/develop_platform.py",
     # The contract layer. This module's docstring has always named *contracts*
     # as FORBIDDEN, but the list only ever protected `specs/` — the exam's
     # content — and not the declarations that decide how it is marked. That gap

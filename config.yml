@@ -115,6 +115,12 @@ canary:
   # in-memory recording.
   # env: SIS_CANARY   flag: --canary-backend
   strict_backend: null
+  # In --loop mode, serve the head of develop as blue in a sandbox worker, deploy each
+  # observed merge as green and judge it on shadow traffic from the contract's oracle: a
+  # pass switches blue and green, a failure retires green, pages a human and opens a
+  # revert PR (OMNI-133). Class-1 contracts only.
+  # env: SIS_DEVELOP_BLUE_GREEN   flag: --canary-develop-blue-green
+  strict_develop_blue_green: false
 
 loop:
   # Seconds between cycles in --loop mode.
