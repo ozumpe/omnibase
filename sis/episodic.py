@@ -46,6 +46,10 @@ ACCEPTED_OUTCOMES = frozenset({"verified_awaiting_human_merge", "promoted", "fea
 NEUTRAL_OUTCOMES: dict[str, str] = {
     "noop": "no_change",
     "benchmark_inconclusive": "inconclusive",
+    # The feature's own review asked for changes (OMNI-131): its head passed
+    # every gate, and the next cycle revises it. Not a failure, and not the
+    # target converging either.
+    "review_requested": "review_requested",
 }
 
 
@@ -454,6 +458,13 @@ def gate_from_reason(reason: str | None) -> str | None:
     # limit (L33). Neither the candidate's gate nor the sandbox's.
     if r.startswith("proposer:"):
         return "proposer"
+    # The feature's own review (OMNI-131): changes asked for, which the next
+    # cycle revises, or a review still unsatisfied after its last round. First
+    # among the candidate's gates, since a finding can name any of them.
+    if r.startswith("review requested:"):
+        return "review_requested"
+    if r.startswith("review:"):
+        return "review"
     # A Class-2 feature already on the base branch that still passes every gate
     # (OMNI-147): nothing to build, the target converging. Neutral because the
     # SWE says so (no_gain), as for "no improvement" on a new Class-1 feature.

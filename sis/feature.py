@@ -118,7 +118,12 @@ def with_step(feature: dict[str, Any], story_id: str, baseline_s: float,
     gain = (f"{(1 - candidate_s / baseline_s) * 100:.1f}% faster"
             if candidate_s is not None and baseline_s else "accepted")
     step = {"story": story_id, "baseline_s": baseline_s, "candidate_s": candidate_s}
-    return with_note({**feature, "steps": [*feature["steps"], step]},
+    # A step that passed the gauntlet is the revision a review asked for, if
+    # one was asked for: its findings are answered by the next review, not kept.
+    state = review_state(feature)
+    revised = ({**feature, "review": {**state, "findings": []}}
+               if state["findings"] else feature)
+    return with_note({**revised, "steps": [*feature["steps"], step]},
                      f"step {len(feature['steps']) + 1} accepted: {gain}")
 
 
@@ -163,6 +168,38 @@ def resubmitted(reason: str) -> str:
     """
     return (f"{reason} [resubmitted: identical to a candidate already rejected "
             "against this baseline, not judged again]")
+
+
+def review_state(feature: Mapping[str, Any] | None) -> dict[str, Any]:
+    """The feature's review so far (OMNI-131): rounds held, and open findings. Pure.
+
+    ``{"rounds": n, "findings": [...]}``; a feature saved before OMNI-131, or
+    rebuilt from its branch after a restart, has none, and is reviewed afresh.
+    """
+    state = (feature or {}).get("review") or {}
+    return {"rounds": int(state.get("rounds", 0)), "findings": list(state.get("findings", []))}
+
+
+def needs_revision(feature: Mapping[str, Any] | None) -> bool:
+    """Whether the feature's head was sent back by its review and not yet revised."""
+    return bool(review_state(feature)["findings"])
+
+
+def with_review(feature: dict[str, Any], *, approved: bool,
+                findings: Iterable[str]) -> dict[str, Any]:
+    """*feature* after one more review round. Pure.
+
+    A rejection keeps its findings until a revision passes the gauntlet
+    (:func:`with_step` clears them), and leaves a note the next prompt sees.
+    """
+    state = review_state(feature)
+    rounds = state["rounds"] + 1
+    open_findings = [] if approved else list(findings)
+    reviewed = {**feature, "review": {"rounds": rounds, "findings": open_findings}}
+    if approved:
+        return with_note(reviewed, f"review round {rounds}: approved")
+    return with_note(reviewed, f"review round {rounds}: changes requested "
+                               f"({len(open_findings)} finding(s))")
 
 
 def with_note(feature: dict[str, Any], note: str) -> dict[str, Any]:
@@ -270,14 +307,17 @@ def pr_title(contract_name: str, feature: dict[str, Any], *, building: bool = Fa
 
 
 def pr_body(contract_name: str, feature: dict[str, Any], finished_because: str, *,
-            building: bool = False) -> str:
+            building: bool = False, review: str = "") -> str:
     """The evidence a reviewer reads: every step, and why the feature stopped.
 
     A built feature has no timings to show, so its body says which gates passed
-    and what the attempts before it were rejected for.
+    and what the attempts before it were rejected for. *review* is the agent's
+    approving review (OMNI-131), recorded on the PR it let open.
     """
+    reviewed = [review, ""] if review else []
     if building:
-        earlier = [n for n in feature["attempts"] if not n.startswith("step ")]
+        earlier = [n for n in feature["attempts"]
+                   if not n.startswith(("step ", "review round "))]
         return "\n".join([
             f"Feature for contract `{contract_name}`, built from its spec (OMNI-147). "
             "The module passed every gate the contract names: types, the public API, "
@@ -288,6 +328,7 @@ def pr_body(contract_name: str, feature: dict[str, Any], finished_because: str, 
                *(f"- {n}" for n in earlier), ""] if earlier else []),
             f"Finished because: {finished_because}.",
             "",
+            *reviewed,
             "Automated proposal. Human review and merge required.",
         ])
     rows = [
@@ -305,5 +346,6 @@ def pr_body(contract_name: str, feature: dict[str, Any], finished_because: str, 
         "",
         f"Finished because: {finished_because}.",
         "",
+        *reviewed,
         "Automated proposal. Human review and merge required.",
     ])
