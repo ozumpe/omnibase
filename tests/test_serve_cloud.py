@@ -429,23 +429,30 @@ def test_an_agreeing_candidate_passes(shadow) -> None:  # type: ignore[no-untype
     for _ in range(12):
         _post([[4, 1, 3, 2]])
 
+    # Agreement is what this test is about; the samples' own latencies would
+    # decide on 12 real dispatches (OMNI-50), so equal pairs are given instead.
     verdict = evaluate_canary(
         [], shadow.live_samples(),
         [1.0] * 12, [1.0] * 12,
-        version="v2", mode=CanaryMode.SHADOW, min_samples=10)
+        version="v2", mode=CanaryMode.SHADOW, min_samples=10,
+        pairs=[(1.0, 1.0)] * 12)
     assert verdict.passed, verdict.reason
     assert verdict.response_disagreements == 0
 
 
-def test_a_failing_candidate_does_not_poison_the_sample_set(shadow) -> None:  # type: ignore[no-untyped-def]
-    # A green call that raises is an error_rate movement, not a "disagreement".
-    # Recording it as a sample would blame the candidate twice and, worse, make
-    # a crash look like a wrong answer — different defects, different fixes.
+def test_a_failing_candidate_is_recorded_as_failing(shadow) -> None:  # type: ignore[no-untyped-def]
+    # A green call that raises while blue answers is recorded as a sample with
+    # its error (OMNI-50, M21): dropping it judged green only on the requests
+    # it survived. evaluate_canary counts it as a disagreement, never hands it
+    # to the laws, and leaves it out of the latency pairs.
     shadow.deploy_canary("v2", source='def sort_numbers(v):\n    raise ValueError("boom")\n')
     shadow.shift_traffic("v2", 1.0)
     for _ in range(6):
         assert _post([[2, 1]])["result"] == [1, 2]      # caller still served by blue
 
-    assert shadow.live_samples() == []
+    samples = shadow.live_samples()
+    assert len(samples) == 6
+    assert all(s.candidate_error and "boom" in s.candidate_error for s in samples)
+    assert all(s.baseline_response == [1, 2] for s in samples)
     assert shadow.live_metrics("v2", 60.0)["error_rate"] == 1.0
     assert shadow.live_metrics("v1", 60.0)["error_rate"] == 0.0
