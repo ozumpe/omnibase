@@ -603,9 +603,11 @@ Where things stand (2026-10-31):
   sanitising door, `EIASensor` and its trace, the scenario generator, the first
   recorded fixture (`specs/ca_price_next_week`) and the prediction-error report.
   **OMNI-163, the first gated omnitrack contract** (`ca_price_wholesale`, which
-  must beat persistence on held-out history), is on `develop`; its private
-  fixture still needs a human-checked 2018–2026 calendar and a promotion (L61, L62
-  and L63, which stood in its way, are fixed). What comes next, and the settled decision
+  must beat persistence on held-out history), is on `develop`, and its private
+  fixture was promoted on 2026-11-02 (354 weeks, 2020-01-06 to 2026-10-26; two
+  catch-up weeks skipped), so the contract is registered. Its episodes are in
+  `s3://olafzumpe/specs/ca_price_wholesale/private/`; a scheduled AWS run needs
+  them in the box's artifacts bucket too. What comes next, and the settled decision
   register D0–D12, is `docs/OMNITRACK_VISION.md`: read it before designing
   anything the twin touches. Data-source licences and terms are checked by a
   human before any adapter is written (D0). Iowa's spirits supply chain

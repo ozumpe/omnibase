@@ -221,6 +221,7 @@ def build(lines: Sequence[Mapping[str, Any]], rules: SourceRules, calendar: Rele
 
     files: dict[str, str] = {}
     episodes: list[str] = []
+    skipped: list[str] = []
     week = question.first
     while week <= question.last:
         asked = week - question.horizon
@@ -230,12 +231,16 @@ def build(lines: Sequence[Mapping[str, Any]], rules: SourceRules, calendar: Rele
         # When the value for the week before became known (its first vintage),
         # the question is asked; the answer is the value for this week as the
         # trace holds it now (its latest vintage). No vintage of this week may
-        # be known by then: the view would show it (M32, OMNI-164).
+        # be known by then: the view would show it (M32, OMNI-164). A week that
+        # was (a catch-up release: EIA's June 2022 outage) has no honest
+        # question, so it is skipped and listed, never an episode, as the
+        # prediction-error report skips it (M34, OMNI-170).
         at = by_week[asked][0].known_at + question.ask_after
         answer = by_week[week][-1]
         if by_week[week][0].known_at <= at:
-            raise FixtureRefused(f"{question.target} {week}: known before the question "
-                                 "about it was asked")
+            skipped.append(week.isoformat())
+            week += question.horizon
+            continue
         view = as_of([r for r in adjusted if isinstance(r, Reading)],
                      [a for a in adjusted if isinstance(a, Absent)], at)
         floor = asked - question.lookback
@@ -253,6 +258,10 @@ def build(lines: Sequence[Mapping[str, Any]], rules: SourceRules, calendar: Rele
         files[f"{stem}_expect.json"] = _dump({"schema": FIXTURE_SCHEMA, "value": answer.value})
         episodes.append(week.isoformat())
         week += question.horizon
+    if not episodes:
+        raise FixtureRefused(f"{question.target}: every week from {question.first} to "
+                             f"{question.last} was known before the question about it "
+                             "was asked")
     if private:
         index = []
         for week_name in episodes:
@@ -264,12 +273,13 @@ def build(lines: Sequence[Mapping[str, Any]], rules: SourceRules, calendar: Rele
         files[PRIVATE_INDEX] = _dump({"schema": PRIVATE_INDEX_SCHEMA, "episodes": index})
     files[CALENDAR_FILE] = calendar.raw
     files["README.md"] = _readme(lines, calendar, question, name=name, spec_ref=spec_ref,
-                                 episodes=episodes, private=private)
+                                 episodes=episodes, skipped=skipped, private=private)
     return ContractDraft(name=name, spec_ref=spec_ref, files=files)
 
 
 def _readme(lines: Sequence[Mapping[str, Any]], calendar: ReleaseCalendar, question: Question,
-            *, name: str, spec_ref: str, episodes: Sequence[str], private: bool) -> str:
+            *, name: str, spec_ref: str, episodes: Sequence[str], skipped: Sequence[str],
+            private: bool) -> str:
     captures = [line for line in lines if line["kind"] == "capture"]
     provenance = []
     for line in captures:
@@ -282,7 +292,9 @@ def _readme(lines: Sequence[Mapping[str, Any]], calendar: ReleaseCalendar, quest
     return "".join([
         f"# `{name}`: recorded fixture ({spec_ref})\n\n",
         f"Built by `scripts/build_fixture.py` from a sensor trace. **{len(episodes)} "
-        "episodes**, all held out (`Split.HOLDOUT`).\n\n",
+        "episodes**, all held out (`Split.HOLDOUT`)",
+        f"; {len(skipped)} week(s) skipped (below)" if skipped else "",
+        ".\n\n",
         f"**The question.** {_when(question)}, given everything known then (",
         "every series" if question.inputs is None
         else ", ".join(f"`{series}`" for series in sorted(question.inputs | {question.target})),
@@ -312,6 +324,11 @@ def _readme(lines: Sequence[Mapping[str, Any]], calendar: ReleaseCalendar, quest
         "and labelled EIA's.\n\n",
         "## Episodes\n\n",
         "".join(f"- {week}\n" for week in episodes),
+        *(["\n## Skipped\n\n",
+           "Each week's value was already known when the question about it would be "
+           "asked (released with, or before, the week before it), so there is no "
+           "honest question and it is not an episode.\n\n",
+           "".join(f"- {week}\n" for week in skipped)] if skipped else []),
     ])
 
 

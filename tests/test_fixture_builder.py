@@ -16,6 +16,7 @@ import json
 import pathlib
 import sys
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -203,14 +204,32 @@ def _revised_trace() -> list[dict[str, Any]]:
     return [*first, *second]
 
 
-def test_an_earlier_vintage_of_the_predicted_week_refuses_the_build() -> None:
+def test_a_week_known_before_its_question_is_skipped_and_listed() -> None:
     # M32 (OMNI-164): the 26 Sep price released late, on Wed 5 Oct, after the
     # 3 Oct price's first vintage (5 Oct 17:00). The answer is the revision,
     # known in 2026, so a check on the latest vintage alone passed, and the
-    # inputs carried 6.213 for the very week the model must predict.
+    # inputs carried 6.213 for the very week the model must predict. Such a
+    # catch-up week has no honest question: it is skipped and listed, not an
+    # episode (OMNI-163; EIA's June 2022 outage made two of them).
     late = _calendar(gdu={"2022-09-26": "2022-10-05"})
-    with pytest.raises(FixtureRefused, match="2022-10-03: known before"):
-        build(_revised_trace(), EIA_RULES, late, QUESTION,
+    files = build(_revised_trace(), EIA_RULES, late, QUESTION,
+                  name="ca_price_next_week", spec_ref="OMNI-35").files
+    assert "backtests/2022-10-03_fixture.json" not in files
+    readme = files["README.md"]
+    assert "16 episodes**" in readme and "1 week(s) skipped" in readme
+    assert readme.split("## Skipped", 1)[1].strip().endswith("- 2022-10-03")
+    for name in files:
+        if name.endswith("_fixture.json"):
+            week = name.removeprefix("backtests/").removesuffix("_fixture.json")
+            state, _ = _episode(files, week)
+            assert all(r["event_time"] < week for r in state["readings"] if r["series"] == CA)
+
+
+def test_a_build_with_every_week_skipped_refuses() -> None:
+    late = _calendar(gdu={"2022-09-26": "2022-10-05"})
+    only = replace(QUESTION, first=datetime.date(2022, 10, 3), last=datetime.date(2022, 10, 3))
+    with pytest.raises(FixtureRefused, match="every week from 2022-10-03"):
+        build(_revised_trace(), EIA_RULES, late, only,
               name="ca_price_next_week", spec_ref="OMNI-35")
 
 

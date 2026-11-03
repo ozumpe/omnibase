@@ -22,6 +22,14 @@ release renames that heading to the new tag.
   it is private, its episodes kept in the artifacts bucket and checked by the
   sha256 in a committed `specs/<name>/private.json`. The contract registers
   once that index is promoted.
+- OMNI-163: a fixture week whose answer was public before its question could
+  be asked (a catch-up release: 2022-06-27 and 2026-09-21 in EIA's record) is
+  skipped and listed in the staged README instead of refusing the whole build
+  (M32's guard, unchanged otherwise). A build with every week skipped still
+  refuses.
+- OMNI-163: `ca_price_wholesale`'s private fixture is promoted (354 weekly
+  episodes, 2020-01-06 to 2026-10-26), so the contract is registered. Git holds
+  `private.json`, the README and the calendar; the episodes are in S3.
 - OMNI-175: a proposer API error (a 401, say) is named as the proposer's, not
   as "in the SWE's step, after the proposal".
 - OMNI-73 (L27): only the harness's own words (`<gate> gate timed out`) make a
