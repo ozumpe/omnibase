@@ -7,8 +7,10 @@ sandbox worker (`sis/sandbox_worker.py`,
 feature branches (`sis/feature.py`,
 [OMNI-130](https://olafzumpe.atlassian.net/browse/OMNI-130)), are built. The
 gate separation built on that worker also shipped (OMNI-45/146), and Class-2
-construction is integrated (OMNI-147/149). Serve isolation, agent review,
-develop blue/green, AI approval and dynamic feature sizing remain planned.
+construction is integrated (OMNI-147/149). Develop blue/green
+([OMNI-133](https://olafzumpe.atlassian.net/browse/OMNI-133),
+`sis/develop_platform.py`) is built behind `canary.develop_blue_green`, off by
+default. Agent review, AI approval and dynamic feature sizing remain planned.
 
 ## Why
 
@@ -28,7 +30,7 @@ The engine adopts the flow this repository already uses for its own work:
 | Stage | Who acts | What reaches it |
 |---|---|---|
 | **Feature** branch | The agent, autonomously | Passing versions are committed; failed attempts remain feedback. Optimizations can take several steps; Class 2 finishes at its first passing step. The sandbox worker exists; agent self-review and automatic hot feature testing are planned. |
-| **`develop`** | A human merges one fixed-head PR per finished feature. | The next feature starts from merged code. Automatic develop blue/green and optional AI approval are planned, not available switches today. |
+| **`develop`** | A human merges one fixed-head PR per finished feature. | The next feature starts from merged code. With `canary.develop_blue_green` on, each merge is served as green and judged against blue before it replaces it (below). Optional AI approval is planned. |
 | **`main`** | A human, always, by release PR | Production |
 
 Git keeps the history of every version the agent stood behind, and only those.
@@ -63,7 +65,8 @@ sizing based on gains is OMNI-134, still planned.
 | OMNI-45/146: benchmark and correctness gates separated from candidate workers | Built; SLO remains in-process |
 | OMNI-147/149: Class-2 construction and already-built convergence | Built |
 | OMNI-48: move Serve green onto the worker | Built 2026-10-27; non-stub Serve refusal remains until a human lifts it |
-| OMNI-131/133: agent review and develop blue/green | Planned |
+| OMNI-133: develop blue/green | Built 2026-11-03, off by default (`canary.develop_blue_green`); Class-1 contracts, `--loop` only |
+| OMNI-131: agent review | Planned |
 | OMNI-132: optional AI approval | Planned; no implemented configuration switch |
 | OMNI-134: dynamic feature size | Planned |
 
@@ -130,6 +133,57 @@ Desktop; measure it before relying on either number.
 - State is not handed over on a swap. Stateful targets (the omnitrack twin's
   actors) come later, and D2's decision to externalise state makes that
   tractable.
+
+## Develop blue/green (OMNI-133)
+
+`develop` is a running platform, not just a branch. With
+`canary.develop_blue_green` on, `main.py --loop` starts a
+`DevelopPlatform` (`sis/develop_platform.py`, POLICY-FORBIDDEN) before its
+first cycle:
+
+- **Blue** is the head of `develop` as the run finds it (the target as merged
+  on the base branch, else the local file), served from a sandbox worker.
+- **Green.** When the loop observes a human merge (`DevOps.observe_merge`),
+  the merged file is started as green in a second worker.
+- **The judgment.** The host draws 120 batches of 16 fresh inputs from the
+  contract's oracle and sends each batch to both sides, alternating which goes
+  first. `evaluate_canary` then decides in `SHADOW` mode:
+  - every answer must equal the reference and blue's (plain values, JSON-decoded);
+  - no call may fail (the error rate);
+  - green's p95 per exchange may be at most 25% above blue's (p99 has a further
+    10%).
+
+  A merged version already beat its baseline offline, so the latency check
+  only has to catch a regression; without slack, two equal versions would fail
+  on noise.
+- **Pass:** blue and green switch, automatically, because a human already
+  approved the merge.
+- **Fail:** green is retired before it serves anything, and blue keeps serving.
+  A revert PR (`revert/<version>`, blue's file) is opened against the base
+  branch and a human is paged (CRITICAL). Nothing reverts automatically.
+- **A fault on blue's side** (blue errs or dies under the window) is the
+  harness's, not green's (OMNI-37). Nothing switches and nothing is reverted;
+  a human is paged.
+
+Every outcome is a provenance event (`develop.switch`, `develop.rollback`,
+`develop.unjudged`) and an episodic row (`develop_switched`,
+`develop_rolled_back`, `develop_unjudged`), with blue's and green's p95. The
+SelfModel's `develop_blue` slot names what blue serves.
+
+**Limits of this slice:**
+
+- Class-1 contracts only. A feature has no oracle to draw traffic from, so
+  for a Class-2 contract the platform stays off and says so.
+- Only the loop's own contract is judged. A merge for another contract is
+  logged as not judged.
+- The traffic is the oracle's, not production's: nothing outside calls
+  `develop` yet.
+- Blue lives as long as the loop process. A restart serves the base branch's
+  head again, which then includes every merge, judged or not.
+- A revert PR does not hold the loop (only `feature/` PRs do, OMNI-136).
+- The latency check is `evaluate_canary`'s percentile comparison. OMNI-50's
+  paired statistics will replace it for both canaries.
+- `main`'s own blue/green comes later, with the same machinery.
 
 ## Risks
 

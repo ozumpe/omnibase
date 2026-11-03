@@ -162,6 +162,16 @@ internal target before it models anything external.
   host-side file; sandbox containers run with `--log-driver none`, so docker
   keeps no copy either (OMNI-156, H11). The Serve canary's
   replicas serve through it too (OMNI-48).
+  **`develop` is a running platform** (OMNI-133, `sis/develop_platform.py`,
+  `canary.develop_blue_green`, off by default, `--loop` and Class 1 only).
+  Blue is the base branch's head in a sandbox worker; each merge the loop
+  observes runs as green beside it. Both get the same oracle inputs, and
+  `evaluate_canary` (SHADOW) judges green against the reference and blue,
+  then its error rate and latency (p95 at most 25% above blue's). A pass
+  switches them. A failure retires green, so blue never serves a version
+  that failed, opens a revert PR (`revert/<version>`) and pages a human;
+  nothing reverts by itself. A fault on blue's side is the harness's. See
+  `docs/STAGED_DELIVERY.md`.
   **A broken sandbox is never blamed on the candidate** (OMNI-37): when a
   sandboxed gate fails, the gauntlet first runs a trusted self-check in the
   same sandbox (`gauntlet.probe_sandbox`); if that fails too, the verdict is
@@ -331,7 +341,8 @@ internal target before it models anything external.
 - **Change-authorization policy (`sis/policy.py`) — what the loop may rewrite:**
   - FORBIDDEN (never, no override): guardrail/safety code — the gauntlet and
     its output canonicaliser (`sis/canonical.py`), the hot-deploy sandbox
-    worker (`sis/sandbox_worker.py`, `sis/sandbox_worker_main.py`), the contract layer (`sis/contract.py`, `sis/backtest.py`, `sis/invariant.py`,
+    worker (`sis/sandbox_worker.py`, `sis/sandbox_worker_main.py`), what `develop`'s
+    blue serves (`sis/develop_platform.py`, OMNI-133), the contract layer (`sis/contract.py`, `sis/backtest.py`, `sis/invariant.py`,
     `sis/slo.py`, `sis/clock.py`), the ports with the `Sensor` and the shape
     of a reading (`sis/ports.py`, OMNI-31), the door sensor data comes in
     through (`sis/sensor_input.py`, OMNI-32), the capture trace
@@ -602,9 +613,9 @@ Where things stand (2026-10-31):
 - **Staged delivery is where engine work continues** (epic OMNI-128,
   `docs/STAGED_DELIVERY.md`). Built: the sandbox worker (OMNI-129), now behind
   every gate but SLO and behind the Serve canary (OMNI-48), and feature
-  branches (OMNI-130, hardened by OMNI-135). Next: OMNI-133 (`develop`
-  blue/green), OMNI-131 (the agent's own review), OMNI-132 (AI approval),
-  OMNI-134 (dynamic feature size). OMNI-142 (holds per contract) matters only
+  branches (OMNI-130, hardened by OMNI-135), and `develop` blue/green
+  (OMNI-133, off by default). Next: OMNI-131 (the agent's own review),
+  OMNI-132 (AI approval), OMNI-134 (dynamic feature size). OMNI-142 (holds per contract) matters only
   once two contracts run at the same time.
 - **Open epics from the 2026-09-26 review:** OMNI-43 (gate integrity; left:
   L42, OMNI-86) and OMNI-44 (Serve-canary isolation; left: OMNI-50, M20/M21).
