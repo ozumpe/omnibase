@@ -115,3 +115,17 @@ def test_the_draft_leaves_the_check_to_a_human(tmp_path: pathlib.Path) -> None:
     assert drafted["reports"]["gdu"]["releases"] == {"2022-01-10": "2022-01-10"}
     assert drafted["reports"]["spot"]["releases"] == {"2022-01-07": "2022-01-12",
                                                       "2022-01-10": "2022-01-12"}
+
+
+def test_a_correction_moves_a_retail_release_later_and_never_earlier() -> None:
+    drafted = {D(2022, 6, 13): D(2022, 6, 13), D(2022, 6, 20): D(2022, 6, 21),
+               D(2026, 9, 14): D(2026, 9, 15)}
+    assert calendar.corrected(drafted) == {D(2022, 6, 13): D(2022, 6, 13),
+                                           D(2022, 6, 20): D(2022, 6, 29),
+                                           D(2026, 9, 14): D(2026, 9, 22)}
+    # A source that already shows a later date than the correction keeps it.
+    assert calendar.corrected({D(2022, 6, 20): D(2022, 7, 5)}) == {
+        D(2022, 6, 20): D(2022, 7, 5)}
+    # A Monday outside the draft is not added.
+    assert calendar.corrected({D(2022, 6, 13): D(2022, 6, 13)}) == {
+        D(2022, 6, 13): D(2022, 6, 13)}

@@ -66,6 +66,35 @@ _WPSR_ROW = re.compile(
     r"(?P<day>\d{1,2})</a></td>\s*<td>(?P<ending>\d{1,2}(?:/\d{1,2})?)</td>")
 _ISO = re.compile(r"^\d{4}-\d\d-\d\d$")
 
+# Mondays whose price came out later than ALFRED's release list says, found by
+# a cross-check (OMNI-163): FRED's US regular and conventional gasoline series
+# (GASREGW, GASREGCOVW) first hold these Mondays in a later vintage. Each date
+# is the latest with support, since a late date only hides a value and an
+# early one shows a model a price before it was published. Applied only to
+# move a release later, never earlier.
+RETAIL_CORRECTIONS: dict[datetime.date, tuple[datetime.date, str]] = {
+    datetime.date(2022, 6, 20): (
+        datetime.date(2022, 6, 29),
+        "ALFRED lists a release on 2022-06-21, but GASREGW and GASREGCOVW first hold "
+        "2022-06-20 in their 2022-06-27 vintage (EIA's June 2022 outage), and CLAUDE.md "
+        "says those prices came out on 2022-06-29: the later date is kept."),
+    datetime.date(2026, 9, 14): (
+        datetime.date(2026, 9, 22),
+        "ALFRED lists a release on 2026-09-15, but GASREGW's and GASREGCOVW's "
+        "2026-09-15 vintages still end at 2026-09-07; 2026-09-14 first appears in "
+        "their 2026-09-22 vintage. EIA's holiday schedule names no delay that week, "
+        "so the later date is kept."),
+}
+
+
+def corrected(retail: Mapping[datetime.date, datetime.date]) -> dict[datetime.date, datetime.date]:
+    """*retail* with :data:`RETAIL_CORRECTIONS` applied where they move a release later."""
+    out = dict(retail)
+    for monday, (released, _) in RETAIL_CORRECTIONS.items():
+        if monday in out and released > out[monday]:
+            out[monday] = released
+    return out
+
 
 class SourceRefused(ValueError):
     """A source said something this script does not expect."""
@@ -237,7 +266,8 @@ def draft(sources: pathlib.Path, first: datetime.date, last: datetime.date) -> d
     """The unchecked calendar for [first, last], from the copies saved in *sources*."""
     stocks = {week: day for week, day in wpsr_releases(_read(sources, "wpsr.html")).items()
               if first <= week <= last}
-    retail = monday_releases(alfred_release_dates(_read(sources, "gdu.txt")), first, last)
+    retail = corrected(
+        monday_releases(alfred_release_dates(_read(sources, "gdu.txt")), first, last))
     held: dict[datetime.date, datetime.date] = {}
     for (name, _), window in zip(urls(sources, first, last)[3:],
                                  _windows(_vintages(sources, first, last)), strict=True):
@@ -274,8 +304,10 @@ def draft(sources: pathlib.Path, first: datetime.date, last: datetime.date) -> d
             "gdu": {"name": "Gasoline and Diesel Fuel Update", "series": list(RETAIL),
                     "source": f"{GDU_DATES} (each Monday's price maps to the first release "
                               "date on or after it)",
-                    "note": "ALFRED shows a release on 2022-06-21 for Monday 2022-06-20; "
-                            "CLAUDE.md says those prices came out on 2022-06-29. Check it.",
+                    "note": " ".join(
+                        f"{monday}: released {released}, not ALFRED's date. {why}"
+                        for monday, (released, why) in sorted(RETAIL_CORRECTIONS.items())
+                        if first <= monday <= last),
                     "releases": _iso(retail)},
             "spot": {"name": "Spot prices (weekly release)", "series": list(SPOT),
                      "source": f"{SPOT_VINTAGES} and {SPOT_CSV}: the vintages of "

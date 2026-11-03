@@ -1,8 +1,8 @@
 {
  "schema": 1,
  "timezone": "America/New_York",
- "checked_by": "",
- "checked_on": "",
+ "checked_by": "Olaf Zumpe",
+ "checked_on": "2026-11-02",
  "description": "When each EIA period from 2018-12-01 to 2026-10-28 was actually released, for OMNI-163's fixture's release check (sis/fixture_builder.py). Keys are the period's date (Friday week-ending for stocks, Monday for retail prices, the day for the spot price); values the release date, both in America/New_York. Drafted 2026-10-30 by scripts/draft_release_calendar.py; a human checks the dates against the sources and fills in checked_by and checked_on before any fixture is built.",
  "reports": {
   "wpsr": {
@@ -435,7 +435,7 @@
     "PET.EMM_EPMRR_PTE_NUS_DPG.W"
    ],
    "source": "https://alfred.stlouisfed.org/release/downloaddates?rid=183&ff=txt (each Monday's price maps to the first release date on or after it)",
-   "note": "ALFRED shows a release on 2022-06-21 for Monday 2022-06-20; CLAUDE.md says those prices came out on 2022-06-29. Check it.",
+   "note": "2022-06-20: released 2022-06-29, not ALFRED's date. ALFRED lists a release on 2022-06-21, but GASREGW and GASREGCOVW first hold 2022-06-20 in their 2022-06-27 vintage (EIA's June 2022 outage), and CLAUDE.md says those prices came out on 2022-06-29: the later date is kept. 2026-09-14: released 2026-09-22, not ALFRED's date. ALFRED lists a release on 2026-09-15, but GASREGW's and GASREGCOVW's 2026-09-15 vintages still end at 2026-09-07; 2026-09-14 first appears in their 2026-09-22 vintage. EIA's holiday schedule names no delay that week, so the later date is kept.",
    "releases": {
     "2018-12-03": "2018-12-03",
     "2018-12-10": "2018-12-10",
@@ -622,7 +622,7 @@
     "2022-05-30": "2022-05-31",
     "2022-06-06": "2022-06-06",
     "2022-06-13": "2022-06-13",
-    "2022-06-20": "2022-06-21",
+    "2022-06-20": "2022-06-29",
     "2022-06-27": "2022-06-27",
     "2022-07-04": "2022-07-05",
     "2022-07-11": "2022-07-11",
@@ -843,7 +843,7 @@
     "2026-08-24": "2026-08-25",
     "2026-08-31": "2026-09-01",
     "2026-09-07": "2026-09-09",
-    "2026-09-14": "2026-09-15",
+    "2026-09-14": "2026-09-22",
     "2026-09-21": "2026-09-22",
     "2026-09-28": "2026-09-29",
     "2026-10-05": "2026-10-06",
