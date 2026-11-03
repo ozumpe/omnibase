@@ -1,14 +1,18 @@
 # Brake state & the oracle-versioned circuit breaker (design)
 
-**Status:** historical design. **Parts 1–2 & 6 implemented (2026-07-29)** — the `sis` namespace +
-`get_if_exists` (M2) and CEO brake/spend state persisted to the episodic store and
-rehydrated on restart (L9), with a `reset_breaker()` RPC. **Parts 3–5 remain an
-unimplemented historical design sketch:** the breaker-cause split and the
-oracle-versioned auto-reset needed the L5 target contract to hash against, and L5
-closed on 2026-08-06 (OMNI-1: `sis/contract.py` + the FORBIDDEN
-`specs/<name>/oracle.py` modules). No Jira story exists for them yet. See
-`docs/KNOWN_ISSUES.md` for the issue IDs and `docs/CLASS2_CONTRACT.md` for the
-target/oracle contract this builds on.
+**Status:** closed, nothing left to build (reviewed 2026-11-02). **Parts 1–2 & 6
+implemented (2026-07-29)**: the `sis` namespace + `get_if_exists` (M2, OMNI-92)
+and CEO brake/spend state persisted to the episodic store and rehydrated on
+restart (L9, OMNI-93), with a `reset_breaker()` RPC. **Part 3 shipped in another
+form** (OMNI-138, OMNI-145): no-op and no-gain cycles are neutral and never count
+toward the breaker, `loop.converged_after` of them in a row stop the loop with a
+page, and a quality failure still trips the breaker, which only a human resets.
+**Parts 4–5 are superseded and will not be built:** the convergence count lives
+only in a running loop and is never persisted, so there is no stored convergence
+state for an oracle hash to reset; a loop restarted after a human changes the
+oracle starts from a clean count. They are kept below as the historical
+reasoning. See `docs/KNOWN_ISSUES.md` for the issue IDs and
+`docs/CLASS2_CONTRACT.md` for the target/oracle contract.
 
 **Current behavior supersedes the convergence proposal below:** OMNI-138 made
 no-gain outcomes neutral and added a convergence stop; they no longer trip a
@@ -70,7 +74,7 @@ rehydrates from a state dict on a *fresh* actor; the driver loads on bootstrap a
 persists after every cycle (single-writer). `reset_breaker()` clears the trip but
 **not** the spend (§4.1). So the spend cap and breaker survive a restart.
 
-## Part 3 — Two trip causes, not one *(design — not yet built)*
+## Part 3 — Two trip causes, not one *(shipped differently: OMNI-138, OMNI-145)*
 
 The consecutive-failure breaker currently counts *every* `rolled_back` cycle the
 same way. The live L3 runs showed two very different causes hiding behind that:
@@ -91,7 +95,7 @@ These need different handling, and different reset semantics:
 - **Quality failure → the classic safety breaker** + page-a-human; cleared only by
   an explicit human reset (someone confirms the proposer issue is understood).
 
-## Part 4 — The oracle-versioned breaker *(design — not yet built)*
+## Part 4 — The oracle-versioned breaker *(superseded — will not be built)*
 
 **Idea:** persist the breaker state tagged with a **hash of the current oracle**,
 and auto-reset when that hash changes. Redefining the oracle *is* the reset signal
@@ -141,7 +145,7 @@ Hash the *semantic* contract fields (entry symbol, reference oracle, inputs/sizi
 min-speedup margin) + the baseline, not the raw file bytes — so a cosmetic comment
 edit doesn't cost a re-converge cycle.
 
-## Part 5 — The resulting closed loop *(design — not yet built)*
+## Part 5 — The resulting closed loop *(superseded — will not be built)*
 
 ```
 converged target → benchmark-rejects at the noise floor → goal_exhausted trip
@@ -179,12 +183,12 @@ is computed over exactly that contract. Suggested order:
 
 1. ✅ **M2 + L9(b)** — namespace + `get_if_exists` + `reset_breaker()` + CEO
    state persisted/rehydrated. *(Done 2026-07-29.)*
-2. **Breaker classification** — split `goal_exhausted` (convergence) from the safety
-   breaker; make convergence benign-but-escalating. Small; fixes the run-4/5
-   coin-flip-trip pathology.
+2. ✅ **Breaker classification** — split convergence from the safety breaker;
+   make convergence benign-but-escalating. *(Done as OMNI-138: neutral no-gain
+   outcomes and a convergence stop that pages, refined by OMNI-145.)*
 3. ✅ **L5 Layer 1** — the target/oracle contract, so "redefine the oracle" has
    something to rewrite. *(Done 2026-08-06, OMNI-1 — landed out of the order
    listed here.)*
-4. **The oracle-versioned breaker** — persist CEO state with the oracle hash;
-   auto-reset the convergence breaker on change. Step 2 is now its only
-   remaining prerequisite.
+4. ~~**The oracle-versioned breaker**~~ — superseded. With step 2 done as
+   OMNI-138, no convergence state is persisted, so there is nothing for an
+   oracle hash to reset. Not planned.
