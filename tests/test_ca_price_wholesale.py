@@ -88,11 +88,12 @@ def _fixture(root: pathlib.Path) -> str:
     return str(root / PRIVATE_INDEX)
 
 
-def test_the_contract_waits_for_its_promoted_fixture() -> None:
-    # No private.json in git yet: nothing to judge it on, so not registered.
-    assert not (PROJECT_ROOT / CA_PRICE_WHOLESALE_INDEX).exists()
-    assert CA_PRICE_WHOLESALE is None
-    assert all(c.name != "ca_price_wholesale" for c in FEATURE_CONTRACTS)
+def test_the_promoted_fixture_registers_the_contract() -> None:
+    # private.json was promoted on 2026-11-02 (OMNI-163): the contract is
+    # registered, whether or not this clone has the private episodes.
+    assert (PROJECT_ROOT / CA_PRICE_WHOLESALE_INDEX).exists()
+    assert CA_PRICE_WHOLESALE is not None
+    assert any(c.name == "ca_price_wholesale" for c in FEATURE_CONTRACTS)
 
 
 def _malformed(entry: dict[str, Any]) -> list[tuple[bytes, str]]:

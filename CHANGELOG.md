@@ -27,6 +27,9 @@ release renames that heading to the new tag.
   skipped and listed in the staged README instead of refusing the whole build
   (M32's guard, unchanged otherwise). A build with every week skipped still
   refuses.
+- OMNI-163: `ca_price_wholesale`'s private fixture is promoted (354 weekly
+  episodes, 2020-01-06 to 2026-10-26), so the contract is registered. Git holds
+  `private.json`, the README and the calendar; the episodes are in S3.
 - OMNI-175: a proposer API error (a 401, say) is named as the proposer's, not
   as "in the SWE's step, after the proposal".
 - OMNI-73 (L27): only the harness's own words (`<gate> gate timed out`) make a
