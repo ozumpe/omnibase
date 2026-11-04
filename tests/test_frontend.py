@@ -417,9 +417,9 @@ def _built_server(monkeypatch: pytest.MonkeyPatch) -> Any:
 def test_the_built_server_does_not_run_with_null_auth(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    server = _built_server(monkeypatch)  # skips without the ui group
     from bokeh.server.auth_provider import NullAuth
 
-    server = _built_server(monkeypatch)
     try:
         tornado = server._tornado
         assert not isinstance(tornado.auth_provider, NullAuth)
@@ -435,9 +435,9 @@ def test_an_unsigned_session_token_is_refused_by_the_websocket(
     # Bokeh's websocket handler opens a session only for a token that passes
     # check_token_signature; with signed sessions, only the page handler (after
     # login and the authorize callback) can mint one.
+    server = _built_server(monkeypatch)  # skips without the ui group
     from bokeh.util.token import check_token_signature, generate_jwt_token, generate_session_id
 
-    server = _built_server(monkeypatch)
     try:
         tornado = server._tornado
         forged = generate_jwt_token(generate_session_id(signed=False), signed=False)
