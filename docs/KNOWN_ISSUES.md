@@ -45,7 +45,7 @@ reference with no link target below.
 > | M20, M21 | [OMNI-50](https://olafzumpe.atlassian.net/browse/OMNI-50) (epic OMNI-44) |
 > | M15 | [OMNI-51](https://olafzumpe.atlassian.net/browse/OMNI-51) — **fixed** |
 > | M12 | [OMNI-52](https://olafzumpe.atlassian.net/browse/OMNI-52) — **fixed** (2026-10-25) |
-> | M13 | [OMNI-53](https://olafzumpe.atlassian.net/browse/OMNI-53) |
+> | M13 | [OMNI-53](https://olafzumpe.atlassian.net/browse/OMNI-53) — **fixed** (2026-11-04) |
 > | M14 | [OMNI-54](https://olafzumpe.atlassian.net/browse/OMNI-54) — **fixed** (2026-10-15) |
 > | M16 (and L30) | [OMNI-55](https://olafzumpe.atlassian.net/browse/OMNI-55) — **fixed** (2026-10-08) |
 > | M17 | [OMNI-56](https://olafzumpe.atlassian.net/browse/OMNI-56) — **fixed** (2026-09-29) |
@@ -68,25 +68,6 @@ reference with no link target below.
 None open.
 
 ## Medium
-
-- [OMNI-53] **M13 — GitHub OAuth is never actually installed on the operator console;
-  the server runs unauthenticated** *(found 2026-09-26; reproduced against
-  the installed Panel version, without starting Ray)* — `_install_oauth`
-  (`sis/frontend.py`) only sets `pn.config.oauth_provider`/etc. and returns
-  `{}`; `serve()` calls `pn.serve(...)` without passing `oauth_provider=` as
-  an argument, and Panel's `get_server` only builds an auth provider when
-  that *argument* (not the `pn.config` attribute) is set. Reproduced: the
-  server's `auth_provider` comes back `NullAuth`, `sign_sessions=False`.
-  Browser requests are refused with a 403 (the `authorize` callback receives
-  `user_info=None` and raises on `.get`), but the Bokeh websocket path
-  accepts an unsigned session token without ever calling the authorize
-  callback, so a non-browser client can open a full session and save edits —
-  including, combined with M12, `forbidden_` ones. Mitigated today only by
-  the loopback-only bind (OMNI-29); this fails as soon as anything binds
-  `SIS_FRONTEND_BIND` beyond loopback believing OAuth protects it. Fix: pass
-  `oauth_provider`, `oauth_key`/`oauth_secret` and a `cookie_secret` to
-  `pn.serve`; enable signed sessions; add a test asserting the built server's
-  `auth_provider` is not `NullAuth`.
 
 - [OMNI-50] **M20 — The live canary's p95/p99 gate is close to a coin flip for targets
   where dispatch overhead dominates compute** *(found 2026-09-26; simulated
@@ -832,6 +813,36 @@ any long-lived cluster exists.
   `Workspace` actor (skipped without the image, as on CI), and the driver's
   sandbox mode is what the replica uses after the scrub. The M19 refusal still
   stands; lifting it is a separate decision.
+
+- [OMNI-53] **M13 — GitHub OAuth is never actually installed on the operator console;
+  the server runs unauthenticated** *(found 2026-09-26; reproduced against
+  the installed Panel version, without starting Ray)* — `_install_oauth`
+  (`sis/frontend.py`) only sets `pn.config.oauth_provider`/etc. and returns
+  `{}`; `serve()` calls `pn.serve(...)` without passing `oauth_provider=` as
+  an argument, and Panel's `get_server` only builds an auth provider when
+  that *argument* (not the `pn.config` attribute) is set. Reproduced: the
+  server's `auth_provider` comes back `NullAuth`, `sign_sessions=False`.
+  Browser requests are refused with a 403 (the `authorize` callback receives
+  `user_info=None` and raises on `.get`), but the Bokeh websocket path
+  accepts an unsigned session token without ever calling the authorize
+  callback, so a non-browser client can open a full session and save edits —
+  including, combined with M12, `forbidden_` ones. Mitigated today only by
+  the loopback-only bind (OMNI-29); this fails as soon as anything binds
+  `SIS_FRONTEND_BIND` beyond loopback believing OAuth protects it. Fix: pass
+  `oauth_provider`, `oauth_key`/`oauth_secret` and a `cookie_secret` to
+  `pn.serve`; enable signed sessions; add a test asserting the built server's
+  `auth_provider` is not `NullAuth`. **Fixed 2026-11-04 (OMNI-53):**
+  `frontend.server_options` passes `oauth_provider`, `oauth_key`,
+  `oauth_secret`, a `cookie_secret` (the configured one, or generated per
+  process), a per-process `oauth_encryption_key`, and `sign_sessions=True`
+  with a per-process `secret_key` to `pn.serve`. The authorize callback
+  (`frontend.authorize_login`) refuses `user_info=None` instead of raising.
+  Inside the session, `frontend.session_refusal` checks the signed-in user
+  against the allowlist again when the page is built (the twin viewer's
+  too) and before every save. Tests build the server and assert it is not
+  `NullAuth` and signs sessions, that an unsigned token fails the websocket's
+  signature check, and that a session with no authorized user never reaches
+  `save_edits`. Not yet exercised against a real GitHub OAuth app.
 
 - [OMNI-171] **M35 — A scheduled AWS run lost track of its loop once the run's log passed
   20 KB** *(found 2026-10-26 by the weekly code review; reproduced on

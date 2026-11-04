@@ -306,6 +306,13 @@ def build_config_panel() -> pn.viewable.Viewable:
     )
 
     def save(_event: Any) -> None:
+        # Defence in depth (OMNI-53, M13): the page was only built for an
+        # authorized operator, but a save is the one action that changes
+        # anything, so it asks again rather than trusting how it was reached.
+        refusal = session_refusal()
+        if refusal is not None:
+            _flash(status, f"Refused: {refusal}", "danger")
+            return
         edits = _pending_edits(views, widgets)
         if not edits:
             _flash(status, "Nothing changed.", "light")
@@ -455,6 +462,9 @@ def build_app() -> pn.viewable.Viewable:
     """The whole page. Called per session, so each visitor gets fresh state."""
     import panel as pn
 
+    refusal = session_refusal()
+    if refusal is not None:
+        return _refused_page(refusal)
     return pn.template.FastListTemplate(
         title=TITLE,
         main=[build_state_panel(), build_config_panel()],
@@ -462,20 +472,98 @@ def build_app() -> pn.viewable.Viewable:
 
 
 # --------------------------------------------------------------------------
+# Who is on the other end of a session (OMNI-53, M13)
+# --------------------------------------------------------------------------
+
+# The configuration :func:`serve` is serving under, so a session's checks use
+# the same allowlist the login did. ``None`` outside :func:`serve` (tests, a
+# page built by hand), where the current configuration is read instead.
+_SERVING: config.FrontendConfig | None = None
+
+
+def _current_user() -> str | None:
+    """The signed-in login of the current session, or ``None``. Panel's view."""
+    import panel as pn
+
+    user = pn.state.user
+    return None if user is None else str(user)
+
+
+def session_refusal(
+    frontend: config.FrontendConfig | None = None, user: str | None = None,
+) -> str | None:
+    """Why the current session may not use the console, or ``None`` if it may.
+
+    The login itself is checked by Panel's authorize callback before a page is
+    served. This asks again from inside the session, when the page is built
+    and before every save: a session that reached the app some other way (the
+    websocket path, an auth provider that was never installed, which is what
+    M13 was) has no user, and gets nothing. With ``auth: none`` there is no
+    user to check; :func:`sis.operator.check_servable` keeps that loopback-only.
+    """
+    resolved = frontend or _SERVING or config.config().frontend
+    if resolved.auth == "none":
+        return None
+    login = user if user is not None else _current_user()
+    if not login:
+        return "this session has no signed-in GitHub user"
+    if not operator.is_authorized(login, resolved):
+        return f"{login!r} is not on frontend.allowed_logins"
+    return None
+
+
+def _refused_page(reason: str) -> pn.viewable.Viewable:
+    import panel as pn
+
+    return pn.pane.Alert(f"**Not authorized** — {reason}.", alert_type="danger")
+
+
+def _guarded(app: Callable[[], Any]) -> Callable[[], Any]:
+    """*app*, built only for a session :func:`session_refusal` admits."""
+
+    def guarded() -> Any:
+        refusal = session_refusal()
+        return _refused_page(refusal) if refusal is not None else app()
+
+    return guarded
+
+
+# --------------------------------------------------------------------------
 # Serving
 # --------------------------------------------------------------------------
 
 
-def _install_oauth(frontend: config.FrontendConfig) -> dict[str, Any]:
-    """Configure Panel's OAuth and the allowlist. Returns extra serve kwargs.
+def authorize_login(user_info: Mapping[str, Any] | None,
+                    frontend: config.FrontendConfig) -> bool:
+    """Panel's authorize callback, as a pure function: is this login allowed?
 
-    The allowlist is applied through Panel's ``authorize_callback``, which runs
-    after a successful login and before any page is served — so an authenticated
-    GitHub user who is not on the list gets nothing, rather than a page they
-    merely cannot edit.
+    ``user_info`` is ``None`` when the request carries no signed-in user,
+    which is what every request saw while no auth provider was installed
+    (M13): it is a refusal, never an ``AttributeError`` on ``.get``.
     """
-    import panel as pn
+    if not user_info:
+        return False
+    login = str(user_info.get("login") or user_info.get("username") or "")
+    return operator.is_authorized(login, frontend)
 
+
+def server_options(frontend: config.FrontendConfig) -> dict[str, Any]:
+    """The ``pn.serve`` arguments that install authentication. ``{}`` for none.
+
+    **They have to be arguments** (OMNI-53, M13). Panel builds its auth
+    provider only from ``pn.serve(oauth_provider=...)``; setting
+    ``pn.config.oauth_provider``, which this once did, left the server on
+    Bokeh's ``NullAuth`` with unsigned sessions, so a client that skipped the
+    browser could open a session the authorize callback never saw.
+
+    - ``sign_sessions`` with a per-process ``secret_key``: only the page
+      handler, after the login and the authorize callback, can mint a session
+      token the websocket accepts.
+    - ``cookie_secret`` from the secrets file, or generated per process (a
+      restart logs everyone out, which is fine for a single-operator tool).
+    - ``oauth_encryption_key``, generated per process: the access token in
+      the cookie is encrypted, not merely signed.
+    """
     if frontend.auth == "none":
         return {}
 
@@ -487,18 +575,37 @@ def _install_oauth(frontend: config.FrontendConfig) -> dict[str, Any]:
             "secrets.local.yml (see secrets.example.yml)."
         )
 
-    pn.config.oauth_provider = "github"
-    pn.config.oauth_key = creds.oauth_key
-    pn.config.oauth_secret = creds.oauth_secret
-    if creds.cookie_secret:
-        pn.config.cookie_secret = creds.cookie_secret
+    import base64
+    import secrets
 
-    def authorize(user_info: dict[str, Any]) -> bool:
-        login = str(user_info.get("login") or user_info.get("username") or "")
-        return operator.is_authorized(login, frontend)
+    return {
+        "oauth_provider": "github",
+        "oauth_key": creds.oauth_key,
+        "oauth_secret": creds.oauth_secret,
+        "cookie_secret": creds.cookie_secret or secrets.token_urlsafe(32),
+        "oauth_encryption_key": base64.urlsafe_b64encode(secrets.token_bytes(32)).decode(),
+        "sign_sessions": True,
+        "secret_key": secrets.token_urlsafe(32),
+    }
 
-    pn.config.authorize_callback = authorize
-    return {}
+
+def _install_oauth(frontend: config.FrontendConfig) -> dict[str, Any]:
+    """The serve arguments for *frontend*, with the allowlist installed.
+
+    The allowlist is applied through Panel's ``authorize_callback``, which runs
+    after a successful login and before any page is served — so an authenticated
+    GitHub user who is not on the list gets nothing, rather than a page they
+    merely cannot edit.
+    """
+    import panel as pn
+
+    options = server_options(frontend)
+    if options:
+        def authorize(user_info: dict[str, Any] | None) -> bool:
+            return authorize_login(user_info, frontend)
+
+        pn.config.authorize_callback = authorize
+    return options
 
 
 def serve(
@@ -520,12 +627,15 @@ def serve(
     """
     import panel as pn
 
+    global _SERVING
+
     resolved = config.config().frontend if frontend is None else frontend
     operator.check_servable(resolved)
     extra = _install_oauth(resolved)
+    _SERVING = resolved
 
     pn.serve(
-        build_app if app is None else app,
+        build_app if app is None else _guarded(app),
         port=resolved.port if port is None else port,
         address=resolved.bind,
         title=title,

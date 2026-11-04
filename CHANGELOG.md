@@ -50,6 +50,12 @@ release renames that heading to the new tag.
 - OMNI-184: this changelog; the 2026-10-31 code and documentation review
   recorded as L61–L68 (OMNI-176–183); the empty `identifier.db` removed and
   `*.tfplan` ignored.
+- OMNI-53 (M13): the operator console's GitHub OAuth is installed. The
+  provider, credentials, a cookie secret and signed sessions are passed to
+  `pn.serve` as arguments; setting `pn.config` had left the server on
+  `NullAuth`, where an unsigned websocket session skipped the login. The
+  session also re-checks its user against the allowlist when the page is
+  built and before every save.
 
 ## v0.5.0 — 2026-10-30
 
