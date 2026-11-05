@@ -47,6 +47,9 @@ release renames that heading to the new tag.
 - `scripts/aws_secret.py` checks the Anthropic key against the API before it
   uploads the run secret, and a scheduled run's log shows the key's last four
   characters.
+- OMNI-58 (M22): the Serve canary's blue serves the target as merged on the
+  base branch, not the local file, so a `ServeCloud` rebuilt after a restart
+  no longer falls back to code older than what was merged.
 - OMNI-184: this changelog; the 2026-10-31 code and documentation review
   recorded as L61–L68 (OMNI-176–183); the empty `identifier.db` removed and
   `*.tfplan` ignored.

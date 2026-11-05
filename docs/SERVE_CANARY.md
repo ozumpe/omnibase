@@ -430,6 +430,13 @@ step 1 (already done):
    became control-plane calls, and blue is never touched. Regression test:
    `test_deploying_a_canary_does_not_restart_blue`.
 
+   **Blue is what is merged** (OMNI-58, M22). `serve_blue()` without a source
+   serves the target as merged on the base branch, read through
+   `VersionControl.live_target_source`, and the local `runtime/*.py` only when
+   nothing is merged there, the same rule as the offline baseline (H1). A
+   `ServeCloud` rebuilt after a DevOps restart used to read the local file,
+   which can be older than what a human merged.
+
    **Environment scrubbing, not sandboxing.** Green blanks non-allowlisted
    environment variables, but the later H3 review established that it can reach
    credentials held by control-plane actors. Network egress also remains open.
