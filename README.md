@@ -68,8 +68,8 @@ how strongly it is protected — `forbidden_`, `strict_`, `soft_`. That prefix
 governs what a **human operator** may change (the operator console,
 `python -m sis.frontend`, shows `forbidden_` keys read-only, and its write path
 refuses direct edits to them; a `strict_` edit needs a written justification).
-The current console has known OAuth and YAML-rendering defects (OMNI-53/52);
-see [its deployment limits](docs/OPERATOR_FRONTEND.md). A separate, read-only
+Its GitHub OAuth (OMNI-53) and YAML rendering (OMNI-52) defects are fixed;
+see [its deployment limits](docs/OPERATOR_FRONTEND.md) before exposing it. A separate, read-only
 twin viewer (`python -m sis.viewer`, OMNI-40) replays the recorded fuel data and
 generated scenarios under the same serving rules. The prefix grants the
 loop nothing, because `config.yml` and

@@ -15,7 +15,7 @@ from sis.adapters import InMemoryTelemetry
 from sis.canary import CanaryMode, LiveSample, evaluate_canary
 from sis.contract import SORT
 from sis.ports import Cloud
-from sis.serve_cloud import ServeCloud
+from sis.serve_cloud import ServeCloud, baseline_source
 
 # Set at *import* time, which pytest runs during collection — i.e. before any
 # test calls ray.init(). That ordering is the whole point: a Ray worker
@@ -118,6 +118,52 @@ def test_only_the_deployed_candidate_can_be_promoted() -> None:
     cloud = ServeCloud(InMemoryTelemetry(), SORT)
     with pytest.raises(ValueError, match="not the deployed candidate"):
         cloud.promote("v2")
+
+
+def test_blue_is_the_merged_base_when_one_exists(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    # M22 (OMNI-58): the same rule as the offline baseline (H1). What is merged
+    # is what is live; the local file is only the fallback where nothing is.
+    local = tmp_path / "target.py"
+    local.write_text("LOCAL = 1\n", encoding="utf-8")
+    assert baseline_source("MERGED = 1\n", str(local)) == ("MERGED = 1\n", "merged_base")
+    assert baseline_source("", str(local)) == ("LOCAL = 1\n", "local_file")
+    with pytest.raises(FileNotFoundError, match="no baseline to serve"):
+        baseline_source("", str(tmp_path / "absent.py"))
+
+
+def test_a_rebuilt_serve_cloud_serves_the_merged_source_on_blue(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # The failure M22 names: a ServeCloud built after a merge (a DevOps restart)
+    # seeded blue from the local file, which may be older than what a human
+    # merged. Serve itself is stubbed here; the live test below runs it.
+    import ray.serve
+
+    import sis.serve_cloud as serve_cloud
+
+    built: dict[str, object] = {}
+
+    def fake_build(contract, *, blue_source, blue_version, mode):  # type: ignore[no-untyped-def]
+        built["blue_source"] = blue_source
+        return "graph"
+
+    monkeypatch.setattr(serve_cloud, "build_canary", fake_build)
+    monkeypatch.setattr(ray.serve, "run", lambda *a, **k: "router")
+    asked: list[str] = []
+
+    def merged(path: str) -> str:
+        asked.append(path)
+        return _DIFFERENT_SRC
+
+    tel = InMemoryTelemetry()
+    ServeCloud(tel, SORT, merged_source=merged).serve_blue(version="live")
+
+    assert asked == [SORT.target_path]
+    assert built["blue_source"] == _DIFFERENT_SRC
+    assert tel.events()[-1]["source"] == "merged_base"
+
+    # Nothing merged yet: the committed local file, and the event says so.
+    ServeCloud(tel, SORT, merged_source=lambda _path: "").serve_blue(version="live")
+    assert built["blue_source"] == open(SORT.target_file, encoding="utf-8").read()
+    assert tel.events()[-1]["source"] == "local_file"
 
 
 # --- live Serve ------------------------------------------------------------
@@ -232,6 +278,20 @@ def _is_identity_answer(answer) -> bool:  # type: ignore[no-untyped-def]
 def test_blue_serves_the_committed_target(cloud) -> None:  # type: ignore[no-untyped-def]
     assert _post([[3, 1, 2]])["result"] == [1, 2, 3]
     assert cloud.live_version() == "v1"
+
+
+def test_blue_serves_the_merged_base_over_the_local_file(cloud) -> None:  # type: ignore[no-untyped-def]
+    # M22 (OMNI-58), against a real deployment: with a merged base to read,
+    # blue answers with it, not with runtime/sort_target.py.
+    cloud._merged_source = lambda _path: _DIFFERENT_SRC
+    try:
+        cloud.serve_blue(version="v1")
+        answer = _post_until(lambda a: a.get("result") == "green-answer", [[3, 1, 2]])
+        assert answer["result"] == "green-answer", "blue is not the merged source"
+        assert answer["slot"] == "blue"
+    finally:
+        cloud._merged_source = None
+        _reset(cloud, CanaryMode.SPLIT)
 
 
 def test_deploying_a_canary_does_not_restart_blue(_live) -> None:  # type: ignore[no-untyped-def]

@@ -11,13 +11,14 @@ See [OMNI-28](https://olafzumpe.atlassian.net/browse/OMNI-28). **Depends on OMNI
 `sis.config.effective()` (already exercised by `main.py --show-config`) are what
 this UI renders and edits.
 
-**Current operating boundary (2026-10-25):** keep the console on loopback,
-accessed locally or through SSM port forwarding. GitHub OAuth configuration is
-not installed as Panel's server auth provider (OMNI-53); an unsigned websocket
-session can bypass the intended login boundary. That is an open defect in
-[KNOWN_ISSUES.md](KNOWN_ISSUES.md), not a guarantee fixed by this
-documentation. Do not deploy publicly on the strength of the OAuth settings
-until it is fixed. The YAML injection through string-valued edits (OMNI-52,
+**Current operating boundary (2026-11-04):** keep the console on loopback,
+accessed locally or through SSM port forwarding, until a real GitHub login has
+been tried. GitHub OAuth is installed as Panel's server auth provider since
+OMNI-53 (M13 in [KNOWN_ISSUES.md](KNOWN_ISSUES.md)): `pn.serve` gets the
+provider, the credentials, a cookie secret and signed sessions as arguments,
+and the session checks its user against the allowlist again when the page is
+built and before every save. The tests build the server; none has signed in
+through a real OAuth app yet. The YAML injection through string-valued edits (OMNI-52,
 M12) is fixed: every string is escaped, a control character is refused, and a
 save that would not read back exactly as approved is refused before it writes. The deployment/auth design
 below describes the intended boundary.
@@ -158,8 +159,11 @@ Single-operator tool, so identity reduces to "is this GitHub account on a
 short allowlist" — checked once per session, not per key. No password store to
 secure or rotate; MFA is inherited from GitHub's side.
 
-Three policy checks are implemented in `sis/operator.py` and unit-tested, but
-they do not establish server authentication while OMNI-53 is open:
+Panel's GitHub provider does the login (OMNI-53: passed to `pn.serve` as
+arguments, with signed sessions, so a websocket token can only come from the
+page handler after the authorize callback). `frontend.session_refusal` asks
+again from inside the session, when the page is built and before every save.
+Three policy checks are implemented in `sis/operator.py` and unit-tested:
 
 - **The allowlist is a `forbidden_` config key.** `frontend.allowed_logins`
   cannot be edited directly through the UI it governs, because an operator who could
