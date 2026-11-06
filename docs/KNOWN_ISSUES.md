@@ -50,7 +50,7 @@ reference with no link target below.
 > | M16 (and L30) | [OMNI-55](https://olafzumpe.atlassian.net/browse/OMNI-55) — **fixed** (2026-10-08) |
 > | M17 | [OMNI-56](https://olafzumpe.atlassian.net/browse/OMNI-56) — **fixed** (2026-09-29) |
 > | M18 | [OMNI-57](https://olafzumpe.atlassian.net/browse/OMNI-57) — **fixed** (with OMNI-126) |
-> | M22 | [OMNI-58](https://olafzumpe.atlassian.net/browse/OMNI-58) — blocked by OMNI-51 |
+> | M22 | [OMNI-58](https://olafzumpe.atlassian.net/browse/OMNI-58) — **fixed** (2026-11-05) |
 > | M23 | [OMNI-59](https://olafzumpe.atlassian.net/browse/OMNI-59) |
 > | L21, L23 | [OMNI-61](https://olafzumpe.atlassian.net/browse/OMNI-61) (brake state fails closed; `sis.admin`) — **fixed** |
 > | L24 | [OMNI-62](https://olafzumpe.atlassian.net/browse/OMNI-62) (Notifier port) — **fixed** |
@@ -101,14 +101,6 @@ None open.
   pass both error counts into `evaluate_canary` and reject when green's error
   rate exceeds blue's; in SHADOW, record a blue-ok/green-error pair as a
   disagreement rather than dropping it.
-
-- [OMNI-58] **M22 — The Serve baseline (blue) is the local target file, not the merged
-  base, and reverts to it whenever `ServeCloud` is rebuilt** *(found
-  2026-09-26; confirmed by reading the code)* — unlike the offline gauntlet
-  (fixed under H1 to benchmark against `live_target_source()`), the Serve
-  canary's blue deployment is seeded from the local `runtime/*.py` file, so a
-  rebuilt `ServeCloud` (e.g. after a DevOps restart) can silently regress
-  blue to stale code. Fix: seed blue from `live_target_source()` too.
 
 - [OMNI-59] **M23 — The test suite inherits real `SIS_*` environment variables from the
   developer's shell** *(found 2026-09-26; confirmed by reading
@@ -880,6 +872,24 @@ any long-lived cluster exists.
   writes. The CLI prints `refused:` and exits 1. Regression tests: `../x`,
   `.`, `..`, `a/b`, an empty name and a mismatched name are refused by
   `load_staged`, by `promote` and on the command line, and fail without the fix.
+
+- [OMNI-58] **M22 — The Serve baseline (blue) is the local target file, not the merged
+  base, and reverts to it whenever `ServeCloud` is rebuilt** *(found
+  2026-09-26; confirmed by reading the code)* — unlike the offline gauntlet
+  (fixed under H1 to benchmark against `live_target_source()`), the Serve
+  canary's blue deployment is seeded from the local `runtime/*.py` file, so a
+  rebuilt `ServeCloud` (e.g. after a DevOps restart) can silently regress
+  blue to stale code. Fix: seed blue from `live_target_source()` too.
+  **Fixed 2026-11-05 (OMNI-58):** `ServeCloud.serve_blue()` without a
+  `source` serves the target as merged on the base branch, and the local file
+  only when nothing is merged there (`serve_cloud.baseline_source`, the same
+  rule the SWE and QA use for the offline baseline). `DevOps._cloud_for`
+  builds its `ServeCloud` with a reader of `Workspace.live_target_source`, so
+  a rebuild after a restart serves what a human merged. The
+  `serve.blue_deployed` event names where blue came from (`merged_base`,
+  `local_file` or `given`). Regression tests (`tests/test_serve_cloud.py`): the
+  rule itself, a rebuilt `ServeCloud` that reads the merged source, and a live
+  deployment whose blue answers with it.
 
 - [OMNI-170] **M34 — The prediction-error report could show a predictor the week it is
   scored on** *(found 2026-10-26 by the weekly code review; reproduced on

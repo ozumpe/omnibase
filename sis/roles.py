@@ -1226,10 +1226,18 @@ class DevOps(Role):
             from sis.serve_cloud import ServeCloud
 
             serve.start(logging_config={"log_level": "ERROR"})
-            cloud = ServeCloud(_RemoteTelemetry(self._ws), spec)
+            # Blue is what is merged, not the local file (OMNI-58, M22): this
+            # runs again after a DevOps restart, when the local file may be
+            # older than what a human merged since.
+            cloud = ServeCloud(_RemoteTelemetry(self._ws), spec,
+                               merged_source=self._merged_target_source)
             cloud.serve_blue(version="live")
             self._serve_clouds[spec.name] = cloud
         return self._serve_clouds[spec.name]
+
+    def _merged_target_source(self, path: str) -> str:
+        """*path* as merged on the base branch, ``""`` when nothing is."""
+        return str(ray.get(self._ws.live_target_source.remote(path)))
 
     def canary(
         self, pr_id: str, candidate_latency: float | None, canary_backend: str | None = None
