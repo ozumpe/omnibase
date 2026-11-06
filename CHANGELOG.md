@@ -53,6 +53,10 @@ release renames that heading to the new tag.
 - `scripts/aws_secret.py` checks the Anthropic key against the API before it
   uploads the run secret, and a scheduled run's log shows the key's last four
   characters.
+- OMNI-59 (M23): the test suite ignores `SIS_*` variables, the Anthropic key
+  and AWS credentials exported in the shell, so a shell set up for a real run
+  no longer points `pytest` at real adapters or real spend; a test opts in with
+  the `real_env` fixture.
 - OMNI-58 (M22): the Serve canary's blue serves the target as merged on the
   base branch, not the local file, so a `ServeCloud` rebuilt after a restart
   no longer falls back to code older than what was merged.
