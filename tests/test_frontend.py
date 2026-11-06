@@ -349,3 +349,163 @@ def test_github_auth_without_credentials_refuses_to_serve(
                 auth="github", allowed_logins=("ozumpe",), bind="127.0.0.1", port=8080
             )
         )
+
+
+# --- OMNI-53 (M13): authentication is actually installed --------------------
+
+_GITHUB = FrontendConfig(auth="github", allowed_logins=("ozumpe",), bind="127.0.0.1",
+                         port=8080)
+
+
+def _with_credentials(monkeypatch: pytest.MonkeyPatch, cookie_secret: str = "") -> None:
+    from sis import settings
+
+    creds = settings.FrontendSettings(oauth_key="Iv1_test", oauth_secret="s3cret",
+                                      cookie_secret=cookie_secret)
+    monkeypatch.setattr(settings, "cached_settings",
+                        lambda: settings.Settings(frontend=creds))
+
+
+def test_no_auth_adds_no_server_options() -> None:
+    local = FrontendConfig(auth="none", allowed_logins=(), bind="127.0.0.1", port=8080)
+    assert frontend.server_options(local) == {}
+
+
+def test_github_auth_is_passed_to_serve_as_arguments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # M13: setting pn.config.oauth_provider installed nothing; Panel builds
+    # its auth provider only from the serve argument.
+    _with_credentials(monkeypatch)
+    options = frontend.server_options(_GITHUB)
+    assert options["oauth_provider"] == "github"
+    assert options["oauth_key"] == "Iv1_test" and options["oauth_secret"] == "s3cret"
+    assert options["sign_sessions"] is True
+    assert options["secret_key"] and options["cookie_secret"] and options["oauth_encryption_key"]
+    # Generated per process, never a shared constant.
+    again = frontend.server_options(_GITHUB)
+    for key in ("secret_key", "cookie_secret", "oauth_encryption_key"):
+        assert options[key] != again[key], key
+
+
+def test_a_configured_cookie_secret_is_used(monkeypatch: pytest.MonkeyPatch) -> None:
+    _with_credentials(monkeypatch, cookie_secret="keep-me-across-restarts")
+    assert frontend.server_options(_GITHUB)["cookie_secret"] == "keep-me-across-restarts"
+
+
+def test_serve_hands_the_auth_options_to_panel(monkeypatch: pytest.MonkeyPatch) -> None:
+    pn = pytest.importorskip("panel")
+    _with_credentials(monkeypatch)
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(pn, "serve", lambda app, **kwargs: seen.update(kwargs))
+    monkeypatch.setattr(frontend, "_SERVING", None)
+    monkeypatch.setattr(pn.config, "authorize_callback", None)  # restored after
+    frontend.serve(frontend=_GITHUB)
+    assert seen["oauth_provider"] == "github" and seen["sign_sessions"] is True
+
+
+def _built_server(monkeypatch: pytest.MonkeyPatch) -> Any:
+    pytest.importorskip("panel")
+    from panel.io.server import get_server
+
+    _with_credentials(monkeypatch)
+    server = get_server(frontend.build_app, port=0, address="127.0.0.1", start=False,
+                        **frontend.server_options(_GITHUB))
+    return server
+
+
+def test_the_built_server_does_not_run_with_null_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = _built_server(monkeypatch)  # skips without the ui group
+    from bokeh.server.auth_provider import NullAuth
+
+    try:
+        tornado = server._tornado
+        assert not isinstance(tornado.auth_provider, NullAuth)
+        assert tornado.sign_sessions is True
+        assert tornado.secret_key
+    finally:
+        server.stop()
+
+
+def test_an_unsigned_session_token_is_refused_by_the_websocket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Bokeh's websocket handler opens a session only for a token that passes
+    # check_token_signature; with signed sessions, only the page handler (after
+    # login and the authorize callback) can mint one.
+    server = _built_server(monkeypatch)  # skips without the ui group
+    from bokeh.util.token import check_token_signature, generate_jwt_token, generate_session_id
+
+    try:
+        tornado = server._tornado
+        forged = generate_jwt_token(generate_session_id(signed=False), signed=False)
+        assert not check_token_signature(forged, signed=tornado.sign_sessions,
+                                         secret_key=tornado.secret_key)
+        minted = generate_jwt_token(
+            generate_session_id(secret_key=tornado.secret_key, signed=True),
+            secret_key=tornado.secret_key, signed=True)
+        assert check_token_signature(minted, signed=tornado.sign_sessions,
+                                     secret_key=tornado.secret_key)
+    finally:
+        server.stop()
+
+
+def test_authorize_refuses_a_request_with_no_user_info() -> None:
+    # Was an AttributeError on None.get (M13), which Panel turned into a 403
+    # for everyone.
+    assert frontend.authorize_login(None, _GITHUB) is False
+    assert frontend.authorize_login({}, _GITHUB) is False
+    assert frontend.authorize_login({"login": "OZUMPE"}, _GITHUB) is True
+    assert frontend.authorize_login({"login": "mallory"}, _GITHUB) is False
+
+
+def test_a_session_without_an_authorized_user_is_refused() -> None:
+    assert frontend.session_refusal(_GITHUB, user="") is not None
+    assert "mallory" in str(frontend.session_refusal(_GITHUB, user="mallory"))
+    assert frontend.session_refusal(_GITHUB, user="ozumpe") is None
+    local = FrontendConfig(auth="none", allowed_logins=(), bind="127.0.0.1", port=8080)
+    assert frontend.session_refusal(local, user="") is None
+
+
+def test_an_unauthorized_session_gets_no_console(monkeypatch: pytest.MonkeyPatch) -> None:
+    pn = pytest.importorskip("panel")
+    monkeypatch.setattr(frontend, "_SERVING", _GITHUB)
+    monkeypatch.setattr(frontend, "_current_user", lambda: None)
+    page = frontend.build_app()
+    assert isinstance(page, pn.pane.Alert) and "Not authorized" in page.object
+
+
+def test_an_unauthorized_session_cannot_save(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Acceptance criterion: a session that is not an authorized operator's
+    # cannot reach save_edits, even if it holds a built config panel.
+    pn = pytest.importorskip("panel")
+    monkeypatch.setattr(frontend, "_SERVING", _GITHUB)
+    monkeypatch.setattr(frontend, "_current_user", lambda: "ozumpe")
+    panel = frontend.build_config_panel()  # built while authorized
+
+    def _reached(*_a: Any, **_k: Any) -> None:
+        raise AssertionError("save_edits was reached by an unauthorized session")
+
+    monkeypatch.setattr(operator, "save_edits", _reached)
+    monkeypatch.setattr(frontend, "_current_user", lambda: None)
+
+    buttons = [w for w in panel.select(pn.widgets.Button)]
+    alerts = [w for w in panel.select(pn.pane.Alert)]
+    assert len(buttons) == 1 and len(alerts) == 1
+    buttons[0].clicks += 1
+    assert alerts[0].visible and "Refused" in alerts[0].object
+    assert "no signed-in GitHub user" in alerts[0].object
+
+
+def test_a_served_app_is_guarded_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The twin viewer is served through frontend.serve(app=...) under the same
+    # allowlist, so its page is guarded the same way.
+    pytest.importorskip("panel")
+    monkeypatch.setattr(frontend, "_SERVING", _GITHUB)
+    monkeypatch.setattr(frontend, "_current_user", lambda: "mallory")
+    guarded = frontend._guarded(lambda: "the viewer")
+    assert guarded() != "the viewer"
+    monkeypatch.setattr(frontend, "_current_user", lambda: "ozumpe")
+    assert guarded() == "the viewer"

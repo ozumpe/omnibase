@@ -42,15 +42,15 @@ reference with no link target below.
 > | H8 | [OMNI-153] (epic OMNI-43), found 2026-10-08 — **fixed** the same day |
 > | H9 | [OMNI-154] (epic OMNI-43), found 2026-10-08 — **fixed** the same day |
 > | M19 | [OMNI-49](https://olafzumpe.atlassian.net/browse/OMNI-49) (epic OMNI-44) — **fixed** (by refusal; isolation is H3) |
-> | M20, M21 | [OMNI-50](https://olafzumpe.atlassian.net/browse/OMNI-50) (epic OMNI-44) |
+> | M20, M21 | [OMNI-50](https://olafzumpe.atlassian.net/browse/OMNI-50) (epic OMNI-44) — **fixed** (2026-11-03) |
 > | M15 | [OMNI-51](https://olafzumpe.atlassian.net/browse/OMNI-51) — **fixed** |
 > | M12 | [OMNI-52](https://olafzumpe.atlassian.net/browse/OMNI-52) — **fixed** (2026-10-25) |
-> | M13 | [OMNI-53](https://olafzumpe.atlassian.net/browse/OMNI-53) |
+> | M13 | [OMNI-53](https://olafzumpe.atlassian.net/browse/OMNI-53) — **fixed** (2026-11-04) |
 > | M14 | [OMNI-54](https://olafzumpe.atlassian.net/browse/OMNI-54) — **fixed** (2026-10-15) |
 > | M16 (and L30) | [OMNI-55](https://olafzumpe.atlassian.net/browse/OMNI-55) — **fixed** (2026-10-08) |
 > | M17 | [OMNI-56](https://olafzumpe.atlassian.net/browse/OMNI-56) — **fixed** (2026-09-29) |
 > | M18 | [OMNI-57](https://olafzumpe.atlassian.net/browse/OMNI-57) — **fixed** (with OMNI-126) |
-> | M22 | [OMNI-58](https://olafzumpe.atlassian.net/browse/OMNI-58) — blocked by OMNI-51 |
+> | M22 | [OMNI-58](https://olafzumpe.atlassian.net/browse/OMNI-58) — **fixed** (2026-11-05) |
 > | M23 | [OMNI-59](https://olafzumpe.atlassian.net/browse/OMNI-59) |
 > | L21, L23 | [OMNI-61](https://olafzumpe.atlassian.net/browse/OMNI-61) (brake state fails closed; `sis.admin`) — **fixed** |
 > | L24 | [OMNI-62](https://olafzumpe.atlassian.net/browse/OMNI-62) (Notifier port) — **fixed** |
@@ -68,66 +68,6 @@ reference with no link target below.
 None open.
 
 ## Medium
-
-- [OMNI-53] **M13 — GitHub OAuth is never actually installed on the operator console;
-  the server runs unauthenticated** *(found 2026-09-26; reproduced against
-  the installed Panel version, without starting Ray)* — `_install_oauth`
-  (`sis/frontend.py`) only sets `pn.config.oauth_provider`/etc. and returns
-  `{}`; `serve()` calls `pn.serve(...)` without passing `oauth_provider=` as
-  an argument, and Panel's `get_server` only builds an auth provider when
-  that *argument* (not the `pn.config` attribute) is set. Reproduced: the
-  server's `auth_provider` comes back `NullAuth`, `sign_sessions=False`.
-  Browser requests are refused with a 403 (the `authorize` callback receives
-  `user_info=None` and raises on `.get`), but the Bokeh websocket path
-  accepts an unsigned session token without ever calling the authorize
-  callback, so a non-browser client can open a full session and save edits —
-  including, combined with M12, `forbidden_` ones. Mitigated today only by
-  the loopback-only bind (OMNI-29); this fails as soon as anything binds
-  `SIS_FRONTEND_BIND` beyond loopback believing OAuth protects it. Fix: pass
-  `oauth_provider`, `oauth_key`/`oauth_secret` and a `cookie_secret` to
-  `pn.serve`; enable signed sessions; add a test asserting the built server's
-  `auth_provider` is not `NullAuth`.
-
-- [OMNI-50] **M20 — The live canary's p95/p99 gate is close to a coin flip for targets
-  where dispatch overhead dominates compute** *(found 2026-09-26; simulated
-  through the real `evaluate_canary`)* — Gate 4 compares nearest-rank p95/p99
-  of two **unpaired** marginal latency arrays (~150 samples) at
-  `max_latency_ratio=1.0` with no allowance on p95 (only p99 got the #107
-  10% allowance). `tests/test_live_canary.py` already documents "there is no
-  candidate that reliably passes here." Simulated (lognormal σ=0.35, n=150,
-  2000 trials) through `evaluate_canary` itself: an equal-speed candidate is
-  rejected **~56%** of the time (mostly on p95); a candidate ~3% slower still
-  passes **~44%** of the time. Every false reject counts in full toward the
-  circuit breaker and files a bug. Fix: store paired `(blue, green)`
-  latencies per shadow sample (the router already has both in hand; it
-  throws the pairing away when it records each side separately) and decide
-  the way `gauntlet.benchmark_decision` does — a paired-bootstrap accept /
-  reject / inconclusive, inconclusive neutral.
-
-- [OMNI-50] **M21 — The live canary never judges error rate, and SHADOW mode drops any
-  pair where green failed** *(found 2026-09-26 from three independent
-  reviews; simulated through the real `evaluate_canary`)* — `_canary_live`
-  (`sis/roles.py`) discards both error counts that `live_window` returns;
-  `evaluate_canary` (`sis/canary.py`) has no error-rate parameter at all; and
-  `CanaryRouter.route` only records a `LiveSample` when *both* sides
-  succeeded, so a request where green raised never reaches the agreement
-  gate (survivorship bias) — yet green's failed calls still land in its
-  latency array, and because failures return fast, they pull green's
-  percentiles *down*. Simulated: 105 paired samples plus 45 fast green
-  errors (dropped from pairing, counted in latency) still returns
-  `passed=True`. The evidence floor (`min(100, 150)=100`) leaves room for up
-  to a third of live traffic to fail on green and still certify it. Fix:
-  pass both error counts into `evaluate_canary` and reject when green's error
-  rate exceeds blue's; in SHADOW, record a blue-ok/green-error pair as a
-  disagreement rather than dropping it.
-
-- [OMNI-58] **M22 — The Serve baseline (blue) is the local target file, not the merged
-  base, and reverts to it whenever `ServeCloud` is rebuilt** *(found
-  2026-09-26; confirmed by reading the code)* — unlike the offline gauntlet
-  (fixed under H1 to benchmark against `live_target_source()`), the Serve
-  canary's blue deployment is seeded from the local `runtime/*.py` file, so a
-  rebuilt `ServeCloud` (e.g. after a DevOps restart) can silently regress
-  blue to stale code. Fix: seed blue from `live_target_source()` too.
 
 - [OMNI-59] **M23 — The test suite inherits real `SIS_*` environment variables from the
   developer's shell** *(found 2026-09-26; confirmed by reading
@@ -793,6 +733,58 @@ any long-lived cluster exists.
 
 ## Resolved
 
+- [OMNI-50] **M20 — The live canary's p95/p99 gate is close to a coin flip for targets
+  where dispatch overhead dominates compute** *(found 2026-09-26; simulated
+  through the real `evaluate_canary`)* — Gate 4 compares nearest-rank p95/p99
+  of two **unpaired** marginal latency arrays (~150 samples) at
+  `max_latency_ratio=1.0` with no allowance on p95 (only p99 got the #107
+  10% allowance). `tests/test_live_canary.py` already documents "there is no
+  candidate that reliably passes here." Simulated (lognormal σ=0.35, n=150,
+  2000 trials) through `evaluate_canary` itself: an equal-speed candidate is
+  rejected **~56%** of the time (mostly on p95); a candidate ~3% slower still
+  passes **~44%** of the time. Every false reject counts in full toward the
+  circuit breaker and files a bug. Fix: store paired `(blue, green)`
+  latencies per shadow sample (the router already has both in hand; it
+  throws the pairing away when it records each side separately) and decide
+  the way `gauntlet.benchmark_decision` does — a paired-bootstrap accept /
+  reject / inconclusive, inconclusive neutral. **Fixed 2026-11-03
+  (OMNI-50):** the router records blue's and green's latency on each shadow
+  sample, and `evaluate_canary` decides a paired window with
+  `gauntlet.benchmark_decision` on total cost against `max_latency_ratio ×
+  (1 + latency_tolerance)` (default 1.10), 90% interval: pass, fail, or
+  inconclusive, which DevOps retires without a bug and `run_cycle` records as
+  the neutral `inconclusive`. On M20's simulation (200 windows) an
+  equal-speed candidate is now rejected in under 5% (about 2%), about a
+  quarter inconclusive; a 30%-slower one is always rejected
+  (`tests/test_canary.py`, which also pins the old rule at over 40% on the
+  same windows). `develop`'s blue/green (OMNI-133) decides on its per-exchange
+  pairs the same way; an inconclusive interval there is "not judged". An
+  unpaired SPLIT window keeps the percentile rule.
+
+- [OMNI-50] **M21 — The live canary never judges error rate, and SHADOW mode drops any
+  pair where green failed** *(found 2026-09-26 from three independent
+  reviews; simulated through the real `evaluate_canary`)* — `_canary_live`
+  (`sis/roles.py`) discards both error counts that `live_window` returns;
+  `evaluate_canary` (`sis/canary.py`) has no error-rate parameter at all; and
+  `CanaryRouter.route` only records a `LiveSample` when *both* sides
+  succeeded, so a request where green raised never reaches the agreement
+  gate (survivorship bias) — yet green's failed calls still land in its
+  latency array, and because failures return fast, they pull green's
+  percentiles *down*. Simulated: 105 paired samples plus 45 fast green
+  errors (dropped from pairing, counted in latency) still returns
+  `passed=True`. The evidence floor (`min(100, 150)=100`) leaves room for up
+  to a third of live traffic to fail on green and still certify it. Fix:
+  pass both error counts into `evaluate_canary` and reject when green's error
+  rate exceeds blue's; in SHADOW, record a blue-ok/green-error pair as a
+  disagreement rather than dropping it. **Fixed 2026-11-03 (OMNI-50):**
+  `_judge_live` passes both counts; `evaluate_canary` rejects when green's
+  error rate exceeds blue's (`live error rate: ...`, episodic gate
+  `canary_errors`), before any other judgment of green; the router records a
+  request blue answered and green failed as a sample with `candidate_error`,
+  which the agreement gate counts as a disagreement and the latency pairs
+  leave out. M21's simulation (105 pairs plus 45 fast green errors) is
+  rejected.
+
 - [OMNI-48] **H3 — A Serve-canary candidate runs as a full Ray control-plane worker, not
   in any sandbox** *(found 2026-09-26 by a multi-dimension review; confirmed by
   two independent skeptics reading the code, not run against a live cluster)* —
@@ -833,6 +825,36 @@ any long-lived cluster exists.
   sandbox mode is what the replica uses after the scrub. The M19 refusal still
   stands; lifting it is a separate decision.
 
+- [OMNI-53] **M13 — GitHub OAuth is never actually installed on the operator console;
+  the server runs unauthenticated** *(found 2026-09-26; reproduced against
+  the installed Panel version, without starting Ray)* — `_install_oauth`
+  (`sis/frontend.py`) only sets `pn.config.oauth_provider`/etc. and returns
+  `{}`; `serve()` calls `pn.serve(...)` without passing `oauth_provider=` as
+  an argument, and Panel's `get_server` only builds an auth provider when
+  that *argument* (not the `pn.config` attribute) is set. Reproduced: the
+  server's `auth_provider` comes back `NullAuth`, `sign_sessions=False`.
+  Browser requests are refused with a 403 (the `authorize` callback receives
+  `user_info=None` and raises on `.get`), but the Bokeh websocket path
+  accepts an unsigned session token without ever calling the authorize
+  callback, so a non-browser client can open a full session and save edits —
+  including, combined with M12, `forbidden_` ones. Mitigated today only by
+  the loopback-only bind (OMNI-29); this fails as soon as anything binds
+  `SIS_FRONTEND_BIND` beyond loopback believing OAuth protects it. Fix: pass
+  `oauth_provider`, `oauth_key`/`oauth_secret` and a `cookie_secret` to
+  `pn.serve`; enable signed sessions; add a test asserting the built server's
+  `auth_provider` is not `NullAuth`. **Fixed 2026-11-04 (OMNI-53):**
+  `frontend.server_options` passes `oauth_provider`, `oauth_key`,
+  `oauth_secret`, a `cookie_secret` (the configured one, or generated per
+  process), a per-process `oauth_encryption_key`, and `sign_sessions=True`
+  with a per-process `secret_key` to `pn.serve`. The authorize callback
+  (`frontend.authorize_login`) refuses `user_info=None` instead of raising.
+  Inside the session, `frontend.session_refusal` checks the signed-in user
+  against the allowlist again when the page is built (the twin viewer's
+  too) and before every save. Tests build the server and assert it is not
+  `NullAuth` and signs sessions, that an unsigned token fails the websocket's
+  signature check, and that a session with no authorized user never reaches
+  `save_edits`. Not yet exercised against a real GitHub OAuth app.
+
 - [OMNI-171] **M35 — A scheduled AWS run lost track of its loop once the run's log passed
   20 KB** *(found 2026-10-26 by the weekly code review; reproduced on
   `develop` @ 88aaaae)* — `scripts/aws_scheduled_run.py` polled the box with
@@ -869,6 +891,24 @@ any long-lived cluster exists.
   writes. The CLI prints `refused:` and exits 1. Regression tests: `../x`,
   `.`, `..`, `a/b`, an empty name and a mismatched name are refused by
   `load_staged`, by `promote` and on the command line, and fail without the fix.
+
+- [OMNI-58] **M22 — The Serve baseline (blue) is the local target file, not the merged
+  base, and reverts to it whenever `ServeCloud` is rebuilt** *(found
+  2026-09-26; confirmed by reading the code)* — unlike the offline gauntlet
+  (fixed under H1 to benchmark against `live_target_source()`), the Serve
+  canary's blue deployment is seeded from the local `runtime/*.py` file, so a
+  rebuilt `ServeCloud` (e.g. after a DevOps restart) can silently regress
+  blue to stale code. Fix: seed blue from `live_target_source()` too.
+  **Fixed 2026-11-05 (OMNI-58):** `ServeCloud.serve_blue()` without a
+  `source` serves the target as merged on the base branch, and the local file
+  only when nothing is merged there (`serve_cloud.baseline_source`, the same
+  rule the SWE and QA use for the offline baseline). `DevOps._cloud_for`
+  builds its `ServeCloud` with a reader of `Workspace.live_target_source`, so
+  a rebuild after a restart serves what a human merged. The
+  `serve.blue_deployed` event names where blue came from (`merged_base`,
+  `local_file` or `given`). Regression tests (`tests/test_serve_cloud.py`): the
+  rule itself, a rebuilt `ServeCloud` that reads the merged source, and a live
+  deployment whose blue answers with it.
 
 - [OMNI-170] **M34 — The prediction-error report could show a predictor the week it is
   scored on** *(found 2026-10-26 by the weekly code review; reproduced on

@@ -52,6 +52,11 @@ def test_steps_build_on_the_feature_and_one_pr_follows(handles: dict[str, Any]) 
     assert pr.branch == branch and pr.artifact == committed
     assert pr.title.startswith("Optimise sum_of_divisors: 1 step")
     assert ray.get(sm.feature.remote(first["contract"])) is None, "the next feature starts fresh"
+    # No PR without a recorded approving review (OMNI-131): the stub
+    # reviewer is the rules alone, and its approval is in the provenance
+    # graph (the PR body carrying it is pinned in test_review.py).
+    reviews = [e for e in second["provenance"] if e["kind"] == "review" and e["ref"] == branch]
+    assert [e["detail"]["approved"] for e in reviews] == [True]
 
 
 def _epics(ws: Any) -> int:

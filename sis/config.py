@@ -321,6 +321,12 @@ SCHEMA: tuple[Key, ...] = (
         "Accepted steps a feature branch collects before its one PR to the base "
         "branch opens; a step that finds no further gain ends the feature sooner "
         "(OMNI-130)."),
+    Key("loop", "review_max_rounds", ConfigTier.SOFT, Kind.INT, 3,
+        "SIS_REVIEW_MAX_ROUNDS",
+        "Reviews a finished feature may have before it is given up (OMNI-131). Its "
+        "PR opens only after a review approves it; each review that asks for "
+        "changes sends it back for one revision. A feature still not approved after "
+        "this many is a counted failure, left on its branch with no PR. At least 1."),
     Key("loop", "converged_after", ConfigTier.SOFT, Kind.INT, 3,
         "SIS_LOOP_CONVERGED_AFTER",
         "Cycles in a row that found nothing to improve (no change, no gain) "
@@ -809,6 +815,7 @@ class LoopConfig:
     interval_seconds: float
     max_cycles: int | None
     feature_max_steps: int
+    review_max_rounds: int
     converged_after: int
     artifact_sync_every: int
 

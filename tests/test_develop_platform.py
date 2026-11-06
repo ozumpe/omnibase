@@ -106,7 +106,7 @@ def test_a_slower_merge_is_retired() -> None:
     try:
         judgment = platform.judge("v2", NAIVE)
         assert judgment.outcome == "develop_rolled_back"
-        assert judgment.reason.startswith("live p"), judgment.reason
+        assert judgment.reason.startswith("live latency regression"), judgment.reason
         assert platform.blue_version == "v1"
     finally:
         platform.close()
@@ -188,7 +188,7 @@ def test_latency_within_the_slack_passes_and_beyond_it_fails() -> None:
     beyond = judge_window(_window(green_elapsed=0.0013), version="v2", reference=_identity)
     assert within[0] is not None and within[0].passed
     assert beyond[0] is not None and not beyond[0].passed
-    assert beyond[1] is not None and beyond[1].startswith("live p95 regression")
+    assert beyond[1] is not None and beyond[1].startswith("live latency regression")
 
 
 def test_a_failing_call_on_green_fails_green() -> None:

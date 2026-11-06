@@ -46,6 +46,13 @@ ACCEPTED_OUTCOMES = frozenset({"verified_awaiting_human_merge", "promoted", "fea
 NEUTRAL_OUTCOMES: dict[str, str] = {
     "noop": "no_change",
     "benchmark_inconclusive": "inconclusive",
+    # The live canary's paired latency interval could not tell (OMNI-50, M20):
+    # the same fact as an inconclusive benchmark, and the same status.
+    "canary_inconclusive": "inconclusive",
+    # The feature's own review asked for changes (OMNI-131): its head passed
+    # every gate, and the next cycle revises it. Not a failure, and not the
+    # target converging either.
+    "review_requested": "review_requested",
 }
 
 
@@ -102,7 +109,8 @@ class EpisodicEvent:
     #            | error     (an exception inside the cycle, OMNI-55: no gate's
     #                         verdict at all)
     #            | canary_evidence | canary_invariant | canary_disagreement
-    #            | canary_regression  (evaluate_canary, OMNI-14: the ONLINE
+    #            | canary_regression | canary_errors | canary_inconclusive
+    #                         (evaluate_canary, OMNI-14/50: the ONLINE
     #                         analogue of correctness/benchmark, named
     #                         distinctly so rejected_by_gate can tell whether
     #                         the sandbox or live traffic caught it)
@@ -454,6 +462,13 @@ def gate_from_reason(reason: str | None) -> str | None:
     # limit (L33). Neither the candidate's gate nor the sandbox's.
     if r.startswith("proposer:"):
         return "proposer"
+    # The feature's own review (OMNI-131): changes asked for, which the next
+    # cycle revises, or a review still unsatisfied after its last round. First
+    # among the candidate's gates, since a finding can name any of them.
+    if r.startswith("review requested:"):
+        return "review_requested"
+    if r.startswith("review:"):
+        return "review"
     # A Class-2 feature already on the base branch that still passes every gate
     # (OMNI-147): nothing to build, the target converging. Neutral because the
     # SWE says so (no_gain), as for "no improvement" on a new Class-1 feature.
@@ -503,7 +518,11 @@ def gate_from_reason(reason: str | None) -> str | None:
         return "canary_invariant"
     if r.startswith("response disagreement"):
         return "canary_disagreement"
-    if r.startswith("live "):  # "live p95/p99 regression: ..."
+    if r.startswith("live error rate"):  # green failed more often (OMNI-50, M21)
+        return "canary_errors"
+    if r.startswith("live latency inconclusive"):  # neutral (OMNI-50, M20)
+        return "canary_inconclusive"
+    if r.startswith("live "):  # "live latency/p95/p99 regression: ..."
         return "canary_regression"
     if "syntaxerror" in r:
         return "ast"

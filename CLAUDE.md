@@ -167,7 +167,8 @@ internal target before it models anything external.
   Blue is the base branch's head in a sandbox worker; each merge the loop
   observes runs as green beside it. Both get the same oracle inputs, and
   `evaluate_canary` (SHADOW) judges green against the reference and blue,
-  then its error rate and latency (p95 at most 25% above blue's). A pass
+  then its error rate and latency (total time at most 25% above blue's,
+  paired per exchange, OMNI-50; an inconclusive interval is not judged). A pass
   switches them. A failure retires green, so blue never serves a version
   that failed, opens a revert PR (`revert/<version>`) and pages a human;
   nothing reverts by itself. A fault on blue's side is the harness's. See
@@ -336,13 +337,22 @@ internal target before it models anything external.
     `target.<name>` references are served too (`_names_the_tests_use`). **The
     SLO gate** still runs its candidate in-process; no shipped contract declares
     an SLO yet (L42, OMNI-86).
+  - **No feature PR opens without the agent's own approving review**
+    (OMNI-131, `sis/review.py`). Deterministic rules always run (a SOFT
+    target; no new I/O or egress import or call against the base), then,
+    with a real proposer, a reviewer model whose reply is schema-checked and
+    fails closed, its cost charged with the step. Changes requested send the
+    head back for a revision judged against the base (neutral
+    `review_requested`); after `loop.review_max_rounds` the feature is given
+    up as a counted `review:` failure. See `docs/STAGED_DELIVERY.md`.
   - Every gate ends in a human PR. Generated code MUST be fully typed. What
     counts as correct/better is per-target — see `sis/contract.py`.
 - **Change-authorization policy (`sis/policy.py`) — what the loop may rewrite:**
   - FORBIDDEN (never, no override): guardrail/safety code — the gauntlet and
     its output canonicaliser (`sis/canonical.py`), the hot-deploy sandbox
     worker (`sis/sandbox_worker.py`, `sis/sandbox_worker_main.py`), what `develop`'s
-    blue serves (`sis/develop_platform.py`, OMNI-133), the contract layer (`sis/contract.py`, `sis/backtest.py`, `sis/invariant.py`,
+    blue serves (`sis/develop_platform.py`, OMNI-133), the agent's own review
+    (`sis/review.py`, OMNI-131), the contract layer (`sis/contract.py`, `sis/backtest.py`, `sis/invariant.py`,
     `sis/slo.py`, `sis/clock.py`), the ports with the `Sensor` and the shape
     of a reading (`sis/ports.py`, OMNI-31), the door sensor data comes in
     through (`sis/sensor_input.py`, OMNI-32), the capture trace
@@ -616,11 +626,13 @@ Where things stand (2026-10-31):
   `docs/STAGED_DELIVERY.md`). Built: the sandbox worker (OMNI-129), now behind
   every gate but SLO and behind the Serve canary (OMNI-48), and feature
   branches (OMNI-130, hardened by OMNI-135), and `develop` blue/green
-  (OMNI-133, off by default). Next: OMNI-131 (the agent's own review),
-  OMNI-132 (AI approval), OMNI-134 (dynamic feature size). OMNI-142 (holds per contract) matters only
+  (OMNI-133, off by default), and the agent's own review before a feature's
+  PR opens (OMNI-131). Next: OMNI-132 (AI approval), OMNI-134 (dynamic
+  feature size). OMNI-142 (holds per contract) matters only
   once two contracts run at the same time.
 - **Open epics from the 2026-09-26 review:** OMNI-43 (gate integrity; left:
-  L42, OMNI-86) and OMNI-44 (Serve-canary isolation; left: OMNI-50, M20/M21).
+  L42, OMNI-86) and OMNI-44 (Serve-canary isolation; OMNI-50, M20/M21, fixed
+  2026-11-03; check the board for what is left).
 - **Elsewhere on the board:** OMNI-38 (wire the live SLO-breach trigger into
   `main.py --loop`) and OMNI-20 (`ToolchainAdapter`, parked).
 - **Not yet scheduled:** the atomic actor swap for internal, never-served
@@ -697,7 +709,10 @@ in `CHANGELOG.md`):
 - **The Serve canary**: Ray Serve has no weighted split, so `CanaryRouter`
   (`sis/serving.py`) is the split and the only place a paired sample can be
   recorded; green is a separate Serve application, because one app restarted
-  blue on every canary deploy (`docs/SERVE_CANARY.md`).
+  blue on every canary deploy (`docs/SERVE_CANARY.md`). Its verdict is paired
+  (OMNI-50): green's error rate may not exceed blue's, and latency is the
+  offline benchmark's bootstrap on total cost; an inconclusive interval
+  retires green as a neutral `inconclusive` cycle, no bug and no breaker count.
 
 Two traps L5 surfaced, both worth knowing before writing similar code:
 - **Anti-gaming is only as strong as the input distribution.** A candidate that

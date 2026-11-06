@@ -10,7 +10,9 @@ gate separation built on that worker also shipped (OMNI-45/146), and Class-2
 construction is integrated (OMNI-147/149). Develop blue/green
 ([OMNI-133](https://olafzumpe.atlassian.net/browse/OMNI-133),
 `sis/develop_platform.py`) is built behind `canary.develop_blue_green`, off by
-default. Agent review, AI approval and dynamic feature sizing remain planned.
+default. Agent review
+([OMNI-131](https://olafzumpe.atlassian.net/browse/OMNI-131), `sis/review.py`)
+is built. AI approval and dynamic feature sizing remain planned.
 
 ## Why
 
@@ -29,7 +31,7 @@ The engine adopts the flow this repository already uses for its own work:
 
 | Stage | Who acts | What reaches it |
 |---|---|---|
-| **Feature** branch | The agent, autonomously | Passing versions are committed; failed attempts remain feedback. Optimizations can take several steps; Class 2 finishes at its first passing step. The sandbox worker exists; agent self-review and automatic hot feature testing are planned. |
+| **Feature** branch | The agent, autonomously | Passing versions are committed; failed attempts remain feedback. Optimizations can take several steps; Class 2 finishes at its first passing step. The finished feature is reviewed by the agent before its PR opens (OMNI-131); automatic hot feature testing is planned. |
 | **`develop`** | A human merges one fixed-head PR per finished feature. | The next feature starts from merged code. With `canary.develop_blue_green` on, each merge is served as green and judged against blue before it replaces it (below). Optional AI approval is planned. |
 | **`main`** | A human, always, by release PR | Production |
 
@@ -66,7 +68,7 @@ sizing based on gains is OMNI-134, still planned.
 | OMNI-147/149: Class-2 construction and already-built convergence | Built |
 | OMNI-48: move Serve green onto the worker | Built 2026-10-27; non-stub Serve refusal remains until a human lifts it |
 | OMNI-133: develop blue/green | Built 2026-11-03, off by default (`canary.develop_blue_green`); Class-1 contracts, `--loop` only |
-| OMNI-131: agent review | Planned |
+| OMNI-131: agent review | Built 2026-11-03: no feature PR without an approving review (below) |
 | OMNI-132: optional AI approval | Planned; no implemented configuration switch |
 | OMNI-134: dynamic feature size | Planned |
 
@@ -134,6 +136,68 @@ Desktop; measure it before relying on either number.
   actors) come later, and D2's decision to externalise state makes that
   tractable.
 
+## The agent's own review (OMNI-131)
+
+A finished feature is reviewed before its PR opens (`sis/review.py`,
+POLICY-FORBIDDEN: a loop able to edit its reviewer could approve itself). The
+review reads the whole diff, head against the base branch, and has two parts.
+Both must approve.
+
+- **The rules**, deterministic, always run, and the only part under the stub
+  proposer:
+  - the target must be a path the loop may write (the policy's SOFT tier);
+  - the diff may add no I/O or egress, meaning an import of a module that
+    reaches files, processes, the network or the interpreter's internals
+    (`os`, `socket`, `subprocess`, `importlib`, …), or a call to `open`,
+    `exec`, `eval`, `__import__` and the like, that the base did not already
+    have.
+
+  The sandbox stops such code at run time; the rules stop it reaching a
+  human's queue, and no model's answer overrides them. A rule finding
+  sends the feature back without calling the model.
+- **The reviewer model**, with a real (non-stub) proposer: the configured LLM,
+  asked whether the diff stays within the contract and the system's rules, is
+  typed and readable, and does not game the checks. Under D3 it is a runtime
+  LLM, so:
+  - it has its own interface, stubbed in tests with canned replies;
+  - its reply must be one JSON object, `{"approved": bool, "findings":
+    [str]}`, and anything else, an approval that also lists findings, or an
+    answer cut off at the token limit, is not an approval;
+  - findings are capped in number and length, stripped of control
+    characters, and quoted as data in the next prompt;
+  - the diff is another model's text, so the prompt marks it as data, and
+    the rules do not depend on the model at all;
+  - its cost is added to the step's, so the CEO's brakes meter it like the
+    proposer's, and a failure after the review still reports it.
+
+**What happens next:**
+
+- **Approved:** the PR opens, and its body records the review (who
+  approved it, in which round, at what cost). Provenance gets a `review`
+  event for every round.
+- **Changes requested:** the head stays on its branch and the findings stay
+  on the feature. The next cycle revises the head: the proposer is shown the
+  findings and the head, and the revision is judged against the **base**, not
+  the head, so it must keep the feature's gain over the base but need not
+  beat the version it fixes. A passing revision is committed as one more step
+  and reviewed again. The cycle's status is `review_requested`: neutral (spend
+  recorded, no bug, no breaker count) and no evidence of convergence. A
+  revision identical to the head is `no change`, and is not reviewed again.
+- **Rounds used up:** a feature still not approved after
+  `loop.review_max_rounds` reviews (default 3) is given up. Its branch is kept
+  for a person to read, no PR opens, and the cycle is a counted `review:`
+  failure with a bug filed.
+
+**Limits:** a feature rebuilt from its branch after a restart (OMNI-135) has
+lost its review state and is reviewed afresh. A given-up branch is remembered
+by the SelfModel, so the next plan does not resume it; a restart forgets that
+too, so a given-up branch the base has not moved past can be resumed once
+more after a restart, for at most another `loop.review_max_rounds` reviews,
+each counted toward the breaker. The reviewer model is not
+deterministic (D3's known gap), so the same diff can be judged differently on
+a second round; the rules are what is guaranteed. The reviewer uses the
+proposer's provider and model.
+
 ## Develop blue/green (OMNI-133)
 
 `develop` is a running platform, not just a branch. With
@@ -150,12 +214,14 @@ first cycle:
   first. `evaluate_canary` then decides in `SHADOW` mode:
   - every answer must equal the reference and blue's (plain values, JSON-decoded);
   - no call may fail (the error rate);
-  - green's p95 per exchange may be at most 25% above blue's (p99 has a further
-    10%).
+  - green's total time over the 120 exchanges may be at most 25% above blue's,
+    decided on the paired `(green, blue)` time of each exchange with a
+    bootstrap interval (OMNI-50): over the limit fails, an interval that
+    straddles it is inconclusive.
 
   A merged version already beat its baseline offline, so the latency check
-  only has to catch a regression; without slack, two equal versions would fail
-  on noise.
+  only has to catch a regression. An inconclusive interval is recorded as not
+  judged: green is retired without a revert PR, and a human is paged.
 - **Pass:** blue and green switch, automatically, because a human already
   approved the merge.
 - **Fail:** green is retired before it serves anything, and blue keeps serving.
@@ -181,12 +247,14 @@ SelfModel's `develop_blue` slot names what blue serves.
 - Blue lives as long as the loop process. A restart serves the base branch's
   head again, which then includes every merge, judged or not.
 - A revert PR does not hold the loop (only `feature/` PRs do, OMNI-136).
-- The latency check is `evaluate_canary`'s percentile comparison. OMNI-50's
-  paired statistics will replace it for both canaries.
 - `main`'s own blue/green comes later, with the same machinery.
 
 ## Risks
 
+- **The reviewer is a model reviewing a model.** It can be talked round by
+  the code it reads, which is why its prompt marks the diff as data and why
+  the rules that matter most (no I/O, no egress, a SOFT target) are
+  deterministic and checked first. A human still merges every feature.
 - **Gates run AI-written code no human has reviewed.** That is the sandbox's
   job. OMNI-45/146 separate the trusted verdict from the candidate, but the
   SLO and Serve limitations remain; see [KNOWN_ISSUES.md](KNOWN_ISSUES.md).

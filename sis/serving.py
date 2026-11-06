@@ -410,14 +410,17 @@ class CanaryRouter:
                 _timed_call(self._blue, args), _timed_call(self._green, args))
             self._record(self._blue_version, b_lat, b_err)
             self._record(str(self._green_version), g_lat, g_err)
-            # Only a request both versions answered is comparable evidence. A
-            # sample built from a failed call would enter evaluate_canary as a
-            # "disagreement", blaming the candidate for what may be blue's fault
-            # — and the error already moved error_rate, which is where a failure
-            # belongs.
-            if b_err is None and g_err is None:
+            # Each sample keeps both latencies, so the canary compares pairs
+            # (same request, same instant) rather than two unpaired arrays
+            # (OMNI-50, M20). A request green failed and blue answered is a
+            # disagreement, recorded as one (M21): dropping it judged green
+            # only on the requests it survived. A request blue failed is not
+            # evidence against green; the error count is where it belongs.
+            if b_err is None:
                 self._samples.append(LiveSample(
-                    request=args, candidate_response=g_out, baseline_response=b_out))
+                    request=args, candidate_response=g_out, baseline_response=b_out,
+                    baseline_latency=b_lat, candidate_latency=g_lat,
+                    candidate_error=g_err))
             # The caller gets blue's answer even when green disagreed: shadow
             # traffic is unobservable to clients by definition.
             return self._envelope(self._blue_version, BLUE, b_out, b_err)

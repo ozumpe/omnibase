@@ -20,7 +20,7 @@ whole job is to be the last thing between a bad candidate and live traffic, so
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Protocol, runtime_checkable
@@ -45,6 +45,17 @@ DEFAULT_P99_NOISE_TOLERANCE = 0.10
 # Upper bound on the allowance, so it can be tuned but never set to "anything
 # passes": beyond this it is no longer noise tolerance, it is not checking p99.
 MAX_P99_NOISE_TOLERANCE = 0.5
+
+# The paired latency decision's non-inferiority margin (OMNI-50, M20): green's
+# total latency over the paired window may be this fraction above
+# ``max_latency_ratio`` times blue's. The canary only has to catch a real
+# regression; the offline benchmark already showed the candidate faster by the
+# contract's margin. Bounded by MAX_P99_NOISE_TOLERANCE for the same reason.
+DEFAULT_LATENCY_TOLERANCE = 0.10
+# Confidence of the paired-bootstrap interval. Lower than the offline gate's,
+# because here the interval decides only between pass and inconclusive (a
+# neutral outcome), never between pass and reject.
+DEFAULT_LATENCY_CONFIDENCE = 0.90
 
 
 class CanaryMode(str, Enum):
@@ -88,13 +99,25 @@ class BoundInvariant(Protocol):
 
 @dataclass(frozen=True)
 class LiveSample:
-    """One observed request and what the deployed version(s) answered."""
+    """One observed request and what the deployed version(s) answered.
+
+    Under SHADOW the router records both sides' latencies on the sample, so
+    the latency decision compares *pairs* (same request, same instant) rather
+    than two unpaired arrays (OMNI-50, M20). A request where blue answered and
+    green failed is recorded too, with ``candidate_error`` set: it is a
+    disagreement, not a sample to drop (M21).
+    """
 
     request: Any
     candidate_response: Any
     # SHADOW only — None under SPLIT, where the request only ever reached one
     # version. See CanaryMode.
     baseline_response: Any | None = None
+    baseline_latency: float | None = None
+    candidate_latency: float | None = None
+    # Green's error, when it failed a request blue answered. Its response and
+    # latency are then not evidence of anything but the failure.
+    candidate_error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -112,6 +135,15 @@ class CanaryVerdict:
     candidate_p99: float
     passed: bool
     reason: str
+    # Neither passed nor failed: the paired latency interval could not tell
+    # (OMNI-50). Neutral, like an inconclusive offline benchmark.
+    inconclusive: bool = False
+    baseline_errors: int = 0
+    candidate_errors: int = 0
+    # Paired decision only: sum(green) / sum(blue) and its interval's bounds.
+    latency_ratio: float | None = None
+    latency_ci_low: float | None = None
+    latency_ci_high: float | None = None
 
 
 def _violations(
@@ -132,6 +164,8 @@ def _violations(
     count = 0
     first: str | None = None
     for sample in samples:
+        if sample.candidate_error is not None:
+            continue  # a failure, judged by the error-rate and agreement gates
         for invariant in invariants:
             try:
                 held = invariant.check(sample.request, canonical(sample.candidate_response))
@@ -145,9 +179,16 @@ def _violations(
 
 
 def _disagreements(samples: Sequence[LiveSample]) -> int:
-    """Shadow only: sampled requests where blue and green answered differently."""
+    """Shadow only: sampled requests where blue and green answered differently.
+
+    A request blue answered and green failed is a disagreement (M21): dropping
+    it, as the router once did, judged green only on the requests it survived.
+    """
     count = 0
     for sample in samples:
+        if sample.candidate_error is not None:
+            count += 1
+            continue
         try:
             # Plain values only on the candidate's side of `!=` (OMNI-46, H4):
             # otherwise its own __ne__ decides whether it disagrees.
@@ -157,6 +198,19 @@ def _disagreements(samples: Sequence[LiveSample]) -> int:
         if differs:
             count += 1
     return count
+
+
+def _shadow_pairs(samples: Sequence[LiveSample]) -> list[tuple[float, float]] | None:
+    """``(candidate, baseline)`` latency per answered shadow sample, or ``None``
+    when any sample lacks its latencies (a caller that recorded none)."""
+    pairs: list[tuple[float, float]] = []
+    for sample in samples:
+        if sample.candidate_error is not None:
+            continue  # failures return fast; they would pull green's cost down
+        if sample.candidate_latency is None or sample.baseline_latency is None:
+            return None
+        pairs.append((sample.candidate_latency, sample.baseline_latency))
+    return pairs
 
 
 def evaluate_canary(
@@ -170,23 +224,38 @@ def evaluate_canary(
     min_samples: int = DEFAULT_MIN_CANARY_SAMPLES,
     max_latency_ratio: float = 1.0,
     p99_noise_tolerance: float = DEFAULT_P99_NOISE_TOLERANCE,
+    baseline_errors: int = 0,
+    candidate_errors: int = 0,
+    pairs: Sequence[tuple[float, float]] | None = None,
+    latency_tolerance: float = DEFAULT_LATENCY_TOLERANCE,
+    latency_confidence: float = DEFAULT_LATENCY_CONFIDENCE,
 ) -> CanaryVerdict:
     """Decide whether ``version`` may be offered for promotion. Pure.
 
     Gates, cheapest and hardest first — every applicable one must pass:
 
     1. **Evidence.** Enough samples and enough latency observations to judge.
-    2. **Correctness (hard).** No invariant violation over the window. Same
+    2. **Error rate (hard, OMNI-50, M21).** Green's share of failed calls
+       (``candidate_errors`` over ``candidate_latencies``, which counts every
+       call, failed or not) is no higher than blue's.
+    3. **Correctness (hard).** No invariant violation over the window. Same
        anti-gaming role the offline differential-correctness gate plays: the
        candidate cannot special-case inputs it never sees coming.
-    3. **Agreement (hard, SHADOW only).** Blue and green answered every sampled
-       request identically.
-    4. **Performance (graded).** Candidate p95 within ``max_latency_ratio`` of
-       baseline's, and p99 within that times ``1 + p99_noise_tolerance``.
-       Default ratio 1.0 = "not worse"; pass e.g. 0.9 to demand the offline
-       gate's 10% margin. The p99 allowance (default 10%, see
-       ``DEFAULT_P99_NOISE_TOLERANCE``) exists because p99 over a live window
-       of ~150 requests is one or two requests; p95 gets no allowance.
+    4. **Agreement (hard, SHADOW only).** Blue and green answered every sampled
+       request identically; a request green failed is a disagreement.
+    5. **Performance.** Paired where the window is paired (OMNI-50, M20):
+       ``pairs`` of ``(candidate, baseline)`` seconds, or, under SHADOW, the
+       latencies recorded on every sample. Decided like the offline benchmark
+       (:func:`sis.gauntlet.benchmark_decision`), on total cost with a paired
+       bootstrap, against the limit ``max_latency_ratio * (1 +
+       latency_tolerance)``: **pass** if the interval's upper bound is within
+       it, **fail** if the point estimate is over it, otherwise
+       **inconclusive** (neutral). An unpaired window (SPLIT) keeps the
+       percentile rule: p95 within ``max_latency_ratio`` of baseline's, p99
+       within that times ``1 + p99_noise_tolerance``.
+
+    Two unpaired percentiles at ratio 1.0 were close to a coin flip: an
+    equal-speed candidate failed ~56% of simulated windows (M20).
 
     Passing is *not* promotion — it only makes the candidate eligible for the
     human PR merge, which is what actually promotes (``CLAUDE.md`` hard rules).
@@ -198,22 +267,39 @@ def evaluate_canary(
             f"p99_noise_tolerance must be in [0, {MAX_P99_NOISE_TOLERANCE}], got "
             f"{p99_noise_tolerance} — above that the gate no longer checks the tail"
         )
+    if not 0.0 <= latency_tolerance <= MAX_P99_NOISE_TOLERANCE:
+        raise ValueError(
+            f"latency_tolerance must be in [0, {MAX_P99_NOISE_TOLERANCE}], got "
+            f"{latency_tolerance} — above that the gate no longer checks latency"
+        )
+    if baseline_errors < 0 or candidate_errors < 0:
+        raise ValueError("error counts must be >= 0")
 
     b_p95, b_p99 = percentile(baseline_latencies, 95), percentile(baseline_latencies, 99)
     c_p95, c_p99 = percentile(candidate_latencies, 95), percentile(candidate_latencies, 99)
+    paired = list(pairs) if pairs is not None else (
+        _shadow_pairs(samples) if mode is CanaryMode.SHADOW else None)
 
-    def verdict(passed: bool, reason: str, *, violations: int = 0, disagreements: int = 0
+    def verdict(passed: bool, reason: str, *, violations: int = 0, disagreements: int = 0,
+                inconclusive: bool = False, ratio: tuple[float, float, float] | None = None,
                 ) -> CanaryVerdict:
         return CanaryVerdict(
             version=version, samples=len(samples),
             invariant_violations=violations, response_disagreements=disagreements,
             baseline_p95=b_p95, baseline_p99=b_p99,
             candidate_p95=c_p95, candidate_p99=c_p99,
-            passed=passed, reason=reason,
+            passed=passed, reason=reason, inconclusive=inconclusive,
+            baseline_errors=baseline_errors, candidate_errors=candidate_errors,
+            latency_ratio=ratio[0] if ratio else None,
+            latency_ci_low=ratio[1] if ratio else None,
+            latency_ci_high=ratio[2] if ratio else None,
         )
 
     # --- Gate 1: enough evidence to decide at all ---
-    thinnest = min(len(samples), len(baseline_latencies), len(candidate_latencies))
+    observed = [len(samples), len(baseline_latencies), len(candidate_latencies)]
+    if paired is not None:
+        observed.append(len(paired))
+    thinnest = min(observed)
     if thinnest < min_samples:
         return verdict(
             False,
@@ -231,7 +317,20 @@ def evaluate_canary(
             "the shadow dispatcher recorded only one side",
         )
 
-    # --- Gate 2: correctness (hard) ---
+    # --- Gate 2: error rate (hard) ---
+    # Rates, not counts: the two sides need not have served as many calls
+    # (SPLIT sends green a fraction). The latency arrays hold failed calls too.
+    b_rate = baseline_errors / len(baseline_latencies)
+    c_rate = candidate_errors / len(candidate_latencies)
+    if c_rate > b_rate:
+        return verdict(
+            False,
+            f"live error rate: candidate failed {candidate_errors} of "
+            f"{len(candidate_latencies)} calls ({c_rate:.1%}), baseline "
+            f"{baseline_errors} of {len(baseline_latencies)} ({b_rate:.1%})",
+        )
+
+    # --- Gate 3: correctness (hard) ---
     violations, first_broken = _violations(invariants, samples)
     if violations:
         return verdict(
@@ -241,7 +340,7 @@ def evaluate_canary(
             violations=violations,
         )
 
-    # --- Gate 3: response agreement (hard, SHADOW only) ---
+    # --- Gate 4: response agreement (hard, SHADOW only) ---
     disagreements = _disagreements(samples) if mode is CanaryMode.SHADOW else 0
     if disagreements:
         return verdict(
@@ -251,7 +350,11 @@ def evaluate_canary(
             disagreements=disagreements,
         )
 
-    # --- Gate 4: performance (graded) ---
+    # --- Gate 5: performance ---
+    if paired is not None:
+        return _paired_latency(paired, max_latency_ratio * (1.0 + latency_tolerance),
+                               latency_confidence, len(samples), verdict)
+
     limits = (
         ("p95", b_p95, c_p95, max_latency_ratio),
         ("p99", b_p99, c_p99, max_latency_ratio * (1.0 + p99_noise_tolerance)),
@@ -265,3 +368,30 @@ def evaluate_canary(
             )
 
     return verdict(True, f"canary passed on {len(samples)} live samples")
+
+
+def _paired_latency(
+    pairs: Sequence[tuple[float, float]], limit: float, confidence: float, samples: int,
+    verdict: Callable[..., CanaryVerdict],
+) -> CanaryVerdict:
+    """Gate 5 on a paired window: the offline benchmark's rule, as non-inferiority."""
+    # Imported here: the gauntlet imports a great deal, and this module is
+    # imported by the Serve replicas, which need none of it.
+    from sis.gauntlet import BenchmarkVerdict, benchmark_decision
+
+    d = benchmark_decision(pairs, max_ratio=limit, confidence=confidence)
+    ratio = (d.ratio, d.ci_low, d.ci_high)
+    evidence = (f"total latency ratio {d.ratio:.3f}, {confidence:.0%} interval "
+                f"[{d.ci_low:.3f}, {d.ci_high:.3f}] over {d.samples} pairs, "
+                f"limit {limit:.3f}")
+    if d.verdict is BenchmarkVerdict.ACCEPT:
+        return verdict(
+            True, f"canary passed on {samples} live samples ({evidence})", ratio=ratio)
+    if d.verdict is BenchmarkVerdict.INCONCLUSIVE:
+        return verdict(
+            False, f"live latency inconclusive: {evidence}", inconclusive=True, ratio=ratio)
+    if d.verdict is BenchmarkVerdict.UNMEASURABLE:
+        return verdict(
+            False, f"insufficient evidence: {d.samples} usable latency pairs")
+    return verdict(
+        False, f"live latency regression: {evidence}", ratio=ratio)

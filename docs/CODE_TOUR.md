@@ -495,14 +495,17 @@ gate-functions-are-pure convention. Four gates, cheapest first, **everything
 fails closed** (a predicate that raises counts as a violation, not an
 exception that propagates):
 
-1. Evidence floor — enough samples to say anything at all.
+1. Evidence floor — enough samples to say anything at all. Then the error
+   rate (hard, OMNI-50): green may fail no larger share of calls than blue.
 2. Correctness (hard) — zero violations of declared, bound invariants. The
    two shipped optimization contracts declare none, so response agreement is
    their live correctness signal. `roman` has laws but is refused by Serve.
 3. Response agreement (hard, `SHADOW` only) — blue and green must have
    answered every sampled request identically.
-4. Performance (graded) — candidate p95 *and* p99 within a configurable ratio
-   of baseline's.
+4. Performance — under `SHADOW`, a paired bootstrap on total latency, the
+   offline benchmark's rule (`gauntlet.benchmark_decision`) read as "not
+   worse than the limit": pass, fail, or a neutral inconclusive (OMNI-50).
+   Unpaired (`SPLIT`): p95 *and* p99 within a configurable ratio.
 
 **`sis/serve_cloud.py::ServeCloud`** is the real `Cloud` port adapter that ties
 the above together — a third implementation alongside the in-memory fake and
@@ -513,8 +516,7 @@ reading a PR back as *already* merged, the same human-approval invariant
 enforced one layer up instead of by the adapter refusing outright (see §6).
 Green's replica runs with a scrubbed `runtime_env`, but remains a Ray worker
 with control-plane access. The non-stub-proposer refusal in §5 is mandatory.
-The live latency/error-rate decision also has open defects (OMNI-50); these
-mechanics are not certification for production use.
+These mechanics are not certification for production use.
 
 **Where this plugs into the cycle you already read in §7:** `DevOps.canary()`
 takes an optional `canary_backend`. Left unset, it's exactly what §7 described

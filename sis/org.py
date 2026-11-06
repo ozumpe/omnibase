@@ -638,6 +638,19 @@ def cycle_outcome(approved: bool, canary: dict[str, Any] | None) -> tuple[str, b
     return status, success, canary_reason
 
 
+def canary_neutral_status(canary: Mapping[str, Any] | None) -> str | None:
+    """The neutral status a canary result maps to, or ``None``. Pure.
+
+    A live canary whose paired latency interval could not tell (OMNI-50) is
+    neither a pass nor a rejection; it is read through the same
+    :func:`episodic.neutral_status` as QA's inconclusive benchmark, so the
+    two can never disagree about what is benign.
+    """
+    if canary is None or canary.get("canary_passed", True):
+        return None
+    return episodic.neutral_status(canary.get("reason"))
+
+
 def run_cycle(
     handles: dict[str, Any],
     proposal_title: str,
@@ -976,6 +989,21 @@ def run_cycle(
                   if approved else None)
         if canary is not None and canary.get("canary_passed", True):
             seen["canary_version"] = canary.get("version")  # green is set: retired on an error
+
+        # A live canary whose paired latency interval could not tell (OMNI-50)
+        # is neutral, exactly like QA's inconclusive benchmark above: spend
+        # recorded, no bug, no breaker increment. DevOps already retired green.
+        canary_neutral = canary_neutral_status(canary)
+        if canary is not None and canary_neutral:
+            trip = _neutral()
+            return _record({"status": canary_neutral, "reason": canary.get("reason"),
+                            "spec_id": spec_id, "story_id": story_id,
+                            "pr_id": impl["pr_id"],
+                            "candidate_sha": impl.get("candidate_sha"),
+                            "canary": canary,
+                            "breaker_bug_id": _breaker_alarm(trip),
+                            "economics": ray.get(ceo.economics.remote()),
+                            "provenance": ray.get(sm.provenance.remote())}, cost_usd)
 
         status, success, canary_reason = cycle_outcome(approved, canary)
 

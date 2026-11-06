@@ -133,6 +133,12 @@ loop:
   # a step that finds no further gain ends the feature sooner (OMNI-130).
   # env: SIS_FEATURE_MAX_STEPS   flag: --loop-feature-max-steps
   soft_feature_max_steps: 3
+  # Reviews a finished feature may have before it is given up (OMNI-131). Its PR opens
+  # only after a review approves it; each review that asks for changes sends it back for
+  # one revision. A feature still not approved after this many is a counted failure,
+  # left on its branch with no PR. At least 1.
+  # env: SIS_REVIEW_MAX_ROUNDS   flag: --loop-review-max-rounds
+  soft_review_max_rounds: 3
   # Cycles in a row that found nothing to improve (no change, no gain) after which the
   # loop stops: the target has converged. An inconclusive benchmark resets the count
   # (OMNI-145). Not a breaker trip; nothing to reset (OMNI-138).
