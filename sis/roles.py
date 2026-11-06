@@ -26,6 +26,7 @@ import ray
 
 from sis import config, contract, contract_author, episodic, gauntlet, policy, proposer
 from sis import feature as feature_mod
+from sis import review as review_mod
 from sis.canary import DEFAULT_MIN_CANARY_SAMPLES, CanaryMode, evaluate_canary
 from sis.paths import PROJECT_ROOT, TARGET_PATH
 from sis.ports import IssueStatus, IssueType, PullRequest, PullRequestNotFound
@@ -702,7 +703,10 @@ class CTO(Role):
             ray.get(self._ws.emit.remote("feature.resume_failed", contract=spec.name,
                                          error=detail))
             return None
-        found = feature_mod.resumable_feature(spec.name, branches)
+        # A branch given up after its review is not a feature to carry on (OMNI-131).
+        given_up = set(ray.get(self._sm.given_up_branches.remote()))
+        found = feature_mod.resumable_feature(
+            spec.name, [b for b in branches if b.name not in given_up])
         if found is None:
             return None
         feature, plan = found["feature"], found["plan"]
@@ -804,10 +808,15 @@ class SWE(Role):
                 ray.get(self._sm.set_feature.remote(paid["contract"], paid["feature"]))
         with contextlib.suppress(Exception):
             ray.get(self._sm.record.remote("outcome", story_id, passed=False, reason=reason))
-        # propose() clears its last cost before it calls anything, so this is
-        # this step's cost and no earlier one's: nothing if the call itself failed.
+        # propose() clears its last cost before it calls anything, so while it
+        # runs that is this step's cost: nothing if the call itself failed.
+        # After it, the step keeps its own tally, the review's included
+        # (OMNI-131), so a step that asked for no proposal is not charged an
+        # earlier one's.
+        cost = (proposer.last_cost_usd() if paid.get("proposing")
+                else float(paid.get("cost", 0.0)))
         return {"passed": False, "reason": reason, "pr_id": None,
-                "cost_usd": proposer.last_cost_usd(),
+                "cost_usd": cost,
                 "candidate_sha": paid.get("candidate_sha"),
                 "contract": paid["contract"], "model": proposer.last_model()}
 
@@ -847,21 +856,30 @@ class SWE(Role):
                 if feature and feature["steps"] else "")
         if feature and feature["steps"] and not head:
             feature = None  # the branch lost its file: start a fresh feature
-        if building and feature and head:
-            # A built feature ends at its first step, so a step without a PR is
-            # one a stopped process committed (OMNI-135): open its PR now.
-            return self._finish_feature(
-                story_id, spec, feature, head, 0.0, _sha(head), "all gates passed")
-        if feature and head and feature_mod.is_full(feature, max_steps):
-            # Its last step was committed and the PR then failed to open
-            # (OMNI-55): open it now, without paying for another proposal.
-            return self._finish_feature(
-                story_id, spec, feature, head, 0.0, _sha(head),
-                f"{len(feature['steps'])} of {max_steps} steps")
+        # The feature's review sent its head back (OMNI-131): this step revises
+        # the head rather than finishing or optimising it further.
+        revising = bool(feature and head and feature_mod.needs_revision(feature))
+        if (building and feature and head) or (
+                feature and head and feature_mod.is_full(feature, max_steps)):
+            if not revising:
+                # Its last step was committed and the feature not finished: a
+                # built feature ends at its first step (a stopped process,
+                # OMNI-135), and a full one's PR failed to open (OMNI-55).
+                # Finished now, without paying for another proposal; the
+                # review's spend is reported even if what follows raises.
+                paid.update(contract=spec.name, cost=0.0)
+                return self._finish_feature(
+                    story_id, spec, feature, head, _sha(head),
+                    "all gates passed" if building
+                    else f"{len(feature['steps'])} of {max_steps} steps", paid)
         if head:
             current_source, origin = head, "feature_branch"
         else:
             current_source, origin = self._base_source(spec)
+        # A revision is judged against the base branch, not the head it
+        # revises: it must keep the feature's gain over the base, but need
+        # not beat the head a review sent back (OMNI-131).
+        judged_against = self._base_source(spec)[0] if revising else current_source
         ray.get(self._ws.emit.remote("target.source", story_id=story_id, origin=origin))
         if building and feature is None and current_source:
             # A feature already built: judged again, since its spec may have
@@ -880,14 +898,17 @@ class SWE(Role):
                 feature_mod.new_feature(feature_mod.feature_branch(story_id), story_id),
                 f"the current module fails: {standing.reason}")
         # sandboxed, not in-process
-        baseline = (gauntlet.measure_baseline(current_source, contract=spec)
+        baseline = (gauntlet.measure_baseline(judged_against, contract=spec)
                     if isinstance(spec, contract.OptimizationContract) else 0.0)
         # From here on an error is reported with what the proposal cost (M16).
         paid["contract"] = spec.name
         paid["proposing"] = True
         try:
-            candidate = proposer.propose(current_source, baseline, contract=spec,
-                                         history=feature["attempts"] if feature else ())
+            candidate = proposer.propose(
+                current_source, baseline, contract=spec,
+                history=feature["attempts"] if feature else (),
+                findings=(feature_mod.review_state(feature)["findings"]
+                          if revising else ()))
         except proposer.ProposalCutOff as exc:
             # Nothing to judge, and not the candidate's doing: a failed cycle
             # the log names as the proposer's, its spend kept (L33, OMNI-78).
@@ -897,18 +918,23 @@ class SWE(Role):
             return {"passed": False, "reason": reason, "pr_id": None,
                     "cost_usd": proposer.last_cost_usd(), "candidate_sha": None,
                     "contract": spec.name, "model": proposer.last_model()}
-        paid["proposing"] = False
+        paid.update(proposing=False, cost=proposer.last_cost_usd())
         # The model this cycle called, None for the stub: what the episodic log
         # records, rather than whatever is configured (L53, OMNI-150).
         model = proposer.last_model()
         candidate_sha = _sha(candidate)
         cost_usd = proposer.last_cost_usd()  # 0.0 for the stub; real $ for Claude
-        paid["candidate_sha"] = candidate_sha
+        paid.update(candidate_sha=candidate_sha, cost=cost_usd)
         # The same code against the same baseline was judged already: its verdict
         # stands, without a second run (OMNI-127, L46). The proposal was paid for.
-        baseline_sha = _sha(current_source)
+        baseline_sha = _sha(judged_against)
         earlier = feature_mod.rejected_before(feature, candidate_sha, baseline_sha)
-        if earlier is not None:
+        if revising and candidate_sha == _sha(current_source):
+            # The head the review sent back, unchanged: nothing was revised.
+            report = gauntlet.Result(
+                passed=False, reason="no change: the revision is identical to the head "
+                                     "the review sent back")
+        elif earlier is not None:
             ray.get(self._ws.emit.remote("candidate.resubmitted", story_id=story_id,
                                          candidate_sha=candidate_sha, reason=earlier))
             report = gauntlet.Result(passed=False, reason=feature_mod.resubmitted(earlier))
@@ -916,7 +942,7 @@ class SWE(Role):
             # Benchmark the candidate against the source the cycle is based on (the
             # merged target), not the stale local file — see KNOWN_ISSUES.md H1.
             report = gauntlet.validate(
-                candidate, baseline, baseline_source=current_source or None, contract=spec)
+                candidate, baseline, baseline_source=judged_against or None, contract=spec)
 
         if not report.passed:
             ray.get(self._ws.transition.remote(
@@ -934,12 +960,14 @@ class SWE(Role):
                        if earlier is not None else
                        feature_mod.with_rejection(feature, candidate_sha, baseline_sha,
                                                   report.reason))
-            if feature["steps"] and feature_mod.ends_feature(report.reason):
+            if (feature["steps"] and not revising
+                    and feature_mod.ends_feature(report.reason)):
                 # The head cannot be beaten: the feature is finished, and
-                # its PR carries the head, not this rejected candidate.
+                # its PR carries the head, not this rejected candidate. Not
+                # while a review's changes are open: that head was sent back.
                 return self._finish_feature(
-                    story_id, spec, feature, current_source, cost_usd, candidate_sha,
-                    f"no further gain ({report.reason})", model=model)
+                    story_id, spec, feature, current_source, candidate_sha,
+                    f"no further gain ({report.reason})", paid, model=model)
             ray.get(self._sm.set_feature.remote(spec.name, feature))
             return {"passed": False, "reason": report.reason, "pr_id": None,
                     "cost_usd": cost_usd, "candidate_sha": candidate_sha,
@@ -982,13 +1010,18 @@ class SWE(Role):
         feature = feature_mod.with_step(feature, story_id, baseline, report.latency_seconds)
         paid["feature"] = feature  # committed: an error from here on keeps the step
         ray.get(self._sm.record.remote("commit", feature["branch"], story=story_id, step=step))
-        if building:
-            return self._finish_feature(story_id, spec, feature, candidate, cost_usd,
-                                        candidate_sha, "all gates passed", model=model)
-        if feature_mod.is_full(feature, max_steps):
-            return self._finish_feature(story_id, spec, feature, candidate, cost_usd,
-                                        candidate_sha, f"{step} of {max_steps} steps",
+        if revising:
+            rounds = feature_mod.review_state(feature)["rounds"]
+            return self._finish_feature(story_id, spec, feature, candidate, candidate_sha,
+                                        f"revised after review round {rounds}", paid,
                                         model=model)
+        if building:
+            return self._finish_feature(story_id, spec, feature, candidate,
+                                        candidate_sha, "all gates passed", paid, model=model)
+        if feature_mod.is_full(feature, max_steps):
+            return self._finish_feature(story_id, spec, feature, candidate,
+                                        candidate_sha, f"{step} of {max_steps} steps",
+                                        paid, model=model)
         ray.get(self._sm.set_feature.remote(spec.name, feature))
         # The story is the feature's, not the step's (OMNI-135): it stays in
         # progress until the feature's PR opens.
@@ -1001,19 +1034,43 @@ class SWE(Role):
 
     def _finish_feature(
         self, story_id: str, spec: contract.Contract, feature: dict[str, Any],
-        head: str, cost_usd: float, candidate_sha: str, finished_because: str,
+        head: str, candidate_sha: str, finished_because: str, paid: dict[str, Any],
         *, model: str | None = None,
     ) -> dict[str, Any]:
-        """Open the feature's one PR, for its head, and hand it to review.
+        """Review the finished feature, then open its one PR for its head (OMNI-131).
+
+        No PR opens without an approving review. A review that asks for
+        changes sends the head back for a revision, and one still unsatisfied
+        after ``loop.review_max_rounds`` gives the feature up. The review's
+        spend joins the step's in *paid*, so it is charged whatever follows.
 
         The PR's head never moves after this (the next feature gets a new
         branch), so a human merges exactly the steps the PR shows.
         """
         building = isinstance(spec, contract.FeatureContract)
+        verdict = review_mod.review(review_mod.Subject(
+            spec, self._base_source(spec)[0], head, tuple(feature["attempts"])))
+        paid["cost"] = float(paid.get("cost", 0.0)) + verdict.cost_usd
+        cost_usd = paid["cost"]
+        feature = feature_mod.with_review(feature, approved=verdict.approved,
+                                          findings=verdict.findings)
+        rounds = feature_mod.review_state(feature)["rounds"]
+        ray.get(self._sm.record.remote(
+            "review", feature["branch"], story=story_id, approved=verdict.approved,
+            round=rounds, findings=list(verdict.findings), reviewer=verdict.reviewer,
+            cost_usd=verdict.cost_usd))
+        ray.get(self._ws.emit.remote(
+            "feature.review", story_id=story_id, branch=feature["branch"],
+            approved=verdict.approved, round=rounds, findings=len(verdict.findings),
+            cost_usd=verdict.cost_usd))
+        if not verdict.approved:
+            return self._review_rejected(story_id, spec, feature, verdict, candidate_sha,
+                                         cost_usd, model=model)
         pr = ray.get(self._ws.open_pr.remote(
             feature["branch"], feature_mod.pr_title(spec.name, feature, building=building),
             head, spec.target_path,
-            feature_mod.pr_body(spec.name, feature, finished_because, building=building)))
+            feature_mod.pr_body(spec.name, feature, finished_because, building=building,
+                                review=review_mod.pr_section(verdict, rounds))))
         ray.get(self._ws.transition.remote(
             story_id, IssueStatus.READY_FOR_REVIEW, f"Feature PR {pr.id} ready"))
         # The canary needs this PR's contract later (oracle, entry point,
@@ -1030,7 +1087,42 @@ class SWE(Role):
                 "steps": len(feature["steps"]), "finished_because": finished_because,
                 "baseline": first["baseline_s"], "candidate_latency": last["candidate_s"],
                 "cost_usd": cost_usd, "candidate_sha": candidate_sha,
-                "contract": spec.name, "model": model}
+                "contract": spec.name, "model": model, "review": verdict.summary()}
+
+    def _review_rejected(
+        self, story_id: str, spec: contract.Contract, feature: dict[str, Any],
+        verdict: review_mod.Review, candidate_sha: str, cost_usd: float,
+        *, model: str | None,
+    ) -> dict[str, Any]:
+        """The result of a review that did not approve: revise, or give up (OMNI-131).
+
+        Below the round limit the feature keeps its head and the findings,
+        and the next cycle revises it: a neutral outcome, neither a failure
+        nor the target converging. At the limit the feature is given up, its
+        branch kept for a person to read and no PR opened, as a counted
+        failure ("review:").
+        """
+        rounds = feature_mod.review_state(feature)["rounds"]
+        limit = max(1, int(config.get("loop.review_max_rounds")))
+        findings = "; ".join(verdict.findings)
+        result = {"passed": False, "pr_id": None, "cost_usd": cost_usd,
+                  "candidate_sha": candidate_sha, "contract": spec.name, "model": model,
+                  "branch": feature["branch"], "review_round": rounds}
+        if rounds < limit:
+            ray.get(self._sm.set_feature.remote(spec.name, feature))
+            ray.get(self._ws.transition.remote(
+                story_id, IssueStatus.IN_PROGRESS,
+                f"Review round {rounds} of {limit} asked for changes: {findings}"))
+            return {**result, "review_requested": True,
+                    "reason": f"review requested: round {rounds} of {limit}, "
+                              f"{verdict.summary()}"}
+        reason = f"review: not approved after {rounds} round(s), {verdict.summary()}"
+        ray.get(self._sm.give_up_branch.remote(feature["branch"]))
+        ray.get(self._sm.set_feature.remote(spec.name, None))
+        ray.get(self._sm.set_plan.remote(spec.name, None))
+        ray.get(self._ws.transition.remote(story_id, IssueStatus.TBD, reason))
+        ray.get(self._sm.record.remote("outcome", story_id, passed=False, reason=reason))
+        return {**result, "reason": reason}
 
 
 @ray.remote
@@ -1226,10 +1318,18 @@ class DevOps(Role):
             from sis.serve_cloud import ServeCloud
 
             serve.start(logging_config={"log_level": "ERROR"})
-            cloud = ServeCloud(_RemoteTelemetry(self._ws), spec)
+            # Blue is what is merged, not the local file (OMNI-58, M22): this
+            # runs again after a DevOps restart, when the local file may be
+            # older than what a human merged since.
+            cloud = ServeCloud(_RemoteTelemetry(self._ws), spec,
+                               merged_source=self._merged_target_source)
             cloud.serve_blue(version="live")
             self._serve_clouds[spec.name] = cloud
         return self._serve_clouds[spec.name]
+
+    def _merged_target_source(self, path: str) -> str:
+        """*path* as merged on the base branch, ``""`` when nothing is."""
+        return str(ray.get(self._ws.live_target_source.remote(path)))
 
     def canary(
         self, pr_id: str, candidate_latency: float | None, canary_backend: str | None = None

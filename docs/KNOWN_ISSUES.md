@@ -45,12 +45,12 @@ reference with no link target below.
 > | M20, M21 | [OMNI-50](https://olafzumpe.atlassian.net/browse/OMNI-50) (epic OMNI-44) — **fixed** (2026-11-03) |
 > | M15 | [OMNI-51](https://olafzumpe.atlassian.net/browse/OMNI-51) — **fixed** |
 > | M12 | [OMNI-52](https://olafzumpe.atlassian.net/browse/OMNI-52) — **fixed** (2026-10-25) |
-> | M13 | [OMNI-53](https://olafzumpe.atlassian.net/browse/OMNI-53) |
+> | M13 | [OMNI-53](https://olafzumpe.atlassian.net/browse/OMNI-53) — **fixed** (2026-11-04) |
 > | M14 | [OMNI-54](https://olafzumpe.atlassian.net/browse/OMNI-54) — **fixed** (2026-10-15) |
 > | M16 (and L30) | [OMNI-55](https://olafzumpe.atlassian.net/browse/OMNI-55) — **fixed** (2026-10-08) |
 > | M17 | [OMNI-56](https://olafzumpe.atlassian.net/browse/OMNI-56) — **fixed** (2026-09-29) |
 > | M18 | [OMNI-57](https://olafzumpe.atlassian.net/browse/OMNI-57) — **fixed** (with OMNI-126) |
-> | M22 | [OMNI-58](https://olafzumpe.atlassian.net/browse/OMNI-58) — blocked by OMNI-51 |
+> | M22 | [OMNI-58](https://olafzumpe.atlassian.net/browse/OMNI-58) — **fixed** (2026-11-05) |
 > | M23 | [OMNI-59](https://olafzumpe.atlassian.net/browse/OMNI-59) |
 > | L21, L23 | [OMNI-61](https://olafzumpe.atlassian.net/browse/OMNI-61) (brake state fails closed; `sis.admin`) — **fixed** |
 > | L24 | [OMNI-62](https://olafzumpe.atlassian.net/browse/OMNI-62) (Notifier port) — **fixed** |
@@ -68,33 +68,6 @@ reference with no link target below.
 None open.
 
 ## Medium
-
-- [OMNI-53] **M13 — GitHub OAuth is never actually installed on the operator console;
-  the server runs unauthenticated** *(found 2026-09-26; reproduced against
-  the installed Panel version, without starting Ray)* — `_install_oauth`
-  (`sis/frontend.py`) only sets `pn.config.oauth_provider`/etc. and returns
-  `{}`; `serve()` calls `pn.serve(...)` without passing `oauth_provider=` as
-  an argument, and Panel's `get_server` only builds an auth provider when
-  that *argument* (not the `pn.config` attribute) is set. Reproduced: the
-  server's `auth_provider` comes back `NullAuth`, `sign_sessions=False`.
-  Browser requests are refused with a 403 (the `authorize` callback receives
-  `user_info=None` and raises on `.get`), but the Bokeh websocket path
-  accepts an unsigned session token without ever calling the authorize
-  callback, so a non-browser client can open a full session and save edits —
-  including, combined with M12, `forbidden_` ones. Mitigated today only by
-  the loopback-only bind (OMNI-29); this fails as soon as anything binds
-  `SIS_FRONTEND_BIND` beyond loopback believing OAuth protects it. Fix: pass
-  `oauth_provider`, `oauth_key`/`oauth_secret` and a `cookie_secret` to
-  `pn.serve`; enable signed sessions; add a test asserting the built server's
-  `auth_provider` is not `NullAuth`.
-
-- [OMNI-58] **M22 — The Serve baseline (blue) is the local target file, not the merged
-  base, and reverts to it whenever `ServeCloud` is rebuilt** *(found
-  2026-09-26; confirmed by reading the code)* — unlike the offline gauntlet
-  (fixed under H1 to benchmark against `live_target_source()`), the Serve
-  canary's blue deployment is seeded from the local `runtime/*.py` file, so a
-  rebuilt `ServeCloud` (e.g. after a DevOps restart) can silently regress
-  blue to stale code. Fix: seed blue from `live_target_source()` too.
 
 - [OMNI-59] **M23 — The test suite inherits real `SIS_*` environment variables from the
   developer's shell** *(found 2026-09-26; confirmed by reading
@@ -852,6 +825,36 @@ any long-lived cluster exists.
   sandbox mode is what the replica uses after the scrub. The M19 refusal still
   stands; lifting it is a separate decision.
 
+- [OMNI-53] **M13 — GitHub OAuth is never actually installed on the operator console;
+  the server runs unauthenticated** *(found 2026-09-26; reproduced against
+  the installed Panel version, without starting Ray)* — `_install_oauth`
+  (`sis/frontend.py`) only sets `pn.config.oauth_provider`/etc. and returns
+  `{}`; `serve()` calls `pn.serve(...)` without passing `oauth_provider=` as
+  an argument, and Panel's `get_server` only builds an auth provider when
+  that *argument* (not the `pn.config` attribute) is set. Reproduced: the
+  server's `auth_provider` comes back `NullAuth`, `sign_sessions=False`.
+  Browser requests are refused with a 403 (the `authorize` callback receives
+  `user_info=None` and raises on `.get`), but the Bokeh websocket path
+  accepts an unsigned session token without ever calling the authorize
+  callback, so a non-browser client can open a full session and save edits —
+  including, combined with M12, `forbidden_` ones. Mitigated today only by
+  the loopback-only bind (OMNI-29); this fails as soon as anything binds
+  `SIS_FRONTEND_BIND` beyond loopback believing OAuth protects it. Fix: pass
+  `oauth_provider`, `oauth_key`/`oauth_secret` and a `cookie_secret` to
+  `pn.serve`; enable signed sessions; add a test asserting the built server's
+  `auth_provider` is not `NullAuth`. **Fixed 2026-11-04 (OMNI-53):**
+  `frontend.server_options` passes `oauth_provider`, `oauth_key`,
+  `oauth_secret`, a `cookie_secret` (the configured one, or generated per
+  process), a per-process `oauth_encryption_key`, and `sign_sessions=True`
+  with a per-process `secret_key` to `pn.serve`. The authorize callback
+  (`frontend.authorize_login`) refuses `user_info=None` instead of raising.
+  Inside the session, `frontend.session_refusal` checks the signed-in user
+  against the allowlist again when the page is built (the twin viewer's
+  too) and before every save. Tests build the server and assert it is not
+  `NullAuth` and signs sessions, that an unsigned token fails the websocket's
+  signature check, and that a session with no authorized user never reaches
+  `save_edits`. Not yet exercised against a real GitHub OAuth app.
+
 - [OMNI-171] **M35 — A scheduled AWS run lost track of its loop once the run's log passed
   20 KB** *(found 2026-10-26 by the weekly code review; reproduced on
   `develop` @ 88aaaae)* — `scripts/aws_scheduled_run.py` polled the box with
@@ -888,6 +891,24 @@ any long-lived cluster exists.
   writes. The CLI prints `refused:` and exits 1. Regression tests: `../x`,
   `.`, `..`, `a/b`, an empty name and a mismatched name are refused by
   `load_staged`, by `promote` and on the command line, and fail without the fix.
+
+- [OMNI-58] **M22 — The Serve baseline (blue) is the local target file, not the merged
+  base, and reverts to it whenever `ServeCloud` is rebuilt** *(found
+  2026-09-26; confirmed by reading the code)* — unlike the offline gauntlet
+  (fixed under H1 to benchmark against `live_target_source()`), the Serve
+  canary's blue deployment is seeded from the local `runtime/*.py` file, so a
+  rebuilt `ServeCloud` (e.g. after a DevOps restart) can silently regress
+  blue to stale code. Fix: seed blue from `live_target_source()` too.
+  **Fixed 2026-11-05 (OMNI-58):** `ServeCloud.serve_blue()` without a
+  `source` serves the target as merged on the base branch, and the local file
+  only when nothing is merged there (`serve_cloud.baseline_source`, the same
+  rule the SWE and QA use for the offline baseline). `DevOps._cloud_for`
+  builds its `ServeCloud` with a reader of `Workspace.live_target_source`, so
+  a rebuild after a restart serves what a human merged. The
+  `serve.blue_deployed` event names where blue came from (`merged_base`,
+  `local_file` or `given`). Regression tests (`tests/test_serve_cloud.py`): the
+  rule itself, a rebuilt `ServeCloud` that reads the merged source, and a live
+  deployment whose blue answers with it.
 
 - [OMNI-170] **M34 — The prediction-error report could show a predictor the week it is
   scored on** *(found 2026-10-26 by the weekly code review; reproduced on
