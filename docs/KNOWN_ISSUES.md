@@ -60,6 +60,7 @@ reference with no link target below.
 > | L39 | [OMNI-42] — **fixed** (2026-10-15, with OMNI-68) |
 > | L55, L57 | [OMNI-166], [OMNI-172], from the weekly code reviews of 2026-10-25 and 2026-10-26 |
 > | L58, L59, L69 | [OMNI-141], [OMNI-174], [OMNI-186]: tests that failed once under `-n auto` |
+> | L71 | [OMNI-188]: a test that failed once on CI — **fixed** (2026-11-06) |
 > | L60 | [OMNI-173] — **fixed** (2026-10-27) |
 > | L61–L68 | [OMNI-176]–[OMNI-183], one each, from the code and documentation review of 2026-10-31 (develop @ 83bb43c); its documentation findings were fixed with [OMNI-184] (L61 and L63 **fixed** 2026-11-01, L62 2026-11-02) |
 
@@ -261,6 +262,21 @@ None open.
 
 ## Resolved (Low)
 
+- [OMNI-188] **L71** — `scripts/aws_scheduled_run.tail_commands` trusted
+  `awk`'s `substr` and `tail -c` on a pipe to keep its output under the 24,000
+  characters SSM keeps *(seen 2026-11-05 on CI, PR #214)*.
+  `test_a_long_status_line_is_cut_and_the_output_stays_under_ssms_limit` got
+  24,393 characters where 20,357 are expected; the re-run on the same commit
+  passed, and 300 runs locally, then 1,200 more under load, gave 20,357 every
+  time. The cause was not found. On the box, output past the limit is cut
+  from the end, so the newest log lines, which `summary_lines` reports, are
+  the ones lost. **Fixed 2026-11-06 (OMNI-188)** by bounding each part by
+  construction instead of finding the culprit: the status lines go through
+  `cut -b` and `head -n` (at most 6 × 301 characters), and the tail is read
+  from a snapshot of the run's part with POSIX `dd`, at an offset worked out
+  from its size, then capped by `head -c`. A test fakes a `tail` that ignores
+  its count and an `awk` that ignores `substr`, and the output still fits,
+  status lines first and whole and the newest 20,000 bytes last.
 - [OMNI-177] **L62** — The AWS box never fetches `ca_price_wholesale`'s
   private fixtures *(found 2026-10-31 by code review; latent until
   `private.json` is promoted)*. `specs/ca_price_wholesale/private/` is
@@ -2210,3 +2226,4 @@ any long-lived cluster exists.
 [OMNI-183]: https://olafzumpe.atlassian.net/browse/OMNI-183
 [OMNI-184]: https://olafzumpe.atlassian.net/browse/OMNI-184
 [OMNI-186]: https://olafzumpe.atlassian.net/browse/OMNI-186
+[OMNI-188]: https://olafzumpe.atlassian.net/browse/OMNI-188

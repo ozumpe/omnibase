@@ -259,7 +259,8 @@ def tail_commands(run_id: str) -> list[str]:
     """
     if not _RUN_ID.match(run_id):
         raise ValueError(f"run id {run_id!r} is not YYYYMMDDTHHMMSSZ")
-    keys = "|".join([exit_marker(run_id), _STOPPED, _HOLDING, _SYNCED, _CRASHED])
+    kinds = [exit_marker(run_id), _STOPPED, _HOLDING, _SYNCED, _CRASHED]
+    keys = "|".join(kinds)
     # index(), not a regex: the markers' brackets would need escaping.
     status = (f"awk -v m='{start_marker(run_id)}' -v ks='{keys}' "
               "'BEGIN {n = split(ks, k, \"|\")} "
@@ -267,8 +268,17 @@ def tail_commands(run_id: str) -> list[str]:
               "p {for (i = 1; i <= n; i++) if (index($0, k[i])) last[i] = $0} "
               f"END {{for (i = 1; i <= n; i++) if (i in last) "
               f"print substr(last[i], 1, {_STATUS_CHARS})}}' {LOG_PATH}")
-    tail = (f"awk -v m='{start_marker(run_id)}' 'index($0, m) == 1 {{p = 1}} p' {LOG_PATH}"
-            f" | tail -c {_TAIL_BYTES}")
+    # Each part is capped by construction, not by trusting one tool's count
+    # (OMNI-188: CI once saw 24393 characters where 20357 were expected, and
+    # the re-run passed): cut and head bound the status lines, and the tail is
+    # read from a snapshot of the run's part at an offset worked out from its
+    # size, then bounded again by head. POSIX dd, so it also runs on a Mac.
+    status += f" | cut -b 1-{_STATUS_CHARS} | head -n {len(kinds) + 1}"
+    tail = (f"t=$(mktemp) && "
+            f"awk -v m='{start_marker(run_id)}' 'index($0, m) == 1 {{p = 1}} p' {LOG_PATH}"
+            f' > "$t"; n=$(wc -c < "$t"); '
+            f'dd if="$t" bs=1 skip=$(( n > {_TAIL_BYTES} ? n - {_TAIL_BYTES} : 0 )) 2>/dev/null'
+            f' | head -c {_TAIL_BYTES}; rm -f "$t"')
     return [
         f"test -f {LOG_PATH} || exit 0",
         f"{status}; echo '{TAIL_SEPARATOR}'; {tail}",

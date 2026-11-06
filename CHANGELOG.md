@@ -13,6 +13,10 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+- OMNI-188 (L71): the scheduled run's log tail is capped by construction, each
+  part bounded by `cut`, `head` and an offset `dd` read of a snapshot, so it
+  stays under the 24,000 characters SSM keeps even if one tool returns too
+  much; CI once saw 24,393 where 20,357 were expected.
 - OMNI-50 (M20, M21): the live canary decides latency on paired samples, the
   offline benchmark's paired bootstrap on total cost, with an inconclusive
   interval neutral; an equal-speed candidate is rejected in about 2% of
