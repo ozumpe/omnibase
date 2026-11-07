@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 from types import ModuleType
@@ -212,12 +213,12 @@ def test_the_tail_shows_only_this_runs_part_of_the_log(tmp_path: pathlib.Path) -
     assert "old" not in out
 
 
-def _tail(tmp_path: pathlib.Path, text: str) -> str:
+def _tail(tmp_path: pathlib.Path, text: str, env: dict[str, str] | None = None) -> str:
     log = tmp_path / "loop.log"
     log.write_text(text)
     cmd = sr.tail_commands(RUN)[1].replace(sr.LOG_PATH, str(log))
     return subprocess.run(["bash", "-c", cmd], capture_output=True, text=True,
-                          check=True).stdout
+                          check=True, env=env).stdout
 
 
 def test_a_long_run_is_still_read_once_its_log_passes_the_tail(tmp_path: pathlib.Path) -> None:
@@ -249,6 +250,42 @@ def test_a_long_status_line_is_cut_and_the_output_stays_under_ssms_limit(
     out = _tail(tmp_path, text)
     assert len(out) < 24_000
     assert sr.read_log(out, RUN).crashed
+
+
+def test_the_output_stays_under_ssms_limit_even_if_a_tool_returns_too_much(
+        tmp_path: pathlib.Path) -> None:
+    # OMNI-188: CI once saw 24393 characters for the input above, where 20357
+    # is expected; the re-run on the same commit passed, and the cause was not
+    # found. So each part is capped by construction, not by trusting one tool:
+    # here `tail` ignores its byte count and `awk` its substr, and the output
+    # must still fit what SSM keeps, its status lines first and whole.
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    real_awk = shutil.which("awk")
+    assert real_awk
+    (bin_dir / "tail").write_text("#!/bin/sh\nfor f; do :; done\n"
+                                  'case "$f" in -*|[0-9]*) cat ;; *) cat "$f" ;; esac\n')
+    (bin_dir / "awk").write_text(
+        "#!/bin/sh\n"
+        'for a; do shift; set -- "$@" '
+        '"$(printf %s "$a" | sed "s/substr(\\([^,]*\\),[^)]*)/\\1/g")"; done\n'
+        f'exec {real_awk} "$@"\n')
+    for tool in ("tail", "awk"):
+        (bin_dir / tool).chmod(0o755)
+    text = "\n".join([f"[scheduled] {RUN} start " + "s" * 3_000,
+                      "[loop] crashed: " + "y" * 50_000,
+                      "[sis] artifacts synced to s3://b/" + "a" * 9_000,
+                      *(["z" * 999] * 60)]) + "\n"
+    out = _tail(tmp_path, text, env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"})
+    assert len(out) < 24_000
+    assert 6 * (sr._STATUS_CHARS + 1) + len(sr.TAIL_SEPARATOR) + 1 + sr._TAIL_BYTES < 24_000
+    assert sum(len(line) + 1 for line in out.split(sr.TAIL_SEPARATOR)[0].splitlines()) <= (
+        6 * (sr._STATUS_CHARS + 1))
+    assert len(sr.log_tail(out)) == sr._TAIL_BYTES
+    state = sr.read_log(out, RUN)
+    assert state.crashed and state.synced
+    assert out.splitlines()[0].startswith(f"[scheduled] {RUN} start")
+    assert sr.log_tail(out).endswith("z" * 999 + "\n")   # the newest bytes are kept
 
 
 # --- reading the log and deciding --------------------------------------------
