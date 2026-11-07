@@ -62,6 +62,7 @@ reference with no link target below.
 > | L58, L59, L69 | [OMNI-141], [OMNI-174], [OMNI-186]: tests that failed once under `-n auto` |
 > | L70 | [OMNI-187], from the weekly code review of 2026-11-02 (develop @ 7ae6654) — **fixed** (2026-11-07) |
 > | L71 | [OMNI-188]: a test that failed once on CI — **fixed** (2026-11-06) |
+> | L72 | [OMNI-185], from the weekly review of the scheduled AWS run of 2026-10-31 — **fixed** (2026-11-07) |
 > | L60 | [OMNI-173] — **fixed** (2026-10-27) |
 > | L61–L68 | [OMNI-176]–[OMNI-183], one each, from the code and documentation review of 2026-10-31 (develop @ 83bb43c); its documentation findings were fixed with [OMNI-184] (L61 and L63 **fixed** 2026-11-01, L62 2026-11-02) |
 
@@ -254,6 +255,18 @@ None open.
 
 ## Resolved (Low)
 
+- [OMNI-185] **L72** — a PR merged while `--loop` ran left no trace in
+  `loop.log` or the episodic log *(seen in the scheduled AWS run
+  `runs/20261031-0806/`)*: testrun PR 23 was evidently merged, since the hold
+  released and the next plan started from a faster baseline, but nothing said
+  so. `loop.serve`'s merge watch called `org.record_release`, which logs only
+  a decline (OMNI-57), and printed nothing; the SelfModel's `promote` record
+  died with the box. **Fixed 2026-11-07 (OMNI-185)**: `org.record_decision`
+  logs a merge as `human_merged` (proposer `human`, no cost, not an accepted
+  outcome, because the cycle that opened the PR counted the improvement) on
+  all three paths that observe one (the live watch, a restart, the open-PR
+  check), `DevOps.observe_merge` reports the merged PR's contract as a
+  release does, and the live watch prints the merge or release line.
 - [OMNI-187] **L70** — `sis/fixture_builder.build` wrote a public fixture
   (`private=False`) from whatever series `question.inputs` named, and from
   every series in the trace when it named none. It never asked whether a
@@ -2251,6 +2264,7 @@ any long-lived cluster exists.
 [OMNI-182]: https://olafzumpe.atlassian.net/browse/OMNI-182
 [OMNI-183]: https://olafzumpe.atlassian.net/browse/OMNI-183
 [OMNI-184]: https://olafzumpe.atlassian.net/browse/OMNI-184
+[OMNI-185]: https://olafzumpe.atlassian.net/browse/OMNI-185
 [OMNI-186]: https://olafzumpe.atlassian.net/browse/OMNI-186
 [OMNI-187]: https://olafzumpe.atlassian.net/browse/OMNI-187
 [OMNI-188]: https://olafzumpe.atlassian.net/browse/OMNI-188

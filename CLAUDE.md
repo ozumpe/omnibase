@@ -685,6 +685,10 @@ in `CHANGELOG.md`):
   canary holds green, `loop.serve(watch_merges=True)` polls the pending PR; a
   merge promotes the candidate and starts the next cycle. A PR closed without
   merging releases the hold as `human_declined`, never a failure (OMNI-57).
+  Either decision is printed and logged at no cost, a merge as `human_merged`,
+  never as a second accepted improvement (OMNI-185).
+  Either decision is printed and logged at no cost, a merge as `human_merged`,
+  never as a second accepted improvement (OMNI-185).
 - **The VCS is the source of truth for what awaits a human** (OMNI-136):
   before every cycle (`loop.serve` and a single `main.py` run),
   `org.hold_for_open_prs` asks `VersionControl.open_prs()` and holds for the

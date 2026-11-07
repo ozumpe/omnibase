@@ -1527,8 +1527,13 @@ class DevOps(Role):
         ray.get(self._sm.set_pending_pr.remote(None))
         ray.get(self._sm.record.remote("promote", version, pr=pr_id))
         ray.get(self._ws.emit.remote("merge.observed", pr_id=pr_id, version=version))
+        # The contract rides along for the driver's episodic record, as a
+        # release's does (OMNI-185).
+        merged: contract.OptimizationContract | None = ray.get(
+            self._sm.contract_for_pr.remote(pr_id))
         return {"pr": pr_id, "version": version, "merged": True, "promoted": True,
-                "slot": record.slot, "live": record.live}
+                "slot": record.slot, "live": record.live,
+                "contract": merged.name if merged else None}
 
     def _release(self, pr_id: str, version: str | None, why: str) -> dict[str, Any]:
         """A human declined *pr_id* (or it is gone): retire its canary, free green.
