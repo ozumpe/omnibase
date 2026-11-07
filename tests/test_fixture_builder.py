@@ -555,6 +555,31 @@ def test_the_wholesale_question_waits_for_mondays_spot_price() -> None:
     assert _latest(earlier, SPOT)["event_time"].startswith("2022-09-19")
 
 
+def test_a_public_build_that_would_show_a_licensed_series_is_refused() -> None:
+    # OMNI-187 (L70): the guard was only build_fixture.py's convention of naming
+    # EIA_PUBLIC_SERIES. With a calendar that covers the spot price, a public
+    # build naming it, or naming nothing (every series in the trace), put the
+    # licensed values in a fixture meant for specs/, which is public.
+    for inputs in (None, WHOLESALE.inputs, frozenset({SPOT})):
+        public = replace(WHOLESALE, inputs=inputs)
+        with pytest.raises(FixtureRefused, match=f"{SPOT}.*licensed.*private"):
+            build(_spot_trace(), EIA_RULES, _spot_calendar(), public,
+                  name="n", spec_ref="OMNI-187")
+    # Built private, the same question is fine, and so is a public one that
+    # shows only what may be redistributed, over the same trace.
+    assert _wholesale()
+    public = replace(WHOLESALE, inputs=EIA_PUBLIC_SERIES, ask_after=datetime.timedelta(0))
+    files = build(_spot_trace(), EIA_RULES, _spot_calendar(), public,
+                  name="n", spec_ref="OMNI-187").files
+    # The calendar copied beside it names the series, with release dates only.
+    assert not any(SPOT in body for name, body in files.items()
+                   if name.endswith(("_fixture.json", "_expect.json")))
+
+
+def test_the_eia_rules_name_the_licensed_series() -> None:
+    assert EIA_RULES.licensed == frozenset(EIA_SERIES) - EIA_PUBLIC_SERIES == {SPOT}
+
+
 def _private_gate(tmp_path: pathlib.Path, files: dict[str, str], candidate: str,
                   *, change: Callable[[pathlib.Path], None] | None = None,
                   ) -> gauntlet.Result | None:
