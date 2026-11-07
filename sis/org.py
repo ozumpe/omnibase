@@ -191,9 +191,29 @@ def release_result(seen: Mapping[str, Any]) -> dict[str, Any] | None:
             "pr_id": seen.get("pr"), "contract": seen.get("contract")}
 
 
-def record_release(store: episodic.EpisodicStore, seen: Mapping[str, Any]) -> None:
-    """Append a released hold to the episodic log, at no cost. Never raises."""
-    if (result := release_result(seen)) is None:
+# A merge a human made, recorded beside a decline (OMNI-185). Not "promoted",
+# which is an accepted outcome: the cycle that opened the PR counted the
+# improvement already, and the merge is the human's decision on it.
+HUMAN_MERGED = "human_merged"
+
+
+def decision_result(seen: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The episodic record of a human's decision on a held PR, or None. Pure.
+
+    A release as :func:`release_result` gives it, or a merge. Before OMNI-185
+    only a release was recorded, so a run's dataset could not tell a merged PR
+    from a declined one.
+    """
+    if (released := release_result(seen)) is not None:
+        return released
+    if not seen.get("merged"):
+        return None
+    return {"status": HUMAN_MERGED, "pr_id": seen.get("pr"), "contract": seen.get("contract")}
+
+
+def record_decision(store: episodic.EpisodicStore, seen: Mapping[str, Any]) -> None:
+    """Append a human's merge or release to the episodic log, at no cost. Never raises."""
+    if (result := decision_result(seen)) is None:
         return
     try:
         store.append(episodic.event_from_cycle_result(result, proposer="human"))
@@ -395,10 +415,11 @@ def restore_pending_pr(
     if not outcome.get("adopted", False):
         return f"[sis] {label} from the last run not restored: {outcome.get('reason')}"
     if outcome.get("promoted") or outcome.get("merged"):
+        record_decision(store, outcome)
         forget_pending_pr(store, pr_id)
         return f"[sis] {label} was merged since the last run: promoted; cycles build on it"
     if outcome.get("released"):
-        record_release(store, outcome)
+        record_decision(store, outcome)
         forget_pending_pr(store, pr_id)
         return f"[sis] {label} from the last run was {outcome.get('reason')}: hold released"
     return (f"[sis] HOLDING: {label} from the last run still awaits a human merge or "
@@ -436,10 +457,11 @@ def hold_for_open_prs(
         return True, (f"[sis] HOLDING: PR {pr_id} is open but not adopted: "
                       f"{outcome.get('reason')}{also}")
     if outcome.get("released"):
-        record_release(store, outcome)
+        record_decision(store, outcome)
         forget_pending_pr(store, pr_id)
         return bool(others), f"[sis] PR {pr_id} was {outcome.get('reason')}: not held{also}"
     if outcome.get("promoted") or outcome.get("merged"):
+        record_decision(store, outcome)
         forget_pending_pr(store, pr_id)
         return bool(others), f"[sis] PR {pr_id} was merged: promoted; cycles build on it{also}"
     return True, (f"[sis] HOLDING: PR {pr_id} is open and awaits a human merge or close"

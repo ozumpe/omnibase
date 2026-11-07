@@ -470,8 +470,14 @@ def serve(
                 # remembered for the next start (OMNI-126).
                 if seen["promoted"] or seen.get("released"):
                     held_by = None
+                    # Printed and logged either way, so a run's loop.log and
+                    # episodic log say what the human decided (OMNI-57, OMNI-185).
+                    print(f"[sis] PR {pending} was merged: promoted; cycles build on it"
+                          if seen["promoted"] else
+                          f"[sis] PR {pending} was {seen.get('reason')}: hold released",
+                          flush=True)
                     store = episodic.get_episodic_store()
-                    org.record_release(store, seen)   # a decline is logged (OMNI-57)
+                    org.record_decision(store, seen)
                     org.forget_pending_pr(store, pending)
                     if develop is not None and (
                             judged := org.apply_develop_judgment(handles, store, develop,

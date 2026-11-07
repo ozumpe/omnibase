@@ -232,6 +232,17 @@ def test_a_decline_seen_by_the_loop_is_logged(handles, canary, tmp_path, monkeyp
     assert outcomes == [("human_declined", canary.id)]
 
 
+def test_a_merge_seen_by_the_loop_is_logged(handles, canary, tmp_path, monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    # OMNI-185: the live merge-watch path printed nothing and logged nothing,
+    # so a run's loop.log and episodic.jsonl could not say a PR was merged.
+    store = _durable(monkeypatch, tmp_path)
+    _mark_merged(handles, canary.id)
+    assert _consulted(handles)
+    assert [(e.outcome, e.pr_id) for e in store.events()] == [("human_merged", canary.id)]
+    assert f"[sis] PR {canary.id} was merged: promoted; cycles build on it" in \
+        capsys.readouterr().out
+
+
 def test_a_pr_that_no_longer_exists_releases_its_hold(handles) -> None:  # type: ignore[no-untyped-def]
     # A remembered PR can outlive the PR (OMNI-126). PullRequestNotFound must
     # survive the trip through Ray as itself, or this would read as an outage.
@@ -280,6 +291,8 @@ def test_a_pr_merged_offline_is_promoted_at_startup(handles, tmp_path, monkeypat
     line = org.restore_pending_pr(handles, store, repo="o/r")
 
     assert line is not None and "was merged since the last run" in line
+    merged = [e for e in store.events() if e.outcome == "human_merged"]   # OMNI-185
+    assert [(e.pr_id, e.contract) for e in merged] == [(pr_id, result["contract"])]
     deployment = _deployment(handles)
     assert deployment["live_version"] == result["canary"]["version"]
     assert loop.canary_in_flight(deployment) is None

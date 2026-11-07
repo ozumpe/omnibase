@@ -13,6 +13,10 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+- OMNI-185 (L72): a human merge seen by the running loop is printed and logged
+  (`human_merged`, at no cost) like a decline, so a run's `loop.log` and
+  episodic log say when a PR was merged; a restart or the open-PR check logs
+  one too.
 - OMNI-190: CI checks the release calendar, in place of a person's sign-off.
   The sources it is drafted from are committed, reduced to dates (every value
   in a CSV is `x`: the spot prices are licensed) and pinned by sha256 in
