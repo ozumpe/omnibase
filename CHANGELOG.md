@@ -13,6 +13,10 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+- OMNI-187 (L70): a public fixture refuses to show a licensed series. The
+  rule was only `scripts/build_fixture.py`'s choice of inputs; now
+  `SourceRules.licensed` names the series (the LA spot price for EIA) and
+  `fixture_builder.build` refuses one unless the fixture is private.
 - OMNI-188 (L71): the scheduled run's log tail is capped by construction, each
   part bounded by `cut`, `head` and an offset `dd` read of a snapshot, so it
   stays under the 24,000 characters SSM keeps even if one tool returns too

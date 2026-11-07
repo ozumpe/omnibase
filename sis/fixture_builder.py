@@ -129,7 +129,8 @@ class Question:
     horizon: datetime.timedelta = datetime.timedelta(weeks=1)
     # The series an episode shows, the target always among them. A fixture
     # committed under specs/ is public, so it names only series that may be
-    # redistributed (OMNI-163); None shows every series in the trace.
+    # redistributed (OMNI-163), and build() refuses one that shows a series
+    # its SourceRules call licensed (OMNI-187); None shows every series in the trace.
     inputs: frozenset[str] | None = None
     # How long after the week's value became known the question is asked. A
     # question that also shows a series released later waits for it: the LA
@@ -201,12 +202,20 @@ def build(lines: Sequence[Mapping[str, Any]], rules: SourceRules, calendar: Rele
         raise FixtureRefused(f"source {SIMULATED_SOURCE!r} is a generated scenario; a "
                              "backtest fixture is built from recorded data only")
     readings, absent = read_back(lines, rules)
+    every: list[Reading | Absent] = [*readings, *absent]
+    inputs = None if question.inputs is None else question.inputs | {question.target}
+    if not private:
+        # specs/ is public: a licensed series is modelled, never redistributed
+        # (OMNI-163). The rule is here, not in a caller's choice of inputs (OMNI-187).
+        named = inputs if inputs is not None else {item.series for item in every}
+        licensed = sorted(named & rules.licensed)
+        if licensed:
+            raise FixtureRefused(f"{', '.join(licensed)}: licensed, never redistributed; a "
+                                 "public fixture may not show it (build it private)")
     flagged = _reconstructed(lines)
     # Only what some episode can include needs release evidence: a reading
     # outside every lookback, or after the last week asked about, is never shown.
     first_shown = question.first - question.horizon - question.lookback
-    every: list[Reading | Absent] = [*readings, *absent]
-    inputs = None if question.inputs is None else question.inputs | {question.target}
     shown = [item for item in every
              if (inputs is None or item.series in inputs)
              and first_shown <= item.event_time.astimezone(calendar.timezone).date()
