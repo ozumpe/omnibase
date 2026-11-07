@@ -238,12 +238,27 @@ Each phase ends in something runnable, in the style of the RUNBOOK levels.
 | **D** | E4: per-actor slots | two modelled actors improving independently on one engine; roll one back without touching the other |
 | **E** | E3: stateful swap | swap a live actor's model version under load, state preserved, nothing else restarts |
 | **F** | E5: emergence gate + interaction contracts | system-level backtest over a multi-actor scenario; advisory verdict |
+| **G** | omnibase as its own target, behind a sealed judge ([OMNI-193](https://olafzumpe.atlassian.net/browse/OMNI-193)) | the loop proposes a change to omnibase's own engine code; it is validated, served as green beside blue and swapped in live (E3), or retired and reverted; a human signs off before `main` |
 
 Rationale for the order: **sense → notice you're wrong → verify a fix → parallelise →
 swap live → integrate.** A and B are cheap and unlock the honest version of every later
 demo (you cannot backtest without event time, and you cannot justify a cycle without a
 model-error signal). C is the intellectual core. D is mechanical. E's cost is set entirely
 by D2. F needs history that only exists after D and E have been running.
+
+Phase G is the goal omnibase started from: the engine improving itself, not only a
+model of the world. It comes last but **depends on E, not on F**: E is the live swap
+that hot-deploying the engine's own code needs, while F's emergence gate is about
+multi-actor twins, which self-improvement does not involve. Its other prerequisite is
+built in none of A–F: everything that judges a change (the gauntlet, `specs/` and its
+oracles, the spend cap and brakes, the policy and the configuration) moves out of what
+the loop can edit, into a separate, signed package that the loop can only read and that
+is verified before every cycle. Today `sis/policy.py` draws that line inside one
+repository; for G it has to be a package boundary, or the cheapest improvement the loop
+can find is a weaker test. Signing it reuses the tamper-evidence work of
+[OMNI-191](https://olafzumpe.atlassian.net/browse/OMNI-191). Generated scripts and
+actors run where candidates run now: in a sandbox with no network, no credentials and a
+spend limit.
 
 Phases A–C are the minimum that proves the thesis on one modelled actor. That is the
 milestone worth aiming at before scoping the rest.
