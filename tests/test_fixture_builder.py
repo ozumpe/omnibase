@@ -376,6 +376,30 @@ def test_the_script_builds_from_a_trace_and_stages_it_for_a_human(
     assert _tree(promoted) == before
 
 
+def test_the_script_accepts_a_ci_signed_calendar_and_refuses_a_forged_claim(
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    # OMNI-190: CI's check replaced the human sign-off. Its claim is checked
+    # again before a build, so typing it into checked_by gets nothing.
+    from sis import contract_author
+
+    monkeypatch.setattr(contract_author, "CONTRACT_STAGING_DIR", tmp_path / "staging")
+    trace = tmp_path / "eia.jsonl"
+    trace.write_text("".join(json.dumps(line, sort_keys=True) + "\n" for line in _trace()),
+                     encoding="utf-8")
+    signed = WHOLESALE_CALENDAR.read_text(encoding="utf-8")
+    assert json.loads(signed)["checked_by"].startswith("CI, sources sha256:")
+    forged = tmp_path / "forged.json"
+    forged.write_text(_checked(CALENDAR_DRAFT.read_text(encoding="utf-8"),
+                               by="CI, sources sha256:" + "0" * 64), encoding="utf-8")
+    script = _script()
+
+    assert script.main(["--trace", str(trace), "--calendar", str(forged)]) == 1
+    assert "claims CI's check, which it does not pass" in capsys.readouterr().err
+    assert script.main(["--trace", str(trace), "--calendar", str(WHOLESALE_CALENDAR)]) == 0
+    assert "17 episodes" in capsys.readouterr().out
+
+
 # --- a licensed series stays out of a public fixture (OMNI-163) ------------------------
 
 SPOT = "PET.EER_EPMRR_PF4_Y05LA_DPG.D"

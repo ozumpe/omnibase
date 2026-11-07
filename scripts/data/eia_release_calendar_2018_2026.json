@@ -1,9 +1,9 @@
 {
  "schema": 1,
  "timezone": "America/New_York",
- "checked_by": "Olaf Zumpe",
- "checked_on": "2026-11-02",
- "description": "When each EIA period from 2018-12-01 to 2026-10-28 was actually released, for OMNI-163's fixture's release check (sis/fixture_builder.py). Keys are the period's date (Friday week-ending for stocks, Monday for retail prices, the day for the spot price); values the release date, both in America/New_York. Drafted 2026-10-30 by scripts/draft_release_calendar.py; a human checks the dates against the sources and fills in checked_by and checked_on before any fixture is built.",
+ "checked_by": "CI, sources sha256:2f6e0050c15a8375dafd04483d2974193adad18917fb36610b4037562ad1c767",
+ "checked_on": "2026-11-07",
+ "description": "When each EIA period from 2018-12-01 to 2026-10-28 was actually released, for OMNI-163's fixture's release check (sis/fixture_builder.py). Keys are the period's date (Friday week-ending for stocks, Monday for retail prices, the day for the spot price); values the release date, both in America/New_York. Drafted by scripts/draft_release_calendar.py from the saved sources in scripts/data/release_calendar_sources/; its `check` re-drafts it from them and `sign` fills in checked_by and checked_on (OMNI-190).",
  "reports": {
   "wpsr": {
    "name": "Weekly Petroleum Status Report",
@@ -434,8 +434,8 @@
     "PET.EMM_EPMRR_PTE_Y05SF_DPG.W",
     "PET.EMM_EPMRR_PTE_NUS_DPG.W"
    ],
-   "source": "https://alfred.stlouisfed.org/release/downloaddates?rid=183&ff=txt (each Monday's price maps to the first release date on or after it)",
-   "note": "2022-06-20: released 2022-06-29, not ALFRED's date. ALFRED lists a release on 2022-06-21, but GASREGW and GASREGCOVW first hold 2022-06-20 in their 2022-06-27 vintage (EIA's June 2022 outage), and CLAUDE.md says those prices came out on 2022-06-29: the later date is kept. 2026-09-14: released 2026-09-22, not ALFRED's date. ALFRED lists a release on 2026-09-15, but GASREGW's and GASREGCOVW's 2026-09-15 vintages still end at 2026-09-07; 2026-09-14 first appears in their 2026-09-22 vintage. EIA's holiday schedule names no delay that week, so the later date is kept.",
+   "source": "https://alfred.stlouisfed.org/release/downloaddates?rid=183&ff=txt (each Monday's price maps to the first release date on or after it) and https://alfred.stlouisfed.org/series/downloaddata?seid=GASREGW (the first vintage of GASREGW holding the Monday); where they differ, the later date",
+   "note": "2022-06-20: released 2022-06-29, later than both sources. ALFRED lists a release on 2022-06-21 and GASREGW first holds 2022-06-20 in its 2022-06-27 vintage, but EIA's June 2022 outage held those prices until 2022-06-29 (CLAUDE.md): the later date is kept.",
    "releases": {
     "2018-12-03": "2018-12-03",
     "2018-12-10": "2018-12-10",
@@ -2921,7 +2921,8 @@
     "2026-10-22": "2026-10-28",
     "2026-10-23": "2026-10-28",
     "2026-10-26": "2026-10-28",
-    "2026-10-27": "2026-10-28"
+    "2026-10-27": "2026-10-28",
+    "2026-10-28": "2026-11-04"
    }
   }
  }

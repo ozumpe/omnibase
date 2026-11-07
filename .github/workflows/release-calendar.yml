@@ -1,0 +1,51 @@
+name: Release calendar
+
+# OMNI-190: the release calendar every private fixture is built against
+# (scripts/data/eia_release_calendar_2018_2026.json) is checked by CI, not by a
+# person. On every PR the check runs in the fast suite
+# (tests/test_draft_release_calendar.py::test_the_committed_calendar_passes_its_check):
+# the calendar must be exactly what the sha256-pinned source copies in
+# scripts/data/release_calendar_sources/ draft, and its checked_by must name
+# their digest.
+#
+# Here, once it has landed on develop or main, the check runs again and the
+# calendar and the sources' manifest are signed: a Sigstore build-provenance
+# attestation, naming this workflow and the commit. Anyone can verify it:
+#
+#   gh attestation verify scripts/data/eia_release_calendar_2018_2026.json \
+#     --repo ozumpe/omnibase
+#
+# The attestation is public (the repository is), and holds only the files'
+# digests: the calendar holds dates, never a price.
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - scripts/data/eia_release_calendar_2018_2026.json
+      - scripts/data/release_calendar_sources/**
+      - scripts/draft_release_calendar.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write       # Sigstore's keyless signing
+      attestations: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check the calendar against its saved sources
+        # Standard library only, and no network: the sources are the saved copies.
+        run: python3 scripts/draft_release_calendar.py check
+
+      - name: Sign the checked calendar
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: |
+            scripts/data/eia_release_calendar_2018_2026.json
+            scripts/data/release_calendar_sources/sources.json

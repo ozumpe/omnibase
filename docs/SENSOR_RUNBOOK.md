@@ -137,21 +137,31 @@ A fixture is the exam, so it reaches `specs/` only through a human:
 `ca_price_wholesale` shows the licensed LA spot price, so its episodes may not
 be committed. The steps are the same, with these differences:
 
-1. **Draft and check the calendar.** It also needs the spot price's releases.
-   `python scripts/draft_release_calendar.py urls --sources DIR` prints what to
-   save into `DIR` (`curl -sSL -o DIR/<name> '<url>'`; run it again once
-   `spot_vintages.html` is saved, for the spot CSVs). `draft --sources DIR`
-   writes `scripts/data/eia_release_calendar_2018_2026.json` with
-   `checked_by` empty. Check its dates against the saved files and fill in
-   both fields. The spot dates come from ALFRED's `DGASUSGULF`, the Gulf Coast
-   price from the same weekly EIA release, because ALFRED does not carry the
-   LA series. Only dates are kept.
+1. **The calendar is checked by CI** (OMNI-190). It also needs the spot
+   price's releases. The source copies it is drafted from are committed under
+   `scripts/data/release_calendar_sources/`, reduced to dates and pinned by
+   sha256 in `sources.json`; CI re-drafts the calendar from them and fails on
+   any difference (`draft_release_calendar.py check`), and `build_fixture.py`
+   checks a CI sign-off again before it builds. To extend it:
+   `python scripts/draft_release_calendar.py urls --sources DIR --last DATE`
+   prints what to save into `DIR` (`curl -sSL -o DIR/<name> '<url>'`; run it
+   again once the `*_vintages.html` files are saved, for the CSVs). Then
+   `save --sources DIR --last DATE` reduces them into the committed folder
+   (every CSV value becomes `x`: the spot prices are licensed), `draft
+   --sources scripts/data/release_calendar_sources --last DATE` writes the
+   calendar, and `sign` fills in `checked_by` (`CI, sources sha256:…`) and
+   `checked_on`. Commit all of it through a pull request. Keep the raw copies
+   out of git (the artifacts bucket); `sources.json` records each one's
+   sha256 as `raw_sha256`. The spot dates come from ALFRED's `DGASUSGULF`,
+   the Gulf Coast price from the same weekly EIA release, because ALFRED does
+   not carry the LA series; the retail dates from ALFRED's release list and
+   `GASREGW`'s vintages, the later where they differ.
 2. **Build:** `python scripts/build_fixture.py --fixture ca_price_wholesale`
    builds every week from 6 January 2020 to the last the trace answers (about
    350 episodes, about 40 MB). A fresh capture backfills its history as
    reconstructed, which needs the calendar, so the build stops at the last
    week the calendar covers and prints it, with the week the trace goes to.
-   To build further, extend the calendar and have it checked again. `--last
+   To build further, extend the calendar (step 1). `--last
    YYYY-MM-DD` sets the last week yourself; one past the calendar is refused. Each question is asked on Thursday at 17:00 ET,
    a day after the retail price is out, when Monday's spot price is known.
    The episodes are staged under `private/`, with `private.json` listing the

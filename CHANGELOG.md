@@ -13,6 +13,19 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+- OMNI-190: CI checks the release calendar, in place of a person's sign-off.
+  The sources it is drafted from are committed, reduced to dates (every value
+  in a CSV is `x`: the spot prices are licensed) and pinned by sha256 in
+  `scripts/data/release_calendar_sources/sources.json`. The fast suite
+  re-drafts the calendar from them and fails on any difference, naming a date
+  earlier than the sources as the leak it would be; a changed copy fails
+  rather than re-drafting. `checked_by` is now `CI, sources sha256:…`, a claim
+  `scripts/build_fixture.py` checks again before building, and a workflow
+  attests the checked calendar with a Sigstore signature on `develop` and
+  `main`. Retail dates have a second source, FRED's `GASREGW` vintages, and
+  where sources disagree the later date wins; it reproduces the 2026-09-14
+  correction by itself. The re-drafted calendar adds one spot day,
+  2026-10-28 (released 2026-11-04).
 - OMNI-187 (L70): a public fixture refuses to show a licensed series. The
   rule was only `scripts/build_fixture.py`'s choice of inputs; now
   `SourceRules.licensed` names the series (the LA spot price for EIA) and
