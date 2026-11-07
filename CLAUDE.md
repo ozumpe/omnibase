@@ -658,8 +658,10 @@ one. File the ticket first, then the entry; when it is fixed, move it to
 "Resolved" and add a line to `CHANGELOG.md`.
 
 **Tests.** `poetry run pytest` runs the fast half, the serve half runs
-separately (Operational quick reference above), and CI runs both. No count is
-kept here: CI's is the one that matters, and a hand-kept one drifted.
+separately (Operational quick reference above), and CI runs both. The suite
+ignores your shell's `SIS_*` variables, Anthropic key and AWS credentials
+(OMNI-59, `tests/conftest.py`); a test that needs a real backend asks for the
+`real_env` fixture. No count is kept here: CI's is the one that matters, and a hand-kept one drifted.
 **Known test flakes**: re-run, then file or update the ticket; never call a
 failure environment noise.
 - Open: L58 (`test_fast_on_typical_inputs_but_slower_in_total_is_rejected`,

@@ -51,7 +51,7 @@ reference with no link target below.
 > | M17 | [OMNI-56](https://olafzumpe.atlassian.net/browse/OMNI-56) — **fixed** (2026-09-29) |
 > | M18 | [OMNI-57](https://olafzumpe.atlassian.net/browse/OMNI-57) — **fixed** (with OMNI-126) |
 > | M22 | [OMNI-58](https://olafzumpe.atlassian.net/browse/OMNI-58) — **fixed** (2026-11-05) |
-> | M23 | [OMNI-59](https://olafzumpe.atlassian.net/browse/OMNI-59) |
+> | M23 | [OMNI-59](https://olafzumpe.atlassian.net/browse/OMNI-59) — **fixed** (2026-11-06) |
 > | L21, L23 | [OMNI-61](https://olafzumpe.atlassian.net/browse/OMNI-61) (brake state fails closed; `sis.admin`) — **fixed** |
 > | L24 | [OMNI-62](https://olafzumpe.atlassian.net/browse/OMNI-62) (Notifier port) — **fixed** |
 > | M7 | [OMNI-88] — **won't fix** for now (label `wont-fix`); see the Won't fix section |
@@ -69,16 +69,7 @@ None open.
 
 ## Medium
 
-- [OMNI-59] **M23 — The test suite inherits real `SIS_*` environment variables from the
-  developer's shell** *(found 2026-09-26; confirmed by reading
-  `tests/conftest.py`)* — nothing clears `SIS_*`/adapter-credential
-  variables before the suite runs, so a shell configured for a real run
-  (real adapters, the real Claude proposer, or the real episodic store)
-  silently changes what `pytest` exercises, with no visible signal that it
-  happened. Fix: snapshot and clear the relevant env vars in a session-scoped
-  autouse fixture, with an explicit opt-in fixture for the handful of tests
-  that intentionally want a real backend.
-
+None open.
 
 ## Low
 
@@ -891,6 +882,26 @@ any long-lived cluster exists.
   writes. The CLI prints `refused:` and exits 1. Regression tests: `../x`,
   `.`, `..`, `a/b`, an empty name and a mismatched name are refused by
   `load_staged`, by `promote` and on the command line, and fail without the fix.
+
+- [OMNI-59] **M23 — The test suite inherits real `SIS_*` environment variables from the
+  developer's shell** *(found 2026-09-26; confirmed by reading
+  `tests/conftest.py`)* — nothing clears `SIS_*`/adapter-credential
+  variables before the suite runs, so a shell configured for a real run
+  (real adapters, the real Claude proposer, or the real episodic store)
+  silently changes what `pytest` exercises, with no visible signal that it
+  happened. Fix: snapshot and clear the relevant env vars in a session-scoped
+  autouse fixture, with an explicit opt-in fixture for the handful of tests
+  that intentionally want a real backend.
+  **Fixed 2026-11-06 (OMNI-59):** `tests/conftest.py` removes every `SIS_*`
+  variable, `ANTHROPIC_API_KEY` and the AWS credentials (`AWS_ACCESS_KEY_ID`,
+  `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_PROFILE`) when it is
+  imported, before any test module and so before any Ray actor exists. The
+  run's header names what it ignored, never the values. A test that means to
+  reach a real backend asks for the `real_env` fixture, which puts them back
+  for that test in its own process. Regression tests
+  (`tests/test_env_isolation.py`): the scrub itself, and a pytest started from
+  a shell with `SIS_ADAPTERS=real`, `SIS_PROPOSER=claude` and a key exported
+  that still runs on the in-memory adapters and the stub proposer.
 
 - [OMNI-58] **M22 — The Serve baseline (blue) is the local target file, not the merged
   base, and reverts to it whenever `ServeCloud` is rebuilt** *(found
