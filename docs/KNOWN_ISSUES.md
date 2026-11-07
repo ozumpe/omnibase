@@ -60,6 +60,7 @@ reference with no link target below.
 > | L39 | [OMNI-42] — **fixed** (2026-10-15, with OMNI-68) |
 > | L55, L57 | [OMNI-166], [OMNI-172], from the weekly code reviews of 2026-10-25 and 2026-10-26 |
 > | L58, L59, L69 | [OMNI-141], [OMNI-174], [OMNI-186]: tests that failed once under `-n auto` |
+> | L70 | [OMNI-187], from the weekly code review of 2026-11-02 (develop @ 7ae6654) — **fixed** (2026-11-07) |
 > | L71 | [OMNI-188]: a test that failed once on CI — **fixed** (2026-11-06) |
 > | L60 | [OMNI-173] — **fixed** (2026-10-27) |
 > | L61–L68 | [OMNI-176]–[OMNI-183], one each, from the code and documentation review of 2026-10-31 (develop @ 83bb43c); its documentation findings were fixed with [OMNI-184] (L61 and L63 **fixed** 2026-11-01, L62 2026-11-02) |
@@ -253,6 +254,20 @@ None open.
 
 ## Resolved (Low)
 
+- [OMNI-187] **L70** — `sis/fixture_builder.build` wrote a public fixture
+  (`private=False`) from whatever series `question.inputs` named, and from
+  every series in the trace when it named none. It never asked whether a
+  series may be redistributed, so the Los Angeles spot price (Thomson Reuters'
+  data under licence to EIA, `redistributable=False`) stayed out of `specs/`
+  only because `scripts/build_fixture.py` named `EIA_PUBLIC_SERIES` for the
+  public fixture: a caller's convention, not a guardrail. A new entry there
+  with the default `inputs=None`, over a calendar that covers the spot price,
+  staged its values for promotion into a public repo, and nothing failed.
+  **Fixed 2026-11-07 (OMNI-187)**: `SourceRules` names its `licensed` series
+  (each must be declared), `EIA_RULES` names the spot price, and a public
+  `build()` refuses a question that shows one, named or by default, with
+  "build it private". The rule now lives in the POLICY-FORBIDDEN module that
+  writes the exam's inputs.
 - [OMNI-188] **L71** — `scripts/aws_scheduled_run.tail_commands` trusted
   `awk`'s `substr` and `tail -c` on a pipe to keep its output under the 24,000
   characters SSM keeps *(seen 2026-11-05 on CI, PR #214)*.
@@ -2237,4 +2252,5 @@ any long-lived cluster exists.
 [OMNI-183]: https://olafzumpe.atlassian.net/browse/OMNI-183
 [OMNI-184]: https://olafzumpe.atlassian.net/browse/OMNI-184
 [OMNI-186]: https://olafzumpe.atlassian.net/browse/OMNI-186
+[OMNI-187]: https://olafzumpe.atlassian.net/browse/OMNI-187
 [OMNI-188]: https://olafzumpe.atlassian.net/browse/OMNI-188
