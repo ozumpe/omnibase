@@ -5,8 +5,8 @@
     poetry run python scripts/build_fixture.py --trace PATH --calendar PATH
 
 Reads the trace through the sanitising door, checks every reconstructed
-``known_at`` a fixture shows against the release calendar (which a human must
-have checked: ``checked_by``, ``checked_on``), and builds one held-out episode
+``known_at`` a fixture shows against the release calendar (which must be
+checked: ``checked_by``, ``checked_on``), and builds one held-out episode
 per week. Two fixtures:
 
 - ``ca_price_next_week`` (OMNI-35, the default): 8 August to 28 November 2022.
@@ -19,6 +19,11 @@ per week. Two fixtures:
   licensed (may be modelled, never redistributed), so the episodes are
   private: under ``private/``, gitignored, with ``private.json`` listing their
   digests for git (``docs/SENSOR_RUNBOOK.md``).
+
+A calendar signed by CI (``checked_by`` ``CI, sources sha256:…``, OMNI-190) is
+checked again here, offline, against the saved sources it names
+(``scripts/draft_release_calendar.py check``): a claim that does not hold is
+refused, so it cannot simply be typed in.
 
 The draft is staged under ``runtime/contract_staging/<fixture>/``. Nothing
 reaches ``specs/`` from here. A human reads the staged files, then runs
@@ -37,8 +42,12 @@ import pathlib
 import sys
 from dataclasses import dataclass, replace
 
-# Allow running as a plain script: put the repo root (parent of scripts/) on the path.
+# Allow running as a plain script: put the repo root (parent of scripts/) on the
+# path, and scripts/ itself for the calendar check.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+
+import draft_release_calendar  # noqa: E402
 
 from sis import sensor_trace  # noqa: E402
 from sis.adapters_real import EIA_PUBLIC_SERIES, EIA_RULES, EIA_SERIES, EIA_TRACE  # noqa: E402
@@ -134,8 +143,14 @@ def main(argv: list[str] | None = None) -> int:
         if not lines:
             raise FixtureRefused(f"no trace at {args.trace}: capture one first "
                                  "(scripts/capture_sensor.py)")
-        calendar = ReleaseCalendar.parse(
-            (args.calendar or fixture.calendar).read_text(encoding="utf-8"))
+        calendar_path = args.calendar or fixture.calendar
+        calendar = ReleaseCalendar.parse(calendar_path.read_text(encoding="utf-8"))
+        if draft_release_calendar.is_ci_claim(calendar.checked_by):
+            try:
+                draft_release_calendar.check(calendar_path)
+            except draft_release_calendar.CalendarRefused as exc:
+                raise FixtureRefused(f"the release calendar claims CI's check, which it "
+                                     f"does not pass: {exc}") from None
         last, note = args.last or fixture.last, None
         if last is None:
             weeks = _answered(lines, fixture.question.target)
@@ -144,12 +159,12 @@ def main(argv: list[str] | None = None) -> int:
             if not covered or covered[-1] < fixture.question.first:
                 raise FixtureRefused(
                     f"the release calendar ends before {fixture.question.first}, the "
-                    "first week asked about: extend it, and have it checked")
+                    "first week asked about: extend it (draft_release_calendar.py)")
             last = covered[-1]
             if covered[-1] != weeks[-1]:
                 note = (f"last week: {last}, the last before {beyond}, which the release "
                         f"calendar does not reach; the trace answers to {weeks[-1]}. "
-                        "Extend the calendar (and have it checked) to build further.")
+                        "Extend the calendar (draft_release_calendar.py) to build further.")
         question = replace(fixture.question, last=last)
         draft = build(lines, EIA_RULES, calendar, question, name=args.fixture,
                       spec_ref=fixture.spec_ref, private=fixture.private)
