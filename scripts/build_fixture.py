@@ -62,7 +62,8 @@ class Fixture:
 
 FIXTURES = {
     # Committed under specs/, so it shows only what may be redistributed:
-    # never a licensed series such as the LA spot price (OMNI-163).
+    # never a licensed series such as the LA spot price (OMNI-163). The build
+    # refuses one in a public fixture in any case (OMNI-187).
     "ca_price_next_week": Fixture(
         Question(target=CALIFORNIA, first=datetime.date(2022, 8, 8),
                  last=datetime.date(2022, 11, 28), inputs=EIA_PUBLIC_SERIES),

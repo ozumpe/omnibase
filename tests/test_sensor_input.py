@@ -298,6 +298,10 @@ def test_rules_that_make_no_sense_are_refused_when_written() -> None:
         SourceRules("eia", {"price\n": SeriesRule("USD/gal", 0.0, 1.0)})
     with pytest.raises(ValueError, match="separator"):
         SourceRules("eia", {}, thousands=";")
+    # A licensed series is one the adapter declares (OMNI-187).
+    with pytest.raises(ValueError, match="licensed.*not a declared series"):
+        SourceRules("eia", {"price": SeriesRule("USD/gal", 0.0, 1.0)},
+                    licensed=frozenset({"spot"}))
 
 
 # --- the boundary is the loop's to read, not to move ---------------------------------

@@ -826,7 +826,8 @@ EIA_SERIES: Mapping[str, EIASeries] = {
 # The series a public fixture may show: every one EIA may let us redistribute.
 EIA_PUBLIC_SERIES = frozenset(series for series, spec in EIA_SERIES.items()
                               if spec.redistributable)
-EIA_RULES = SourceRules("eia", {series: spec.rule for series, spec in EIA_SERIES.items()})
+EIA_RULES = SourceRules("eia", {series: spec.rule for series, spec in EIA_SERIES.items()},
+                        licensed=frozenset(EIA_SERIES) - EIA_PUBLIC_SERIES)
 
 
 class EIAFormatError(ValueError):
