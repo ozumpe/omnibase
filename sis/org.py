@@ -314,16 +314,25 @@ def apply_develop_judgment(
     if governing is not None and governing.name != spec.name:
         return (f"[sis] develop: PR {pr_id} is for {governing.name}, blue/green serves "
                 f"{spec.name}; not judged")
-    try:
-        source = ray.get(ws.get_pr.remote(pr_id, spec.target_path)).artifact
-        judgment = platform.judge(version, source)
-    except Exception as exc:  # noqa: BLE001 - a harness fault; blue is untouched
-        from sis.develop_platform import Judgment
+    from sis.develop_platform import Judgment
 
+    origin = ""
+    try:
+        source, origin = _merged_green_source(ws, pr_id, spec.target_path)
+        if source:
+            judgment = platform.judge(version, source)
+        else:
+            judgment = Judgment(
+                version, platform.blue_version, switched=False, harness=True,
+                reason=(f"harness: no source to judge: {spec.target_path} is on neither "
+                        f"the base branch nor PR {pr_id}'s head"))
+    except Exception as exc:  # noqa: BLE001 - a harness fault; blue is untouched
         judgment = Judgment(version, platform.blue_version, switched=False, harness=True,
                             reason=f"harness: the judgment could not run: {exc}")
     detail: dict[str, Any] = {"pr": pr_id, "previous": judgment.previous,
                               "reason": judgment.reason, "contract": spec.name}
+    if origin:
+        detail["source"] = origin
     revert: str | None = None
     if judgment.switched:
         ray.get(sm.set_slot.remote("develop_blue", version))
@@ -359,6 +368,23 @@ def apply_develop_judgment(
         print(f"[sis] WARNING: develop judgment of PR {pr_id} not recorded: {exc}",
               file=sys.stderr)
     return line
+
+
+def _merged_green_source(ws: Any, pr_id: str, path: str) -> tuple[str, str]:
+    """What ``develop`` serves after the merge, and where it was read.
+
+    The base branch's file, never the PR's head (OMNI-200, M36): the merge can
+    differ from the head (another merge first, a resolved conflict, an edited
+    squash), and a head branch deleted on merge reads as "". Only a backend
+    with no base branch to read (the in-memory adapter answers "") falls back
+    to the PR's file, the rule ``serve_cloud.baseline_source`` follows for
+    Serve's blue (OMNI-58). ``("", "")`` when neither has it.
+    """
+    merged = str(ray.get(ws.live_target_source.remote(path)))
+    if merged:
+        return merged, "merged_base"
+    head = str(ray.get(ws.get_pr.remote(pr_id, path)).artifact)
+    return (head, "pr_head") if head else ("", "")
 
 
 def _open_revert_pr(ws: Any, platform: Any, judgment: Any, pr_id: str
