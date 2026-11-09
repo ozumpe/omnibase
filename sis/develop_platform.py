@@ -238,6 +238,13 @@ class DevelopPlatform:
     def judge(self, version: str, source: str) -> Judgment:
         """Deploy *source* as green, judge it against blue, then switch or retire it."""
         previous = self._blue_version
+        if not source.strip():
+            # A read that found nothing (a deleted head branch, say), not a merge
+            # that "did not start": judged as green, it earned a good merge a
+            # revert PR (OMNI-200, M36).
+            return Judgment(version, previous, switched=False, harness=True,
+                            reason="harness: no source to judge: the merged target "
+                                   "read as empty")
         if source == self._blue_source:
             return Judgment(version, previous, switched=False, harness=True,
                             reason="already serving: the merge is what blue serves")

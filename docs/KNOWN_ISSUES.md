@@ -52,6 +52,7 @@ reference with no link target below.
 > | M18 | [OMNI-57](https://olafzumpe.atlassian.net/browse/OMNI-57) — **fixed** (with OMNI-126) |
 > | M22 | [OMNI-58](https://olafzumpe.atlassian.net/browse/OMNI-58) — **fixed** (2026-11-05) |
 > | M23 | [OMNI-59](https://olafzumpe.atlassian.net/browse/OMNI-59) — **fixed** (2026-11-06) |
+> | M36 | [OMNI-200], from the weekly code review of 2026-11-09 (develop @ 165623f) — **fixed** (2026-11-09) |
 > | L21, L23 | [OMNI-61](https://olafzumpe.atlassian.net/browse/OMNI-61) (brake state fails closed; `sis.admin`) — **fixed** |
 > | L24 | [OMNI-62](https://olafzumpe.atlassian.net/browse/OMNI-62) (Notifier port) — **fixed** |
 > | M7 | [OMNI-88] — **won't fix** for now (label `wont-fix`); see the Won't fix section |
@@ -767,6 +768,32 @@ any long-lived cluster exists.
   front.
 
 ## Resolved
+
+- [OMNI-200] **M36 — develop blue/green judged the PR's head file, not what
+  `develop` serves after the merge** *(found 2026-11-09 by the weekly code
+  review, develop @ 165623f; same class as M22)* — `org.apply_develop_judgment`
+  took green's source from `Workspace.get_pr(pr, path).artifact`, which the
+  GitHub adapter reads at the PR's **head branch**, while blue starts from the
+  merged base. Two failures followed. A head branch deleted on merge (GitHub's
+  "automatically delete head branches", or a person) reads as `""`;
+  `DevelopPlatform.judge` deployed it, the worker reported that it exports
+  nothing, and `judge` called that "green did not start", green's fault: every
+  good merge earned a revert PR against `develop` and a CRITICAL page. And a
+  merge that differs from the head (another merge first, a resolved conflict,
+  an edited squash) was judged on code `develop` does not serve; on a pass
+  that code became blue's source, so a later revert PR could put back content
+  `develop` never had and undo another merged change.
+  **Fixed 2026-11-09 (OMNI-200):** green is the target as merged on the base
+  branch (`Workspace.live_target_source`, `org._merged_green_source`), the
+  rule `serve_cloud.baseline_source` follows for Serve's blue (OMNI-58); only
+  a backend with no base branch to read (the in-memory adapter) falls back to
+  the PR's file. The `develop.*` provenance record names which (`source`:
+  `merged_base` or `pr_head`). Nothing to read on either side, or a source
+  that is empty or blank, is a harness fault (`develop_unjudged`, no revert
+  PR, a page): `DevelopPlatform.judge` refuses an empty source itself.
+  Regression tests (`tests/test_develop_platform.py`): a merge that differs
+  from the head, a deleted head branch, nothing to read, the in-memory
+  fallback, and an empty source given to the platform.
 
 - [OMNI-50] **M20 — The live canary's p95/p99 gate is close to a coin flip for targets
   where dispatch overhead dominates compute** *(found 2026-09-26; simulated
@@ -2268,3 +2295,4 @@ any long-lived cluster exists.
 [OMNI-186]: https://olafzumpe.atlassian.net/browse/OMNI-186
 [OMNI-187]: https://olafzumpe.atlassian.net/browse/OMNI-187
 [OMNI-188]: https://olafzumpe.atlassian.net/browse/OMNI-188
+[OMNI-200]: https://olafzumpe.atlassian.net/browse/OMNI-200
