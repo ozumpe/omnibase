@@ -68,9 +68,14 @@ internal target before it models anything external.
   `runtime/ca_price_persistence.py` absent until built); it declares no
   backtest, since persistence would fail one in the jump week.
   `scripts/prediction_error.py` replays autumn 2022 from the EIA trace, or a
-  scenario (`--scenario KIND --seed N`), and prints the errors. Nothing starts
-  a cycle from it: an error budget and skill against climatology are Phase B's
-  triggers (D9).
+  scenario (`--scenario KIND --seed N`), and prints the errors. **Climatology**
+  is asked too (OMNI-195), on the host from the same as-of view: the latest
+  price plus the mean change from that ISO week to the next over up to five
+  earlier years. The summary carries its MAE and the model's skill,
+  1 − MAE(model)/MAE(climatology), over the weeks both were scored; a week with
+  no earlier year has no climatology and claims no skill. Nothing starts a
+  cycle from it: an error budget and skill against climatology are Phase B's
+  triggers (D9, epic OMNI-194).
   **The real sensor is `EIASensor`** (OMNI-33, `sis/adapters_real.py`): EIA's
   bulk file `PET.zip` (no key), five weekly series (PADD 5 gasoline stocks;
   California, Los Angeles, San Francisco and US retail prices) and, since

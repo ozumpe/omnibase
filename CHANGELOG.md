@@ -13,6 +13,13 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+- OMNI-195 (Phase B 1): a climatology baseline and the skill against it in the
+  prediction-error report. Climatology is the latest price plus the mean
+  change from that ISO week to the next over up to five earlier years, from
+  the as-of view, on the host. The summary (and `prediction.summary`
+  telemetry) adds `climatology_mae`, `skill` and `skill_weeks`;
+  `scripts/prediction_error.py` prints both. Autumn 2022: persistence's skill
+  is about −0.03.
 - OMNI-185 (L72): a human merge seen by the running loop is printed and logged
   (`human_merged`, at no cost) like a decline, so a run's `loop.log` and
   episodic log say when a PR was merged; a restart or the open-PR check logs

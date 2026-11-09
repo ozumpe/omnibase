@@ -6,6 +6,17 @@ error budget and skill against climatology are Phase B's triggers (D9); this
 module starts no cycle, files nothing and pages no one, and imports nothing
 that could (a test holds it to that).
 
+**Climatology** (OMNI-195, the baseline D9's skill trigger measures against)
+is asked every question too, on the host from the same as-of view, never in a
+sandbox: the latest value plus the mean change from the same ISO week to the
+next in up to :data:`CLIMATOLOGY_YEARS` earlier years (:func:`climatology`).
+A seasonal change rather than a seasonal level, so a market that moved a
+dollar since last year is not forecast to move back. A week with no earlier
+year to learn from has no climatology, and no skill is claimed for it. The
+skill, ``1 - MAE(model) / MAE(climatology)`` over the weeks both were scored
+on, is in the summary next to bias, MAE and RMSE: above 0 the model beats
+climatology, at 0 it is no better, below 0 worse.
+
 **The question** is the fixture builder's (:mod:`sis.fixture_builder`): at the
 moment the target series' value for week *w* first became known, given
 everything known then, what is its value for week *w* + 1? The predictor is
@@ -48,6 +59,11 @@ from sis.sensor_input import Absent
 CALIFORNIA = "PET.EMM_EPMRR_PTE_SCA_DPG.W"
 DEFAULT_LOOKBACK = datetime.timedelta(weeks=52)
 HORIZON = datetime.timedelta(weeks=1)
+# How many earlier years climatology averages the seasonal change over: enough
+# to smooth one odd year, few enough to follow a market whose seasons changed.
+CLIMATOLOGY_YEARS = 5
+# A climatology MAE at or below this is perfect: the rest is float rounding.
+_PERFECT = 1e-9
 # A week whose next value is dated more than this after it is not "next week":
 # a gap in the series, skipped rather than scored against a later week.
 _NEXT_WEEK_SLACK = datetime.timedelta(days=3)
@@ -63,6 +79,7 @@ class Question:
     next_week: datetime.datetime | None
     actual: float | None               # the next week's value, latest vintage; None: skipped
     skip: str = ""                     # why a week with a next value is not scored
+    climatology: float | None = None   # the baseline's forecast; None: no earlier year
 
 
 @dataclass(frozen=True)
@@ -75,6 +92,8 @@ class Step:
     actual: float | None
     error: float | None                # predicted - actual
     note: str = ""                     # why a step was not scored
+    climatology: float | None = None   # the baseline's forecast for the same week
+    climatology_error: float | None = None  # climatology - actual, when both exist
 
 
 @dataclass(frozen=True)
@@ -91,16 +110,71 @@ class Report:
         return tuple(step for step in self.steps if step.error is not None)
 
     def summary(self) -> dict[str, Any]:
-        """Count, bias (mean signed error), MAE and RMSE over the scored weeks."""
+        """Count, bias (mean signed error), MAE and RMSE over the scored weeks.
+
+        And climatology's MAE and the model's skill against it, both over the
+        weeks the model and climatology were each scored on (``skill_weeks``):
+        a week only one of them answered says nothing about which is better.
+        """
         errors = [step.error for step in self.scored if step.error is not None]
         n = len(errors)
+        pairs = [(abs(step.error), abs(step.climatology_error)) for step in self.steps
+                 if step.error is not None and step.climatology_error is not None]
+        model_mae = sum(m for m, _ in pairs) / len(pairs) if pairs else None
+        climatology_mae = sum(c for _, c in pairs) / len(pairs) if pairs else None
         return {
             "target": self.target, "unit": self.unit, "source": self.source,
             "weeks": len(self.steps), "scored": n, "skipped": len(self.steps) - n,
             "bias": sum(errors) / n if n else None,
             "mae": sum(abs(e) for e in errors) / n if n else None,
             "rmse": math.sqrt(sum(e * e for e in errors) / n) if n else None,
+            "skill_weeks": len(pairs),
+            "climatology_mae": climatology_mae,
+            "skill": skill(model_mae, climatology_mae),
         }
+
+
+def skill(model_mae: float | None, climatology_mae: float | None) -> float | None:
+    """``1 - model / climatology``; None when either is missing or climatology was perfect.
+
+    A perfect climatology (up to float rounding, :data:`_PERFECT`) leaves no
+    headroom to measure against, so no skill is claimed rather than an
+    infinity, a division error or a ratio of rounding noise.
+    """
+    if model_mae is None or climatology_mae is None or climatology_mae <= _PERFECT:
+        return None
+    return 1.0 - model_mae / climatology_mae
+
+
+def climatology(values: dict[datetime.datetime, float], week: datetime.datetime, *,
+                years: int = CLIMATOLOGY_YEARS) -> float | None:
+    """The climatology forecast for the week after *week*, from *values* alone.
+
+    *values* is the target series as a model may see it (an as-of view):
+    ``event_time -> value``. The forecast is *week*'s value plus the mean
+    change from the same ISO week to the following one over up to *years*
+    earlier years that have both. None when *week* has no value or no earlier
+    year has the pair. Pure: what it may see is the caller's to limit.
+    """
+    current = values.get(week)
+    if current is None:
+        return None
+    by_iso = {(day.isocalendar().year, day.isocalendar().week): day for day in values}
+    ordered = sorted(values)
+    position = {day: i for i, day in enumerate(ordered)}
+    iso = week.isocalendar()
+    changes: list[float] = []
+    for back in range(1, years + 1):
+        then = by_iso.get((iso.year - back, iso.week))
+        if then is None or position[then] + 1 >= len(ordered):
+            continue
+        after = ordered[position[then] + 1]
+        if after - then > HORIZON + _NEXT_WEEK_SLACK or after >= week:
+            continue
+        changes.append(values[after] - values[then])
+    if not changes:
+        return None
+    return current + sum(changes) / len(changes)
 
 
 def _record(reading: Reading) -> dict[str, Any]:
@@ -140,6 +214,7 @@ def questions(readings: Iterable[Reading], absent: Iterable[Absent], *, target: 
         if clock is not None:
             clock.advance_to(at)
         view = as_of(readings, absent, at)
+        seen = {r.event_time: r.value for r in view.readings if r.series == target}
         floor = week - lookback
         state = {"as_of": at.isoformat(),
                  "readings": [_record(r) for r in view.readings if r.event_time >= floor],
@@ -157,7 +232,7 @@ def questions(readings: Iterable[Reading], absent: Iterable[Absent], *, target: 
         else:
             next_week = None
         out.append(Question(week=week, at=at, state=state, next_week=next_week, actual=actual,
-                            skip=skip))
+                            skip=skip, climatology=climatology(seen, week)))
     return out
 
 
@@ -171,22 +246,28 @@ def score(asked: Sequence[Question], answers: Sequence[Any | BaseException], *,
         raise ValueError(f"{len(answers)} answers to {len(asked)} questions")
     steps: list[Step] = []
     for question, answer in zip(asked, answers, strict=True):
+        # Climatology is scored whatever the predictor answered: its errors are
+        # the same series whichever model is judged against them.
+        base = question.climatology
+        base_error = base - question.actual \
+            if base is not None and question.actual is not None else None
         if isinstance(answer, BaseException):
             steps.append(Step(question.week, question.at, None, question.actual, None,
-                              f"the predictor failed: {answer}"))
+                              f"the predictor failed: {answer}", base, base_error))
             continue
         if isinstance(answer, bool) or not isinstance(answer, int | float) \
                 or not math.isfinite(answer):
             steps.append(Step(question.week, question.at, None, question.actual, None,
-                              f"not a number: {str(answer)[:40]!r}"))
+                              f"not a number: {str(answer)[:40]!r}", base, base_error))
             continue
         predicted = float(answer)
         if question.actual is None:
             steps.append(Step(question.week, question.at, predicted, None, None,
-                              question.skip or "no value for the next week to compare with"))
+                              question.skip or "no value for the next week to compare with",
+                              base, None))
             continue
         steps.append(Step(question.week, question.at, predicted, question.actual,
-                          predicted - question.actual))
+                          predicted - question.actual, "", base, base_error))
     return Report(target=target, unit=unit, source=source, steps=tuple(steps))
 
 
@@ -233,6 +314,8 @@ def publish(report: Report, telemetry: Telemetry, *, ref: str,
         telemetry.emit("prediction.error", ref=ref, target=report.target,
                        week=step.week.isoformat(), at=step.at.isoformat(),
                        predicted=step.predicted, actual=step.actual, error=step.error,
+                       climatology=step.climatology,
+                       climatology_error=step.climatology_error,
                        unit=report.unit, note=step.note)
     summary = report.summary()
     telemetry.emit("prediction.summary", ref=ref, **summary)
@@ -242,13 +325,16 @@ def publish(report: Report, telemetry: Telemetry, *, ref: str,
 
 def table(report: Report) -> str:
     """The per-week errors and the summary, as lines for a terminal."""
-    lines = [f"{'week':<10}  {'known at':<16}  {'predicted':>9}  {'actual':>9}  {'error':>8}"]
+    lines = [f"{'week':<10}  {'known at':<16}  {'predicted':>9}  {'actual':>9}  {'error':>8}"
+             f"  {'climatology':>11}  {'clim err':>8}"]
     for step in report.steps:
         def cell(value: float | None, width: int) -> str:
             return f"{value:>{width}.3f}" if value is not None else f"{'-':>{width}}"
         lines.append(f"{step.week:%Y-%m-%d}  {step.at:%Y-%m-%d %H:%M}  "
                      f"{cell(step.predicted, 9)}  {cell(step.actual, 9)}  "
-                     f"{cell(step.error, 8)}" + (f"  {step.note}" if step.note else ""))
+                     f"{cell(step.error, 8)}  {cell(step.climatology, 11)}  "
+                     f"{cell(step.climatology_error, 8)}"
+                     + (f"  {step.note}" if step.note else ""))
     s = report.summary()
 
     def num(value: float | None, sign: str = "") -> str:
@@ -256,8 +342,14 @@ def table(report: Report) -> str:
 
     lines.append(f"{s['scored']} of {s['weeks']} weeks scored ({report.unit}): "
                  f"bias {num(s['bias'], '+')}, MAE {num(s['mae'])}, RMSE {num(s['rmse'])}")
+    if s["skill_weeks"]:
+        lines.append(f"against climatology over {s['skill_weeks']} weeks: "
+                     f"climatology MAE {num(s['climatology_mae'])}, "
+                     f"skill {num(s['skill'], '+')} (above 0 beats climatology)")
+    else:
+        lines.append("against climatology: no week had an earlier year to learn from")
     return "\n".join(lines)
 
 
-__all__ = ["CALIFORNIA", "Question", "Report", "Step", "ask", "ask_in_sandbox", "publish",
-           "questions", "score", "table"]
+__all__ = ["CALIFORNIA", "CLIMATOLOGY_YEARS", "Question", "Report", "Step", "ask",
+           "ask_in_sandbox", "climatology", "publish", "questions", "score", "skill", "table"]
