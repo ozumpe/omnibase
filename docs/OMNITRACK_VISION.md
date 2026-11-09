@@ -551,6 +551,9 @@ SLO trigger. The open question is whether the threshold is absolute, relative to
 incumbent, or relative to climatology. *Recommend relative to climatology* — it is the only
 form that stays meaningful as the model improves.
 → *Decided ahead of Phase B (the two-trigger structure; per-actor thresholds stay case-by-case, see below).*
+→ *Climatology built (OMNI-195): the latest value plus the mean change from that ISO week
+to the next over up to five earlier years, from the as-of view; the report carries the skill
+against it. The triggers themselves are OMNI-196/197.*
 
 That's a decision to be made case by case, actor by actor and project by project. My opinion is to optimize the implementation
 of a model over time based on historic values/timelines. The situation for each actor can change suddenly and drastically - 

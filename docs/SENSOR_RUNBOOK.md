@@ -210,9 +210,21 @@ a scenario may reject a candidate, never be the evidence that promotes one (D4).
 
 ## Prediction error
 
-How wrong a predictor is, week by week (OMNI-36). Nothing acts on the number
-yet: an error budget and skill against climatology are Phase B's triggers (D9),
-and this starts no cycle.
+How wrong a predictor is, week by week (OMNI-36), and how it compares with
+climatology (OMNI-195). Nothing acts on the number yet: an error budget and
+skill against climatology are Phase B's triggers (D9), and this starts no
+cycle.
+
+Climatology is the baseline the skill is measured against. At each question
+it forecasts the latest price plus the mean change from that ISO week to the
+next over up to five earlier years, from the same as-of view the predictor is
+shown, computed on the host. It learns a seasonal *change*, not a seasonal
+level, so a market that moved a dollar since last year is not forecast to
+move back. A week with no earlier year to learn from has no climatology. The
+summary line adds climatology's MAE and the skill, 1 − MAE(model) /
+MAE(climatology), over the weeks both were scored: above 0 the model beats
+climatology. On autumn 2022, persistence scores about −0.03 (MAE 0.179 against
+climatology's 0.173): it is no better than the season.
 
 ```bash
 poetry run python scripts/prediction_error.py                    # autumn 2022, from the EIA trace

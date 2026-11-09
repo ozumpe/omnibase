@@ -144,6 +144,20 @@ def test_a_merge_blue_already_serves_is_not_judged() -> None:
         platform.close()
 
 
+@pytest.mark.parametrize("source", ["", "  \n"])
+def test_no_source_to_judge_is_the_harness_never_green(source: str) -> None:
+    # OMNI-200 (M36): an empty source is a read that found nothing, not a merge
+    # that "did not start". Judged as green, it opened a revert PR for a good merge.
+    platform = _platform(NAIVE)
+    try:
+        judgment = platform.judge("v2", source)
+        assert judgment.harness and judgment.outcome == "develop_unjudged"
+        assert judgment.reason.startswith("harness: no source")
+        assert _serves(platform, 12) == 28 and platform.blue_version == "v1"
+    finally:
+        platform.close()
+
+
 # --- the window's judgment, pure --------------------------------------------------
 
 
@@ -239,7 +253,11 @@ class _FakePlatform:
         return self._judgment
 
 
-def _shell(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+def _shell(monkeypatch: pytest.MonkeyPatch, *, merged: str = "",
+           head: str = FAST) -> dict[str, Any]:
+    """*merged* is the target on develop after the merge ("" for a backend
+    with no base branch, the in-memory one); *head* is the PR's head file
+    ("" once the head branch is deleted)."""
     calls: dict[str, Any] = {"record": [], "slots": {}, "branches": [], "prs": [],
                              "pages": [], "emits": []}
     monkeypatch.setattr(org.ray, "get", lambda value: value)
@@ -250,11 +268,12 @@ def _shell(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     )
 
     class _PR:
-        artifact = FAST
+        artifact = head
         id = "PR-9"
 
     ws = _Actor(
         get_pr=lambda pr, path: _PR(),
+        live_target_source=lambda path: merged,
         create_branch=lambda name, base: calls["branches"].append((name, base)),
         open_pr=lambda *a: calls["prs"].append(a) or _PR(),
         notify=lambda sev, title, body: calls["pages"].append((sev, title, body))
@@ -315,6 +334,67 @@ def test_a_harness_fault_pages_but_reverts_nothing(
     assert not calls["prs"] and calls["pages"]
     assert [r[0] for r in calls["record"]] == ["develop.unjudged"]
     assert store.events()[0].outcome == "develop_unjudged"
+
+
+def test_green_is_what_develop_serves_after_the_merge_not_the_pr_head(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
+    # OMNI-200 (M36): the merge result can differ from the PR's head (another
+    # merge first, a resolved conflict, an edited squash). Judging the head
+    # measured code develop does not serve, and on a pass made it blue's source,
+    # so a later revert PR could put back content develop never had.
+    merged = FAST.replace("total = 0", "total = 0  # merged with another change")
+    calls = _shell(monkeypatch, merged=merged)
+    store = episodic.JsonlEpisodicStore(tmp_path / "e.jsonl")
+    platform = _FakePlatform(_judgment(switched=True))
+    org.apply_develop_judgment(calls["handles"], store, platform,
+                               {"promoted": True, "pr": "PR-3", "version": "v2"})
+    assert platform.judged == [("v2", merged)]
+    [(_, _, detail)] = calls["record"]
+    assert detail["source"] == "merged_base"
+
+
+def test_a_deleted_head_branch_still_judges_what_was_merged(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
+    # OMNI-200 (M36): GitHub can delete the head branch on merge, and the PR's
+    # file then reads as "". Every merge was judged "green did not start" and
+    # earned a revert PR and a CRITICAL page.
+    calls = _shell(monkeypatch, merged=FAST, head="")
+    store = episodic.JsonlEpisodicStore(tmp_path / "e.jsonl")
+    platform = _FakePlatform(_judgment(switched=True))
+    org.apply_develop_judgment(calls["handles"], store, platform,
+                               {"promoted": True, "pr": "PR-3", "version": "v2"})
+    assert platform.judged == [("v2", FAST)]
+    assert not calls["prs"] and not calls["pages"]
+
+
+def test_nothing_to_judge_is_a_harness_fault_without_a_revert(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
+    # Neither develop nor the PR head has the file: the judgment has nothing to
+    # run, which is the harness's problem, never the merge's.
+    calls = _shell(monkeypatch, merged="", head="")
+    store = episodic.JsonlEpisodicStore(tmp_path / "e.jsonl")
+    platform = _FakePlatform(_judgment(switched=True))
+    line = org.apply_develop_judgment(calls["handles"], store, platform,
+                                      {"promoted": True, "pr": "PR-3", "version": "v2"})
+    assert not platform.judged
+    assert not calls["prs"] and not calls["branches"] and calls["pages"]
+    [(kind, _, detail)] = calls["record"]
+    assert kind == "develop.unjudged" and detail["reason"].startswith("harness: no source")
+    assert line is not None and "no revert PR" in line
+    assert store.events()[0].outcome == "develop_unjudged"
+
+
+def test_a_backend_with_no_base_branch_judges_the_pr_file(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
+    # The in-memory adapter keeps no merged state (live_target_source is ""),
+    # so the PR's file is the merge, as baseline_source falls back for Serve.
+    calls = _shell(monkeypatch, merged="", head=FAST)
+    store = episodic.JsonlEpisodicStore(tmp_path / "e.jsonl")
+    platform = _FakePlatform(_judgment(switched=True))
+    org.apply_develop_judgment(calls["handles"], store, platform,
+                               {"promoted": True, "pr": "PR-3", "version": "v2"})
+    assert platform.judged == [("v2", FAST)]
+    assert calls["record"][0][2]["source"] == "pr_head"
 
 
 def test_a_release_is_not_judged(

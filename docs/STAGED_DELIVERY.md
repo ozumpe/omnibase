@@ -208,7 +208,11 @@ first cycle:
 - **Blue** is the head of `develop` as the run finds it (the target as merged
   on the base branch, else the local file), served from a sandbox worker.
 - **Green.** When the loop observes a human merge (`DevOps.observe_merge`),
-  the merged file is started as green in a second worker.
+  the target as merged on the base branch is started as green in a second
+  worker: what `develop` serves, never the PR's head, which can differ from
+  the merge or be gone with its branch (OMNI-200). Only a backend with no base
+  branch (the in-memory adapter) uses the PR's file. Nothing to read is a
+  harness fault: no revert PR, a page.
 - **The judgment.** The host draws 120 batches of 16 fresh inputs from the
   contract's oracle and sends each batch to both sides, alternating which goes
   first. `evaluate_canary` then decides in `SHADOW` mode:
