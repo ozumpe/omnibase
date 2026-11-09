@@ -13,6 +13,10 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+- OMNI-201 (L73): a predictor answer too large for a float (an int JSON can
+  carry, such as `10**400`) is "not a number" for its week in the
+  prediction-error report, instead of an `OverflowError` that lost the whole
+  report; a backtest baseline returning one is a harness fault, not a crash.
 - OMNI-195 (Phase B 1): a climatology baseline and the skill against it in the
   prediction-error report. Climatology is the latest price plus the mean
   change from that ISO week to the next over up to five earlier years, from

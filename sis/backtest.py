@@ -409,8 +409,14 @@ def build_script(
         scored = 0
 
         def _number(value):
-            return (isinstance(value, (int, float)) and not isinstance(value, bool)
-                    and math.isfinite(value))
+            # An int too large for a float is not a number to score: isfinite
+            # raises OverflowError on it (OMNI-201, L73).
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return False
+            try:
+                return math.isfinite(value)
+            except OverflowError:
+                return False
 
         for bt in {plan!r}:
             try:

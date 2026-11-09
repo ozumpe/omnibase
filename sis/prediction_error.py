@@ -255,12 +255,12 @@ def score(asked: Sequence[Question], answers: Sequence[Any | BaseException], *,
             steps.append(Step(question.week, question.at, None, question.actual, None,
                               f"the predictor failed: {answer}", base, base_error))
             continue
-        if isinstance(answer, bool) or not isinstance(answer, int | float) \
-                or not math.isfinite(answer):
+        predicted_or_none = _finite(answer)
+        if predicted_or_none is None:
             steps.append(Step(question.week, question.at, None, question.actual, None,
-                              f"not a number: {str(answer)[:40]!r}", base, base_error))
+                              f"not a number: {_shown(answer)!r}", base, base_error))
             continue
-        predicted = float(answer)
+        predicted = predicted_or_none
         if question.actual is None:
             steps.append(Step(question.week, question.at, predicted, None, None,
                               question.skip or "no value for the next week to compare with",
@@ -269,6 +269,29 @@ def score(asked: Sequence[Question], answers: Sequence[Any | BaseException], *,
         steps.append(Step(question.week, question.at, predicted, question.actual,
                           predicted - question.actual, "", base, base_error))
     return Report(target=target, unit=unit, source=source, steps=tuple(steps))
+
+
+def _finite(answer: Any) -> float | None:
+    """*answer* as a finite float, or None when it is not a plain finite number.
+
+    An int too large for a float is not one: JSON carries an int of any size,
+    and ``math.isfinite`` raises ``OverflowError`` on it (OMNI-201, L73).
+    """
+    if isinstance(answer, bool) or not isinstance(answer, int | float):
+        return None
+    try:
+        value = float(answer)
+    except OverflowError:
+        return None
+    return value if math.isfinite(value) else None
+
+
+def _shown(answer: Any) -> str:
+    """The first 40 characters of *answer*, without formatting a huge int whole."""
+    if isinstance(answer, int) and not isinstance(answer, bool) \
+            and answer.bit_length() > 256:
+        return f"{'-' if answer < 0 else ''}an int of {answer.bit_length()} bits"
+    return str(answer)[:40]
 
 
 def ask(predict: Predict, asked: Sequence[Question]) -> list[Any | BaseException]:
