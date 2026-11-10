@@ -13,6 +13,12 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+- OMNI-196 (Phase B 2): the two model-error triggers as pure decisions,
+  `sis/model_error.py`. The error budget fires on a window's MAE above the
+  actor's budget, skill decay on its skill against climatology below the
+  actor's floor; each needs a sustained breach and a minimum of scored weeks,
+  keeps its own streak and names its reason. Nothing calls them yet
+  (OMNI-197 wires them into `--loop`).
 ## v0.6.0 — 2026-11-10
 
 The first gated omnitrack contract (`ca_price_wholesale`, OMNI-163) and its
