@@ -13,6 +13,12 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+## v0.6.0 — 2026-11-10
+
+The first gated omnitrack contract (`ca_price_wholesale`, OMNI-163) and its
+private fixtures, Phase B's first story (OMNI-195), signed CI (OMNI-190),
+and the fixes since v0.5.0.
+
 - OMNI-163: a real proposer building a contract with backtests is told the bar
   it must clear on the held-out episodes: each answer's tolerance and, with a
   skill check, how far its mean absolute error must fall below the named
