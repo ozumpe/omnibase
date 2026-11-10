@@ -150,6 +150,52 @@ def test_a_403_at_open_pr_still_charges_the_proposal_and_counts_the_failure(
     assert _ceo(handles) == (pytest.approx(spent + PROPOSAL_COST), 0.0)
 
 
+def _the_proposer_rejects_its_key(_swe: Any) -> None:
+    """Inside the SWE's process: the proposer's API call fails, as with a bad key.
+
+    The call behind ``propose()`` fails, not ``propose()`` itself, so it first
+    clears its last cost as it does before every call.
+    """
+    from sis import proposer
+
+    class AuthenticationError(Exception):
+        pass
+
+    def rejected(*args: Any, **kwargs: Any) -> str:
+        raise AuthenticationError("Error code: 401 - invalid x-api-key")
+
+    proposer._real_stub, proposer._stub_proposal = (  # type: ignore[attr-defined]
+        proposer._stub_proposal, rejected)
+
+
+def _the_proposer_works_again(_swe: Any) -> None:
+    from sis import proposer
+
+    proposer._stub_proposal = proposer._real_stub  # type: ignore[attr-defined]
+
+
+def test_an_error_from_the_proposer_is_named_as_the_proposers(
+    handles: dict[str, Any], store: episodic.JsonlEpisodicStore,
+) -> None:
+    # OMNI-175: the scheduled AWS run of 2026-10-29 had a rejected Anthropic key,
+    # and every cycle read "(in the SWE's step, after the proposal)", though no
+    # proposal ever came back.
+    ray.get(handles["SWE"].__ray_call__.remote(_the_proposer_rejects_its_key))
+    spent, streak = _ceo(handles)
+    try:
+        result = org.run_cycle(handles, "speed it up", "make it fast")
+    finally:
+        ray.get(handles["SWE"].__ray_call__.remote(_the_proposer_works_again))
+
+    assert result["reason"] == ("error: AuthenticationError: Error code: 401 - invalid "
+                                "x-api-key (in the proposer, while asking for the proposal)")
+    # Still an error, counted in full, and charged what it cost: nothing.
+    assert (result["status"], result["cost_usd"]) == ("error", 0.0)
+    assert _ceo(handles) == (pytest.approx(spent), streak + 1)
+    (event,) = store.events()
+    assert (event.outcome, event.reject_gate) == ("error", "error")
+
+
 # --- the driver, with roles that fail on demand --------------------------------------
 
 

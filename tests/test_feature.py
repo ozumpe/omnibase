@@ -79,6 +79,14 @@ def test_a_verdict_that_was_not_the_candidates_is_not_replayed(reason: str) -> N
     assert feature.rejected_before(f, "c1", "base1") is None
 
 
+def test_a_candidate_that_says_timed_out_is_still_remembered() -> None:
+    # L27 (OMNI-73): the words are the candidate's, so the verdict is too, and
+    # the same code is not judged and billed again.
+    reason = "acceptance tests failed: AssertionError: the request timed out"
+    f = feature.with_rejection(feature.new_feature("b", "TES-1"), "c1", "base1", reason)
+    assert feature.rejected_before(f, "c1", "base1") == reason
+
+
 @pytest.mark.parametrize("reason", [
     "acceptance tests failed",
     "no change: candidate is identical to the baseline",

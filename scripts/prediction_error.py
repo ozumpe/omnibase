@@ -8,9 +8,10 @@
 Replays a recorded trace (read back through the sanitising door) or a
 generated scenario, asks the predictor California's next-week price at each
 moment a week's price first became known, and prints the signed error per week
-with its bias, MAE and RMSE. The predictor is ``runtime/ca_price_persistence.py``
-if one has been built, else the shipped persistence stub; ``--predictor`` names
-another file. It runs in the sandbox, never in this process.
+with its bias, MAE and RMSE, beside climatology's forecast and error and the
+predictor's skill against climatology (OMNI-195). The predictor is
+``runtime/ca_price_persistence.py`` if one has been built, else the shipped
+persistence stub; ``--predictor`` names another file. It runs in the sandbox, never in this process.
 
 The errors are also emitted to telemetry (``prediction.error``,
 ``prediction.summary``). Nothing acts on them: this starts no cycle, files

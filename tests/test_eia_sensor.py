@@ -114,8 +114,8 @@ def test_a_first_capture_backfills_every_value_with_a_reconstructed_known_at(
     sensor, _ = _sensor(tmp_path, _AUTUMN)
     report = sensor.capture()
     assert (report.appended, report.reconstructed, report.refused, report.missing) == (
-        4, 4, 0, ("PET.EMM_EPMRR_PTE_NUS_DPG.W", "PET.EMM_EPMRR_PTE_Y05LA_DPG.W",
-                  "PET.EMM_EPMRR_PTE_Y05SF_DPG.W"))
+        4, 4, 0, ("PET.EER_EPMRR_PF4_Y05LA_DPG.D", "PET.EMM_EPMRR_PTE_NUS_DPG.W",
+                  "PET.EMM_EPMRR_PTE_Y05LA_DPG.W", "PET.EMM_EPMRR_PTE_Y05SF_DPG.W"))
     lines = _lines(sensor)
     assert lines[0]["kind"] == "capture" and all(line["kind"] == "reading" for line in lines[1:])
     assert all(line["reconstructed"] is True for line in lines[1:])
@@ -818,3 +818,31 @@ def test_the_preflight_reports_the_sensor(tmp_path: pathlib.Path,
 def test_how_a_trace_is_captured_is_guardrail_code() -> None:
     for path in ("sis/sensor_trace.py", "sis/adapters_real.py", "sis/sensor_input.py"):
         assert policy.classify(path) is policy.ChangeTier.FORBIDDEN, path
+
+
+def test_the_spot_price_is_taken_as_out_after_its_weekly_release() -> None:
+    # OMNI-163. Spot prices come out once a week on Wednesday: through the
+    # Monday before in 2022, through the Tuesday before now (ALFRED vintages of
+    # DGASUSGULF). The rule takes each day as out on the first Thursday at
+    # least three days later, at 5 p.m., after either regime.
+    spot = "PET.EER_EPMRR_PF4_Y05LA_DPG.D"
+    at = lambda *d: datetime.datetime(*d, tzinfo=EASTERN)  # noqa: E731
+    assert eia.eia_published(spot, at(2022, 9, 26)) == at(2022, 9, 29, 17)   # Monday
+    assert eia.eia_published(spot, at(2022, 9, 27)) == at(2022, 10, 6, 17)   # Tuesday
+    assert eia.eia_published(spot, at(2022, 9, 23)) == at(2022, 9, 29, 17)   # Friday
+    day = datetime.date(2021, 1, 1)
+    while day < datetime.date(2023, 1, 1):
+        if day.weekday() < 5:
+            # 2022: the Wednesday release covers through the Monday two days before.
+            wednesday = day + datetime.timedelta(days=(2 - day.weekday()) % 7)
+            if (wednesday - day).days < 2:
+                wednesday += datetime.timedelta(days=7)
+            taken = eia.eia_published(spot, at(day.year, day.month, day.day))
+            assert taken.date() > wednesday, day
+        day += datetime.timedelta(days=1)
+
+
+def test_a_licensed_series_is_never_public() -> None:
+    assert not eia.EIA_SERIES["PET.EER_EPMRR_PF4_Y05LA_DPG.D"].redistributable
+    assert "PET.EER_EPMRR_PF4_Y05LA_DPG.D" not in eia.EIA_PUBLIC_SERIES
+    assert set(eia.EIA_SERIES) - eia.EIA_PUBLIC_SERIES == {"PET.EER_EPMRR_PF4_Y05LA_DPG.D"}

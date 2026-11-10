@@ -1,7 +1,7 @@
 # Sensor capture and replay
 
 The sensor implementation reads observations, not a fuel-market model. The
-current EIA adapter captures five weekly series into a local trace, and
+current EIA adapter captures five weekly series and one daily one into a local trace, and
 generated scenarios (OMNI-34) replay through the simulated sensor, and a
 predictor's error can be computed on either (OMNI-36); approved domain
 fixtures (OMNI-35) remain separate work. No control-loop consumer uses the
@@ -30,6 +30,17 @@ backend nor starting `main.py` schedules them.
 | `PET.EMM_EPMRR_PTE_Y05LA_DPG.W` | Los Angeles regular reformulated retail price | Dollars per Gallon |
 | `PET.EMM_EPMRR_PTE_Y05SF_DPG.W` | San Francisco regular reformulated retail price | Dollars per Gallon |
 | `PET.EMM_EPMRR_PTE_NUS_DPG.W` | US regular reformulated retail price | Dollars per Gallon |
+| `PET.EER_EPMRR_PF4_Y05LA_DPG.D` | Los Angeles RBOB spot price, daily (licensed, see below) | Dollars per Gallon |
+
+The Los Angeles spot price is Thomson Reuters' data, which EIA republishes
+under licence. EIA's reuse policy puts it under "Protected materials", not the
+public-domain line: it may be modelled, and its raw values may not be
+redistributed. The trace is gitignored. A fixture committed under `specs/`
+shows only `EIA_PUBLIC_SERIES` (`scripts/build_fixture.py`), so never this
+series; one that shows it is private (see "A private fixture" below). Do not
+paste its values into a PR, a ticket or a public log. Spot
+prices are released once a week on Wednesday, so a day's value is taken as
+known on the first Thursday at least three days later, at 17:00 ET.
 
 Stocks and prices have different reporting geographies and anchor days. This
 adapter does not capture production, inter-PADD transfers, traffic or station
@@ -121,6 +132,52 @@ A fixture is the exam, so it reaches `specs/` only through a human:
    since review, and audits to `runtime/operator_audit.jsonl`. Commit the new
    `specs/` directory through a pull request.
 
+### A private fixture (OMNI-163)
+
+`ca_price_wholesale` shows the licensed LA spot price, so its episodes may not
+be committed. The steps are the same, with these differences:
+
+1. **The calendar is checked by CI** (OMNI-190). It also needs the spot
+   price's releases. The source copies it is drafted from are committed under
+   `scripts/data/release_calendar_sources/`, reduced to dates and pinned by
+   sha256 in `sources.json`; CI re-drafts the calendar from them and fails on
+   any difference (`draft_release_calendar.py check`), and `build_fixture.py`
+   checks a CI sign-off again before it builds. To extend it:
+   `python scripts/draft_release_calendar.py urls --sources DIR --last DATE`
+   prints what to save into `DIR` (`curl -sSL -o DIR/<name> '<url>'`; run it
+   again once the `*_vintages.html` files are saved, for the CSVs). Then
+   `save --sources DIR --last DATE` reduces them into the committed folder
+   (every CSV value becomes `x`: the spot prices are licensed), `draft
+   --sources scripts/data/release_calendar_sources --last DATE` writes the
+   calendar, and `sign` fills in `checked_by` (`CI, sources sha256:…`) and
+   `checked_on`. Commit all of it through a pull request. Keep the raw copies
+   out of git (the artifacts bucket); `sources.json` records each one's
+   sha256 as `raw_sha256`. The spot dates come from ALFRED's `DGASUSGULF`,
+   the Gulf Coast price from the same weekly EIA release, because ALFRED does
+   not carry the LA series; the retail dates from ALFRED's release list and
+   `GASREGW`'s vintages, the later where they differ.
+2. **Build:** `python scripts/build_fixture.py --fixture ca_price_wholesale`
+   builds every week from 6 January 2020 to the last the trace answers (about
+   350 episodes, about 40 MB). A fresh capture backfills its history as
+   reconstructed, which needs the calendar, so the build stops at the last
+   week the calendar covers and prints it, with the week the trace goes to.
+   To build further, extend the calendar (step 1). `--last
+   YYYY-MM-DD` sets the last week yourself; one past the calendar is refused. Each question is asked on Thursday at 17:00 ET,
+   a day after the retail price is out, when Monday's spot price is known.
+   The episodes are staged under `private/`, with `private.json` listing the
+   sha256 of each.
+3. **Review and promote** as above. `specs/ca_price_wholesale/private/` is
+   gitignored. Commit only `private.json`, `README.md` and the calendar.
+4. **Keep the private files in the artifacts bucket**, not in git:
+   `aws s3 sync specs/ca_price_wholesale/private/
+   s3://<artifacts bucket>/specs/ca_price_wholesale/private/`. On another
+   machine, sync them back into the same directory (`docs/AWS_RUN.md` step
+   5a has the commands; a scheduled AWS run fetches and checks them itself,
+   OMNI-177). The backtest gate checks
+   every file against `private.json` and refuses a missing or different one as
+   a `harness:` fault, so a verdict is only reached on the data a human
+   promoted.
+
 ## Generated scenarios
 
 Scenarios drive a twin into situations the record does not hold (OMNI-34). Each
@@ -153,9 +210,21 @@ a scenario may reject a candidate, never be the evidence that promotes one (D4).
 
 ## Prediction error
 
-How wrong a predictor is, week by week (OMNI-36). Nothing acts on the number
-yet: an error budget and skill against climatology are Phase B's triggers (D9),
-and this starts no cycle.
+How wrong a predictor is, week by week (OMNI-36), and how it compares with
+climatology (OMNI-195). Nothing acts on the number yet: an error budget and
+skill against climatology are Phase B's triggers (D9), and this starts no
+cycle.
+
+Climatology is the baseline the skill is measured against. At each question
+it forecasts the latest price plus the mean change from that ISO week to the
+next over up to five earlier years, from the same as-of view the predictor is
+shown, computed on the host. It learns a seasonal *change*, not a seasonal
+level, so a market that moved a dollar since last year is not forecast to
+move back. A week with no earlier year to learn from has no climatology. The
+summary line adds climatology's MAE and the skill, 1 − MAE(model) /
+MAE(climatology), over the weeks both were scored: above 0 the model beats
+climatology. On autumn 2022, persistence scores about −0.03 (MAE 0.179 against
+climatology's 0.173): it is no better than the season.
 
 ```bash
 poetry run python scripts/prediction_error.py                    # autumn 2022, from the EIA trace

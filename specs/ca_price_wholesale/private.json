@@ -1,0 +1,2483 @@
+{
+ "episodes": [
+  {
+   "expect": "private/backtests/2020-01-06_expect.json",
+   "expect_sha256": "c361249e19021b3c92345e7b2a53e17331717a008f601d8257a94c40db81341f",
+   "fixture": "private/backtests/2020-01-06_fixture.json",
+   "fixture_sha256": "283817b759fe8b2ce9042211775240ec1466abaf1dcc250390be823cefffac8f",
+   "name": "2020-01-06"
+  },
+  {
+   "expect": "private/backtests/2020-01-13_expect.json",
+   "expect_sha256": "d0560447899e77f4be0f218c7f6f1e19933f3831f35991a9d3bbb498335792df",
+   "fixture": "private/backtests/2020-01-13_fixture.json",
+   "fixture_sha256": "1b00fcc17bee49ecc4867d5839aab240fe3e3ef57443db55880c09bc2ecacb4b",
+   "name": "2020-01-13"
+  },
+  {
+   "expect": "private/backtests/2020-01-20_expect.json",
+   "expect_sha256": "8c816606a9ba32db38cc5bb53f53926d83e7f3bf1e86b49947c734fe9bf194b2",
+   "fixture": "private/backtests/2020-01-20_fixture.json",
+   "fixture_sha256": "4fbca60901b451fd1b37fe3a5175d16e565f338b98dbe793859c4f915d15ca13",
+   "name": "2020-01-20"
+  },
+  {
+   "expect": "private/backtests/2020-01-27_expect.json",
+   "expect_sha256": "b2dcd61620f7a0eb435a6bef681c7f8ceceb81e4d49eb0f00b10e599addb4a4a",
+   "fixture": "private/backtests/2020-01-27_fixture.json",
+   "fixture_sha256": "03483f376739a14455a5c0af94734c9400c6ea8d03f4591ad5f1b27ae4f9119c",
+   "name": "2020-01-27"
+  },
+  {
+   "expect": "private/backtests/2020-02-03_expect.json",
+   "expect_sha256": "785749ba1b4d94bf44e07d66d0d792fe5cd31b84457edfa85ac464e26a67767d",
+   "fixture": "private/backtests/2020-02-03_fixture.json",
+   "fixture_sha256": "765fcdac9021b03dfbaa8b24d0a4dda51a3a728cc568a585be391c8b8d012eab",
+   "name": "2020-02-03"
+  },
+  {
+   "expect": "private/backtests/2020-02-10_expect.json",
+   "expect_sha256": "f7f5596be586db6ac7a5040b3049126023c640fdf78e7b2e1aecc817b39f177e",
+   "fixture": "private/backtests/2020-02-10_fixture.json",
+   "fixture_sha256": "dd5d63c2eaeeec65ac1f527767052c247bd752e80e2f170bcc3f6c6fd4146b4e",
+   "name": "2020-02-10"
+  },
+  {
+   "expect": "private/backtests/2020-02-17_expect.json",
+   "expect_sha256": "1aa7b083ebb4f6e3180090982ea6dd48f78ebfb6c7240435be534c9f54a0b830",
+   "fixture": "private/backtests/2020-02-17_fixture.json",
+   "fixture_sha256": "2abc558442fd8d91c04f0ebb9a11c55f7b50aca11e436005a30ab6bf8ddb34a9",
+   "name": "2020-02-17"
+  },
+  {
+   "expect": "private/backtests/2020-02-24_expect.json",
+   "expect_sha256": "176ada54e8a35b3abaa02f276abb5dbba2ec65b8cda2c23a17af3a7e92b5454d",
+   "fixture": "private/backtests/2020-02-24_fixture.json",
+   "fixture_sha256": "569d7b14fa88f89629b0f69f728389aa61c0bb1b6430d107bb737d9ec320965d",
+   "name": "2020-02-24"
+  },
+  {
+   "expect": "private/backtests/2020-03-02_expect.json",
+   "expect_sha256": "eb068e6868a17f0403c93594a587e07e50202a31e23642648f43ee81e2e789d7",
+   "fixture": "private/backtests/2020-03-02_fixture.json",
+   "fixture_sha256": "005063844bc0120f2e841dc4ef552a99982678f40071c1ae904fd8034c450e43",
+   "name": "2020-03-02"
+  },
+  {
+   "expect": "private/backtests/2020-03-09_expect.json",
+   "expect_sha256": "40b58b43a102a4c73032b073faf363fc811b28c3b76b9d6efd3618baf16f64c6",
+   "fixture": "private/backtests/2020-03-09_fixture.json",
+   "fixture_sha256": "af8f3bf8467b0df74f3c509bc80733bc431c46c46d1c2a7c6ffbaa21b8ae090a",
+   "name": "2020-03-09"
+  },
+  {
+   "expect": "private/backtests/2020-03-16_expect.json",
+   "expect_sha256": "500dedb5a32f3f5aa4b3cc28f9d44aaba2e9dfe54b6b2d4a10d8d1113ecdddbf",
+   "fixture": "private/backtests/2020-03-16_fixture.json",
+   "fixture_sha256": "f05b3a6e10efe56a9115db42c9b63f72922773377c5c9082f23b0bc536109a46",
+   "name": "2020-03-16"
+  },
+  {
+   "expect": "private/backtests/2020-03-23_expect.json",
+   "expect_sha256": "c3da4c07292c59198f25040908ab197a93524f9cc20c7860a543ca4bce5e11eb",
+   "fixture": "private/backtests/2020-03-23_fixture.json",
+   "fixture_sha256": "b6962ae359a4a9fbeebb8365bb17cc56aed6fe1dc7a3a8e75ef80103dec0a03c",
+   "name": "2020-03-23"
+  },
+  {
+   "expect": "private/backtests/2020-03-30_expect.json",
+   "expect_sha256": "6c3d90267d83f0bfc7040b89ea1512bca0743b2cf1ec82aaf807ac94c29c6f46",
+   "fixture": "private/backtests/2020-03-30_fixture.json",
+   "fixture_sha256": "2891393c33fe881c73da2db818ed13bbb4d87035f08641c47ab91d0f8dffe566",
+   "name": "2020-03-30"
+  },
+  {
+   "expect": "private/backtests/2020-04-06_expect.json",
+   "expect_sha256": "055cadf645031b6248d4ff17d331991263ce1ac676a9dcf08d2a84fcde1b5c6e",
+   "fixture": "private/backtests/2020-04-06_fixture.json",
+   "fixture_sha256": "f0cf7f2eae2c870cb6815f5d54bbd185d8d2e437dc789edfe9376714f97eca38",
+   "name": "2020-04-06"
+  },
+  {
+   "expect": "private/backtests/2020-04-13_expect.json",
+   "expect_sha256": "8bfcab29d8b0b62d550715a3cba7ebf7591d39f8428a588feda19f9fcf2b936e",
+   "fixture": "private/backtests/2020-04-13_fixture.json",
+   "fixture_sha256": "1d88977fc4fb7019ead567d6ab18ae55a1e3d8232624b85bb6cd587a21ab6768",
+   "name": "2020-04-13"
+  },
+  {
+   "expect": "private/backtests/2020-04-20_expect.json",
+   "expect_sha256": "049a9e245f00d1a91794d67ef774cbee823315113b4b4f0ec5efddb81a9657ca",
+   "fixture": "private/backtests/2020-04-20_fixture.json",
+   "fixture_sha256": "39d06f5ce9b50f373ad748783cc8cf40f75dcb3f78ff80e5119d6647f232efcb",
+   "name": "2020-04-20"
+  },
+  {
+   "expect": "private/backtests/2020-04-27_expect.json",
+   "expect_sha256": "8ba5cdc013d3ca133e8dc804e317b9b53fe47030e2007ea4fb12342dfecbc992",
+   "fixture": "private/backtests/2020-04-27_fixture.json",
+   "fixture_sha256": "d3c242d6312588c50239ddd591ee422c67ce67b85d40b74752e5ec6da58df14c",
+   "name": "2020-04-27"
+  },
+  {
+   "expect": "private/backtests/2020-05-04_expect.json",
+   "expect_sha256": "056a51a5d75f3dd8b6b88554e581d2cdd296c9004de321897b42175ca459b92c",
+   "fixture": "private/backtests/2020-05-04_fixture.json",
+   "fixture_sha256": "d07cb12e08bb779e84bf424f812a1ff17892e815a49f5f12558b32bab0376eb2",
+   "name": "2020-05-04"
+  },
+  {
+   "expect": "private/backtests/2020-05-11_expect.json",
+   "expect_sha256": "25c2ca48aa8730d7e504b15138d4fb16c2c2fa20335697841aa74d5a9d3c442c",
+   "fixture": "private/backtests/2020-05-11_fixture.json",
+   "fixture_sha256": "6d524434b006dd60dc47a8e352bc850b1570e57de6d8aa54096334f88f2eab7e",
+   "name": "2020-05-11"
+  },
+  {
+   "expect": "private/backtests/2020-05-18_expect.json",
+   "expect_sha256": "9e74de51e35f40d19d003b4d4bb6f19500c55503c08d7abbb8a9bf6b40df67a9",
+   "fixture": "private/backtests/2020-05-18_fixture.json",
+   "fixture_sha256": "fe715a203485e3494d9a96f207f293d7f994f385bbe67bdb4cafa59215ab4195",
+   "name": "2020-05-18"
+  },
+  {
+   "expect": "private/backtests/2020-05-25_expect.json",
+   "expect_sha256": "3b812a93993312d0289cb7a08a59e2072aeff13df87109728eb105a962320ea8",
+   "fixture": "private/backtests/2020-05-25_fixture.json",
+   "fixture_sha256": "7e1692f6a0992215e109b885fac60a25216a814a2e461635b81475cb94f5da58",
+   "name": "2020-05-25"
+  },
+  {
+   "expect": "private/backtests/2020-06-01_expect.json",
+   "expect_sha256": "fbfa51af8ad9570bdf0b86ec46dab79ffe9a045ab9918ef4ffecd69e63534672",
+   "fixture": "private/backtests/2020-06-01_fixture.json",
+   "fixture_sha256": "19725bca45218cd2ad7cd9a6300ef88f53215ae8a3361f9fc8f5361e04e79588",
+   "name": "2020-06-01"
+  },
+  {
+   "expect": "private/backtests/2020-06-08_expect.json",
+   "expect_sha256": "94b1dcf55035132949e1824dfef8f69e4b6a44044e306020dcd8d4056cf30ecc",
+   "fixture": "private/backtests/2020-06-08_fixture.json",
+   "fixture_sha256": "f806659bcd954f7edc9ffd82cd1d2d7463436999d8b6a613210e60dcc4d37259",
+   "name": "2020-06-08"
+  },
+  {
+   "expect": "private/backtests/2020-06-15_expect.json",
+   "expect_sha256": "1736e2938458ebea0ab4d983de0399d5e25e3aa8f547696cd4141164a7823d08",
+   "fixture": "private/backtests/2020-06-15_fixture.json",
+   "fixture_sha256": "29dba4861d45495fe056eca255a917cc33dc2181d7f50222ed0048f95b30b642",
+   "name": "2020-06-15"
+  },
+  {
+   "expect": "private/backtests/2020-06-22_expect.json",
+   "expect_sha256": "149f87f467edc04013056d23b16fe6e4dcab64a2d6866a5414683627c2dd2078",
+   "fixture": "private/backtests/2020-06-22_fixture.json",
+   "fixture_sha256": "8eb11de6d30af64727ae6b5cb48027e734f9625055229189030cf0a33838cf0f",
+   "name": "2020-06-22"
+  },
+  {
+   "expect": "private/backtests/2020-06-29_expect.json",
+   "expect_sha256": "d130760440c8e5b3c935a860cf96145c278c80239ec446e9646cc83d6be1fcd3",
+   "fixture": "private/backtests/2020-06-29_fixture.json",
+   "fixture_sha256": "dc821c5fb9ed667c2b8ea4bafbee40059bc1548a71c8f913b27f3c420a377637",
+   "name": "2020-06-29"
+  },
+  {
+   "expect": "private/backtests/2020-07-06_expect.json",
+   "expect_sha256": "408bb4f9603587630804dfe52d2a50badc62156bf73741ab642feb5f0505141f",
+   "fixture": "private/backtests/2020-07-06_fixture.json",
+   "fixture_sha256": "528fb9792ab18f5cf861888006ec69cc7d523ee20a6b863880707e54de71c146",
+   "name": "2020-07-06"
+  },
+  {
+   "expect": "private/backtests/2020-07-13_expect.json",
+   "expect_sha256": "bb2c96c44fe09d5fb13ee49ae997dcb76a85e45edbd8e91aae90be7eb71d1504",
+   "fixture": "private/backtests/2020-07-13_fixture.json",
+   "fixture_sha256": "287a6905379612cf92a80bb54b1b63dc144ded6a510a7a9d5b0ed086d05204cb",
+   "name": "2020-07-13"
+  },
+  {
+   "expect": "private/backtests/2020-07-20_expect.json",
+   "expect_sha256": "645b993cff825abc81125fea36f3300c2e5aaa520c50f078d64695ad53f82929",
+   "fixture": "private/backtests/2020-07-20_fixture.json",
+   "fixture_sha256": "57b3a9f4252ab1d47c9fd2a3fa5f2f74203dc6581949df3e6ff8e7271538d463",
+   "name": "2020-07-20"
+  },
+  {
+   "expect": "private/backtests/2020-07-27_expect.json",
+   "expect_sha256": "be85bbb0cf28a3d38f69dce52f5fa6ed65f197272b38387279cd5b8a32f6cf88",
+   "fixture": "private/backtests/2020-07-27_fixture.json",
+   "fixture_sha256": "b9588df79809e5c5a9f31da55fd929096ae2b813bb9f3cf025cec6ca5ae580d6",
+   "name": "2020-07-27"
+  },
+  {
+   "expect": "private/backtests/2020-08-03_expect.json",
+   "expect_sha256": "dd5ee19c2f8d8002913bf7d79ccd85b3d7f0082fcbaca8f464e3717bc851199c",
+   "fixture": "private/backtests/2020-08-03_fixture.json",
+   "fixture_sha256": "9fc370e6ebebedf69244588b4c9389304741fe65f6c66de3536a26957f273bf9",
+   "name": "2020-08-03"
+  },
+  {
+   "expect": "private/backtests/2020-08-10_expect.json",
+   "expect_sha256": "35b02a669ed94a1418b795b5a911bc276ce01545c56b01929d361c9c6739f865",
+   "fixture": "private/backtests/2020-08-10_fixture.json",
+   "fixture_sha256": "e061544d2e354ae7fbc2262c554bb87ae079b7d39cfb389a50880e43216265c7",
+   "name": "2020-08-10"
+  },
+  {
+   "expect": "private/backtests/2020-08-17_expect.json",
+   "expect_sha256": "e37352b1fb7abb938885ff151ddf545ccd07edc359c098a0b7fa755045ca1b0c",
+   "fixture": "private/backtests/2020-08-17_fixture.json",
+   "fixture_sha256": "badfd51ee04c9370d3203bd033e1c7595a1fd3dcc22b6e4839e49681ce2c609f",
+   "name": "2020-08-17"
+  },
+  {
+   "expect": "private/backtests/2020-08-24_expect.json",
+   "expect_sha256": "f27e66495feac0fcd82cf453e9034602780e77520f6133cc3c98f7e828063115",
+   "fixture": "private/backtests/2020-08-24_fixture.json",
+   "fixture_sha256": "28a5fa9830a5f30af2ce7af4d52e29733335cf2bcf54dcdaec8a62bb10e31688",
+   "name": "2020-08-24"
+  },
+  {
+   "expect": "private/backtests/2020-08-31_expect.json",
+   "expect_sha256": "d0681ba77552b79b17b47ff78cafec3507598f65b457474b95366816268a09cc",
+   "fixture": "private/backtests/2020-08-31_fixture.json",
+   "fixture_sha256": "ba07eed287f57a21c7d401ce5300ecc082e53d412eec8deb4e49adf327523a95",
+   "name": "2020-08-31"
+  },
+  {
+   "expect": "private/backtests/2020-09-07_expect.json",
+   "expect_sha256": "d96f2f6c681caaf5d3acd8b92269b1634aa4236bc067d1138de78b3bf190fd7e",
+   "fixture": "private/backtests/2020-09-07_fixture.json",
+   "fixture_sha256": "f05104025fc8bc2358383641a267ce7be1d98568fc126a78c1b8c2a3a8a2ca9d",
+   "name": "2020-09-07"
+  },
+  {
+   "expect": "private/backtests/2020-09-14_expect.json",
+   "expect_sha256": "5b9941db28f23fab794d1d427dae649cf50f1e5c65f116a6673c5e44d729aaff",
+   "fixture": "private/backtests/2020-09-14_fixture.json",
+   "fixture_sha256": "826d3ffd70916ede9124e449c6efdcbfe9bee76c5c1ddf77822633303051754e",
+   "name": "2020-09-14"
+  },
+  {
+   "expect": "private/backtests/2020-09-21_expect.json",
+   "expect_sha256": "fd354203aa28076792d1a92baed490058cc24d25fe25e22bcfbdcca134479ef5",
+   "fixture": "private/backtests/2020-09-21_fixture.json",
+   "fixture_sha256": "f5d5633cb90b828bf444ae0e055602ab87e5b211e19c05fbd136739fdc815b7b",
+   "name": "2020-09-21"
+  },
+  {
+   "expect": "private/backtests/2020-09-28_expect.json",
+   "expect_sha256": "3291476e776dc23396108c1ad8473e844527b229d3668b27c9b9b3be0536f6a5",
+   "fixture": "private/backtests/2020-09-28_fixture.json",
+   "fixture_sha256": "26da8094048e42126510c09577c5de2e561145c4d65d18866b7149509b33f42b",
+   "name": "2020-09-28"
+  },
+  {
+   "expect": "private/backtests/2020-10-05_expect.json",
+   "expect_sha256": "33fa9e71b3affb10da304282ba746601f7f6f265e93d1ffe7214c5c192f5928b",
+   "fixture": "private/backtests/2020-10-05_fixture.json",
+   "fixture_sha256": "695476995d52f102b2d5f3222550c7705216c6ded17f27a757515d7d67e1c2ff",
+   "name": "2020-10-05"
+  },
+  {
+   "expect": "private/backtests/2020-10-12_expect.json",
+   "expect_sha256": "be85bbb0cf28a3d38f69dce52f5fa6ed65f197272b38387279cd5b8a32f6cf88",
+   "fixture": "private/backtests/2020-10-12_fixture.json",
+   "fixture_sha256": "26d94fe92a5eb262112d277394bbb38906501f2366f7257149f48fb8cf48af70",
+   "name": "2020-10-12"
+  },
+  {
+   "expect": "private/backtests/2020-10-19_expect.json",
+   "expect_sha256": "eaa4cf5687dd01c1b66e015efd58559b68e5e5883d6848c0aa625d74ffe230de",
+   "fixture": "private/backtests/2020-10-19_fixture.json",
+   "fixture_sha256": "6de808c55663347ae96fb2fdd72b765a7ad224591c3e2fa56c03876f1fa8b9a8",
+   "name": "2020-10-19"
+  },
+  {
+   "expect": "private/backtests/2020-10-26_expect.json",
+   "expect_sha256": "023b871e92eb3e15fef540733f425edd2e2e456ee218eee3e4edc0adc7ee6da7",
+   "fixture": "private/backtests/2020-10-26_fixture.json",
+   "fixture_sha256": "bf395a29c07abc65256e7f887fcb181b690954a2404ba4bb56c1f51a0722a415",
+   "name": "2020-10-26"
+  },
+  {
+   "expect": "private/backtests/2020-11-02_expect.json",
+   "expect_sha256": "32435ec12861291bd7191353317f83eea17d591800bbf01c45d57ba70dcc0cf3",
+   "fixture": "private/backtests/2020-11-02_fixture.json",
+   "fixture_sha256": "0530af34b9629681d95d6c082c5236d1d1486ecf369b46c3fc6c17e436d0bea2",
+   "name": "2020-11-02"
+  },
+  {
+   "expect": "private/backtests/2020-11-09_expect.json",
+   "expect_sha256": "5d0eed90c6ff20f17c26256c00bf0df8a558974fe119d8c9231f041aa4f5f051",
+   "fixture": "private/backtests/2020-11-09_fixture.json",
+   "fixture_sha256": "55eafc9d28aa12aed28232a7d5eb1590468ba2e10ec07aed9b3ed1bf9f5f9faa",
+   "name": "2020-11-09"
+  },
+  {
+   "expect": "private/backtests/2020-11-16_expect.json",
+   "expect_sha256": "937b3facb4f1fe69c1d318cb785e89944079a706cf367a2590fc72ea324b3ddf",
+   "fixture": "private/backtests/2020-11-16_fixture.json",
+   "fixture_sha256": "e85c0a91da249a42bd07b295f5bbbbbf8adf1478fd1601fcd266e3bd2a69be72",
+   "name": "2020-11-16"
+  },
+  {
+   "expect": "private/backtests/2020-11-23_expect.json",
+   "expect_sha256": "d1da814c31cf86916d4b77afd35c1a3249c019b3605c50d62ed78ab012560df4",
+   "fixture": "private/backtests/2020-11-23_fixture.json",
+   "fixture_sha256": "2fa8f0f0dcf9119304a5b1f575118d3668e84e914e26d4aa85869b9d624daa2a",
+   "name": "2020-11-23"
+  },
+  {
+   "expect": "private/backtests/2020-11-30_expect.json",
+   "expect_sha256": "0530e633bd247a48219d9fb12e87dde1cf9e32b8a4d74e6a696ea63ff3383193",
+   "fixture": "private/backtests/2020-11-30_fixture.json",
+   "fixture_sha256": "344cb0e9fc1053797bed55f6214b4cc6ed445acbecc22c11ec131dd4eac9dd0f",
+   "name": "2020-11-30"
+  },
+  {
+   "expect": "private/backtests/2020-12-07_expect.json",
+   "expect_sha256": "985055e16de7961f04fd1527c43558cf686a768ed232fc68098bea84d44e15c7",
+   "fixture": "private/backtests/2020-12-07_fixture.json",
+   "fixture_sha256": "b6c491b465f78aae2f32d78d4cca17c0ce4dc1588526a50157b8e0ef4d01181a",
+   "name": "2020-12-07"
+  },
+  {
+   "expect": "private/backtests/2020-12-14_expect.json",
+   "expect_sha256": "2ecc08c800975a1cb18d6d6d4ac839a6290a896626d17db30d5b0acac168431a",
+   "fixture": "private/backtests/2020-12-14_fixture.json",
+   "fixture_sha256": "1ec0dbc42364927639c2ab5925953d2b17c94b304c763c8886707e3f29aea6c3",
+   "name": "2020-12-14"
+  },
+  {
+   "expect": "private/backtests/2020-12-21_expect.json",
+   "expect_sha256": "1955500db6af7bad73b61df669e28f078e221bd9e2fa256a1223d30190ef52b2",
+   "fixture": "private/backtests/2020-12-21_fixture.json",
+   "fixture_sha256": "0aba9bf499a1c690635886791eaade1b2a5468df6642aba0262cb3890796339f",
+   "name": "2020-12-21"
+  },
+  {
+   "expect": "private/backtests/2020-12-28_expect.json",
+   "expect_sha256": "a38703eb77c5dc644369ac8b7b5db5e41dbd6991465f18e70ac317db62b1a48a",
+   "fixture": "private/backtests/2020-12-28_fixture.json",
+   "fixture_sha256": "37466c4dfd97eba535b2b2d4966c41f7e76efe95055aeac257c06c0b98b9ba45",
+   "name": "2020-12-28"
+  },
+  {
+   "expect": "private/backtests/2021-01-04_expect.json",
+   "expect_sha256": "d0681ba77552b79b17b47ff78cafec3507598f65b457474b95366816268a09cc",
+   "fixture": "private/backtests/2021-01-04_fixture.json",
+   "fixture_sha256": "84234efef1ea4c0cf5ae68561429e029ba93fbc75fc3180cb7d20cfcdf2969c2",
+   "name": "2021-01-04"
+  },
+  {
+   "expect": "private/backtests/2021-01-11_expect.json",
+   "expect_sha256": "fc411b38b6c374a153d29d53652c1b1d513b9c74d7e6f1206ccfca3515a8f8a6",
+   "fixture": "private/backtests/2021-01-11_fixture.json",
+   "fixture_sha256": "2d5aa6bdfdd7c99af01ea274c35702e4bfb3bd7009eba3c42d95d6bfc87c95be",
+   "name": "2021-01-11"
+  },
+  {
+   "expect": "private/backtests/2021-01-18_expect.json",
+   "expect_sha256": "3aacc8ab53681aaa23c797cb165af8146063225819ce2a5cb35964e21f8fe5d9",
+   "fixture": "private/backtests/2021-01-18_fixture.json",
+   "fixture_sha256": "60bf2ebf812c0dd14d1f566c2dab3b9d4c45a2f1059e1061e7bf4440e7e75d60",
+   "name": "2021-01-18"
+  },
+  {
+   "expect": "private/backtests/2021-01-25_expect.json",
+   "expect_sha256": "489626ab4b672332e8813a9ee48d111394be8b3ae468ed5355a7f33214c8f01f",
+   "fixture": "private/backtests/2021-01-25_fixture.json",
+   "fixture_sha256": "ee2bebc274bf5ff8ca817c78e155b4a4669f5a695eac907d15404eb8fd5e7e43",
+   "name": "2021-01-25"
+  },
+  {
+   "expect": "private/backtests/2021-02-01_expect.json",
+   "expect_sha256": "e7bfd6c63e04da93301521bec0bde3b6cfa1491e732123ba17bcc741c5cef392",
+   "fixture": "private/backtests/2021-02-01_fixture.json",
+   "fixture_sha256": "a8e9f863459f7f212e2453e9045232e8721094cb6b5e3cf080696c086fbc545c",
+   "name": "2021-02-01"
+  },
+  {
+   "expect": "private/backtests/2021-02-08_expect.json",
+   "expect_sha256": "e6ac5b325a98f1151b68709521a522b31a4b62547e867dccb9305d292e450e5c",
+   "fixture": "private/backtests/2021-02-08_fixture.json",
+   "fixture_sha256": "fb3590949bdc33762310cef33db97a33ee0b5a4471376caf25c71b443d114be4",
+   "name": "2021-02-08"
+  },
+  {
+   "expect": "private/backtests/2021-02-15_expect.json",
+   "expect_sha256": "16d9d31e7b11c9905579b4e2be8dbeb5992b98e831f7f9493929d731cc6e648d",
+   "fixture": "private/backtests/2021-02-15_fixture.json",
+   "fixture_sha256": "df5eb36742f766201dbdcca29b77e121438be5bb8628a110458cf72ac488e9e1",
+   "name": "2021-02-15"
+  },
+  {
+   "expect": "private/backtests/2021-02-22_expect.json",
+   "expect_sha256": "84688c1cbd1b29aa6b86a6c1483e0173de876850a055c9670e330d71254b34ae",
+   "fixture": "private/backtests/2021-02-22_fixture.json",
+   "fixture_sha256": "8c34a1b2c20246f99dd9d0a9764177f0e57ee7d15be763b96427dee252b5e4ff",
+   "name": "2021-02-22"
+  },
+  {
+   "expect": "private/backtests/2021-03-01_expect.json",
+   "expect_sha256": "a421e59f1511f3c6158b046ff8219354e0d5b4382153f34a5bc7171dd042ad29",
+   "fixture": "private/backtests/2021-03-01_fixture.json",
+   "fixture_sha256": "761aa7892f406eb1245d422a8e6cf4a3966feb85dcb99104745e2dabe41571cc",
+   "name": "2021-03-01"
+  },
+  {
+   "expect": "private/backtests/2021-03-08_expect.json",
+   "expect_sha256": "83c839159ee8f76c02a54bfc3653db404681d0a4f1546a53a7be1e781a95edf0",
+   "fixture": "private/backtests/2021-03-08_fixture.json",
+   "fixture_sha256": "f7b9145d06cb0713c6f8ac0000b6c9599798b76d9cbab272363898592610c251",
+   "name": "2021-03-08"
+  },
+  {
+   "expect": "private/backtests/2021-03-15_expect.json",
+   "expect_sha256": "3a77b7fa84b5747aa90a3f884094557394408442c69151bf5d45a685fef34ff3",
+   "fixture": "private/backtests/2021-03-15_fixture.json",
+   "fixture_sha256": "f13638110abb57f0efa2abbb8f7be2defa5a14e4d0ebaee8b75a1c1b71cb46d7",
+   "name": "2021-03-15"
+  },
+  {
+   "expect": "private/backtests/2021-03-22_expect.json",
+   "expect_sha256": "06abd8da4e470912797ed7fe7e61f78e89fab6e98b0a84d5b3b2f3a1a7c25f32",
+   "fixture": "private/backtests/2021-03-22_fixture.json",
+   "fixture_sha256": "8d57ed97d919260c9164b2aff0e6a4e8328f55d613cb73708e8e9fe3570b3543",
+   "name": "2021-03-22"
+  },
+  {
+   "expect": "private/backtests/2021-03-29_expect.json",
+   "expect_sha256": "02e02b177059130a4e0f3930dfa7313d4bb8534d32aa7feed0a94088add8e317",
+   "fixture": "private/backtests/2021-03-29_fixture.json",
+   "fixture_sha256": "4241a1b666cc4e2f10cd6d76809f50c5d9569c280766c37a57574acb2d949ae0",
+   "name": "2021-03-29"
+  },
+  {
+   "expect": "private/backtests/2021-04-05_expect.json",
+   "expect_sha256": "a4941f6301bcfb54cf13d1a41bb7c1398a53e21f06d6e439d7726ee6a1d5bc0c",
+   "fixture": "private/backtests/2021-04-05_fixture.json",
+   "fixture_sha256": "cbbe75229a5fea9bd41e2a8cfc0992c7942872faa6034a0344a5db259001c434",
+   "name": "2021-04-05"
+  },
+  {
+   "expect": "private/backtests/2021-04-12_expect.json",
+   "expect_sha256": "c96c73e78bf27eb0f9408a1d419826afa089687a6e915594703e2a6d62f00293",
+   "fixture": "private/backtests/2021-04-12_fixture.json",
+   "fixture_sha256": "b03f2a842ebcb0a1dd32ff7496b65e48cb0cdf72e11ba4c5726d98256396230a",
+   "name": "2021-04-12"
+  },
+  {
+   "expect": "private/backtests/2021-04-19_expect.json",
+   "expect_sha256": "01610598f1ef5e967c4c4a46f8e547dbf6c2e7a6836b784938627fcb0ae2ef52",
+   "fixture": "private/backtests/2021-04-19_fixture.json",
+   "fixture_sha256": "7e4ffe7a19d23f81fe8cb3bf5d9b468409bc41f3d5fdaba568afced6a38c483f",
+   "name": "2021-04-19"
+  },
+  {
+   "expect": "private/backtests/2021-04-26_expect.json",
+   "expect_sha256": "ed2e2403b8fc2a22a4bd092988393ec9073e8fc2b23030c8ed8c41a5d31c0aea",
+   "fixture": "private/backtests/2021-04-26_fixture.json",
+   "fixture_sha256": "601561a1683bf6a36921cb5140cbd383efae91b22aa2ff0030036f3cd654eb1e",
+   "name": "2021-04-26"
+  },
+  {
+   "expect": "private/backtests/2021-05-03_expect.json",
+   "expect_sha256": "b9adc59848fbccb2d4de1e4b246d41382fc31bf75598845ef2c88cfe2e8eebf9",
+   "fixture": "private/backtests/2021-05-03_fixture.json",
+   "fixture_sha256": "656b8f64e3803d1a37161bebbad4251d269b98ef0e7b29d56df8d79d52776308",
+   "name": "2021-05-03"
+  },
+  {
+   "expect": "private/backtests/2021-05-10_expect.json",
+   "expect_sha256": "3ee99d014c903f2d1433137b5f349ccb56835944798c44b56da9ca897be195e3",
+   "fixture": "private/backtests/2021-05-10_fixture.json",
+   "fixture_sha256": "047abe03be9e52d91fc48dee1cba0ff0acc5fe799a0ccae36b4eac9abcf24b5c",
+   "name": "2021-05-10"
+  },
+  {
+   "expect": "private/backtests/2021-05-17_expect.json",
+   "expect_sha256": "81bbae38506fa48f33bb15cf44f4b08fe0331a994e2e778e26098fe4e3caf1a8",
+   "fixture": "private/backtests/2021-05-17_fixture.json",
+   "fixture_sha256": "0e42dea1d224df2a6c989e5a0f2d78099177aa4fbe52e7561bf180700a10c988",
+   "name": "2021-05-17"
+  },
+  {
+   "expect": "private/backtests/2021-05-24_expect.json",
+   "expect_sha256": "4fab246f01afa3ca32dc84655d24a15d7e26c395913e12ac741c2639f3b1c77f",
+   "fixture": "private/backtests/2021-05-24_fixture.json",
+   "fixture_sha256": "3a3558ef55e391f75303c487dbe905269211fc130ea52785ad641d7c08737b0d",
+   "name": "2021-05-24"
+  },
+  {
+   "expect": "private/backtests/2021-05-31_expect.json",
+   "expect_sha256": "9ec0b48cdb0c16eeb3091b44024f3dcc39097744479206dd37b9a811cdf4f5e9",
+   "fixture": "private/backtests/2021-05-31_fixture.json",
+   "fixture_sha256": "ac39a333e1258547eb490d928606254f003cacdce5f1cdf8a357f095b7200a2d",
+   "name": "2021-05-31"
+  },
+  {
+   "expect": "private/backtests/2021-06-07_expect.json",
+   "expect_sha256": "5ccf841073ea567f8530e37dfaae98f2ddd5b66e7ecdebff8bc75857f7687e75",
+   "fixture": "private/backtests/2021-06-07_fixture.json",
+   "fixture_sha256": "358af315d044b801a783941127b1e7c4a36388507e51d0f565713cb6ed169d4e",
+   "name": "2021-06-07"
+  },
+  {
+   "expect": "private/backtests/2021-06-14_expect.json",
+   "expect_sha256": "7f735ae6a4a1e8c2d080255ce2afe2952ea1e75f8b834a5bac1a93c395e48143",
+   "fixture": "private/backtests/2021-06-14_fixture.json",
+   "fixture_sha256": "3abdba9a640eb05388caceeb63adf7953c83cb161327ac92d75eb09c9318aabe",
+   "name": "2021-06-14"
+  },
+  {
+   "expect": "private/backtests/2021-06-21_expect.json",
+   "expect_sha256": "40fab8f7c764c883014f8ae76439d3a6d3266f5264b290968f8e35c478bab856",
+   "fixture": "private/backtests/2021-06-21_fixture.json",
+   "fixture_sha256": "959ecb2c5b36c1f17360c2ac28da4b9db948bb0287f5d814380df2140c6c9e6d",
+   "name": "2021-06-21"
+  },
+  {
+   "expect": "private/backtests/2021-06-28_expect.json",
+   "expect_sha256": "0c48a173d9dc136698799c47621732123d6c62bc01db4cdfdbc8386b526ce3db",
+   "fixture": "private/backtests/2021-06-28_fixture.json",
+   "fixture_sha256": "1fd8a4177a3f948355f7c22baaa08172a9d8d0503d0cf2bff227c712eeb0b1b6",
+   "name": "2021-06-28"
+  },
+  {
+   "expect": "private/backtests/2021-07-05_expect.json",
+   "expect_sha256": "83b77b39d9353c13fa836dd36d799598122aee0dfc0c841c8a16cae9920313a3",
+   "fixture": "private/backtests/2021-07-05_fixture.json",
+   "fixture_sha256": "d2914b692219ff4a5358ca367b27f463a0ac8ec54811e77054fdd151b9b36a96",
+   "name": "2021-07-05"
+  },
+  {
+   "expect": "private/backtests/2021-07-12_expect.json",
+   "expect_sha256": "560908f139718f468e629d789e07b771457709f640e175cb081a1e3e3d68ca65",
+   "fixture": "private/backtests/2021-07-12_fixture.json",
+   "fixture_sha256": "510847c79f2ca75d7b3f5d5f2e9705f07f02c9f402769489cd8d90c1d4863bf5",
+   "name": "2021-07-12"
+  },
+  {
+   "expect": "private/backtests/2021-07-19_expect.json",
+   "expect_sha256": "5b4da76ee9ed652f7fb8c33a80ebdfbc160a5774dbd50f427bfe3435111f39bc",
+   "fixture": "private/backtests/2021-07-19_fixture.json",
+   "fixture_sha256": "ce451b4d42bd8195ca965892cd1cf641003c79011c1aaf121474345f0a10c775",
+   "name": "2021-07-19"
+  },
+  {
+   "expect": "private/backtests/2021-07-26_expect.json",
+   "expect_sha256": "bebde7d299ce8e7c2376fed65014bfa903dc13118c1233ebaf2821730bf33bf4",
+   "fixture": "private/backtests/2021-07-26_fixture.json",
+   "fixture_sha256": "2f09bc2b1354bb72671010dcdaf9727e1f70d9d831987e657bc4c33984b7d44a",
+   "name": "2021-07-26"
+  },
+  {
+   "expect": "private/backtests/2021-08-02_expect.json",
+   "expect_sha256": "2a7a5c729a3fd58e491d5a80f3621b7a860a73139ccc2a225a1e6e5ea7b87f13",
+   "fixture": "private/backtests/2021-08-02_fixture.json",
+   "fixture_sha256": "a29787a1cdbaa57b123e29e35cf8cdeb6dcba9c3ad62222d7883fb7d7be1e62d",
+   "name": "2021-08-02"
+  },
+  {
+   "expect": "private/backtests/2021-08-09_expect.json",
+   "expect_sha256": "70b080429167a491518a1827f3ae038bcf59463637a2ee96cab1ad0904115e18",
+   "fixture": "private/backtests/2021-08-09_fixture.json",
+   "fixture_sha256": "62fbc915da3cb5568af6e1b5a36f3325dfc3631ef770a6b5e99be3afa917a220",
+   "name": "2021-08-09"
+  },
+  {
+   "expect": "private/backtests/2021-08-16_expect.json",
+   "expect_sha256": "6b51f0b94c42ba19374f418ee71cb0f8fa3c30ae5da9de00ce3c65c237e2a843",
+   "fixture": "private/backtests/2021-08-16_fixture.json",
+   "fixture_sha256": "f0a64f6ff6d172ecf8bab45cbabb5a890bfbc6d363a272eb44e2af43f9e04252",
+   "name": "2021-08-16"
+  },
+  {
+   "expect": "private/backtests/2021-08-23_expect.json",
+   "expect_sha256": "58d4c466c885abfb2905b849611fb6b9037463160c5465413de68c218bec67de",
+   "fixture": "private/backtests/2021-08-23_fixture.json",
+   "fixture_sha256": "267f428a3cf7fe18253a78fbbf52dd9492b66fb8436d2fcae727b900159f4aae",
+   "name": "2021-08-23"
+  },
+  {
+   "expect": "private/backtests/2021-08-30_expect.json",
+   "expect_sha256": "9fb6d2b1b7dee235cdc523cb64e1a0b8696ca2469e90313c199f302676725eca",
+   "fixture": "private/backtests/2021-08-30_fixture.json",
+   "fixture_sha256": "3209d8cfcc0b1390ac3fa6d9bac54c4df639192ab7dbd817c8afe1af0797eec9",
+   "name": "2021-08-30"
+  },
+  {
+   "expect": "private/backtests/2021-09-06_expect.json",
+   "expect_sha256": "d7d5117a6466b3c9f9c2861bc6af821b3ddb8e3a1ca36d82340b00851c1cbd87",
+   "fixture": "private/backtests/2021-09-06_fixture.json",
+   "fixture_sha256": "d80a53f3c8f26fb5dfdd543bbd34940ccb1bc3905a927eda4728d151cd70f1be",
+   "name": "2021-09-06"
+  },
+  {
+   "expect": "private/backtests/2021-09-13_expect.json",
+   "expect_sha256": "7fc40e584a212af551718968c265f764970e9d24a1b1a13dfecd222754d6e74a",
+   "fixture": "private/backtests/2021-09-13_fixture.json",
+   "fixture_sha256": "63a47f17756a8256a427373fefff0a1790c0296ee4e38897a107fe81d2e653c3",
+   "name": "2021-09-13"
+  },
+  {
+   "expect": "private/backtests/2021-09-20_expect.json",
+   "expect_sha256": "3e12f205cff2dfc4ea52ead25824c87dbc8cd7c322bde865a8b130053eb8625b",
+   "fixture": "private/backtests/2021-09-20_fixture.json",
+   "fixture_sha256": "3b98d55cb157ed799ec4528ec19c61d85b4aab21c89c4450d3e7e223ae5c6d95",
+   "name": "2021-09-20"
+  },
+  {
+   "expect": "private/backtests/2021-09-27_expect.json",
+   "expect_sha256": "3e12f205cff2dfc4ea52ead25824c87dbc8cd7c322bde865a8b130053eb8625b",
+   "fixture": "private/backtests/2021-09-27_fixture.json",
+   "fixture_sha256": "81ce4f5c424c8a6324aaedfad62b34229f194de40a2b324d191a70602ad3fef4",
+   "name": "2021-09-27"
+  },
+  {
+   "expect": "private/backtests/2021-10-04_expect.json",
+   "expect_sha256": "f47d4fc68b189fc957eedfb1994f4f1c0e4620df22cf3a511d0a70fbbe557ddc",
+   "fixture": "private/backtests/2021-10-04_fixture.json",
+   "fixture_sha256": "03d891e41a2ae552ee0d4bf8d573258ff743603da7839863b7cc9b1a7d823614",
+   "name": "2021-10-04"
+  },
+  {
+   "expect": "private/backtests/2021-10-11_expect.json",
+   "expect_sha256": "c99fe4a51afe6eeb6eb28e9d63ad752e8a2812375794036a6a06057e379d66e0",
+   "fixture": "private/backtests/2021-10-11_fixture.json",
+   "fixture_sha256": "36ae41f6ef8f4f3d0f44a80aaefbacc4143ed92c9257537b561d4ba687a5fcca",
+   "name": "2021-10-11"
+  },
+  {
+   "expect": "private/backtests/2021-10-18_expect.json",
+   "expect_sha256": "3cddd02d089500e428bb55e66fd75525c3a979e9077f6614f5812e26b4c899fd",
+   "fixture": "private/backtests/2021-10-18_fixture.json",
+   "fixture_sha256": "479144265833df6efcadda33308253e0857a1300dc5a8711cd8c6520a51625dd",
+   "name": "2021-10-18"
+  },
+  {
+   "expect": "private/backtests/2021-10-25_expect.json",
+   "expect_sha256": "f32144d2929a09dccd418a78cdb5dba2e8b68fd307688b7d4c2373901ec72b3e",
+   "fixture": "private/backtests/2021-10-25_fixture.json",
+   "fixture_sha256": "51c2ee39022d7e63bbc1045df3ff7ec6d142c17861e457a9923cfca29a53707e",
+   "name": "2021-10-25"
+  },
+  {
+   "expect": "private/backtests/2021-11-01_expect.json",
+   "expect_sha256": "6549ceb5ea6e1da5f72f4f4ba21e04f252aa5b9258960c103dd6dd15b9dac20f",
+   "fixture": "private/backtests/2021-11-01_fixture.json",
+   "fixture_sha256": "4a5ffcc8b9df046193adad380a9ebb1973cc1b6ad68c4667000fa1a8c9c32c32",
+   "name": "2021-11-01"
+  },
+  {
+   "expect": "private/backtests/2021-11-08_expect.json",
+   "expect_sha256": "5237aa27179a36e946aff13bbad2c9389bfc94c43d307940357db258a7a220e8",
+   "fixture": "private/backtests/2021-11-08_fixture.json",
+   "fixture_sha256": "3a0276526433e3ec199a93aea0f0a711f16e5ef97f921d4f1e1cdb4156aed1bd",
+   "name": "2021-11-08"
+  },
+  {
+   "expect": "private/backtests/2021-11-15_expect.json",
+   "expect_sha256": "3c02f40d180ce31e76ea8f62b29a47cb1527f95bf2cbf6930f5b57b164045935",
+   "fixture": "private/backtests/2021-11-15_fixture.json",
+   "fixture_sha256": "7010e2aa8b12240c680996ca3688fc4f7bbec983f2ca7e7e3d8da2e092154581",
+   "name": "2021-11-15"
+  },
+  {
+   "expect": "private/backtests/2021-11-22_expect.json",
+   "expect_sha256": "46c85dbc0ee32ab5b2f277eb9836b4580e4a818b082b5dc2e868c4a3b77cb01e",
+   "fixture": "private/backtests/2021-11-22_fixture.json",
+   "fixture_sha256": "24284070218148d1b1077dc861da07a74df7e252eaab4a6254c99a30462b31d7",
+   "name": "2021-11-22"
+  },
+  {
+   "expect": "private/backtests/2021-11-29_expect.json",
+   "expect_sha256": "1f7a65c627dc867bb991ed03efc8498a688f34214081176a8cbb465eb14c1fd2",
+   "fixture": "private/backtests/2021-11-29_fixture.json",
+   "fixture_sha256": "59d100c3255db7d16ceeb740ad1e38783130cac362e77e8bfeb8fadf653a1b75",
+   "name": "2021-11-29"
+  },
+  {
+   "expect": "private/backtests/2021-12-06_expect.json",
+   "expect_sha256": "7d4c6b8cc1ada4f6fc8c69ead75ca155741bdf5f359da9fe372e4ad68d7db6bf",
+   "fixture": "private/backtests/2021-12-06_fixture.json",
+   "fixture_sha256": "1a85efd48d2523bdc2166c230afa32b0a8326e05d61ea1b59b3f94419134d15e",
+   "name": "2021-12-06"
+  },
+  {
+   "expect": "private/backtests/2021-12-13_expect.json",
+   "expect_sha256": "c42dd3bd7d6d9bfc0272b5f5e672b076cc206cd57a5ae2dd7f3071e756b14ba0",
+   "fixture": "private/backtests/2021-12-13_fixture.json",
+   "fixture_sha256": "60a611957ca08acc8c76e90dfcc39ceca5d1033e1de8d6a8c1c699b92732f176",
+   "name": "2021-12-13"
+  },
+  {
+   "expect": "private/backtests/2021-12-20_expect.json",
+   "expect_sha256": "071af8a8f46ba6fddeb4f340a9e199b41349751e64222dd1dedec5e4889764b6",
+   "fixture": "private/backtests/2021-12-20_fixture.json",
+   "fixture_sha256": "c9ce50aa53d21c1d294a8a2bda46ee62fe4c078459423cc9b23b6db201b3ff82",
+   "name": "2021-12-20"
+  },
+  {
+   "expect": "private/backtests/2021-12-27_expect.json",
+   "expect_sha256": "4bc70b315d0fa713dff5f3d6a7b275e12f037431bcbb5e2e98e1a3242b281584",
+   "fixture": "private/backtests/2021-12-27_fixture.json",
+   "fixture_sha256": "d5b8857ba090d3416d5d278a6dac89b5acbb9a35f31747093ddff8144abee388",
+   "name": "2021-12-27"
+  },
+  {
+   "expect": "private/backtests/2022-01-03_expect.json",
+   "expect_sha256": "897bea7f18f0157872962f4447293f1b820e054846da957fe36740bdfb962e8b",
+   "fixture": "private/backtests/2022-01-03_fixture.json",
+   "fixture_sha256": "f27e5bf0371bba87b2e04d18ee4a3d19bf65fa4ffe7a89aaa22f64372aae6882",
+   "name": "2022-01-03"
+  },
+  {
+   "expect": "private/backtests/2022-01-10_expect.json",
+   "expect_sha256": "071af8a8f46ba6fddeb4f340a9e199b41349751e64222dd1dedec5e4889764b6",
+   "fixture": "private/backtests/2022-01-10_fixture.json",
+   "fixture_sha256": "6f7e75f8d294eb691a2cd7df2cf3c45db26612a38d700406c128e00bc3fb5190",
+   "name": "2022-01-10"
+  },
+  {
+   "expect": "private/backtests/2022-01-17_expect.json",
+   "expect_sha256": "947aa0acd2c9d8caca298037c75901dfee367ed44f10fbe1e929c9c14f34156c",
+   "fixture": "private/backtests/2022-01-17_fixture.json",
+   "fixture_sha256": "6ff49c64a27ad652bd68e47cd7ae25572aaa0d919f77969fdff5f0fb83db282e",
+   "name": "2022-01-17"
+  },
+  {
+   "expect": "private/backtests/2022-01-24_expect.json",
+   "expect_sha256": "a40211df7b54120c09eec1fea9108e35e3b3aa031e8e4546bfba0f0df4e98dfd",
+   "fixture": "private/backtests/2022-01-24_fixture.json",
+   "fixture_sha256": "b2e25ce8d41d63ce4e334a371e1df644a14da011f2a141f0f7e98754bd5a8327",
+   "name": "2022-01-24"
+  },
+  {
+   "expect": "private/backtests/2022-01-31_expect.json",
+   "expect_sha256": "f232684fe3d15b8caa5adb4e1528066a63e8e5a71421ec29fe5aecafba50b76e",
+   "fixture": "private/backtests/2022-01-31_fixture.json",
+   "fixture_sha256": "6518fa9798c766b08b766f77f9d76af43fbd5a7c23eb154e6d9d5be33ae36efe",
+   "name": "2022-01-31"
+  },
+  {
+   "expect": "private/backtests/2022-02-07_expect.json",
+   "expect_sha256": "90daae0799ff7b668eff4ac6ae11c89eeb5855c449c06e651725b8973d4fab16",
+   "fixture": "private/backtests/2022-02-07_fixture.json",
+   "fixture_sha256": "b6e5722342bad3591ab2e9700f610316f11397a96654ea8a3468639ca4a3dacc",
+   "name": "2022-02-07"
+  },
+  {
+   "expect": "private/backtests/2022-02-14_expect.json",
+   "expect_sha256": "3c86bd1531b6a6d3a534d6164d6d6afa98a1c9f50fd8a8730cc21f9730d59af9",
+   "fixture": "private/backtests/2022-02-14_fixture.json",
+   "fixture_sha256": "884db7d30d56782dff0ca11a3f612de8b5b0174b6197fbfc048dbfb535d5dbb5",
+   "name": "2022-02-14"
+  },
+  {
+   "expect": "private/backtests/2022-02-21_expect.json",
+   "expect_sha256": "b5fee2b1cf09c7314982d505a585e2641ff42c3d308073a1cc54a81423b92173",
+   "fixture": "private/backtests/2022-02-21_fixture.json",
+   "fixture_sha256": "146f41476fbfea91ee7b0940cdeee88a6bbd16578a3f8f0c3e749d9d4a1e5c5e",
+   "name": "2022-02-21"
+  },
+  {
+   "expect": "private/backtests/2022-02-28_expect.json",
+   "expect_sha256": "3a6ab7eaa708e2bf4505cf95c146193ca0648977e61d8a70a95641841c3126a0",
+   "fixture": "private/backtests/2022-02-28_fixture.json",
+   "fixture_sha256": "17c2d9ef82caf159b56cb8552bb3d8bc7a79dbbbf1fd06a9ca7390c30c63e1a3",
+   "name": "2022-02-28"
+  },
+  {
+   "expect": "private/backtests/2022-03-07_expect.json",
+   "expect_sha256": "d30c8fabe9315836b3a296d68a79965df971eafd3b77fc8f2dae8ab9ffa97f62",
+   "fixture": "private/backtests/2022-03-07_fixture.json",
+   "fixture_sha256": "aaf2362463bb3bbe39399b150076f8a1f1f8932afc9cbdcfa3810b898d03c750",
+   "name": "2022-03-07"
+  },
+  {
+   "expect": "private/backtests/2022-03-14_expect.json",
+   "expect_sha256": "f167ecbbfb1b3a8eff14465d97ea655367d89ad4f75536bfc8cae73c7b2416c9",
+   "fixture": "private/backtests/2022-03-14_fixture.json",
+   "fixture_sha256": "f4ee5d661fc991b2df0fafd6369933b34665e2114b235be69ca41fd7a8783424",
+   "name": "2022-03-14"
+  },
+  {
+   "expect": "private/backtests/2022-03-21_expect.json",
+   "expect_sha256": "ee61541a3703f99ff64c8c0d2d881372cb4734ff21c156c757bdf5ea5532b334",
+   "fixture": "private/backtests/2022-03-21_fixture.json",
+   "fixture_sha256": "5bfa101023b51f95f2f1d8043580439850196991011cb9ef2bef287f22078283",
+   "name": "2022-03-21"
+  },
+  {
+   "expect": "private/backtests/2022-03-28_expect.json",
+   "expect_sha256": "e86735bfae79db5977147ef2000ff31988f8ec2988684ecc9e00bb1f4b8d7331",
+   "fixture": "private/backtests/2022-03-28_fixture.json",
+   "fixture_sha256": "7073add4625a5a8a03f66d506de713b2718a50d60479b440b393a2a74644032a",
+   "name": "2022-03-28"
+  },
+  {
+   "expect": "private/backtests/2022-04-04_expect.json",
+   "expect_sha256": "809c836f5acc4eadcc1831dc4a1e4edf5f1518fba884371010c312360499a85b",
+   "fixture": "private/backtests/2022-04-04_fixture.json",
+   "fixture_sha256": "6b9823482912063f1dfcd0d8876fd98d58a3f6186a48f6e98ac8728ab0a76116",
+   "name": "2022-04-04"
+  },
+  {
+   "expect": "private/backtests/2022-04-11_expect.json",
+   "expect_sha256": "d40e4c7a1664fff81b6bf1d43f075b7a87ab54433d8f4f98413be89a8a9756fe",
+   "fixture": "private/backtests/2022-04-11_fixture.json",
+   "fixture_sha256": "6337005f99dcc2548a0fc28eb8b98d31ac61ab0a4b1a1766b4e5d5b867296958",
+   "name": "2022-04-11"
+  },
+  {
+   "expect": "private/backtests/2022-04-18_expect.json",
+   "expect_sha256": "6e64a56d14fbdb0ce79624ba0d4423f59cf8d39c44c7480713d5e6e8f05f965f",
+   "fixture": "private/backtests/2022-04-18_fixture.json",
+   "fixture_sha256": "c580e5b38e30f32993d30e5b8ccb1004849168255b34c2303ee6e1e72c82f97e",
+   "name": "2022-04-18"
+  },
+  {
+   "expect": "private/backtests/2022-04-25_expect.json",
+   "expect_sha256": "32a50c47105f00c70ecc9c91c0b86a6834c6302beccd31ad506c79232fad2e06",
+   "fixture": "private/backtests/2022-04-25_fixture.json",
+   "fixture_sha256": "6fc5986aea7d47244f2e02f7f82cbaa72f8fcb80200d47e6bb97e8878ce74bfc",
+   "name": "2022-04-25"
+  },
+  {
+   "expect": "private/backtests/2022-05-02_expect.json",
+   "expect_sha256": "ee0cb2c73611e240d09dbd469e0a0866733e5c3f60cd1e1409e4ce9b40e1f38b",
+   "fixture": "private/backtests/2022-05-02_fixture.json",
+   "fixture_sha256": "5f92b73c2cc3d2c55e763e439af7c689b580d4409850c2f2df52d13e7b4321a2",
+   "name": "2022-05-02"
+  },
+  {
+   "expect": "private/backtests/2022-05-09_expect.json",
+   "expect_sha256": "39da8f6fc936bdf670e45cd8e953838857c7caaefda5e0a73de93950a847f94a",
+   "fixture": "private/backtests/2022-05-09_fixture.json",
+   "fixture_sha256": "8e070a7c750879d690708741c045b8ec2095f08f6ee1f8e880d0196136daba19",
+   "name": "2022-05-09"
+  },
+  {
+   "expect": "private/backtests/2022-05-16_expect.json",
+   "expect_sha256": "28ba1f795e92932e350e81644d301405d4d6ce0f68a99b84279067aee3f20bfb",
+   "fixture": "private/backtests/2022-05-16_fixture.json",
+   "fixture_sha256": "219df79b6881ece933e247516a826363e3b5c32271726d95684e8c827ab0d82b",
+   "name": "2022-05-16"
+  },
+  {
+   "expect": "private/backtests/2022-05-23_expect.json",
+   "expect_sha256": "9b948a979ddca5baeae1aa7083a7bcd0e60f57f0fe19e4b36808f168b4e02765",
+   "fixture": "private/backtests/2022-05-23_fixture.json",
+   "fixture_sha256": "db47353c2cd7c867f85575d1ebbd2a0d0ad5e80483a66e811e5feb752e5c9182",
+   "name": "2022-05-23"
+  },
+  {
+   "expect": "private/backtests/2022-05-30_expect.json",
+   "expect_sha256": "57b98270a0867303506ea1ba41a41308c4146aae8d959300a0fd833873320959",
+   "fixture": "private/backtests/2022-05-30_fixture.json",
+   "fixture_sha256": "36ae6c8702291d9e81b569429833ad39b8fdc36d048911a92eb25932459f3870",
+   "name": "2022-05-30"
+  },
+  {
+   "expect": "private/backtests/2022-06-06_expect.json",
+   "expect_sha256": "3d8e2de66974fbe4556d20f8b56d11b10842bf0fe56892890767675c28d04e25",
+   "fixture": "private/backtests/2022-06-06_fixture.json",
+   "fixture_sha256": "64cfd54e6d10846825a080fd5580f4a314883c29595367f2d247524f69a3c808",
+   "name": "2022-06-06"
+  },
+  {
+   "expect": "private/backtests/2022-06-13_expect.json",
+   "expect_sha256": "5eb71e5c8304ae7b0165ebf04a2570ba5a3810a64c723028abbe124654ca133f",
+   "fixture": "private/backtests/2022-06-13_fixture.json",
+   "fixture_sha256": "ca531995c3b0fb2627e609aab979d0da3796afdb15f9db4df6b37527b73a732c",
+   "name": "2022-06-13"
+  },
+  {
+   "expect": "private/backtests/2022-06-20_expect.json",
+   "expect_sha256": "469d9243e88452baf754b2e41f5bea27e6425019b97052066b7330540798ed5f",
+   "fixture": "private/backtests/2022-06-20_fixture.json",
+   "fixture_sha256": "f064aa5378778d400417ca905872908b08804323229e6c1211769983ab2c3ff6",
+   "name": "2022-06-20"
+  },
+  {
+   "expect": "private/backtests/2022-07-04_expect.json",
+   "expect_sha256": "81fedfec1babc5875b1e0551864bf33ef8e71676787adfc1b3283ef05ed0ff2a",
+   "fixture": "private/backtests/2022-07-04_fixture.json",
+   "fixture_sha256": "4f868924de603a057b34d5f5a5369ded1ecced4098c4f786ca3b99822c7c4f31",
+   "name": "2022-07-04"
+  },
+  {
+   "expect": "private/backtests/2022-07-11_expect.json",
+   "expect_sha256": "010f4a961572ef4a8bc33ac6951d9f61208e2cbca0d08bcba0a76481b3c36fb5",
+   "fixture": "private/backtests/2022-07-11_fixture.json",
+   "fixture_sha256": "be196f211f830ec29237a964a25ba6521af0d165f8541598a9c342e872f97a0e",
+   "name": "2022-07-11"
+  },
+  {
+   "expect": "private/backtests/2022-07-18_expect.json",
+   "expect_sha256": "3aa106af9c72df086e5b5b580ab0e094ce52f2884ec298e7f13ce3bac5ab14cf",
+   "fixture": "private/backtests/2022-07-18_fixture.json",
+   "fixture_sha256": "b14039341fad77d1217da0e54ab3eaf000a1891d7412167a7f26f80755a82086",
+   "name": "2022-07-18"
+  },
+  {
+   "expect": "private/backtests/2022-07-25_expect.json",
+   "expect_sha256": "518b75e535a844a21930d6273ed17de5c7479c9233deb84b38dfb0b987487e40",
+   "fixture": "private/backtests/2022-07-25_fixture.json",
+   "fixture_sha256": "44e0dcd740e8331214676cbb81a91cc6ec3ceaab4c8aada3a7c2892baeca76f6",
+   "name": "2022-07-25"
+  },
+  {
+   "expect": "private/backtests/2022-08-01_expect.json",
+   "expect_sha256": "336944ed6f0cfbb3fbd736f29ddb428bb627a8e8a432924e4197658eef35cdbe",
+   "fixture": "private/backtests/2022-08-01_fixture.json",
+   "fixture_sha256": "5075f18bf49ffdfa6a46f18faf95bdffdafe88989de59923368462fd9f82058c",
+   "name": "2022-08-01"
+  },
+  {
+   "expect": "private/backtests/2022-08-08_expect.json",
+   "expect_sha256": "f55cbea7fa788203af11c3130ab059b6f620a1bdfbe24b7a4725adea26e8a414",
+   "fixture": "private/backtests/2022-08-08_fixture.json",
+   "fixture_sha256": "5531f9d1b8a2a5dbd6b5389846563146f323b54bb136f4c1f70a4edfa3b91e63",
+   "name": "2022-08-08"
+  },
+  {
+   "expect": "private/backtests/2022-08-15_expect.json",
+   "expect_sha256": "92bc56140eb4a3f37e39e288cbf7472a119ab4a3483f2394ed413fc86a4f41db",
+   "fixture": "private/backtests/2022-08-15_fixture.json",
+   "fixture_sha256": "dc620680ab093e26cdab09e6ec71901106c6c6243190287b74a76d40dc9a152f",
+   "name": "2022-08-15"
+  },
+  {
+   "expect": "private/backtests/2022-08-22_expect.json",
+   "expect_sha256": "377aec3face163f7e5b285e583ace8b234e7a6e39868fa9c46fef286402f97a4",
+   "fixture": "private/backtests/2022-08-22_fixture.json",
+   "fixture_sha256": "3334d3cb0239d6c9ff8a9477b032713f6dd6ea6bbfee3502fde4966893d9348a",
+   "name": "2022-08-22"
+  },
+  {
+   "expect": "private/backtests/2022-08-29_expect.json",
+   "expect_sha256": "2f3b60b169f98d39c03eea9aeccb36e0db8818790532f7316e804117b38acdf9",
+   "fixture": "private/backtests/2022-08-29_fixture.json",
+   "fixture_sha256": "c753da2931d2e9f8b504939475be296f9b4ecb474a78342792e108cc978b5f64",
+   "name": "2022-08-29"
+  },
+  {
+   "expect": "private/backtests/2022-09-05_expect.json",
+   "expect_sha256": "08c8c9d9e0320b3a6b7cb1133820785b8020d341f42807c58de4738d6efac3de",
+   "fixture": "private/backtests/2022-09-05_fixture.json",
+   "fixture_sha256": "1a35dbd0fc39a919d7ce8b0c241d554061c9f8bc98f80fd77b21e27209364da4",
+   "name": "2022-09-05"
+  },
+  {
+   "expect": "private/backtests/2022-09-12_expect.json",
+   "expect_sha256": "0a7fe07d52f91c6fcb79ed6c51fed1119134c7c7ed46315cddd1b4ce20c3dc8c",
+   "fixture": "private/backtests/2022-09-12_fixture.json",
+   "fixture_sha256": "3ee73dfd28d8fb734d095bc0f3e28023c4be7f5d70c3fbfa7d927df5ba16ee72",
+   "name": "2022-09-12"
+  },
+  {
+   "expect": "private/backtests/2022-09-19_expect.json",
+   "expect_sha256": "76fb98a43688726ad6faffd555fc4b18b4353533c70d35a7332582e7d91c9c51",
+   "fixture": "private/backtests/2022-09-19_fixture.json",
+   "fixture_sha256": "80686d82864b6949b2bcbaaeb0b7a40eecdcb1d6c75ac21132755346857f791c",
+   "name": "2022-09-19"
+  },
+  {
+   "expect": "private/backtests/2022-09-26_expect.json",
+   "expect_sha256": "2aa3a86c81eddb7b5061a2c2dd5b5ddb7569ab272d42f9a1e878c3862584063e",
+   "fixture": "private/backtests/2022-09-26_fixture.json",
+   "fixture_sha256": "ca69ed25360c1cc11b6a6807b5abe5fdf1a3a8c987ffb48f6b1e671d73e0e98d",
+   "name": "2022-09-26"
+  },
+  {
+   "expect": "private/backtests/2022-10-03_expect.json",
+   "expect_sha256": "6c44e14ef8e866f53322050951a292edb3110481b753e2299b4fcbb241bede68",
+   "fixture": "private/backtests/2022-10-03_fixture.json",
+   "fixture_sha256": "ef90cf8c67659782302fe8f5679875076d780dd270e5483a2021b55e388042f8",
+   "name": "2022-10-03"
+  },
+  {
+   "expect": "private/backtests/2022-10-10_expect.json",
+   "expect_sha256": "cef2177ca3183a0215e3ea4ba7716594ff0d2120c660ac675dd3d46a0fc7b1ce",
+   "fixture": "private/backtests/2022-10-10_fixture.json",
+   "fixture_sha256": "7d2d003bb0bbecf78b92e4612064b2f1047a4d5edda62bfe1a834b00aff5d3b8",
+   "name": "2022-10-10"
+  },
+  {
+   "expect": "private/backtests/2022-10-17_expect.json",
+   "expect_sha256": "ec2790670d8501d31b3fb6834dbeb3286a093650385162142f5fac2c37c13d63",
+   "fixture": "private/backtests/2022-10-17_fixture.json",
+   "fixture_sha256": "b71b37f6056651ef2152644fa5a09e3434dca90bdce7a0accb92cc1642000f56",
+   "name": "2022-10-17"
+  },
+  {
+   "expect": "private/backtests/2022-10-24_expect.json",
+   "expect_sha256": "f272a983ebece8619fa203f438f7dc7edae2060488e369a0be906ff63b1bbac5",
+   "fixture": "private/backtests/2022-10-24_fixture.json",
+   "fixture_sha256": "e58c05491c346d3531cda4daf689d2d0b32a1bc44973d1a22ec4d53bbc95e4ec",
+   "name": "2022-10-24"
+  },
+  {
+   "expect": "private/backtests/2022-10-31_expect.json",
+   "expect_sha256": "209605e58c3aaad33f0da9bee25d1f2a27bbec6f1b41a7cae6ede545a4686b9f",
+   "fixture": "private/backtests/2022-10-31_fixture.json",
+   "fixture_sha256": "e73249dad4ee5d8f94ae362b52e1b5df30ba2fdbbbb0a1ce3d3b46e8e450234d",
+   "name": "2022-10-31"
+  },
+  {
+   "expect": "private/backtests/2022-11-07_expect.json",
+   "expect_sha256": "a58da10d45fdb216cb5ed7622507aa3c16d9ccdff62dd61a145cf6972780276c",
+   "fixture": "private/backtests/2022-11-07_fixture.json",
+   "fixture_sha256": "c8e29b0157061ea7286dae9f284021f680088b37ad1a5a45496250672317849b",
+   "name": "2022-11-07"
+  },
+  {
+   "expect": "private/backtests/2022-11-14_expect.json",
+   "expect_sha256": "25e023621f7474d7adbeef3922528a9065a8a1a8358fb96615695b17c6259294",
+   "fixture": "private/backtests/2022-11-14_fixture.json",
+   "fixture_sha256": "4bad01eb3104852c31e801e6fb63da06505edc3780f248ad7a42f52b7849def5",
+   "name": "2022-11-14"
+  },
+  {
+   "expect": "private/backtests/2022-11-21_expect.json",
+   "expect_sha256": "4d996b5370929dd881d62bc5f18dd28364b22aeb35d93016d21cff06131ef902",
+   "fixture": "private/backtests/2022-11-21_fixture.json",
+   "fixture_sha256": "fd977df44dfc2067c47c3375cf3f15f45b9bfde5f8daf3f90257a8bbf4c179e8",
+   "name": "2022-11-21"
+  },
+  {
+   "expect": "private/backtests/2022-11-28_expect.json",
+   "expect_sha256": "03c19b84c703169a60013a4e83b59b4b4e034874ded80c3a05f6ba37d831bbb0",
+   "fixture": "private/backtests/2022-11-28_fixture.json",
+   "fixture_sha256": "77fbcec7d66a819dfea38155490b8e6d44946254668eeecb94c241059e42c589",
+   "name": "2022-11-28"
+  },
+  {
+   "expect": "private/backtests/2022-12-05_expect.json",
+   "expect_sha256": "5d231092727444800e98dd0de03703836eb78c10983dbe40c5fdb71d8117d599",
+   "fixture": "private/backtests/2022-12-05_fixture.json",
+   "fixture_sha256": "c0cb80a9f70380c871357d2b71a1c5093a575beb33d6c7dc3717dca6d55eaf90",
+   "name": "2022-12-05"
+  },
+  {
+   "expect": "private/backtests/2022-12-12_expect.json",
+   "expect_sha256": "137e3f18a28db7e6d6a443a35795e7eda68664b03b79f4705ffea47c638dd9a1",
+   "fixture": "private/backtests/2022-12-12_fixture.json",
+   "fixture_sha256": "5799d5f97e0c4c66ee9b924828a04147bedc1460a4ae385dbb9a0c4d9fde4e7a",
+   "name": "2022-12-12"
+  },
+  {
+   "expect": "private/backtests/2022-12-19_expect.json",
+   "expect_sha256": "3197f06c581f2700075b5c22d8a47b60a23f1175711eaea1652cda6449f08ac1",
+   "fixture": "private/backtests/2022-12-19_fixture.json",
+   "fixture_sha256": "ca153a799c5eda2301309df4c8e33d898aacdbaa43adc1b087469415677844b5",
+   "name": "2022-12-19"
+  },
+  {
+   "expect": "private/backtests/2022-12-26_expect.json",
+   "expect_sha256": "e2b4e657b3bde03fc9f359fcf57ede8cebba69c7d5c6010103e816f8e494ab92",
+   "fixture": "private/backtests/2022-12-26_fixture.json",
+   "fixture_sha256": "768b53b7fe1f980c00f842060ced46e83466cbf70a85c97250dd763e6700e82c",
+   "name": "2022-12-26"
+  },
+  {
+   "expect": "private/backtests/2023-01-02_expect.json",
+   "expect_sha256": "45f8ed326d574530d26daf37df089046b5e0f592ead9899de612c1bd3f14bbf9",
+   "fixture": "private/backtests/2023-01-02_fixture.json",
+   "fixture_sha256": "de97459426704907e5ade9515456af7db870e479dcdd8c6003a8663d9d5a99c5",
+   "name": "2023-01-02"
+  },
+  {
+   "expect": "private/backtests/2023-01-09_expect.json",
+   "expect_sha256": "6fdc145f70e77f87833c9f3f3f267c2cebeed2cb855e5341c05402e1db40f670",
+   "fixture": "private/backtests/2023-01-09_fixture.json",
+   "fixture_sha256": "9c8c0c730747efcef07ff9d9390ef533d141dc76bd693c693cc8a916496e052a",
+   "name": "2023-01-09"
+  },
+  {
+   "expect": "private/backtests/2023-01-16_expect.json",
+   "expect_sha256": "673d984a75bcea9dde8babaf64976a5c9930f0877c15752c4d1240960004f9a0",
+   "fixture": "private/backtests/2023-01-16_fixture.json",
+   "fixture_sha256": "325747193879bef6ac235dc8412067c567a29d363e1f3c27c96fbe8294608f91",
+   "name": "2023-01-16"
+  },
+  {
+   "expect": "private/backtests/2023-01-23_expect.json",
+   "expect_sha256": "d40706725a7c2a042933fd1b771b3764453dc04686da1ec262efed6079654605",
+   "fixture": "private/backtests/2023-01-23_fixture.json",
+   "fixture_sha256": "c4b93b3cb3cc5f1f9eca66c59988edf5b86f23becf480b4642c6da515d1017a6",
+   "name": "2023-01-23"
+  },
+  {
+   "expect": "private/backtests/2023-01-30_expect.json",
+   "expect_sha256": "0bf6976c2cb793ab0f3d548c324fa689976a71d22103a4532dc4c8c146c2b72f",
+   "fixture": "private/backtests/2023-01-30_fixture.json",
+   "fixture_sha256": "1a2b839fc72de8f66034ced3d7d9b03dac522db65f01b6bb25764fe997784176",
+   "name": "2023-01-30"
+  },
+  {
+   "expect": "private/backtests/2023-02-06_expect.json",
+   "expect_sha256": "6e4ee575123b00b3ff2dfac5a9beb94b9aa70f023abfe999aa314bb84b5e837d",
+   "fixture": "private/backtests/2023-02-06_fixture.json",
+   "fixture_sha256": "83197471bfb8dfa03d0b41d2100ecf1327dd56bb9d738eaab80b8bdac0dff3da",
+   "name": "2023-02-06"
+  },
+  {
+   "expect": "private/backtests/2023-02-13_expect.json",
+   "expect_sha256": "4f2632c16fd3c49df8f8ece9184eb870feaad349435f233c69f34e5143edde6a",
+   "fixture": "private/backtests/2023-02-13_fixture.json",
+   "fixture_sha256": "5bd238fc86f38bbc684570691eb3106ec6aba0f314f113156fdb472c9ba85101",
+   "name": "2023-02-13"
+  },
+  {
+   "expect": "private/backtests/2023-02-20_expect.json",
+   "expect_sha256": "d4a19059426b8b123058aebfbae98f25dbd49ba008d0ebc1cc0d9251ee519020",
+   "fixture": "private/backtests/2023-02-20_fixture.json",
+   "fixture_sha256": "4ae95b27a088a30aef500915241ef8e7262d5a5e15a112e67c48930552e5f310",
+   "name": "2023-02-20"
+  },
+  {
+   "expect": "private/backtests/2023-02-27_expect.json",
+   "expect_sha256": "d61a19b5de3b751c1f48600ff02629b4766b2d0feccfe751dd3ffd74e8dcaa23",
+   "fixture": "private/backtests/2023-02-27_fixture.json",
+   "fixture_sha256": "170c448cfbe447ee212aa01a1088f260cae2618d3b745d2cd96bae1e0cccda5f",
+   "name": "2023-02-27"
+  },
+  {
+   "expect": "private/backtests/2023-03-06_expect.json",
+   "expect_sha256": "e51bdad45271b981e60c93e97384f0613499cfccee2b633f8407ac56b573b9f9",
+   "fixture": "private/backtests/2023-03-06_fixture.json",
+   "fixture_sha256": "1401bd531b4c786bc50352b16c7219a6872fe0ac08c60ff2636f12593f554a18",
+   "name": "2023-03-06"
+  },
+  {
+   "expect": "private/backtests/2023-03-13_expect.json",
+   "expect_sha256": "4b675c9695f5c2c51b3adbf29fd9bfb46787e2d74be50942d5172006f516888f",
+   "fixture": "private/backtests/2023-03-13_fixture.json",
+   "fixture_sha256": "bfa5d313a9077eec71d7f2eda29c04c26ff7ea830eb6a6d9717067727295ea61",
+   "name": "2023-03-13"
+  },
+  {
+   "expect": "private/backtests/2023-03-20_expect.json",
+   "expect_sha256": "05c17903e3c9144ac25535bccfb833905bbe5c098350c98ac452e6c184795e7b",
+   "fixture": "private/backtests/2023-03-20_fixture.json",
+   "fixture_sha256": "4919955dd9330d439b2539382eab3e8c5d3772079a4dde52230523853eb6e489",
+   "name": "2023-03-20"
+  },
+  {
+   "expect": "private/backtests/2023-03-27_expect.json",
+   "expect_sha256": "741dcbf129ed3177cfdbf46506d31d318b42c0c122f7782a4c7a1cb8916ac2c6",
+   "fixture": "private/backtests/2023-03-27_fixture.json",
+   "fixture_sha256": "5b788f058c4be26ecf03cfe93f132ac110dded55522633acf59415dde5913714",
+   "name": "2023-03-27"
+  },
+  {
+   "expect": "private/backtests/2023-04-03_expect.json",
+   "expect_sha256": "8980a568be0abb7e5847aae81dc5a06c66669991ccbe33622ad6033acf905b85",
+   "fixture": "private/backtests/2023-04-03_fixture.json",
+   "fixture_sha256": "d842a3c1f6b2cebe392a1ebe76af40798358477e345146643e8bf2902f306968",
+   "name": "2023-04-03"
+  },
+  {
+   "expect": "private/backtests/2023-04-10_expect.json",
+   "expect_sha256": "ce39457f925bab9e615c2fb1c3c50526c7b536874575425477671bec6424b7d4",
+   "fixture": "private/backtests/2023-04-10_fixture.json",
+   "fixture_sha256": "ffefbeb63d2dc2a14108d68405b251baa9f67e84684762a7385f55d9a10dc358",
+   "name": "2023-04-10"
+  },
+  {
+   "expect": "private/backtests/2023-04-17_expect.json",
+   "expect_sha256": "b08357663bfb7f2af0eb239898e47ffebc11eca3f79d824c4fb0cc8d58c490f0",
+   "fixture": "private/backtests/2023-04-17_fixture.json",
+   "fixture_sha256": "094869578503587f8d6e9f7f35cfe07de8a0103a7f5df0dffeb5ea0c3f6e7e44",
+   "name": "2023-04-17"
+  },
+  {
+   "expect": "private/backtests/2023-04-24_expect.json",
+   "expect_sha256": "41ed9bb1ae2c92378022fa355606e801aaa4fee8960ec462913268bfaa4cbbed",
+   "fixture": "private/backtests/2023-04-24_fixture.json",
+   "fixture_sha256": "a54ba603614f58d9b2ce8cef8ea344117dd5810277d32733ad217e6a2a901c0d",
+   "name": "2023-04-24"
+  },
+  {
+   "expect": "private/backtests/2023-05-01_expect.json",
+   "expect_sha256": "13dd9c131cc0fc766de77d34558cf6ef9d15726c37743201d85f0cd88792ef97",
+   "fixture": "private/backtests/2023-05-01_fixture.json",
+   "fixture_sha256": "9f7f7954b069c8d60ae8a224e726280f49d4998aca129a61734b55fe24b17027",
+   "name": "2023-05-01"
+  },
+  {
+   "expect": "private/backtests/2023-05-08_expect.json",
+   "expect_sha256": "c1302d770355471f3278d3c357dfdc6395eccf375de1ffe471adf54a30a55608",
+   "fixture": "private/backtests/2023-05-08_fixture.json",
+   "fixture_sha256": "0c3caf8cb71384b9fc1d8b206dba03e6bb2f0f7e015202041d3692ab4df184ed",
+   "name": "2023-05-08"
+  },
+  {
+   "expect": "private/backtests/2023-05-15_expect.json",
+   "expect_sha256": "0a339a9d048de5f4b633705ae51140e9b724765fd06f8c87c2c4e4b942b4c402",
+   "fixture": "private/backtests/2023-05-15_fixture.json",
+   "fixture_sha256": "5057098866b358f8cf03a8fe385cb9d8b887e9796c2492cfa5c92ec8aac9a7ec",
+   "name": "2023-05-15"
+  },
+  {
+   "expect": "private/backtests/2023-05-22_expect.json",
+   "expect_sha256": "51e7fdd797be54a6516d26f091fecaaf9b8d91c63fccb7532a9224098aae838a",
+   "fixture": "private/backtests/2023-05-22_fixture.json",
+   "fixture_sha256": "25c336f1f6c8d23a475863c049210abe9b5819a3c138cc32078ea56331b17f4f",
+   "name": "2023-05-22"
+  },
+  {
+   "expect": "private/backtests/2023-05-29_expect.json",
+   "expect_sha256": "0f1a17328256624128a5899c4c0eb9dd94f6f853d1d0589110bc422084b98871",
+   "fixture": "private/backtests/2023-05-29_fixture.json",
+   "fixture_sha256": "930d1e1e191bc3efb4461372902f461170a69490c0bc863af44bfe8a3395f868",
+   "name": "2023-05-29"
+  },
+  {
+   "expect": "private/backtests/2023-06-05_expect.json",
+   "expect_sha256": "6a95adaa2cdf0e2aee0afbf6cdf8eec0c46246ab01e5e06a656154e98f4bacbd",
+   "fixture": "private/backtests/2023-06-05_fixture.json",
+   "fixture_sha256": "2dcf4186822bf7e1481613342b0cca26ca1beab4b00848396b5cfda5e42304ac",
+   "name": "2023-06-05"
+  },
+  {
+   "expect": "private/backtests/2023-06-12_expect.json",
+   "expect_sha256": "18cbed88d981cbafda58c20adb187e8ee1c59ddd99eb2c216a17d6a8d209caeb",
+   "fixture": "private/backtests/2023-06-12_fixture.json",
+   "fixture_sha256": "0e40899580f34b8640be49cebbe1074219130d77395252864c6b903f3c33a014",
+   "name": "2023-06-12"
+  },
+  {
+   "expect": "private/backtests/2023-06-19_expect.json",
+   "expect_sha256": "9e0853ff8a998b38d65442dde36a1cc8f4a5b5845aff02ef6185a0204290e369",
+   "fixture": "private/backtests/2023-06-19_fixture.json",
+   "fixture_sha256": "ff77fa2387fa1eef19208df37caab2bebaa04921251e80d135e324cfef4bdc24",
+   "name": "2023-06-19"
+  },
+  {
+   "expect": "private/backtests/2023-06-26_expect.json",
+   "expect_sha256": "ca950edd91f31cee70e4777fb2740dc33abb60288590dc3ad6291990c15e1dd1",
+   "fixture": "private/backtests/2023-06-26_fixture.json",
+   "fixture_sha256": "3cf043364d3917497b496f7b80e7fe1592ad2d34615bcbe455b08aedbb199a04",
+   "name": "2023-06-26"
+  },
+  {
+   "expect": "private/backtests/2023-07-03_expect.json",
+   "expect_sha256": "2d8e47989d581a116b619ee21d6ba4c0342cdc7749050cc94ae55a6f2dd44858",
+   "fixture": "private/backtests/2023-07-03_fixture.json",
+   "fixture_sha256": "374693b6896350c4fac357193d9d4680202bfa269ba322302314c806f8e53f95",
+   "name": "2023-07-03"
+  },
+  {
+   "expect": "private/backtests/2023-07-10_expect.json",
+   "expect_sha256": "da8c6142660b073487d5b9aefee27746c7691d0e2522e4c9efceca86db7def65",
+   "fixture": "private/backtests/2023-07-10_fixture.json",
+   "fixture_sha256": "2068590387d58d7e4039c3783cd208ac7f8793df35f0358a07e75d603475f36d",
+   "name": "2023-07-10"
+  },
+  {
+   "expect": "private/backtests/2023-07-17_expect.json",
+   "expect_sha256": "8dc68e3e1f2cbef8ceec61c2ebc5f6a7eb76bc204c0570d35bc1ce23b1d25580",
+   "fixture": "private/backtests/2023-07-17_fixture.json",
+   "fixture_sha256": "01d30582597742156ff36584b9e393881f4526134cceca035c781a97d69a7411",
+   "name": "2023-07-17"
+  },
+  {
+   "expect": "private/backtests/2023-07-24_expect.json",
+   "expect_sha256": "18cbed88d981cbafda58c20adb187e8ee1c59ddd99eb2c216a17d6a8d209caeb",
+   "fixture": "private/backtests/2023-07-24_fixture.json",
+   "fixture_sha256": "04d9a28f1a7329e15473e77258d25c9ae05c9a6240bd715b5671bc284917e8d2",
+   "name": "2023-07-24"
+  },
+  {
+   "expect": "private/backtests/2023-07-31_expect.json",
+   "expect_sha256": "40a495da439a2c532737af2816cdc947cf4f1313b6a6aa30a72d1373ff054290",
+   "fixture": "private/backtests/2023-07-31_fixture.json",
+   "fixture_sha256": "0f6ed7931911508353e2e086ca3031613760ced9a919c4b07531ac21c7c5b933",
+   "name": "2023-07-31"
+  },
+  {
+   "expect": "private/backtests/2023-08-07_expect.json",
+   "expect_sha256": "32db70ef3bb05d518ab0c6b11fb900830ef4926f806d07c5d3c05e95721b3487",
+   "fixture": "private/backtests/2023-08-07_fixture.json",
+   "fixture_sha256": "b954813df0ac3b7cb5417e610daa41f5cf6d5344ec2f49d9b01e623e87cea17b",
+   "name": "2023-08-07"
+  },
+  {
+   "expect": "private/backtests/2023-08-14_expect.json",
+   "expect_sha256": "9139b8f443e71f0206fb11d5f4766577f409de3bf691de013a2d264787c19c1a",
+   "fixture": "private/backtests/2023-08-14_fixture.json",
+   "fixture_sha256": "2f444810cfacccfd6ddcfed8a385a5299f2fa26dc0fab73cc0517a652ea8b480",
+   "name": "2023-08-14"
+  },
+  {
+   "expect": "private/backtests/2023-08-21_expect.json",
+   "expect_sha256": "32f5feb0d84e2fc4e049bfae93aa0b7cc5f5ca0746b5d32beb1d47389994fea1",
+   "fixture": "private/backtests/2023-08-21_fixture.json",
+   "fixture_sha256": "827be85e8037dd801f022cb26e3ac51b16fd2be68035a8173a78bc288b3b0abe",
+   "name": "2023-08-21"
+  },
+  {
+   "expect": "private/backtests/2023-08-28_expect.json",
+   "expect_sha256": "cc35f1a96af4e17472086398cb8bb1d6dc42fd7ef4d66695b0e442120cef86d5",
+   "fixture": "private/backtests/2023-08-28_fixture.json",
+   "fixture_sha256": "541c1f2c2fd4d85469a582d572f9212fa6f2e22df21b68a6238d4d753fb7c623",
+   "name": "2023-08-28"
+  },
+  {
+   "expect": "private/backtests/2023-09-04_expect.json",
+   "expect_sha256": "377aec3face163f7e5b285e583ace8b234e7a6e39868fa9c46fef286402f97a4",
+   "fixture": "private/backtests/2023-09-04_fixture.json",
+   "fixture_sha256": "b0e64d6270b0404d5d02654f21b2ca27c7a0e88c5a2f38b3489aa5b30d26e2f6",
+   "name": "2023-09-04"
+  },
+  {
+   "expect": "private/backtests/2023-09-11_expect.json",
+   "expect_sha256": "4c7ebdc6e16e9b5f23363890a16e45d35cecd3e68fbceb75083c4df95d340862",
+   "fixture": "private/backtests/2023-09-11_fixture.json",
+   "fixture_sha256": "a4a292a0586024e8374c22024fa6a75c68d8805d9f346da7b4b6abf32af9ea79",
+   "name": "2023-09-11"
+  },
+  {
+   "expect": "private/backtests/2023-09-18_expect.json",
+   "expect_sha256": "a0f32459ed50b722bb85383d60c2ed4ae0774f89621cf18053e6f44f9cbf7fa4",
+   "fixture": "private/backtests/2023-09-18_fixture.json",
+   "fixture_sha256": "412ebeb25b54fc20612c196d31d08a979310e7aa94477db7784856332fa3dca9",
+   "name": "2023-09-18"
+  },
+  {
+   "expect": "private/backtests/2023-09-25_expect.json",
+   "expect_sha256": "6bfb135ede21e50e0481cb1f52d63c1a65d18db59b679ab900603987743736f2",
+   "fixture": "private/backtests/2023-09-25_fixture.json",
+   "fixture_sha256": "b991bd5510e346d335ab82de60a60881e9ddab0e3b63a177689925057f4f6065",
+   "name": "2023-09-25"
+  },
+  {
+   "expect": "private/backtests/2023-10-02_expect.json",
+   "expect_sha256": "10e409c598045431a9c7f02517362c9350a7d5706554aaf36bbc4e20e50fa8e8",
+   "fixture": "private/backtests/2023-10-02_fixture.json",
+   "fixture_sha256": "27ca0a9c44d78923a8b81858c270cc08a3da749ec5dacf0e3f9f9ee1013c3160",
+   "name": "2023-10-02"
+  },
+  {
+   "expect": "private/backtests/2023-10-09_expect.json",
+   "expect_sha256": "16a8e242d4a815980b2f61139315b68af12fb6d2083982d5221d100577fddc47",
+   "fixture": "private/backtests/2023-10-09_fixture.json",
+   "fixture_sha256": "1f77902e985a6aa168be261ad594c8817c1a86db042850a47a77ad3b6f978b80",
+   "name": "2023-10-09"
+  },
+  {
+   "expect": "private/backtests/2023-10-16_expect.json",
+   "expect_sha256": "e9db27f248303437803a9d131ce1c6d5fc737d881c5b0b5af2ba24e8f5c58bae",
+   "fixture": "private/backtests/2023-10-16_fixture.json",
+   "fixture_sha256": "898b82aa62403351d396c2386358b1f6e33dc60170e1966da511fe7225ea486a",
+   "name": "2023-10-16"
+  },
+  {
+   "expect": "private/backtests/2023-10-23_expect.json",
+   "expect_sha256": "4263fbaf2637722d0acf3684862e49921685efd8d5fc6e81dfea40759bfb3de9",
+   "fixture": "private/backtests/2023-10-23_fixture.json",
+   "fixture_sha256": "e61142b037df9c5b42429718b7958326bf9d784181bf14c3e650f6360ed8d417",
+   "name": "2023-10-23"
+  },
+  {
+   "expect": "private/backtests/2023-10-30_expect.json",
+   "expect_sha256": "2801c618d8735177b0a159a4f3fbbaa39dea0d5d830464670326c8161b6a58dd",
+   "fixture": "private/backtests/2023-10-30_fixture.json",
+   "fixture_sha256": "ebcba93b17a180bbab054aacf271ffacaf3e14f2b64013296515407b1591cf5b",
+   "name": "2023-10-30"
+  },
+  {
+   "expect": "private/backtests/2023-11-06_expect.json",
+   "expect_sha256": "8924b5f982787cf80f7f45b44914a1fd797c856be8ba7769367ab02c51f525dd",
+   "fixture": "private/backtests/2023-11-06_fixture.json",
+   "fixture_sha256": "a2b377a3f37bfe7f6e0db641532410c8070ff5ebd783267e9c3a4210968b2c6e",
+   "name": "2023-11-06"
+  },
+  {
+   "expect": "private/backtests/2023-11-13_expect.json",
+   "expect_sha256": "37565548a0284f1ad89d0f17492dc838c465dc1bea88b8cfec0ddb3c4ebd98a5",
+   "fixture": "private/backtests/2023-11-13_fixture.json",
+   "fixture_sha256": "25099774a9b9227c1cfd9ee754f162611a1009bac279a78c06d48d1f754e9580",
+   "name": "2023-11-13"
+  },
+  {
+   "expect": "private/backtests/2023-11-20_expect.json",
+   "expect_sha256": "739ea0364df6bd1ec9b517fbff81bdc11ca3d11942cbe11c3f0bd9b29787638d",
+   "fixture": "private/backtests/2023-11-20_fixture.json",
+   "fixture_sha256": "7a4a0454762382e1ce18270797c7a5300825edc70774a73aca333ff847baddfd",
+   "name": "2023-11-20"
+  },
+  {
+   "expect": "private/backtests/2023-11-27_expect.json",
+   "expect_sha256": "50b52e9b27600c5685a2f6898d2d1d6d821592acaf476aa8f041c2a74589b93d",
+   "fixture": "private/backtests/2023-11-27_fixture.json",
+   "fixture_sha256": "38e83b835e58079b342c6a684073d1a1b082f6de9b07865833ba2375b75d0904",
+   "name": "2023-11-27"
+  },
+  {
+   "expect": "private/backtests/2023-12-04_expect.json",
+   "expect_sha256": "0b3c4b5da1c4a60590661674b9733d85f2723047fb76841d6c3af55c09d085e5",
+   "fixture": "private/backtests/2023-12-04_fixture.json",
+   "fixture_sha256": "49995a659c4da6454d0b190ec898f149b6c8a90b712dc97b0022142dde3ce5b3",
+   "name": "2023-12-04"
+  },
+  {
+   "expect": "private/backtests/2023-12-11_expect.json",
+   "expect_sha256": "e040f633449b075670dc8eb48cb20ab6ed5df4f5a0cacd79a4673de45d74653e",
+   "fixture": "private/backtests/2023-12-11_fixture.json",
+   "fixture_sha256": "7cc54ca55dd4e5f54382ba61c33182116621458e76f8c9371928b8efe9bfbc86",
+   "name": "2023-12-11"
+  },
+  {
+   "expect": "private/backtests/2023-12-18_expect.json",
+   "expect_sha256": "abdc4764f7839f8730d013eea13d45e59eeab042f228f4a76ea1822be3883e4c",
+   "fixture": "private/backtests/2023-12-18_fixture.json",
+   "fixture_sha256": "d1fa822692d602f38d65a824f831f6e5b542178854d7b68c0c4d06e0a739bf2a",
+   "name": "2023-12-18"
+  },
+  {
+   "expect": "private/backtests/2023-12-25_expect.json",
+   "expect_sha256": "110e8f651f532cba712845726370651e86b565bce6619868f8e6be3e661d3ebc",
+   "fixture": "private/backtests/2023-12-25_fixture.json",
+   "fixture_sha256": "96eef7bcc4293bba98c402f0be93352b1c5975ab97db1f6dba3668668f5c7d19",
+   "name": "2023-12-25"
+  },
+  {
+   "expect": "private/backtests/2024-01-01_expect.json",
+   "expect_sha256": "51fbc68ac06f4085a5d32e6efbf96653dc9a3cd585243ac5c35e0ee0fa0192b1",
+   "fixture": "private/backtests/2024-01-01_fixture.json",
+   "fixture_sha256": "0ea2bd3df3416f0d2663186064a7a7534e48d7b03a2e0a4f5842f7b3a05cc009",
+   "name": "2024-01-01"
+  },
+  {
+   "expect": "private/backtests/2024-01-08_expect.json",
+   "expect_sha256": "c9d9cd524f9746e8a3b9698964f509ddcede8207dc1ca72c8b2930fc06de448b",
+   "fixture": "private/backtests/2024-01-08_fixture.json",
+   "fixture_sha256": "a21a2579ddc9d3a9867cb36e3a9634da959b949b266170e4a23b86b974d3c07a",
+   "name": "2024-01-08"
+  },
+  {
+   "expect": "private/backtests/2024-01-15_expect.json",
+   "expect_sha256": "3cddd02d089500e428bb55e66fd75525c3a979e9077f6614f5812e26b4c899fd",
+   "fixture": "private/backtests/2024-01-15_fixture.json",
+   "fixture_sha256": "ba55f62105240430249bcfa2af52dc545019772fa9e95eb929865791e85ea2dd",
+   "name": "2024-01-15"
+  },
+  {
+   "expect": "private/backtests/2024-01-22_expect.json",
+   "expect_sha256": "185609ec62f125e8c9bf189cc045de6bdb45afbbfa19b515e6a5ede1bde31b79",
+   "fixture": "private/backtests/2024-01-22_fixture.json",
+   "fixture_sha256": "d3da1ea7013440a097d98d6570f5017f06941eb1d043facc8c84bc83137785f5",
+   "name": "2024-01-22"
+  },
+  {
+   "expect": "private/backtests/2024-01-29_expect.json",
+   "expect_sha256": "545f95864a078f4e5ef9db0b3cd47ec0a816c25bc923fa4eda066f13a524abdf",
+   "fixture": "private/backtests/2024-01-29_fixture.json",
+   "fixture_sha256": "33f433531d28f36f0edf67d360677252aeac801ca6557f2fac39bf46dbfe6931",
+   "name": "2024-01-29"
+  },
+  {
+   "expect": "private/backtests/2024-02-05_expect.json",
+   "expect_sha256": "3e2c9ec3d6f66d7a8bbb3efb50e6c24ed8e340900d6a0e0da056b246ae249baf",
+   "fixture": "private/backtests/2024-02-05_fixture.json",
+   "fixture_sha256": "bd5ec78766c7904c7f6842f99ea91e4e86dcdc949b8b9687ec28a8a310bcc733",
+   "name": "2024-02-05"
+  },
+  {
+   "expect": "private/backtests/2024-02-12_expect.json",
+   "expect_sha256": "ad015bc0142e629ec169e3af98147f833dfe3b1fbdcff511076223ef5c66f6ea",
+   "fixture": "private/backtests/2024-02-12_fixture.json",
+   "fixture_sha256": "d540cd9df6af5d1351d895bb57abe954f384457e3d8ff30cd82b84644640e701",
+   "name": "2024-02-12"
+  },
+  {
+   "expect": "private/backtests/2024-02-19_expect.json",
+   "expect_sha256": "79cdcb5546ecae8584813b87674d179c2f500802a6b5142a0ea8a5a17449e75b",
+   "fixture": "private/backtests/2024-02-19_fixture.json",
+   "fixture_sha256": "7f242f9892cba12b9a9dac8594b249a682ead844fc86f105229f2a3051b0738f",
+   "name": "2024-02-19"
+  },
+  {
+   "expect": "private/backtests/2024-02-26_expect.json",
+   "expect_sha256": "3c9fde9dd51d86d755b86071ae6966d64f2e97fc0e323339ab4905bbfce1f35b",
+   "fixture": "private/backtests/2024-02-26_fixture.json",
+   "fixture_sha256": "0b5d13dd646963ca28a670534298c367045fd32edb8413ac752b15eda927de25",
+   "name": "2024-02-26"
+  },
+  {
+   "expect": "private/backtests/2024-03-04_expect.json",
+   "expect_sha256": "2d8e47989d581a116b619ee21d6ba4c0342cdc7749050cc94ae55a6f2dd44858",
+   "fixture": "private/backtests/2024-03-04_fixture.json",
+   "fixture_sha256": "95fad87c79b1b4a4bbd7f448dc49ea49e44294e4abd12b4e1f709ddcc6e47b91",
+   "name": "2024-03-04"
+  },
+  {
+   "expect": "private/backtests/2024-03-11_expect.json",
+   "expect_sha256": "8ac5ebccc2e0c3e32b0964a5dd288850bf06bc6e3c38d33206c4a84bddd14e44",
+   "fixture": "private/backtests/2024-03-11_fixture.json",
+   "fixture_sha256": "a49a63a0e76c12fe49b8892a923a335875f6567fd6da1f29e56d13955ae8d528",
+   "name": "2024-03-11"
+  },
+  {
+   "expect": "private/backtests/2024-03-18_expect.json",
+   "expect_sha256": "26b49a7e5528813069e0a43a9658f86f7ccdd0d86706bb2caa8132d8d763b4c6",
+   "fixture": "private/backtests/2024-03-18_fixture.json",
+   "fixture_sha256": "386c516f088ba2fb0d8552a2597e1e9f1e47c0db30e826b87aef243976d59027",
+   "name": "2024-03-18"
+  },
+  {
+   "expect": "private/backtests/2024-03-25_expect.json",
+   "expect_sha256": "590ebea01c349dd7f0da26d8913b737caa5a77998d8f18566fe145c0acd81f3e",
+   "fixture": "private/backtests/2024-03-25_fixture.json",
+   "fixture_sha256": "4f4008f249aee83e844e9755db9b277472f6cf0698c8115f4ee066ed106655b6",
+   "name": "2024-03-25"
+  },
+  {
+   "expect": "private/backtests/2024-04-01_expect.json",
+   "expect_sha256": "69b10c2936c85e5d1b092208458bf23f4fb55a915655494920f33d5fed684594",
+   "fixture": "private/backtests/2024-04-01_fixture.json",
+   "fixture_sha256": "d6d2cbfe89a9b2ce22404f4c754df45ff995f889a6b5687555b4feec8ffa6350",
+   "name": "2024-04-01"
+  },
+  {
+   "expect": "private/backtests/2024-04-08_expect.json",
+   "expect_sha256": "7340e144bda5bac0e0d24daa014d6cae04868175449e8bb98126f034b79d8b81",
+   "fixture": "private/backtests/2024-04-08_fixture.json",
+   "fixture_sha256": "dbce4186e75fb57d7799e38ef518cd6c3042168467d8bf3614a0373d6c4d49a7",
+   "name": "2024-04-08"
+  },
+  {
+   "expect": "private/backtests/2024-04-15_expect.json",
+   "expect_sha256": "69ac7b6d3b2c357ed5a9510757fe81cc4b43729ca40d69aebd314f8cd206c6c8",
+   "fixture": "private/backtests/2024-04-15_fixture.json",
+   "fixture_sha256": "edd3f7cdd371735dea6f2f4cbe62f96a4601d51676c28e238dbbf2e49986f1a2",
+   "name": "2024-04-15"
+  },
+  {
+   "expect": "private/backtests/2024-04-22_expect.json",
+   "expect_sha256": "2f5879d201c4c26a2219b0e19dc24e854a328732d2192564930df9f0ab4cb3ca",
+   "fixture": "private/backtests/2024-04-22_fixture.json",
+   "fixture_sha256": "12bce3f8f7b5d2769b0a0c842959075ac1fb10c418cf90c2090da69d88877bd4",
+   "name": "2024-04-22"
+  },
+  {
+   "expect": "private/backtests/2024-04-29_expect.json",
+   "expect_sha256": "5791a476f8263003e47757c81e6f0492ed50393a9dc2ae5760e8cba5c36cb365",
+   "fixture": "private/backtests/2024-04-29_fixture.json",
+   "fixture_sha256": "ef885975f94c8cbdf4c8883df1ba75e32064378ca6b2c44f65690068fce430f6",
+   "name": "2024-04-29"
+  },
+  {
+   "expect": "private/backtests/2024-05-06_expect.json",
+   "expect_sha256": "1546c6fcbabad4e4b312975579dd3034640f4487ade08a9e82cb6f47220a6ca7",
+   "fixture": "private/backtests/2024-05-06_fixture.json",
+   "fixture_sha256": "849d540f58945a36ab73b46cc7752893f532bd51183e982a79196bca5d155638",
+   "name": "2024-05-06"
+  },
+  {
+   "expect": "private/backtests/2024-05-13_expect.json",
+   "expect_sha256": "35f535e4f03cc9830765a71cd1d0c55c330ac5ca727a024e012ea72e41e168bc",
+   "fixture": "private/backtests/2024-05-13_fixture.json",
+   "fixture_sha256": "b24b756e62196da09bb7aa9b41ac835d0773082c809cfda4952be504272e51d4",
+   "name": "2024-05-13"
+  },
+  {
+   "expect": "private/backtests/2024-05-20_expect.json",
+   "expect_sha256": "b034379d2c784dbcac86d746ab48e8ee382568d0333b190e73b6c5ae75f1f0cb",
+   "fixture": "private/backtests/2024-05-20_fixture.json",
+   "fixture_sha256": "e43969c0512cae258505b2bfb0e088eb298a426197c540c15b7e08553d1d1428",
+   "name": "2024-05-20"
+  },
+  {
+   "expect": "private/backtests/2024-05-27_expect.json",
+   "expect_sha256": "254db73607692fa27ab111aab9713f3d0f73bf4613c54d4d27d64fd4e42e4411",
+   "fixture": "private/backtests/2024-05-27_fixture.json",
+   "fixture_sha256": "38c000721f0aeb8835a1fceacc03b59a53dd858a44bcd7c2ab807da2a80de08a",
+   "name": "2024-05-27"
+  },
+  {
+   "expect": "private/backtests/2024-06-03_expect.json",
+   "expect_sha256": "a398e251c22fe1f16225c915878387b36331a0f1c8d4f3146d3367fa230fe4a0",
+   "fixture": "private/backtests/2024-06-03_fixture.json",
+   "fixture_sha256": "6a7541940dd29fd05336df194a8527c755eb479449725b651f4541275f4a0bdb",
+   "name": "2024-06-03"
+  },
+  {
+   "expect": "private/backtests/2024-06-10_expect.json",
+   "expect_sha256": "9208f16883578131104ad78fb682c67b7785fdcefe5e8ab3e3d15c476b35e520",
+   "fixture": "private/backtests/2024-06-10_fixture.json",
+   "fixture_sha256": "b55c4ce11ee50edf996e1f0dc12917c3fb5e808f3376f814bbfadc48c8370797",
+   "name": "2024-06-10"
+  },
+  {
+   "expect": "private/backtests/2024-06-17_expect.json",
+   "expect_sha256": "80de96c2077d16f9bafc0cf92e2e39e2d0eb56b89ee69e6bc0e196e4635dd797",
+   "fixture": "private/backtests/2024-06-17_fixture.json",
+   "fixture_sha256": "6cb8b92efe7e43a58f0e465b0db6f3082055f36610a623606d6e8ee88ead3495",
+   "name": "2024-06-17"
+  },
+  {
+   "expect": "private/backtests/2024-06-24_expect.json",
+   "expect_sha256": "5d231092727444800e98dd0de03703836eb78c10983dbe40c5fdb71d8117d599",
+   "fixture": "private/backtests/2024-06-24_fixture.json",
+   "fixture_sha256": "9c4f3860c1b6407fe20dcf2ed80cb166aa1d2d38db1c82be7204f71588da505e",
+   "name": "2024-06-24"
+  },
+  {
+   "expect": "private/backtests/2024-07-01_expect.json",
+   "expect_sha256": "71b67731a943f55240696b33f6e16d78c0e979f0ba30f1e00dd8aead82b1822d",
+   "fixture": "private/backtests/2024-07-01_fixture.json",
+   "fixture_sha256": "f9fc09955e9e3347c02e1e6345ecba028a2e96d2337372175315f013273e01a8",
+   "name": "2024-07-01"
+  },
+  {
+   "expect": "private/backtests/2024-07-08_expect.json",
+   "expect_sha256": "7d7e957056177f85098ea88b678c8f65c192c058ca6f8cc1062d8633d7c11b8d",
+   "fixture": "private/backtests/2024-07-08_fixture.json",
+   "fixture_sha256": "23c809a361713fa0db7b5f4fa586212369411f5adad97ca44c59917731fc7822",
+   "name": "2024-07-08"
+  },
+  {
+   "expect": "private/backtests/2024-07-15_expect.json",
+   "expect_sha256": "67c5ab5e878c530fa517c3de7343c1ca85408d44e8d42ba5788b31904458bf00",
+   "fixture": "private/backtests/2024-07-15_fixture.json",
+   "fixture_sha256": "ca955b72d2706bba9cd641e344777b1ad56113b50d38de62f2ff5415e8114e12",
+   "name": "2024-07-15"
+  },
+  {
+   "expect": "private/backtests/2024-07-22_expect.json",
+   "expect_sha256": "4f2632c16fd3c49df8f8ece9184eb870feaad349435f233c69f34e5143edde6a",
+   "fixture": "private/backtests/2024-07-22_fixture.json",
+   "fixture_sha256": "89e7433bb05815fbf0de1eda152c9ff175d247cea0422af6e04ca263299388d1",
+   "name": "2024-07-22"
+  },
+  {
+   "expect": "private/backtests/2024-07-29_expect.json",
+   "expect_sha256": "58563a79e8824704ad1b3e43c6ba4ed6d746b03f40c18b0fc51899588f80b183",
+   "fixture": "private/backtests/2024-07-29_fixture.json",
+   "fixture_sha256": "7d6613b52c2af1a34be7da0991b4968ee7b3ff85186a0b7b0b68604100927500",
+   "name": "2024-07-29"
+  },
+  {
+   "expect": "private/backtests/2024-08-05_expect.json",
+   "expect_sha256": "86ae99592995f0a3f9edd7668ae4c9deb99015cf719f522de3857982773e37be",
+   "fixture": "private/backtests/2024-08-05_fixture.json",
+   "fixture_sha256": "993f91eccb498f90e06a34a1513265c7ccc20354890f8575a964f3d1266a5bbe",
+   "name": "2024-08-05"
+  },
+  {
+   "expect": "private/backtests/2024-08-12_expect.json",
+   "expect_sha256": "93cbe4369af977978eec2b8ba67da873567de81bd60d9f1fa7c73da51612c80e",
+   "fixture": "private/backtests/2024-08-12_fixture.json",
+   "fixture_sha256": "703de2ec99bfa2a165273f0e5fe33ca8d0beac0adc571b147c66948cd8e57f95",
+   "name": "2024-08-12"
+  },
+  {
+   "expect": "private/backtests/2024-08-19_expect.json",
+   "expect_sha256": "bd4dd2c6736f777a92f9b5a52697ebf41a945eec39cf6282673bcc09e11e9440",
+   "fixture": "private/backtests/2024-08-19_fixture.json",
+   "fixture_sha256": "f048e9b099c3e2c74d70a32d79df4274b81170633573300a9686eae7bd2af958",
+   "name": "2024-08-19"
+  },
+  {
+   "expect": "private/backtests/2024-08-26_expect.json",
+   "expect_sha256": "94208eb34d7db6ed2b6f374e5393fbeffbffc3ffb07cef4e28a50675f8a23f7e",
+   "fixture": "private/backtests/2024-08-26_fixture.json",
+   "fixture_sha256": "28d7f181e6a81b69b65ca7261ec223c7300d5fe87c7bd1cf854955a512e7e5b2",
+   "name": "2024-08-26"
+  },
+  {
+   "expect": "private/backtests/2024-09-02_expect.json",
+   "expect_sha256": "38afe31f9f07c3c5659510ce0b00df4bf6fe7bfeeb3f5d08f1cfec157a9f17a7",
+   "fixture": "private/backtests/2024-09-02_fixture.json",
+   "fixture_sha256": "cb91faec9cf228cb319dd30dc2aaca4880737c91a1c6f019eec0337a8368131a",
+   "name": "2024-09-02"
+  },
+  {
+   "expect": "private/backtests/2024-09-09_expect.json",
+   "expect_sha256": "0a5edb013be7136e4bc5f5a090ff32e51feaabe9fb32728f6d43c796bea30473",
+   "fixture": "private/backtests/2024-09-09_fixture.json",
+   "fixture_sha256": "e751e2e6382914562d3b17f92602c3e07eaebc8be362603526b4e20f5a01df54",
+   "name": "2024-09-09"
+  },
+  {
+   "expect": "private/backtests/2024-09-16_expect.json",
+   "expect_sha256": "0adf8c409c79c45663644c30096f672436d13dc08d3d9c2119b1f1c5c02ad707",
+   "fixture": "private/backtests/2024-09-16_fixture.json",
+   "fixture_sha256": "1f36ae2942b2096200cdc7473d675a5f02cf2fa2be051285358efe1d58d47904",
+   "name": "2024-09-16"
+  },
+  {
+   "expect": "private/backtests/2024-09-23_expect.json",
+   "expect_sha256": "e7addcd86add2258c4018c08b7f3825417ef807ff49aa7cfb6c69d5ce69e0f72",
+   "fixture": "private/backtests/2024-09-23_fixture.json",
+   "fixture_sha256": "9120c3d30c5b47d8a792457a765fdb4932667b79a0a0cd1f177ec335629907ba",
+   "name": "2024-09-23"
+  },
+  {
+   "expect": "private/backtests/2024-09-30_expect.json",
+   "expect_sha256": "fc646c54c54f5d70b939d38291e7e959ea8ef1c871bd4fe7b9744413373bce58",
+   "fixture": "private/backtests/2024-09-30_fixture.json",
+   "fixture_sha256": "391e1f4b2ce9e0594d768b398993c9a671478ba8899cd9fd246af7dd4c7d3046",
+   "name": "2024-09-30"
+  },
+  {
+   "expect": "private/backtests/2024-10-07_expect.json",
+   "expect_sha256": "ddf4e25dfc1d5394cde354bf46cd00e3bbf60b52388c46540081cd4475bd98dd",
+   "fixture": "private/backtests/2024-10-07_fixture.json",
+   "fixture_sha256": "8635cc54572109f6962621dfaa2895bcd967ab56ff260be09c87e212d98e6f5e",
+   "name": "2024-10-07"
+  },
+  {
+   "expect": "private/backtests/2024-10-14_expect.json",
+   "expect_sha256": "4f2632c16fd3c49df8f8ece9184eb870feaad349435f233c69f34e5143edde6a",
+   "fixture": "private/backtests/2024-10-14_fixture.json",
+   "fixture_sha256": "db3428ce8c59fa2ac9dc3eccea6dee8a7020e70e6a999edce029150eaddfb0af",
+   "name": "2024-10-14"
+  },
+  {
+   "expect": "private/backtests/2024-10-21_expect.json",
+   "expect_sha256": "38afe31f9f07c3c5659510ce0b00df4bf6fe7bfeeb3f5d08f1cfec157a9f17a7",
+   "fixture": "private/backtests/2024-10-21_fixture.json",
+   "fixture_sha256": "12aa232651d257ac9eef042e5c0415be1e181fcfab5b376277fe68b075898734",
+   "name": "2024-10-21"
+  },
+  {
+   "expect": "private/backtests/2024-10-28_expect.json",
+   "expect_sha256": "ea8bc3e0e0092d0c903841e85e01b18a7fa65d0b3b29721342b4b3ce79cfa361",
+   "fixture": "private/backtests/2024-10-28_fixture.json",
+   "fixture_sha256": "7fcb96070142a8743331c4e067416f08c6c5fe6f333e22ae525bbdfea2a885c6",
+   "name": "2024-10-28"
+  },
+  {
+   "expect": "private/backtests/2024-11-04_expect.json",
+   "expect_sha256": "019d864f860148b6c97e6126f7aecf9e8d704e757131686b5af2f4f28db81379",
+   "fixture": "private/backtests/2024-11-04_fixture.json",
+   "fixture_sha256": "8c43b0bb06c9e7a8341ca7e49dba46d19d13651a91866087698b58f042887a4a",
+   "name": "2024-11-04"
+  },
+  {
+   "expect": "private/backtests/2024-11-11_expect.json",
+   "expect_sha256": "ab765cfe329ace0d8f06bca1c9fdc16248f9dc59b9baa62864ffa5598845bfab",
+   "fixture": "private/backtests/2024-11-11_fixture.json",
+   "fixture_sha256": "83881992c846992def6e15e18628975a589e440f3785055305649f3b562da6ca",
+   "name": "2024-11-11"
+  },
+  {
+   "expect": "private/backtests/2024-11-18_expect.json",
+   "expect_sha256": "341fdb408527643bd96f02f1bc33125e903f739cb03b7734c7827ae7f920ae2d",
+   "fixture": "private/backtests/2024-11-18_fixture.json",
+   "fixture_sha256": "909feaf2b3c5f0d3d11bfe36a310579538f32b4a71768bb98e97f9628a8cea8a",
+   "name": "2024-11-18"
+  },
+  {
+   "expect": "private/backtests/2024-11-25_expect.json",
+   "expect_sha256": "8d03cfa3106cd45f12a0b2419b150bedc11822053a3c950848d83030d6dc8733",
+   "fixture": "private/backtests/2024-11-25_fixture.json",
+   "fixture_sha256": "2b38733c2e7ac0f91f71fcae7573bf3f198df87de1926e7f414ff8c83bb3825f",
+   "name": "2024-11-25"
+  },
+  {
+   "expect": "private/backtests/2024-12-02_expect.json",
+   "expect_sha256": "aabf0224788c5dfacf61596ac98c60b879a3d50987ac2cddba9885027c4a2169",
+   "fixture": "private/backtests/2024-12-02_fixture.json",
+   "fixture_sha256": "c4055a825b5d77b3fca9c8b97e62ed2de4ab4e2a45d6ef21f3691f135ea9746e",
+   "name": "2024-12-02"
+  },
+  {
+   "expect": "private/backtests/2024-12-09_expect.json",
+   "expect_sha256": "83b77b39d9353c13fa836dd36d799598122aee0dfc0c841c8a16cae9920313a3",
+   "fixture": "private/backtests/2024-12-09_fixture.json",
+   "fixture_sha256": "2617866c1db82125dd13b6f2d63c6a9ce26e25101246090b0851883a0c6bf28b",
+   "name": "2024-12-09"
+  },
+  {
+   "expect": "private/backtests/2024-12-16_expect.json",
+   "expect_sha256": "976dd7dfe4740957b08ab62530fe240a754fe52613b2493570c7f3d9ded7cfbf",
+   "fixture": "private/backtests/2024-12-16_fixture.json",
+   "fixture_sha256": "23ddaae2b6cea849c61698cf4357c389f29058cc66d7f1495bc1b1a26f6da19a",
+   "name": "2024-12-16"
+  },
+  {
+   "expect": "private/backtests/2024-12-23_expect.json",
+   "expect_sha256": "cb328999f4c86f241d4815aa06cd4525923b22a8f2d6479128cb7326ee8c5040",
+   "fixture": "private/backtests/2024-12-23_fixture.json",
+   "fixture_sha256": "17a63504ab05515ae9086993d683c5cab53519eccfd7fedb104b2f22fcbb5427",
+   "name": "2024-12-23"
+  },
+  {
+   "expect": "private/backtests/2024-12-30_expect.json",
+   "expect_sha256": "bd2c6c600eb6bf5b38f5b6b4b3178a8254ac9320f0fa7b6632c74b9d824a25cd",
+   "fixture": "private/backtests/2024-12-30_fixture.json",
+   "fixture_sha256": "578cd0a6885f095f98716ccf10e54371b8b485c9f2f64d4a8c88b7ade351885b",
+   "name": "2024-12-30"
+  },
+  {
+   "expect": "private/backtests/2025-01-06_expect.json",
+   "expect_sha256": "6c29455ed8ccc94b52b69213afe453d2300b4e15dee6915f184c3104d40841a8",
+   "fixture": "private/backtests/2025-01-06_fixture.json",
+   "fixture_sha256": "0f9aee96e7c0531f6d8ef1bd28a7ded02005d49cd4e706e98053b1f2368f7eae",
+   "name": "2025-01-06"
+  },
+  {
+   "expect": "private/backtests/2025-01-13_expect.json",
+   "expect_sha256": "c094b7c8c6041a440acde0e4449e99e7a2a2e4bdcc7e16bffa4d0c9fc102b7c7",
+   "fixture": "private/backtests/2025-01-13_fixture.json",
+   "fixture_sha256": "61236e8f4d51b38c51074af5b42b058448b08e395bd35ba59671b536b5553826",
+   "name": "2025-01-13"
+  },
+  {
+   "expect": "private/backtests/2025-01-20_expect.json",
+   "expect_sha256": "50d81900901e90b43c39f679ab7a4189ecfa9626a2c868aaf1e6ff37d784f7cb",
+   "fixture": "private/backtests/2025-01-20_fixture.json",
+   "fixture_sha256": "1657618e97ad5d40242ec13f367633ed12ee98a248e08f226dc09e2c6f877f3a",
+   "name": "2025-01-20"
+  },
+  {
+   "expect": "private/backtests/2025-01-27_expect.json",
+   "expect_sha256": "a7be68bd1c5b7597ec7ee1dc71f12ddbb26edf765da93889442b78a618226a4d",
+   "fixture": "private/backtests/2025-01-27_fixture.json",
+   "fixture_sha256": "8020e69d500b7e71de03817ac1653cea14cbfb7b8f16dca9921a8ecd986dc1ca",
+   "name": "2025-01-27"
+  },
+  {
+   "expect": "private/backtests/2025-02-03_expect.json",
+   "expect_sha256": "ab765cfe329ace0d8f06bca1c9fdc16248f9dc59b9baa62864ffa5598845bfab",
+   "fixture": "private/backtests/2025-02-03_fixture.json",
+   "fixture_sha256": "5169f6e3d74c4a83bd9770babf1801b417347c3ca69a94c67f1a903c0a638c90",
+   "name": "2025-02-03"
+  },
+  {
+   "expect": "private/backtests/2025-02-10_expect.json",
+   "expect_sha256": "d282864fba96b94ea56090db55fe70a9441f281a7e01ab3634154656a6bf697d",
+   "fixture": "private/backtests/2025-02-10_fixture.json",
+   "fixture_sha256": "f442d85b2cce15ac60477d5985ebe733e0ce2568f8d2fd4b82a61cb02ad306f1",
+   "name": "2025-02-10"
+  },
+  {
+   "expect": "private/backtests/2025-02-17_expect.json",
+   "expect_sha256": "4d005c517f384b573591459f380711fe9bc1fd754aed9fa5a0dbee6ed9c088ca",
+   "fixture": "private/backtests/2025-02-17_fixture.json",
+   "fixture_sha256": "3c768193543bc75fb910304f993c8fdacf95726fde16678c851e0b364ba1a7b4",
+   "name": "2025-02-17"
+  },
+  {
+   "expect": "private/backtests/2025-02-24_expect.json",
+   "expect_sha256": "e413e7d55c8678502ea8748c9f1a8545cbd7b2ca1b7eb3bfd3aeeb583f615c46",
+   "fixture": "private/backtests/2025-02-24_fixture.json",
+   "fixture_sha256": "1b535a94d971aed41f3dc608c5170fd0d4df0cee14446cc27e65da43ff72b766",
+   "name": "2025-02-24"
+  },
+  {
+   "expect": "private/backtests/2025-03-03_expect.json",
+   "expect_sha256": "71b67731a943f55240696b33f6e16d78c0e979f0ba30f1e00dd8aead82b1822d",
+   "fixture": "private/backtests/2025-03-03_fixture.json",
+   "fixture_sha256": "972feba411247270ba990dc49fb882126c55a0a9df4cb6bd23d10bf7a7cebfe0",
+   "name": "2025-03-03"
+  },
+  {
+   "expect": "private/backtests/2025-03-10_expect.json",
+   "expect_sha256": "17c081e6ac49ebaea3e19c680f1de4a522d71066cf17639cffeade7e61fbda12",
+   "fixture": "private/backtests/2025-03-10_fixture.json",
+   "fixture_sha256": "b5701b2218a08832d3580d33e2b36676be5bb054c8b4c5af03d8bdf0b33133ea",
+   "name": "2025-03-10"
+  },
+  {
+   "expect": "private/backtests/2025-03-17_expect.json",
+   "expect_sha256": "55d980b8fb0e9c4ef253eb8338f2596e468a7a5321ec01ec83f007c33ddcb801",
+   "fixture": "private/backtests/2025-03-17_fixture.json",
+   "fixture_sha256": "f3fb0cc9e14e401b8ff315b101474585e3aad8bf59942bc982c1a6a8ee19c37b",
+   "name": "2025-03-17"
+  },
+  {
+   "expect": "private/backtests/2025-03-24_expect.json",
+   "expect_sha256": "b6ea4874c2c82b5c5489b94455c7a6dba8e67e3aeb5836fd7dc3be582cc53075",
+   "fixture": "private/backtests/2025-03-24_fixture.json",
+   "fixture_sha256": "8d5e957e4494c4ee83620d589bb347a728bc40c40837b91923d6d3853a7eab2d",
+   "name": "2025-03-24"
+  },
+  {
+   "expect": "private/backtests/2025-03-31_expect.json",
+   "expect_sha256": "4db98fd3bfd0d30733b817dff001d8ed40a9378299c2670191c7fb57d5107d1b",
+   "fixture": "private/backtests/2025-03-31_fixture.json",
+   "fixture_sha256": "09efcc132f531344a7b1be75ad39bfe0daad107c34c3e7810fc560357cc6fbf0",
+   "name": "2025-03-31"
+  },
+  {
+   "expect": "private/backtests/2025-04-07_expect.json",
+   "expect_sha256": "6bef0ed20e7c0c8af1a47aac16c13843c6e28e7607bfb5c370b8dcec4ae73bfd",
+   "fixture": "private/backtests/2025-04-07_fixture.json",
+   "fixture_sha256": "b0e91db4fb22995c434b18d2f0b01d863dc768524873ff253220d9c3d71a9d8f",
+   "name": "2025-04-07"
+  },
+  {
+   "expect": "private/backtests/2025-04-14_expect.json",
+   "expect_sha256": "9edb030c492967b75d5e56d878a9f5fd1cd78d0cedb260d1c08ea84656513800",
+   "fixture": "private/backtests/2025-04-14_fixture.json",
+   "fixture_sha256": "6a63a18dc2c16b7bd73385ab6d4a6ada4600e2ade2af433c30a9be2ca841303d",
+   "name": "2025-04-14"
+  },
+  {
+   "expect": "private/backtests/2025-04-21_expect.json",
+   "expect_sha256": "be7e60d67422e852b6c4ef8ca376f8a203b17ed63bfe87094efd000ac29207d4",
+   "fixture": "private/backtests/2025-04-21_fixture.json",
+   "fixture_sha256": "56f9bd418e2ea0c82668d4467718dfb2ccf80587b4cc5a2eccac0f86b08b7e42",
+   "name": "2025-04-21"
+  },
+  {
+   "expect": "private/backtests/2025-04-28_expect.json",
+   "expect_sha256": "ddbf763d2b7408c93a7baebcb7cc13f7606d86c8d2adcb57ae914ec86c8c70d6",
+   "fixture": "private/backtests/2025-04-28_fixture.json",
+   "fixture_sha256": "ef7b15de4b2091102b1a124a8d15996c4bd78d49c38253f824dd76f395e9254e",
+   "name": "2025-04-28"
+  },
+  {
+   "expect": "private/backtests/2025-05-05_expect.json",
+   "expect_sha256": "9ff2b1cbaaf1bdb35c416041536141cfd82a8b8afc4da4aeeae09bf8de963044",
+   "fixture": "private/backtests/2025-05-05_fixture.json",
+   "fixture_sha256": "b7144e7baa9ee5974b9b3e0e8785c5a8b10cb6b48116b6ad1f0ab5657848d924",
+   "name": "2025-05-05"
+  },
+  {
+   "expect": "private/backtests/2025-05-12_expect.json",
+   "expect_sha256": "6a95adaa2cdf0e2aee0afbf6cdf8eec0c46246ab01e5e06a656154e98f4bacbd",
+   "fixture": "private/backtests/2025-05-12_fixture.json",
+   "fixture_sha256": "6fb4038ca53f8843ef211cd75ddf02cb8d6c93acd2947d08307db0588d5b591f",
+   "name": "2025-05-12"
+  },
+  {
+   "expect": "private/backtests/2025-05-19_expect.json",
+   "expect_sha256": "79d043575e3ba27d56d81ab2f3bf43c04adbdf6a004172d27603504d3523e10d",
+   "fixture": "private/backtests/2025-05-19_fixture.json",
+   "fixture_sha256": "9e26e7af15ad97c5fae922a52658724bf86898b1e91faf50014b730279eec124",
+   "name": "2025-05-19"
+  },
+  {
+   "expect": "private/backtests/2025-05-26_expect.json",
+   "expect_sha256": "085f275e17a02fc74c4ab74a7692f8e4b7051c1b56e7434970ef851f35a4bdaf",
+   "fixture": "private/backtests/2025-05-26_fixture.json",
+   "fixture_sha256": "85f3a519195cfea152c737bb11d8d857c4a9f3d9b8edf082decb01d42d1c8a75",
+   "name": "2025-05-26"
+  },
+  {
+   "expect": "private/backtests/2025-06-02_expect.json",
+   "expect_sha256": "d79befdba290ab1fc75d9e94636b787ac1f04210c60b2e5a057c786e1639f6b9",
+   "fixture": "private/backtests/2025-06-02_fixture.json",
+   "fixture_sha256": "c4a192fe938c57055ef7b49ee4855f532af9c6d6ed098fa594d5030fb8e1cf33",
+   "name": "2025-06-02"
+  },
+  {
+   "expect": "private/backtests/2025-06-09_expect.json",
+   "expect_sha256": "51fbc68ac06f4085a5d32e6efbf96653dc9a3cd585243ac5c35e0ee0fa0192b1",
+   "fixture": "private/backtests/2025-06-09_fixture.json",
+   "fixture_sha256": "6e740418bd2b1582681b38c663dfa2bebac1279aa4af8e40531026604ba40625",
+   "name": "2025-06-09"
+  },
+  {
+   "expect": "private/backtests/2025-06-16_expect.json",
+   "expect_sha256": "8e4aeeef7e3cbaf2bae31931c8331e7cb91c933ea826a079585af59f1ba683f9",
+   "fixture": "private/backtests/2025-06-16_fixture.json",
+   "fixture_sha256": "ac9e6442ff8a0ee1af6969b5577d74012e63b0ccb71ecbbb2046ab058bc62ff0",
+   "name": "2025-06-16"
+  },
+  {
+   "expect": "private/backtests/2025-06-23_expect.json",
+   "expect_sha256": "330777c398b478c04f8eee537d7d54dca80f2ac7ca2c99b9d0cc6d95ae498488",
+   "fixture": "private/backtests/2025-06-23_fixture.json",
+   "fixture_sha256": "3d9fc133373e5b27e590c002398f02268a473ad9ac628107c601b07429c8a48a",
+   "name": "2025-06-23"
+  },
+  {
+   "expect": "private/backtests/2025-06-30_expect.json",
+   "expect_sha256": "b60515da62ad34d8d4a06fc84a1e6265bcef170211172821dd67cb2ef64a317f",
+   "fixture": "private/backtests/2025-06-30_fixture.json",
+   "fixture_sha256": "bac6b09bc694c9856b18b972ab607d9771dd0790862af410f33e97e4f460653a",
+   "name": "2025-06-30"
+  },
+  {
+   "expect": "private/backtests/2025-07-07_expect.json",
+   "expect_sha256": "afb33e97468461b086859db2f16887341d24af8c17750cf402ef2c81fadee65c",
+   "fixture": "private/backtests/2025-07-07_fixture.json",
+   "fixture_sha256": "c06a21c22a62ed60bb1646ae453c6c5deeb6b2581abaececdb5fabf468587fd3",
+   "name": "2025-07-07"
+  },
+  {
+   "expect": "private/backtests/2025-07-14_expect.json",
+   "expect_sha256": "e4b6b6a8f31af70f0cb367e7b575d36576059ed2ee7666bab6357a7ad2542603",
+   "fixture": "private/backtests/2025-07-14_fixture.json",
+   "fixture_sha256": "15f6592daa1d2ff19b491d23c4f25933a12505a9e1a99696fd480602da2c6cdc",
+   "name": "2025-07-14"
+  },
+  {
+   "expect": "private/backtests/2025-07-21_expect.json",
+   "expect_sha256": "9ff80748403c8952c71415f0fcdc22a09cfbd86b98d7404e722973d42c8ee2d6",
+   "fixture": "private/backtests/2025-07-21_fixture.json",
+   "fixture_sha256": "f3bc3f55c5f5d8956dc8784beecfdfcd94b054b659296dd8db774ecbfaaeea1a",
+   "name": "2025-07-21"
+  },
+  {
+   "expect": "private/backtests/2025-07-28_expect.json",
+   "expect_sha256": "70b080429167a491518a1827f3ae038bcf59463637a2ee96cab1ad0904115e18",
+   "fixture": "private/backtests/2025-07-28_fixture.json",
+   "fixture_sha256": "e43b91d724fc8195f351db0b62d0733aa2f2740a02a3645093a5e404bdf253bf",
+   "name": "2025-07-28"
+  },
+  {
+   "expect": "private/backtests/2025-08-04_expect.json",
+   "expect_sha256": "8f0d75848929b2941adb830e776e07d2489777fdc24386e16a12bf43b660c327",
+   "fixture": "private/backtests/2025-08-04_fixture.json",
+   "fixture_sha256": "05be0e8c3c29949899b0ccf7077295bf9cb4ed20d15dafa4c319eb6f62ff0096",
+   "name": "2025-08-04"
+  },
+  {
+   "expect": "private/backtests/2025-08-11_expect.json",
+   "expect_sha256": "fd501cc31d7a8b15f3425572fa7426bf1d90bcb038395f34924dcca01732fda0",
+   "fixture": "private/backtests/2025-08-11_fixture.json",
+   "fixture_sha256": "df5b83d978b5adeec92c184f785a376177d244cb682a41e5507527fd2e95c13e",
+   "name": "2025-08-11"
+  },
+  {
+   "expect": "private/backtests/2025-08-18_expect.json",
+   "expect_sha256": "0d62b184f13560fa1a43013abfebe11063374254cf83f1604f0aedeeb9a1065f",
+   "fixture": "private/backtests/2025-08-18_fixture.json",
+   "fixture_sha256": "f202539d98aa30777e9605b934c3e36553e86d465c1c02993536ec04c36fabb7",
+   "name": "2025-08-18"
+  },
+  {
+   "expect": "private/backtests/2025-08-25_expect.json",
+   "expect_sha256": "137e3f18a28db7e6d6a443a35795e7eda68664b03b79f4705ffea47c638dd9a1",
+   "fixture": "private/backtests/2025-08-25_fixture.json",
+   "fixture_sha256": "55b41d1aac191b9845ee273fc451e08c7a11cf3f6c821e11a52a06d4041a8ec8",
+   "name": "2025-08-25"
+  },
+  {
+   "expect": "private/backtests/2025-09-01_expect.json",
+   "expect_sha256": "5448fe917f61792a3a575ea61735986c529dd7c309286c099c834b57c6254fb3",
+   "fixture": "private/backtests/2025-09-01_fixture.json",
+   "fixture_sha256": "aaa79e31e768061e96a1a69d814d66b94f1afc2b7b1b4d1d21b1cfd2e6ca0c6b",
+   "name": "2025-09-01"
+  },
+  {
+   "expect": "private/backtests/2025-09-08_expect.json",
+   "expect_sha256": "ad015bc0142e629ec169e3af98147f833dfe3b1fbdcff511076223ef5c66f6ea",
+   "fixture": "private/backtests/2025-09-08_fixture.json",
+   "fixture_sha256": "05c1ea9e783f2181b26f8e4127eec05bc39e1679bd6a0bf825613e10db3dfa6f",
+   "name": "2025-09-08"
+  },
+  {
+   "expect": "private/backtests/2025-09-15_expect.json",
+   "expect_sha256": "4f4774b37dc0a31ab8b095d5170043648a69e79275ba1195eb46f51fe1b4b58b",
+   "fixture": "private/backtests/2025-09-15_fixture.json",
+   "fixture_sha256": "b3dfebe759405857f516e413a41319d45d8460e6413cd130cbcab0e303e3d97e",
+   "name": "2025-09-15"
+  },
+  {
+   "expect": "private/backtests/2025-09-22_expect.json",
+   "expect_sha256": "4f4774b37dc0a31ab8b095d5170043648a69e79275ba1195eb46f51fe1b4b58b",
+   "fixture": "private/backtests/2025-09-22_fixture.json",
+   "fixture_sha256": "a428a0b7db2ee03fde486262909a46425e94adf43d4c3a2d51d2d4f023f10af0",
+   "name": "2025-09-22"
+  },
+  {
+   "expect": "private/backtests/2025-09-29_expect.json",
+   "expect_sha256": "9b7cac544a6f7249bcdb369204be5e9754150a3351f0c2a13b20ad0644156dca",
+   "fixture": "private/backtests/2025-09-29_fixture.json",
+   "fixture_sha256": "8162757ea9b159b59d68b798395bba6d05fcbd5d7f2e5be3feff6b542446d4d7",
+   "name": "2025-09-29"
+  },
+  {
+   "expect": "private/backtests/2025-10-06_expect.json",
+   "expect_sha256": "4816e9ca3f627eca7ddf19f0d9336f18a0081bbaaffd4a4a9b756dc2c5cdffaf",
+   "fixture": "private/backtests/2025-10-06_fixture.json",
+   "fixture_sha256": "52dcb657df96da3b0d6fd19baafeaee1803ea79e794b658b16091c9f57aca7a6",
+   "name": "2025-10-06"
+  },
+  {
+   "expect": "private/backtests/2025-10-13_expect.json",
+   "expect_sha256": "e040f633449b075670dc8eb48cb20ab6ed5df4f5a0cacd79a4673de45d74653e",
+   "fixture": "private/backtests/2025-10-13_fixture.json",
+   "fixture_sha256": "122601f20c79288ad8bbb86ade8a7bee254dacf1f73c9504985a2a1e0702c433",
+   "name": "2025-10-13"
+  },
+  {
+   "expect": "private/backtests/2025-10-20_expect.json",
+   "expect_sha256": "7f6149cc86cfaf496d17f866e042d366e5af9f5342be2cbb193734c0b76da40d",
+   "fixture": "private/backtests/2025-10-20_fixture.json",
+   "fixture_sha256": "0058e5aaca28a57b5bd4ec6d230b78c3d9793c03689d0ed1a053bff09de32ab9",
+   "name": "2025-10-20"
+  },
+  {
+   "expect": "private/backtests/2025-10-27_expect.json",
+   "expect_sha256": "0bf6976c2cb793ab0f3d548c324fa689976a71d22103a4532dc4c8c146c2b72f",
+   "fixture": "private/backtests/2025-10-27_fixture.json",
+   "fixture_sha256": "e57ac2d0125a15e2f733402722cfa5fb81b826a01cf33594e31aa86b80c49438",
+   "name": "2025-10-27"
+  },
+  {
+   "expect": "private/backtests/2025-11-03_expect.json",
+   "expect_sha256": "150f8577ca1d063b3826fbc862c4bf204d8458f716e54f1a339ccbe7649d99b3",
+   "fixture": "private/backtests/2025-11-03_fixture.json",
+   "fixture_sha256": "ccbc3e83f2bf791a6fc496f87d432f33aeac80e96ebae6a862ee0c86a83da4f4",
+   "name": "2025-11-03"
+  },
+  {
+   "expect": "private/backtests/2025-11-10_expect.json",
+   "expect_sha256": "f59fd212b476f06d8b13f6b705441948ea8a2f25faec64f17a067fa47481f875",
+   "fixture": "private/backtests/2025-11-10_fixture.json",
+   "fixture_sha256": "7c5712d4c1577ce2b935404c53b232b0a22c73880a0f29293d36c1aa068803b1",
+   "name": "2025-11-10"
+  },
+  {
+   "expect": "private/backtests/2025-11-17_expect.json",
+   "expect_sha256": "7aec6dafc775e97b206a97e5673b268e2eb718ca496a2db3beebcfff37a8b874",
+   "fixture": "private/backtests/2025-11-17_fixture.json",
+   "fixture_sha256": "e2cb60684af0cb5edaf7b3d2983f25ef12f28f6976655bba667c2faf07939310",
+   "name": "2025-11-17"
+  },
+  {
+   "expect": "private/backtests/2025-11-24_expect.json",
+   "expect_sha256": "f476c1ee07a70f039c4c3c57a716e3ec41782ceb55bc9cf1c14f248ec880524f",
+   "fixture": "private/backtests/2025-11-24_fixture.json",
+   "fixture_sha256": "ae418904eb41d85a2bdf4c2f66c51e56d870bb9b18b9a0fe1607e46752537aa0",
+   "name": "2025-11-24"
+  },
+  {
+   "expect": "private/backtests/2025-12-01_expect.json",
+   "expect_sha256": "9e48fab3c0a18fd35e23001c82b3f25a85785c0558888e7ae0740332914d9197",
+   "fixture": "private/backtests/2025-12-01_fixture.json",
+   "fixture_sha256": "abdf6e06865ae1055aceee728d7495219b0dd2ef90ede7f471a6c67bc8f0f310",
+   "name": "2025-12-01"
+  },
+  {
+   "expect": "private/backtests/2025-12-08_expect.json",
+   "expect_sha256": "185609ec62f125e8c9bf189cc045de6bdb45afbbfa19b515e6a5ede1bde31b79",
+   "fixture": "private/backtests/2025-12-08_fixture.json",
+   "fixture_sha256": "18e2908eaf13105ac92b4071bd23e663386d55b0e2ba84e3c6d6d8b492ec07d5",
+   "name": "2025-12-08"
+  },
+  {
+   "expect": "private/backtests/2025-12-15_expect.json",
+   "expect_sha256": "340eeaa0d77da0c43a640cefd9df3dedf03fbad92f176eac784bdc6b6fead28c",
+   "fixture": "private/backtests/2025-12-15_fixture.json",
+   "fixture_sha256": "8ccffde0c9c923eff21883ccadb9689e603f621c160648bb53d948b052585aa4",
+   "name": "2025-12-15"
+  },
+  {
+   "expect": "private/backtests/2025-12-22_expect.json",
+   "expect_sha256": "161d6d9265723a8169c20048db5bbb814f49b704af30638cdbfd22cd0ca0e029",
+   "fixture": "private/backtests/2025-12-22_fixture.json",
+   "fixture_sha256": "bde1de388a8a7ac55f163e69d11e37819ad8b2b461c373cad5f09fed6ef83e15",
+   "name": "2025-12-22"
+  },
+  {
+   "expect": "private/backtests/2025-12-29_expect.json",
+   "expect_sha256": "dcdfefb1797d4b2bd5592f4bcae8c8fe37ab5ac68a2163c8dfa21ac7bd456469",
+   "fixture": "private/backtests/2025-12-29_fixture.json",
+   "fixture_sha256": "c68456456f0f09af1d0ad938fc7fa48798030e85657c9fd95acb3aca998c50ff",
+   "name": "2025-12-29"
+  },
+  {
+   "expect": "private/backtests/2026-01-05_expect.json",
+   "expect_sha256": "fc5644c665fb5be20989e62072c13c034c0194ea95750162f6aea07ba8fc9cb9",
+   "fixture": "private/backtests/2026-01-05_fixture.json",
+   "fixture_sha256": "c6daaa6e9880c8581c4d5f20534583e89e1dc131c62b642b7d534f67e150c9a6",
+   "name": "2026-01-05"
+  },
+  {
+   "expect": "private/backtests/2026-01-12_expect.json",
+   "expect_sha256": "bef1d9185ae9aa01f6c5daf28c6288e09f9377352f3197c9ddf2775f683b0d3a",
+   "fixture": "private/backtests/2026-01-12_fixture.json",
+   "fixture_sha256": "a0c1a2d9639bcd03245c0d811714fc46f2749c5dc0d0b441227c0d9d24e4e96d",
+   "name": "2026-01-12"
+  },
+  {
+   "expect": "private/backtests/2026-01-19_expect.json",
+   "expect_sha256": "49a33820c2ff80b1178e44670b2c63f23ef689eb3c0655e391145314d93e577e",
+   "fixture": "private/backtests/2026-01-19_fixture.json",
+   "fixture_sha256": "6dafb5efb88a8b90c4603faa7c3c8e59eec9a843f88a8f6917edfb6faa50441a",
+   "name": "2026-01-19"
+  },
+  {
+   "expect": "private/backtests/2026-01-26_expect.json",
+   "expect_sha256": "a850a7fb3cd12126788d399cb131467e81bb2bf3f63ad06982829840425105e3",
+   "fixture": "private/backtests/2026-01-26_fixture.json",
+   "fixture_sha256": "2d56babb152859125d8f4ec7127aed16099f4cf5df0c033f702577382a64bae1",
+   "name": "2026-01-26"
+  },
+  {
+   "expect": "private/backtests/2026-02-02_expect.json",
+   "expect_sha256": "aabf0224788c5dfacf61596ac98c60b879a3d50987ac2cddba9885027c4a2169",
+   "fixture": "private/backtests/2026-02-02_fixture.json",
+   "fixture_sha256": "1dc419a1cbd2461ad01eb7246e1fcf7e9ee26a98cc5526e2da74dfafe1c866b0",
+   "name": "2026-02-02"
+  },
+  {
+   "expect": "private/backtests/2026-02-09_expect.json",
+   "expect_sha256": "8147b05e4b44f089ef5953cfa1acd65bf1e2a51b8527bd80e944704925790a67",
+   "fixture": "private/backtests/2026-02-09_fixture.json",
+   "fixture_sha256": "a70edf877d38a4778c55835515076703f9d508bf1fd6c53d0b89388f42d28282",
+   "name": "2026-02-09"
+  },
+  {
+   "expect": "private/backtests/2026-02-16_expect.json",
+   "expect_sha256": "cd5ccbb5a31a263775cfda8519ef52456d8bedeae096e64e2e8c73db0904af94",
+   "fixture": "private/backtests/2026-02-16_fixture.json",
+   "fixture_sha256": "138c26d10634f78373974664735fda65766bfa9f716cb554223653c8edea4b72",
+   "name": "2026-02-16"
+  },
+  {
+   "expect": "private/backtests/2026-02-23_expect.json",
+   "expect_sha256": "47162430247c30f344839b337e2bf0e2a98c456cbcafac4544f05b9e631e073f",
+   "fixture": "private/backtests/2026-02-23_fixture.json",
+   "fixture_sha256": "d0d41d0d494546c25c167bec71d6330f153aa71a18f8bfaab073dbfd61efa277",
+   "name": "2026-02-23"
+  },
+  {
+   "expect": "private/backtests/2026-03-02_expect.json",
+   "expect_sha256": "32f502d4e389a8828ab69529e6fd9b6cb02c76feae4d1375d53acbf0483b53bb",
+   "fixture": "private/backtests/2026-03-02_fixture.json",
+   "fixture_sha256": "ebd1816a193dafdd6aef2109b691c53b3ab4446ef842ad7fa896111fb6c41907",
+   "name": "2026-03-02"
+  },
+  {
+   "expect": "private/backtests/2026-03-09_expect.json",
+   "expect_sha256": "e0195c7a10b6e99919094f690da343ecc4d8233013e2e564d952a8c6d127433e",
+   "fixture": "private/backtests/2026-03-09_fixture.json",
+   "fixture_sha256": "d47290dfbbadeea71b5d95980ad18b231166f6c5982101ec813aa8e6f29bfa97",
+   "name": "2026-03-09"
+  },
+  {
+   "expect": "private/backtests/2026-03-16_expect.json",
+   "expect_sha256": "085974e433451daf94424d328ef02f48566c4cd3215c75978ff2fa7a3d253078",
+   "fixture": "private/backtests/2026-03-16_fixture.json",
+   "fixture_sha256": "ba540b7f1e7f54bc1382683b8458e830f45bcf5268f18e72fcd26cd42f8ca420",
+   "name": "2026-03-16"
+  },
+  {
+   "expect": "private/backtests/2026-03-23_expect.json",
+   "expect_sha256": "fb8103bcc33c5a176f5011ab12021b4fb8780e249b125093dcbdecf3436f4977",
+   "fixture": "private/backtests/2026-03-23_fixture.json",
+   "fixture_sha256": "e17d06feb90d83869768a0ddb38e09f592de8b8feaf2aaf26e8770a7e41d0ed8",
+   "name": "2026-03-23"
+  },
+  {
+   "expect": "private/backtests/2026-03-30_expect.json",
+   "expect_sha256": "72d9d0342097c5915d3b9e755702f96b86b5026dc88e871f471dcdb521366f10",
+   "fixture": "private/backtests/2026-03-30_fixture.json",
+   "fixture_sha256": "487ac506d4ea95b8d983632d721f6e1f4889f4f741580652bc93b9f6d058d559",
+   "name": "2026-03-30"
+  },
+  {
+   "expect": "private/backtests/2026-04-06_expect.json",
+   "expect_sha256": "174836b81390461fa5fe9ff22a0011d3ab1d6f4b5a6dddb8366575b9532c291a",
+   "fixture": "private/backtests/2026-04-06_fixture.json",
+   "fixture_sha256": "f9df1c1728fadfce0fa59f61e20efd34aa924f71bde58d1532bedb9827a3bf53",
+   "name": "2026-04-06"
+  },
+  {
+   "expect": "private/backtests/2026-04-13_expect.json",
+   "expect_sha256": "ef36059bd65c7a4e2506334dcc5bfcc533938c2ced5a197de868f7c218a07107",
+   "fixture": "private/backtests/2026-04-13_fixture.json",
+   "fixture_sha256": "544f43354a9244fa7e0d9147a66bd8c3ea1fb22fb65aac3e9cb6ebc059706c51",
+   "name": "2026-04-13"
+  },
+  {
+   "expect": "private/backtests/2026-04-20_expect.json",
+   "expect_sha256": "45e16b11429470e9329f3503334c0ff2210c7c61c7aade3cb03c3f4879b38ccb",
+   "fixture": "private/backtests/2026-04-20_fixture.json",
+   "fixture_sha256": "08b71bb20d7c8214e8453316b674a3d1cfdee0c68b75a6f7abbe0541326663c2",
+   "name": "2026-04-20"
+  },
+  {
+   "expect": "private/backtests/2026-04-27_expect.json",
+   "expect_sha256": "8fce85e2114cc037d54889643dcd39d34a9bc6507dec87faae5270321c4e602c",
+   "fixture": "private/backtests/2026-04-27_fixture.json",
+   "fixture_sha256": "027715af350f77175cf7dad76d6612698ab0f55d5e8d7db7935d2ad6bba82734",
+   "name": "2026-04-27"
+  },
+  {
+   "expect": "private/backtests/2026-05-04_expect.json",
+   "expect_sha256": "acc2c0c85de6fc80744a8b6e4667e609f529799f8b8bba3d006c80b65cf2fd8f",
+   "fixture": "private/backtests/2026-05-04_fixture.json",
+   "fixture_sha256": "e68f8ee55d3175b6f67508deea0e513d344272e47efe4cd76155ae8d9f3feb08",
+   "name": "2026-05-04"
+  },
+  {
+   "expect": "private/backtests/2026-05-11_expect.json",
+   "expect_sha256": "d8655bbaad023685f8c2465a511d9cead26a736a676c2a36362645ffb1ce0e7f",
+   "fixture": "private/backtests/2026-05-11_fixture.json",
+   "fixture_sha256": "65fc3482bdff14cb92f9f85419ec3171c6a04eda19ddde46c8bc7eb3e8a74d0e",
+   "name": "2026-05-11"
+  },
+  {
+   "expect": "private/backtests/2026-05-18_expect.json",
+   "expect_sha256": "a4e00a1c8f909dc73a32c0ed0a8bb64bac55617c258fa5d56c7075d00ee14be7",
+   "fixture": "private/backtests/2026-05-18_fixture.json",
+   "fixture_sha256": "b941cece548b0bd45ad1ad44445d909292001b6ec859c65e4a6ce7595724e049",
+   "name": "2026-05-18"
+  },
+  {
+   "expect": "private/backtests/2026-05-25_expect.json",
+   "expect_sha256": "0d133ede58381a1f5f16c295da6e5c8af54fa5c5eb9956cfddeaefe2b8ec36b1",
+   "fixture": "private/backtests/2026-05-25_fixture.json",
+   "fixture_sha256": "6262f36ebc528fd6510a7a40c78127cbf7dfc255b13b4a95c61a83a2d52037b4",
+   "name": "2026-05-25"
+  },
+  {
+   "expect": "private/backtests/2026-06-01_expect.json",
+   "expect_sha256": "c59c98cfad1c73ade24901d97c9fb43be8e8cc285f8cc6e94ba2e94b8bde253e",
+   "fixture": "private/backtests/2026-06-01_fixture.json",
+   "fixture_sha256": "cd068090d799e60404154fcf47789b91d7b772eb4342114d39192ad30b66df11",
+   "name": "2026-06-01"
+  },
+  {
+   "expect": "private/backtests/2026-06-08_expect.json",
+   "expect_sha256": "239f16ff4e664c616ef5b0f50401ea1c10b685fcf871f1fb37f4d63dad6a1247",
+   "fixture": "private/backtests/2026-06-08_fixture.json",
+   "fixture_sha256": "aa277ff122cc2f251bfd4ec138ed91bb15274c9672234466e24c8e6f5791bb9d",
+   "name": "2026-06-08"
+  },
+  {
+   "expect": "private/backtests/2026-06-15_expect.json",
+   "expect_sha256": "feb0b9f27ffe1f9827d33d3c05ab3b7c34901bf50763342c02d9919299117402",
+   "fixture": "private/backtests/2026-06-15_fixture.json",
+   "fixture_sha256": "cdb6f95324cfbca9857f5d939469ba0d5c2cff7c758a95e6be7875ab1144856a",
+   "name": "2026-06-15"
+  },
+  {
+   "expect": "private/backtests/2026-06-22_expect.json",
+   "expect_sha256": "e73f0e2daa82e939bd01910448b6f0338251c3bc2899dd5e3a2579f897b37cb3",
+   "fixture": "private/backtests/2026-06-22_fixture.json",
+   "fixture_sha256": "fe564c6a25558675e2633975f778df59a7994531258a705815ffd77926c73f4a",
+   "name": "2026-06-22"
+  },
+  {
+   "expect": "private/backtests/2026-06-29_expect.json",
+   "expect_sha256": "9ceb58e8ff431df910cd6598ae00fa1dca2df73324bf22326ff117cd2771c086",
+   "fixture": "private/backtests/2026-06-29_fixture.json",
+   "fixture_sha256": "974cc5d1c1c5509a20bd3aca0f41923d4f2e735737f194eaa199254a21eae484",
+   "name": "2026-06-29"
+  },
+  {
+   "expect": "private/backtests/2026-07-06_expect.json",
+   "expect_sha256": "96b3c2e6da8d43512befe5288ab39aac4b57894287314871a9e49d48105ceb27",
+   "fixture": "private/backtests/2026-07-06_fixture.json",
+   "fixture_sha256": "86bbde9b86e74afebe6bc6c67ba7ba2945386bcc9a2a60cf48566b32205e653c",
+   "name": "2026-07-06"
+  },
+  {
+   "expect": "private/backtests/2026-07-13_expect.json",
+   "expect_sha256": "1116c37145cfc3e0aec029fe8a4a7239a800e2e16353f52dd42987687c61dd44",
+   "fixture": "private/backtests/2026-07-13_fixture.json",
+   "fixture_sha256": "01b9eeee9aa17ca151429c45b7e57ce799e903c9a6a0782b037566808ac83ccc",
+   "name": "2026-07-13"
+  },
+  {
+   "expect": "private/backtests/2026-07-20_expect.json",
+   "expect_sha256": "d25addae0088b977a7af23905e6b46627a397aeadf140c01caf7f51ab457a3c7",
+   "fixture": "private/backtests/2026-07-20_fixture.json",
+   "fixture_sha256": "7be82d98e5265f7be8a858a0e758e3194a5ab5dff794ba6e0dc9c6eb3f1a7e3f",
+   "name": "2026-07-20"
+  },
+  {
+   "expect": "private/backtests/2026-07-27_expect.json",
+   "expect_sha256": "f82ffedb9e96bbc737bca70bd4bbe947039c6243222e74cd6dc520eac92f1ef1",
+   "fixture": "private/backtests/2026-07-27_fixture.json",
+   "fixture_sha256": "c0be91807975b2c3d28f2d78c2a791d5512031fc80e7b9d9cf65d38684d20e9c",
+   "name": "2026-07-27"
+  },
+  {
+   "expect": "private/backtests/2026-08-03_expect.json",
+   "expect_sha256": "df322daa8298ed991c607ad5d4f0ed48865512757dfc2cf043d2b204de33d01d",
+   "fixture": "private/backtests/2026-08-03_fixture.json",
+   "fixture_sha256": "f02fc2f1f2f154cc6a7d5e7c73ae83b5c0fc6277176e52f4f3be6ea2096a1d17",
+   "name": "2026-08-03"
+  },
+  {
+   "expect": "private/backtests/2026-08-10_expect.json",
+   "expect_sha256": "83cf86a14756104a6a720ed7e40622375c44d040fe2e54f5bfc124669d5e7cc2",
+   "fixture": "private/backtests/2026-08-10_fixture.json",
+   "fixture_sha256": "b3d75cecc7c57d0480034fb0e6e21e4164bb2403cafb5ebe200d01df443ace93",
+   "name": "2026-08-10"
+  },
+  {
+   "expect": "private/backtests/2026-08-17_expect.json",
+   "expect_sha256": "3e1009d7d72423e54769866207c3a3733b8b45ea4d632f55ef169caa14781b8d",
+   "fixture": "private/backtests/2026-08-17_fixture.json",
+   "fixture_sha256": "f4cbdf643a67ccd93cfac43d6c3ad3ca88e399cdbd117536782ac1b07b1faf5b",
+   "name": "2026-08-17"
+  },
+  {
+   "expect": "private/backtests/2026-08-24_expect.json",
+   "expect_sha256": "e5953dc5dced51c8edc7a24d4f2a37c12863f21dad641f5081cdda1697f4f78c",
+   "fixture": "private/backtests/2026-08-24_fixture.json",
+   "fixture_sha256": "d7d56a6f349aa3c1aa90ef90af8935421dcb24ebd7d95bb1d48d7bffb9c39c7e",
+   "name": "2026-08-24"
+  },
+  {
+   "expect": "private/backtests/2026-08-31_expect.json",
+   "expect_sha256": "aca1d7d6ad9053d5d3676c8b157446178233284b690384f58071f7c41150899e",
+   "fixture": "private/backtests/2026-08-31_fixture.json",
+   "fixture_sha256": "cef85a0c8109a419dc1c7b55eec26e1d9ba29264d3d953b578d91f4601fdc49a",
+   "name": "2026-08-31"
+  },
+  {
+   "expect": "private/backtests/2026-09-07_expect.json",
+   "expect_sha256": "a618b700f66bc1fd515bcc121bf34111c11d33a4b8467a9a66d0d937c57b7867",
+   "fixture": "private/backtests/2026-09-07_fixture.json",
+   "fixture_sha256": "b2e445d842f304faf01dd5bd024e015e5429aca3a2c6650a4a200ac4f513812e",
+   "name": "2026-09-07"
+  },
+  {
+   "expect": "private/backtests/2026-09-14_expect.json",
+   "expect_sha256": "00ff74caeeee584da28840c016bc441febd59bf8a9e0fb5b010b91c56b8912cb",
+   "fixture": "private/backtests/2026-09-14_fixture.json",
+   "fixture_sha256": "ccc3ab7a3ce00683863989a17a280493f1aca77fe5c260e3989a64d1152dec66",
+   "name": "2026-09-14"
+  },
+  {
+   "expect": "private/backtests/2026-09-28_expect.json",
+   "expect_sha256": "4289205eabefb7ee06a2d8e00d171f5bf700697204c943bbad308d3dcda19c9c",
+   "fixture": "private/backtests/2026-09-28_fixture.json",
+   "fixture_sha256": "792616aee8ec01c63455a64cdea78f07929394e752c37b41b8626f2ec455d9fb",
+   "name": "2026-09-28"
+  },
+  {
+   "expect": "private/backtests/2026-10-05_expect.json",
+   "expect_sha256": "6b61a8b7c5f80f8b78e14826284388746738203fd257ff11c4db03c99ea2d09d",
+   "fixture": "private/backtests/2026-10-05_fixture.json",
+   "fixture_sha256": "4dc567b892f67d905783e49d2ec6061fbac08fb4a4bf9f564000c5893136fe11",
+   "name": "2026-10-05"
+  },
+  {
+   "expect": "private/backtests/2026-10-12_expect.json",
+   "expect_sha256": "ddd8ff95cee5bee206a6e5e13a461a67825cf715de6f4dce0a7831a355e0d3a6",
+   "fixture": "private/backtests/2026-10-12_fixture.json",
+   "fixture_sha256": "8d5c666f70ff7b7739de990924edf464d0febc5e34b5f77ee94388c39b7ccc88",
+   "name": "2026-10-12"
+  },
+  {
+   "expect": "private/backtests/2026-10-19_expect.json",
+   "expect_sha256": "d3c0df70e03a03f2fc72c2bb1c9522e9ed2a611cabd894953ad4efc908f51c29",
+   "fixture": "private/backtests/2026-10-19_fixture.json",
+   "fixture_sha256": "c9867ce54ffb63563e2c7037e7801a38e1f88ac4ae0584ab6cecbb0b0dd2ea9e",
+   "name": "2026-10-19"
+  },
+  {
+   "expect": "private/backtests/2026-10-26_expect.json",
+   "expect_sha256": "1d1615582e0e4b4766b34ba2daa9a8e00965e4ff875f384a659b3501571aa91c",
+   "fixture": "private/backtests/2026-10-26_fixture.json",
+   "fixture_sha256": "73f485160483419b693263777173972774b0e80e01f80973907d4d717c0ebfc3",
+   "name": "2026-10-26"
+  }
+ ],
+ "schema": 1
+}

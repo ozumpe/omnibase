@@ -444,6 +444,11 @@ def serve(
     _install_signal_handlers(stop)
     # The last open-PR line printed, so a hold says so once rather than every tick.
     last_line: list[str | None] = [None]
+    # develop as a running platform (OMNI-133): blue is develop's head before
+    # any merge this run observes; each observed merge is judged as green.
+    develop, develop_line = org.start_develop_platform(handles)
+    if develop_line:
+        print(develop_line, flush=True)
 
     def poll() -> Tick:
         econ = ray.get(ceo.economics.remote())  # read-only; no telemetry side effects
@@ -465,9 +470,19 @@ def serve(
                 # remembered for the next start (OMNI-126).
                 if seen["promoted"] or seen.get("released"):
                     held_by = None
+                    # Printed and logged either way, so a run's loop.log and
+                    # episodic log say what the human decided (OMNI-57, OMNI-185).
+                    print(f"[sis] PR {pending} was merged: promoted; cycles build on it"
+                          if seen["promoted"] else
+                          f"[sis] PR {pending} was {seen.get('reason')}: hold released",
+                          flush=True)
                     store = episodic.get_episodic_store()
-                    org.record_release(store, seen)   # a decline is logged (OMNI-57)
+                    org.record_decision(store, seen)
                     org.forget_pending_pr(store, pending)
+                    if develop is not None and (
+                            judged := org.apply_develop_judgment(handles, store, develop,
+                                                                 seen)):
+                        print(judged, flush=True)
             if held_by:
                 ray.get(workspace.emit.remote("loop.held_for_canary", version=held_by))
             elif not paused:
@@ -547,4 +562,6 @@ def serve(
         # After the stop summary, so the console log the runbook tees to
         # runtime/loop.log (OMNI-139) is uploaded with its last line in it.
         sync_artifacts(sync, workspace, final=True)
+        if develop is not None:
+            develop.close()
     return results

@@ -25,12 +25,13 @@ property, made structural rather than incidental.
 from __future__ import annotations
 
 import importlib.util
+import sys
 import types
 from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
 
-from sis.backtest import Backtest
+from sis.backtest import Backtest, BacktestSkill, check_skill, private_backtests
 from sis.invariant import DEFAULT_INVARIANT_EXAMPLES, Invariant
 from sis.paths import PROJECT_ROOT
 from sis.slo import DomainSLO
@@ -114,6 +115,11 @@ class Contract(Protocol):
     @property
     def backtests(self) -> tuple[Backtest, ...]:
         """Recorded episodes the candidate must reproduce."""
+        ...
+
+    @property
+    def skill(self) -> BacktestSkill | None:
+        """A baseline the candidate must beat on the held-out backtests, or None."""
         ...
 
     @property
@@ -267,6 +273,8 @@ class OptimizationContract:
     # (docs/OMNITRACK_VISION.md, Phases A/B); its first real fixtures arrive
     # with the first modelled target.
     backtests: tuple[Backtest, ...] = ()
+    # A baseline to beat on average over the held-out backtests (OMNI-163).
+    skill: BacktestSkill | None = None
     # Almost always DETERMINISTIC. A stochastic *optimisation* is a real cell in
     # the grid, though — "this Monte Carlo simulation is too slow" — which is
     # precisely why determinism is a field here rather than a third contract
@@ -325,6 +333,7 @@ class OptimizationContract:
                 f"{sorted({n for n in names if names.count(n) > 1})} — names identify a "
                 "fixture in the episodic log, so they have to be unique to be useful"
             )
+        check_skill(self.skill, self.backtests, contract=self.name, has_oracle=True)
 
     @property
     def slo(self) -> DomainSLO | None:
@@ -420,6 +429,9 @@ class FeatureContract:
     # backtest comparators, which take precedence over the shared library.
     oracle_path: str | None = None
     backtests: tuple[Backtest, ...] = ()
+    # A baseline to beat on average over the held-out backtests (OMNI-163): a
+    # forecast is judged against persistence, not only episode by episode.
+    skill: BacktestSkill | None = None
     determinism: Determinism = Determinism.DETERMINISTIC
     invariants: tuple[Invariant, ...] = ()
     # Mirrors ``diff_trials``' role: statistical power is a property of the
@@ -451,6 +463,8 @@ class FeatureContract:
                 f"contract {self.name!r} has duplicate backtest names: "
                 f"{sorted({n for n in names if names.count(n) > 1})}"
             )
+        check_skill(self.skill, self.backtests, contract=self.name,
+                    has_oracle=self.oracle_path is not None)
 
     def gate_profile(self) -> tuple[GateName, ...]:
         """The Class-2 profile: the right shape, the spec's cases, and history."""
@@ -568,10 +582,75 @@ CA_PRICE_PERSISTENCE = FeatureContract(
     ),
 )
 
+# The first gated omnitrack contract (OMNI-163): next week's California retail
+# price from the wholesale price, stocks and the season, and it must beat
+# persistence. Every held-out week from 2020 is an episode. Each must be within
+# 15%, a sanity bound only: both persistence and the spike's model miss the
+# autumn-2022 jump by about 12%, so no per-week tolerance separates them. What
+# does is the skill check, a mean absolute error at least 10% below
+# persistence's (the spike's model: 21% below, as of the fixture).
+#
+# The fixture shows the licensed LA spot price, so its episodes are private
+# (``specs/ca_price_wholesale/private/``, gitignored) and git holds their
+# digests in ``private.json``, which arrives with the human promotion.
+CA_PRICE_WHOLESALE_INDEX = "specs/ca_price_wholesale/private.json"
+
+
+def ca_price_wholesale(index: str = CA_PRICE_WHOLESALE_INDEX) -> FeatureContract:
+    """The ``ca_price_wholesale`` contract, judged on the episodes *index* lists."""
+    return FeatureContract(
+        name="ca_price_wholesale",
+        spec_ref="OMNI-163",
+        entry="predict_next_week",
+        entry_module="runtime/ca_price_wholesale.py",
+        acceptance_tests="specs/ca_price_wholesale/tests.py",
+        public_api=("predict_next_week",),
+        oracle_path="specs/ca_price_wholesale/oracle.py",
+        stub_candidate_path="runtime/candidates/ca_price_wholesale.py",
+        invariants=(
+            # Generated states have no spot price: a forecast must still come.
+            Invariant(name="plausible", strategy="fuel_scenario_states",
+                      check="plausible_price"),
+            Invariant(name="deterministic", strategy="fuel_scenario_states",
+                      check="deterministic"),
+        ),
+        backtests=private_backtests(index, tolerance=0.15),
+        skill=BacktestSkill(baseline="persistence", margin=0.10),
+    )
+
+
+def _promoted_wholesale() -> tuple[FeatureContract | None, str | None]:
+    """The wholesale contract if its index is promoted and sound, else why not.
+
+    Until ``private.json`` is in git there is nothing to judge it on, and a
+    skill check with no held-out episodes is refused at declaration, so it is
+    simply absent. An index that is there but malformed makes only this
+    contract unavailable, with the reason: this module is imported by the loop
+    and every role actor, so raising here stopped ``roman`` and ``sort`` too
+    (OMNI-176, L61). Choosing the contract then fails with the reason
+    (:data:`UNAVAILABLE`), before any spend.
+    """
+    if not (PROJECT_ROOT / CA_PRICE_WHOLESALE_INDEX).exists():
+        return None, None
+    try:
+        return ca_price_wholesale(), None
+    except ValueError as exc:
+        print(f"[sis] contract 'ca_price_wholesale' is unavailable: {exc}", file=sys.stderr)
+        return None, str(exc)
+
+
+CA_PRICE_WHOLESALE, _WHOLESALE_PROBLEM = _promoted_wholesale()
+
+# Contracts that are declared but cannot be judged now, with the reason: named
+# in the refusal when one is chosen, so it never reads as a typo.
+UNAVAILABLE: dict[str, str] = (
+    {"ca_price_wholesale": _WHOLESALE_PROBLEM} if _WHOLESALE_PROBLEM else {})
+
 # Kept apart from DEFAULT_CONTRACTS, which are the served (Class-1) targets:
 # the Serve canary, the load generator and ``serve_cloud`` need a reference
 # oracle and a benchmark, and a feature has neither.
-FEATURE_CONTRACTS: tuple[FeatureContract, ...] = (ROMAN, CA_PRICE_PERSISTENCE)
+FEATURE_CONTRACTS: tuple[FeatureContract, ...] = (
+    ROMAN, CA_PRICE_PERSISTENCE, *((CA_PRICE_WHOLESALE,) if CA_PRICE_WHOLESALE else ()))
 
 # Every contract the loop can run (OMNI-147): what ``bootstrap`` registers and
 # ``--contract`` selects from. The SWE builds a feature where it optimises a

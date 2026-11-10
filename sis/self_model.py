@@ -70,6 +70,10 @@ class SelfModel:
         # under, kept until its feature's PR opens: one story per feature, not
         # per cycle (OMNI-135).
         self._plans: dict[str, dict[str, Any]] = {}
+        # Feature branches given up because their review never approved them
+        # (OMNI-131). No PR was opened from them, so without this the next
+        # plan would resume one (OMNI-135) and review it all over again.
+        self._given_up: set[str] = set()
 
     # --- actor registry ---
     def register(self, name: str, role: str, parent: str | None = None) -> None:
@@ -106,6 +110,12 @@ class SelfModel:
             self._features.pop(contract_name, None)
         else:
             self._features[contract_name] = feature
+
+    def give_up_branch(self, branch: str) -> None:
+        self._given_up.add(branch)
+
+    def given_up_branches(self) -> list[str]:
+        return sorted(self._given_up)
 
     def plan(self, contract_name: str) -> dict[str, Any] | None:
         return self._plans.get(contract_name)

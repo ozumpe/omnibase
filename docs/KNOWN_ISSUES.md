@@ -42,25 +42,31 @@ reference with no link target below.
 > | H8 | [OMNI-153] (epic OMNI-43), found 2026-10-08 — **fixed** the same day |
 > | H9 | [OMNI-154] (epic OMNI-43), found 2026-10-08 — **fixed** the same day |
 > | M19 | [OMNI-49](https://olafzumpe.atlassian.net/browse/OMNI-49) (epic OMNI-44) — **fixed** (by refusal; isolation is H3) |
-> | M20, M21 | [OMNI-50](https://olafzumpe.atlassian.net/browse/OMNI-50) (epic OMNI-44) |
+> | M20, M21 | [OMNI-50](https://olafzumpe.atlassian.net/browse/OMNI-50) (epic OMNI-44) — **fixed** (2026-11-03) |
 > | M15 | [OMNI-51](https://olafzumpe.atlassian.net/browse/OMNI-51) — **fixed** |
 > | M12 | [OMNI-52](https://olafzumpe.atlassian.net/browse/OMNI-52) — **fixed** (2026-10-25) |
-> | M13 | [OMNI-53](https://olafzumpe.atlassian.net/browse/OMNI-53) |
+> | M13 | [OMNI-53](https://olafzumpe.atlassian.net/browse/OMNI-53) — **fixed** (2026-11-04) |
 > | M14 | [OMNI-54](https://olafzumpe.atlassian.net/browse/OMNI-54) — **fixed** (2026-10-15) |
 > | M16 (and L30) | [OMNI-55](https://olafzumpe.atlassian.net/browse/OMNI-55) — **fixed** (2026-10-08) |
 > | M17 | [OMNI-56](https://olafzumpe.atlassian.net/browse/OMNI-56) — **fixed** (2026-09-29) |
 > | M18 | [OMNI-57](https://olafzumpe.atlassian.net/browse/OMNI-57) — **fixed** (with OMNI-126) |
-> | M22 | [OMNI-58](https://olafzumpe.atlassian.net/browse/OMNI-58) — blocked by OMNI-51 |
-> | M23 | [OMNI-59](https://olafzumpe.atlassian.net/browse/OMNI-59) |
+> | M22 | [OMNI-58](https://olafzumpe.atlassian.net/browse/OMNI-58) — **fixed** (2026-11-05) |
+> | M23 | [OMNI-59](https://olafzumpe.atlassian.net/browse/OMNI-59) — **fixed** (2026-11-06) |
+> | M36 | [OMNI-200], from the weekly code review of 2026-11-09 (develop @ 165623f) — **fixed** (2026-11-09) |
 > | L21, L23 | [OMNI-61](https://olafzumpe.atlassian.net/browse/OMNI-61) (brake state fails closed; `sis.admin`) — **fixed** |
 > | L24 | [OMNI-62](https://olafzumpe.atlassian.net/browse/OMNI-62) (Notifier port) — **fixed** |
 > | M7 | [OMNI-88] — **won't fix** for now (label `wont-fix`); see the Won't fix section |
-> | L15–L20, L22, L25–L29, L31–L38, L40–L43 | one ticket each, [OMNI-64]–[OMNI-87], on each entry below (L15 and L33 **fixed** 2026-09-29, L34 2026-09-30, L19 2026-10-15, L17 and L18 2026-10-26, L25 2026-10-27, L16 2026-10-28, L37 2026-10-30). Each is linked (Relates) in Jira to the ticket it should ship with. |
+> | L15–L20, L22, L25–L29, L31–L38, L40–L43 | one ticket each, [OMNI-64]–[OMNI-87], on each entry below (L15 and L33 **fixed** 2026-09-29, L34 2026-09-30, L19 2026-10-15, L17 and L18 2026-10-26, L25 2026-10-27, L16 2026-10-28, L37 2026-10-30, L27 2026-10-31). Each is linked (Relates) in Jira to the ticket it should ship with. |
 > | L30 | [OMNI-55], with M16 — **fixed** (2026-10-08) |
 > | L39 | [OMNI-42] — **fixed** (2026-10-15, with OMNI-68) |
 > | L55, L57 | [OMNI-166], [OMNI-172], from the weekly code reviews of 2026-10-25 and 2026-10-26 |
-> | L58, L59 | [OMNI-141], [OMNI-174]: tests that failed once under `-n auto` |
+> | L58, L59, L69 | [OMNI-141], [OMNI-174], [OMNI-186]: tests that failed once under `-n auto` |
+> | L70 | [OMNI-187], from the weekly code review of 2026-11-02 (develop @ 7ae6654) — **fixed** (2026-11-07) |
+> | L71 | [OMNI-188]: a test that failed once on CI — **fixed** (2026-11-06) |
+> | L72 | [OMNI-185], from the weekly review of the scheduled AWS run of 2026-10-31 — **fixed** (2026-11-07) |
+> | L73 | [OMNI-201], from the weekly code review of 2026-11-09 (develop @ 165623f) — **fixed** (2026-11-09) |
 > | L60 | [OMNI-173] — **fixed** (2026-10-27) |
+> | L61–L68 | [OMNI-176]–[OMNI-183], one each, from the code and documentation review of 2026-10-31 (develop @ 83bb43c); its documentation findings were fixed with [OMNI-184] (L61 and L63 **fixed** 2026-11-01, L62 2026-11-02) |
 
 ## High
 
@@ -68,76 +74,7 @@ None open.
 
 ## Medium
 
-- [OMNI-53] **M13 — GitHub OAuth is never actually installed on the operator console;
-  the server runs unauthenticated** *(found 2026-09-26; reproduced against
-  the installed Panel version, without starting Ray)* — `_install_oauth`
-  (`sis/frontend.py`) only sets `pn.config.oauth_provider`/etc. and returns
-  `{}`; `serve()` calls `pn.serve(...)` without passing `oauth_provider=` as
-  an argument, and Panel's `get_server` only builds an auth provider when
-  that *argument* (not the `pn.config` attribute) is set. Reproduced: the
-  server's `auth_provider` comes back `NullAuth`, `sign_sessions=False`.
-  Browser requests are refused with a 403 (the `authorize` callback receives
-  `user_info=None` and raises on `.get`), but the Bokeh websocket path
-  accepts an unsigned session token without ever calling the authorize
-  callback, so a non-browser client can open a full session and save edits —
-  including, combined with M12, `forbidden_` ones. Mitigated today only by
-  the loopback-only bind (OMNI-29); this fails as soon as anything binds
-  `SIS_FRONTEND_BIND` beyond loopback believing OAuth protects it. Fix: pass
-  `oauth_provider`, `oauth_key`/`oauth_secret` and a `cookie_secret` to
-  `pn.serve`; enable signed sessions; add a test asserting the built server's
-  `auth_provider` is not `NullAuth`.
-
-- [OMNI-50] **M20 — The live canary's p95/p99 gate is close to a coin flip for targets
-  where dispatch overhead dominates compute** *(found 2026-09-26; simulated
-  through the real `evaluate_canary`)* — Gate 4 compares nearest-rank p95/p99
-  of two **unpaired** marginal latency arrays (~150 samples) at
-  `max_latency_ratio=1.0` with no allowance on p95 (only p99 got the #107
-  10% allowance). `tests/test_live_canary.py` already documents "there is no
-  candidate that reliably passes here." Simulated (lognormal σ=0.35, n=150,
-  2000 trials) through `evaluate_canary` itself: an equal-speed candidate is
-  rejected **~56%** of the time (mostly on p95); a candidate ~3% slower still
-  passes **~44%** of the time. Every false reject counts in full toward the
-  circuit breaker and files a bug. Fix: store paired `(blue, green)`
-  latencies per shadow sample (the router already has both in hand; it
-  throws the pairing away when it records each side separately) and decide
-  the way `gauntlet.benchmark_decision` does — a paired-bootstrap accept /
-  reject / inconclusive, inconclusive neutral.
-
-- [OMNI-50] **M21 — The live canary never judges error rate, and SHADOW mode drops any
-  pair where green failed** *(found 2026-09-26 from three independent
-  reviews; simulated through the real `evaluate_canary`)* — `_canary_live`
-  (`sis/roles.py`) discards both error counts that `live_window` returns;
-  `evaluate_canary` (`sis/canary.py`) has no error-rate parameter at all; and
-  `CanaryRouter.route` only records a `LiveSample` when *both* sides
-  succeeded, so a request where green raised never reaches the agreement
-  gate (survivorship bias) — yet green's failed calls still land in its
-  latency array, and because failures return fast, they pull green's
-  percentiles *down*. Simulated: 105 paired samples plus 45 fast green
-  errors (dropped from pairing, counted in latency) still returns
-  `passed=True`. The evidence floor (`min(100, 150)=100`) leaves room for up
-  to a third of live traffic to fail on green and still certify it. Fix:
-  pass both error counts into `evaluate_canary` and reject when green's error
-  rate exceeds blue's; in SHADOW, record a blue-ok/green-error pair as a
-  disagreement rather than dropping it.
-
-- [OMNI-58] **M22 — The Serve baseline (blue) is the local target file, not the merged
-  base, and reverts to it whenever `ServeCloud` is rebuilt** *(found
-  2026-09-26; confirmed by reading the code)* — unlike the offline gauntlet
-  (fixed under H1 to benchmark against `live_target_source()`), the Serve
-  canary's blue deployment is seeded from the local `runtime/*.py` file, so a
-  rebuilt `ServeCloud` (e.g. after a DevOps restart) can silently regress
-  blue to stale code. Fix: seed blue from `live_target_source()` too.
-
-- [OMNI-59] **M23 — The test suite inherits real `SIS_*` environment variables from the
-  developer's shell** *(found 2026-09-26; confirmed by reading
-  `tests/conftest.py`)* — nothing clears `SIS_*`/adapter-credential
-  variables before the suite runs, so a shell configured for a real run
-  (real adapters, the real Claude proposer, or the real episodic store)
-  silently changes what `pytest` exercises, with no visible signal that it
-  happened. Fix: snapshot and clear the relevant env vars in a session-scoped
-  autouse fixture, with an explicit opt-in fixture for the handful of tests
-  that intentionally want a real backend.
-
+None open.
 
 ## Low
 
@@ -151,10 +88,6 @@ None open.
   PR as part of recording the rejected outcome.
 - [OMNI-72] **L26** — A live-canary rejection files two bugs for the same event. Fix:
   file one.
-- [OMNI-73] **L27** — `episodic.gate_from_reason` matches `"timed out"`/`"timeout"`
-  anywhere in the reject reason, including text a candidate itself printed,
-  so a counted correctness failure can be mislabelled as an infrastructure
-  timeout. Fix: match only the harness's own timeout sentinel.
 - [OMNI-74] **L28** — Candidate return values are unpickled by value inside the
   (unscrubbed) router and DevOps processes during a live canary — a second,
   more roundabout way for candidate code to run outside any sandbox, lower
@@ -274,15 +207,192 @@ None open.
   cluster, and the suite runs with `episodic.store=none`. The suspect, not
   proven, is a sandboxed gate timing out under heavy load in the first cycle.
   Next time it fails, keep the assertion's `reason` before changing anything.
+- [OMNI-186] **L69** — Four `tests/test_merge_observation.py` tests that run
+  a real `sum_of_divisors` cycle came out `inconclusive` together in one full
+  `pytest -n auto` run *(seen 2026-11-01, on a 4-CPU box with a load average
+  of 11)*: `test_a_real_cycle_reaches_promotion`,
+  `test_a_restart_waits_for_the_last_runs_pr`,
+  `test_a_pr_merged_offline_is_promoted_at_startup` and
+  `test_a_pr_declined_offline_is_released_and_logged`. The file passed alone
+  and the suite passed on a re-run. The suspect, not proven, is L58's: under
+  oversubscription the benchmark's interval widens past the margin. These
+  tests are about merge observation, not timing. Next time, keep the cycle's
+  `reason` (ratio and interval) before changing anything.
+- [OMNI-179] **L64** — `gauntlet._attribute` still treats `"timed out"`
+  anywhere in a reason as a timeout *(found 2026-10-31 by code review; L27's
+  other half)*. L27 made `episodic.gate_from_reason` match only the harness's
+  own words (`_HARNESS_TIMEOUT`); `_attribute` still tests the substring, so a
+  failure quoting the candidate's `ReadTimeout: timed out` skips the
+  probe-before-blame self-check (OMNI-37). The candidate is blamed either way
+  and gains nothing, but a broken sandbox goes unnoticed on that path. Fix:
+  one classifier both modules use, with a test.
+- [OMNI-180] **L65** — A backtest fixture that is not UTF-8 is reported as a
+  generic gate error *(found 2026-10-31 by code review)*. Since OMNI-163,
+  `_gate_backtest` decodes the bytes it digested before its `try`, so a
+  `UnicodeDecodeError` no longer becomes `harness: backtest '<name>' has a
+  malformed fixture` but `harness: the backtest gate raised (...)`, naming
+  neither the backtest nor the file. Still a harness verdict. Fix: decode
+  inside the `try`.
+- [OMNI-181] **L66** — `scripts/aws_secret.py`'s `check_anthropic_key` ends
+  in a traceback when the connection drops mid-response *(found 2026-10-31 by
+  code review)*. It catches `URLError` and `TimeoutError`;
+  `http.client.RemoteDisconnected` and `ConnectionResetError` escape. Nothing
+  is uploaded either way. Fix: catch `OSError` and
+  `http.client.HTTPException`.
+- [OMNI-182] **L67** — An error in the proposal cut-off handler is blamed on
+  the proposer *(found 2026-10-31 by code review; OMNI-175's follow-up)*.
+  `SWE._implement` sets `paid["proposing"]` before `proposer.propose()` and
+  clears it only on success, so if the Workspace call inside the
+  `ProposalCutOff` branch raises, the error reads "in the proposer, while
+  asking for the proposal". Only the label is wrong; cost and breaker count
+  are kept. Fix: scope the flag to the `propose()` call itself.
+- [OMNI-183] **L68** — Three small cleanups from OMNI-163 *(found 2026-10-31
+  by code review; nothing wrong today)*: three sha256 helpers for one
+  integrity check (`gauntlet.py` hashes inline beside its own `_digest`;
+  `fixture_builder._digest`, `contract_author._sha256`); `last` stated in both
+  `Question` and `Fixture` in `scripts/build_fixture.py`, with a placeholder
+  `2020-01-06` that is always overwritten; and `private_backtests(root=)`,
+  which no caller passes and the gate ignores, while its docstring says
+  *index* is repo-relative and a test passes an absolute path.
 
 ## Resolved (Low)
+
+- [OMNI-201] **L73** — `prediction_error.score` crashed on a predictor answer
+  too large for a float *(found 2026-11-09 by the weekly code review, develop
+  @ 165623f)*. It checked an answer with `math.isfinite`, which raises
+  `OverflowError` on an int beyond a float's range; JSON carries such an int
+  and the sandbox worker decodes it as one. A predictor (a SOFT target)
+  answering `10**400` for one week lost the whole report, in
+  `scripts/prediction_error.py` and the twin viewer, instead of that week's
+  step; under Phase B it would crash the monitor that decides whether to start
+  a cycle. The note also printed the answer with `str()`, which raises
+  `ValueError` past 4300 digits. The backtest harness's `_number` had the same
+  expression; a candidate could not reach it (the comparator runs first), but
+  the baseline could. **Fixed 2026-11-09 (OMNI-201):** `score` converts an
+  answer with `float()` inside a try (`prediction_error._finite`), so an int
+  outside a float's range is "not a number" for its step, and a huge int is
+  named by its size in the note (`_shown`). The backtest harness's `_number`
+  treats it as not a number, so a baseline returning one is the harness fault
+  it already was for a string. Regression tests: `10**400`, `-10**400` and
+  `10**5000` as answers (`tests/test_prediction_error.py`), and a baseline
+  returning `10**400` (`tests/test_backtest.py`).
+
+- [OMNI-185] **L72** — a PR merged while `--loop` ran left no trace in
+  `loop.log` or the episodic log *(seen in the scheduled AWS run
+  `runs/20261031-0806/`)*: testrun PR 23 was evidently merged, since the hold
+  released and the next plan started from a faster baseline, but nothing said
+  so. `loop.serve`'s merge watch called `org.record_release`, which logs only
+  a decline (OMNI-57), and printed nothing; the SelfModel's `promote` record
+  died with the box. **Fixed 2026-11-07 (OMNI-185)**: `org.record_decision`
+  logs a merge as `human_merged` (proposer `human`, no cost, not an accepted
+  outcome, because the cycle that opened the PR counted the improvement) on
+  all three paths that observe one (the live watch, a restart, the open-PR
+  check), `DevOps.observe_merge` reports the merged PR's contract as a
+  release does, and the live watch prints the merge or release line.
+- [OMNI-187] **L70** — `sis/fixture_builder.build` wrote a public fixture
+  (`private=False`) from whatever series `question.inputs` named, and from
+  every series in the trace when it named none. It never asked whether a
+  series may be redistributed, so the Los Angeles spot price (Thomson Reuters'
+  data under licence to EIA, `redistributable=False`) stayed out of `specs/`
+  only because `scripts/build_fixture.py` named `EIA_PUBLIC_SERIES` for the
+  public fixture: a caller's convention, not a guardrail. A new entry there
+  with the default `inputs=None`, over a calendar that covers the spot price,
+  staged its values for promotion into a public repo, and nothing failed.
+  **Fixed 2026-11-07 (OMNI-187)**: `SourceRules` names its `licensed` series
+  (each must be declared), `EIA_RULES` names the spot price, and a public
+  `build()` refuses a question that shows one, named or by default, with
+  "build it private". The rule now lives in the POLICY-FORBIDDEN module that
+  writes the exam's inputs.
+- [OMNI-188] **L71** — `scripts/aws_scheduled_run.tail_commands` trusted
+  `awk`'s `substr` and `tail -c` on a pipe to keep its output under the 24,000
+  characters SSM keeps *(seen 2026-11-05 on CI, PR #214)*.
+  `test_a_long_status_line_is_cut_and_the_output_stays_under_ssms_limit` got
+  24,393 characters where 20,357 are expected; the re-run on the same commit
+  passed, and 300 runs locally, then 1,200 more under load, gave 20,357 every
+  time. The cause was not found. On the box, output past the limit is cut
+  from the end, so the newest log lines, which `summary_lines` reports, are
+  the ones lost. **Fixed 2026-11-06 (OMNI-188)** by bounding each part by
+  construction instead of finding the culprit: the status lines go through
+  `cut -b` and `head -n` (at most 6 × 301 characters), and the tail is read
+  from a snapshot of the run's part with POSIX `dd`, at an offset worked out
+  from its size, then capped by `head -c`. A test fakes a `tail` that ignores
+  its count and an `awk` that ignores `substr`, and the output still fits,
+  status lines first and whole and the newest 20,000 bytes last.
+- [OMNI-177] **L62** — The AWS box never fetches `ca_price_wholesale`'s
+  private fixtures *(found 2026-10-31 by code review; latent until
+  `private.json` is promoted)*. `specs/ca_price_wholesale/private/` is
+  gitignored and kept in the artifacts bucket (OMNI-163), and
+  `docs/SENSOR_RUNBOOK.md` says to sync it back on another machine. Neither
+  `docs/AWS_RUN.md`, the bootstrap nor `scripts/aws_scheduled_run.py` does.
+  A box cloned from a tag with `private.json` registers the contract, and
+  every `--contract ca_price_wholesale` cycle fails as `harness: ...
+  references a missing file`, which counts toward the breaker and pages.
+  Fix: add the sync to the runbook and the scheduled run in the PR that
+  promotes `private.json`, and check both principals may read that prefix. **Fixed
+  2026-11-02 (OMNI-177):** the scheduled run's box-side script
+  (`aws_scheduled_run.private_fixture_lines`), when the run's contract has a
+  committed `specs/<contract>/private.json`, syncs `private/` from the
+  artifacts bucket and checks every listed file against its sha256 before the
+  key is read, the preflight or the loop. A missing bucket name, a failed
+  sync, or a missing or changed file ends the run with "nothing was spent";
+  the messages name files, never their contents. `docs/AWS_RUN.md` step 5a
+  has the same two commands for a run by hand. The instance role already
+  reads the whole bucket, and the scheduled-run principal needs nothing,
+  since the box does the fetch.
+- [OMNI-176] **L61** — A malformed `private.json` stops the loop and every
+  role actor, not just its contract *(found 2026-10-31 by code review;
+  latent: no `private.json` is committed yet)*. `sis/contract.py` builds
+  `CA_PRICE_WHOLESALE` at import, as soon as
+  `specs/ca_price_wholesale/private.json` exists, and
+  `backtest.private_backtests` reads each episode's keys unchecked. A missing
+  key, a non-dict episode or a truncated file raises `KeyError`, `TypeError`
+  or `JSONDecodeError` (a wrong schema raises `ValueError`), and any of them
+  stops `import sis.contract`: `main.py`, `sis.org`, `sis.roles` and
+  `sis.gauntlet` fail, so `roman` and `sort` cannot run either. `sis.admin`
+  and the console do not import it, so pausing still works. Fix: validate the
+  index and raise `ValueError` naming the file and episode; decide whether a
+  bad index should disable only that contract, loudly. **Fixed 2026-11-01
+  (OMNI-176):** `private_backtests` checks each episode and raises a
+  `ValueError` naming the index and the episode, for unreadable JSON too. A
+  bad index makes only `ca_price_wholesale` unavailable: `sis.contract`
+  prints why at import, `contract.UNAVAILABLE` keeps the reason, and choosing
+  the contract fails with it before any spend. The other contracts run. No
+  page is sent from an import; the refusal stops the run that asked for it.
+- [OMNI-178] **L63** — The default `ca_price_wholesale` build is refused on a
+  trace captured after the release calendar ends *(found 2026-10-31 by code
+  review)*. Without `--last`, `scripts/build_fixture.py` asks up to the
+  trace's newest week. `eia_release_calendar_2018_2026.json` ends with the
+  periods of 2026-10-23 (stocks), 2026-10-26 (retail) and 2026-10-27 (spot),
+  and every box backfills its first capture as `reconstructed`, which
+  `fixture_builder._adjusted` refuses outside the calendar. So the documented
+  command fails on any trace captured after about 2026-10-28. It fails closed
+  with a clear reason. Fix: cap the default at the calendar's coverage and say
+  so, or document `--last`. **Fixed
+  2026-11-01 (OMNI-178):** without `--last`, the build stops at the last week
+  whose every reconstructed value the calendar covers, and prints that week,
+  where the calendar ends and how far the trace goes. A gap inside the
+  calendar, a series it does not list, or an explicit `--last` past its end
+  is still refused.
+- [OMNI-73] **L27** — `episodic.gate_from_reason` matches `"timed out"`/`"timeout"`
+  anywhere in the reject reason, including text a candidate itself printed,
+  so a counted correctness failure can be mislabelled as an infrastructure
+  timeout. Fix: match only the harness's own timeout sentinel. **Fixed
+  2026-10-31 (OMNI-73):** only a reason that starts with the harness's own
+  words is a timeout (`<gate> gate timed out`, `gauntlet sandbox timed out`).
+  It mattered beyond the analytics: `feature.with_rejection` treats a timeout
+  as not the candidate's doing, so a candidate whose failure said "timed out"
+  was not remembered, and the same code would be judged and billed again
+  (L46). Regression tests in `tests/test_episodic.py` and
+  `tests/test_feature.py` fail without the fix.
 
 - [OMNI-82] **L37** — `scripts/check_connections.py` doesn't preflight the Anthropic
   API key/model; a bad `SIS_LLM_MODEL` or key only fails inside
   `SWE.implement`, after Jira/Confluence artifacts already exist for the
   cycle. Fix: add an Anthropic check to `--deep`. **Fixed 2026-10-30 (OMNI-82):** the
   scheduled run of 2026-10-29 (`runs/20261029-1457/`) did start with a key
-  the API rejected, and all three cycles failed (OMNI-175). The preflight
+  the API rejected, and all three cycles failed, labelled as errors "after
+  the proposal" although no proposal came back (OMNI-175: now "in the
+  proposer, while asking for the proposal"). The preflight
   now checks a real proposer's key and model with `LLMClient.check`
   (`GET /v1/models/{model}`, free, read-only), without `--deep` too, so the
   scheduled runner stops before any spend. A stub proposer skips it.
@@ -680,6 +790,84 @@ any long-lived cluster exists.
 
 ## Resolved
 
+- [OMNI-200] **M36 — develop blue/green judged the PR's head file, not what
+  `develop` serves after the merge** *(found 2026-11-09 by the weekly code
+  review, develop @ 165623f; same class as M22)* — `org.apply_develop_judgment`
+  took green's source from `Workspace.get_pr(pr, path).artifact`, which the
+  GitHub adapter reads at the PR's **head branch**, while blue starts from the
+  merged base. Two failures followed. A head branch deleted on merge (GitHub's
+  "automatically delete head branches", or a person) reads as `""`;
+  `DevelopPlatform.judge` deployed it, the worker reported that it exports
+  nothing, and `judge` called that "green did not start", green's fault: every
+  good merge earned a revert PR against `develop` and a CRITICAL page. And a
+  merge that differs from the head (another merge first, a resolved conflict,
+  an edited squash) was judged on code `develop` does not serve; on a pass
+  that code became blue's source, so a later revert PR could put back content
+  `develop` never had and undo another merged change.
+  **Fixed 2026-11-09 (OMNI-200):** green is the target as merged on the base
+  branch (`Workspace.live_target_source`, `org._merged_green_source`), the
+  rule `serve_cloud.baseline_source` follows for Serve's blue (OMNI-58); only
+  a backend with no base branch to read (the in-memory adapter) falls back to
+  the PR's file. The `develop.*` provenance record names which (`source`:
+  `merged_base` or `pr_head`). Nothing to read on either side, or a source
+  that is empty or blank, is a harness fault (`develop_unjudged`, no revert
+  PR, a page): `DevelopPlatform.judge` refuses an empty source itself.
+  Regression tests (`tests/test_develop_platform.py`): a merge that differs
+  from the head, a deleted head branch, nothing to read, the in-memory
+  fallback, and an empty source given to the platform.
+
+- [OMNI-50] **M20 — The live canary's p95/p99 gate is close to a coin flip for targets
+  where dispatch overhead dominates compute** *(found 2026-09-26; simulated
+  through the real `evaluate_canary`)* — Gate 4 compares nearest-rank p95/p99
+  of two **unpaired** marginal latency arrays (~150 samples) at
+  `max_latency_ratio=1.0` with no allowance on p95 (only p99 got the #107
+  10% allowance). `tests/test_live_canary.py` already documents "there is no
+  candidate that reliably passes here." Simulated (lognormal σ=0.35, n=150,
+  2000 trials) through `evaluate_canary` itself: an equal-speed candidate is
+  rejected **~56%** of the time (mostly on p95); a candidate ~3% slower still
+  passes **~44%** of the time. Every false reject counts in full toward the
+  circuit breaker and files a bug. Fix: store paired `(blue, green)`
+  latencies per shadow sample (the router already has both in hand; it
+  throws the pairing away when it records each side separately) and decide
+  the way `gauntlet.benchmark_decision` does — a paired-bootstrap accept /
+  reject / inconclusive, inconclusive neutral. **Fixed 2026-11-03
+  (OMNI-50):** the router records blue's and green's latency on each shadow
+  sample, and `evaluate_canary` decides a paired window with
+  `gauntlet.benchmark_decision` on total cost against `max_latency_ratio ×
+  (1 + latency_tolerance)` (default 1.10), 90% interval: pass, fail, or
+  inconclusive, which DevOps retires without a bug and `run_cycle` records as
+  the neutral `inconclusive`. On M20's simulation (200 windows) an
+  equal-speed candidate is now rejected in under 5% (about 2%), about a
+  quarter inconclusive; a 30%-slower one is always rejected
+  (`tests/test_canary.py`, which also pins the old rule at over 40% on the
+  same windows). `develop`'s blue/green (OMNI-133) decides on its per-exchange
+  pairs the same way; an inconclusive interval there is "not judged". An
+  unpaired SPLIT window keeps the percentile rule.
+
+- [OMNI-50] **M21 — The live canary never judges error rate, and SHADOW mode drops any
+  pair where green failed** *(found 2026-09-26 from three independent
+  reviews; simulated through the real `evaluate_canary`)* — `_canary_live`
+  (`sis/roles.py`) discards both error counts that `live_window` returns;
+  `evaluate_canary` (`sis/canary.py`) has no error-rate parameter at all; and
+  `CanaryRouter.route` only records a `LiveSample` when *both* sides
+  succeeded, so a request where green raised never reaches the agreement
+  gate (survivorship bias) — yet green's failed calls still land in its
+  latency array, and because failures return fast, they pull green's
+  percentiles *down*. Simulated: 105 paired samples plus 45 fast green
+  errors (dropped from pairing, counted in latency) still returns
+  `passed=True`. The evidence floor (`min(100, 150)=100`) leaves room for up
+  to a third of live traffic to fail on green and still certify it. Fix:
+  pass both error counts into `evaluate_canary` and reject when green's error
+  rate exceeds blue's; in SHADOW, record a blue-ok/green-error pair as a
+  disagreement rather than dropping it. **Fixed 2026-11-03 (OMNI-50):**
+  `_judge_live` passes both counts; `evaluate_canary` rejects when green's
+  error rate exceeds blue's (`live error rate: ...`, episodic gate
+  `canary_errors`), before any other judgment of green; the router records a
+  request blue answered and green failed as a sample with `candidate_error`,
+  which the agreement gate counts as a disagreement and the latency pairs
+  leave out. M21's simulation (105 pairs plus 45 fast green errors) is
+  rejected.
+
 - [OMNI-48] **H3 — A Serve-canary candidate runs as a full Ray control-plane worker, not
   in any sandbox** *(found 2026-09-26 by a multi-dimension review; confirmed by
   two independent skeptics reading the code, not run against a live cluster)* —
@@ -720,6 +908,36 @@ any long-lived cluster exists.
   sandbox mode is what the replica uses after the scrub. The M19 refusal still
   stands; lifting it is a separate decision.
 
+- [OMNI-53] **M13 — GitHub OAuth is never actually installed on the operator console;
+  the server runs unauthenticated** *(found 2026-09-26; reproduced against
+  the installed Panel version, without starting Ray)* — `_install_oauth`
+  (`sis/frontend.py`) only sets `pn.config.oauth_provider`/etc. and returns
+  `{}`; `serve()` calls `pn.serve(...)` without passing `oauth_provider=` as
+  an argument, and Panel's `get_server` only builds an auth provider when
+  that *argument* (not the `pn.config` attribute) is set. Reproduced: the
+  server's `auth_provider` comes back `NullAuth`, `sign_sessions=False`.
+  Browser requests are refused with a 403 (the `authorize` callback receives
+  `user_info=None` and raises on `.get`), but the Bokeh websocket path
+  accepts an unsigned session token without ever calling the authorize
+  callback, so a non-browser client can open a full session and save edits —
+  including, combined with M12, `forbidden_` ones. Mitigated today only by
+  the loopback-only bind (OMNI-29); this fails as soon as anything binds
+  `SIS_FRONTEND_BIND` beyond loopback believing OAuth protects it. Fix: pass
+  `oauth_provider`, `oauth_key`/`oauth_secret` and a `cookie_secret` to
+  `pn.serve`; enable signed sessions; add a test asserting the built server's
+  `auth_provider` is not `NullAuth`. **Fixed 2026-11-04 (OMNI-53):**
+  `frontend.server_options` passes `oauth_provider`, `oauth_key`,
+  `oauth_secret`, a `cookie_secret` (the configured one, or generated per
+  process), a per-process `oauth_encryption_key`, and `sign_sessions=True`
+  with a per-process `secret_key` to `pn.serve`. The authorize callback
+  (`frontend.authorize_login`) refuses `user_info=None` instead of raising.
+  Inside the session, `frontend.session_refusal` checks the signed-in user
+  against the allowlist again when the page is built (the twin viewer's
+  too) and before every save. Tests build the server and assert it is not
+  `NullAuth` and signs sessions, that an unsigned token fails the websocket's
+  signature check, and that a session with no authorized user never reaches
+  `save_edits`. Not yet exercised against a real GitHub OAuth app.
+
 - [OMNI-171] **M35 — A scheduled AWS run lost track of its loop once the run's log passed
   20 KB** *(found 2026-10-26 by the weekly code review; reproduced on
   `develop` @ 88aaaae)* — `scripts/aws_scheduled_run.py` polled the box with
@@ -757,6 +975,44 @@ any long-lived cluster exists.
   `.`, `..`, `a/b`, an empty name and a mismatched name are refused by
   `load_staged`, by `promote` and on the command line, and fail without the fix.
 
+- [OMNI-59] **M23 — The test suite inherits real `SIS_*` environment variables from the
+  developer's shell** *(found 2026-09-26; confirmed by reading
+  `tests/conftest.py`)* — nothing clears `SIS_*`/adapter-credential
+  variables before the suite runs, so a shell configured for a real run
+  (real adapters, the real Claude proposer, or the real episodic store)
+  silently changes what `pytest` exercises, with no visible signal that it
+  happened. Fix: snapshot and clear the relevant env vars in a session-scoped
+  autouse fixture, with an explicit opt-in fixture for the handful of tests
+  that intentionally want a real backend.
+  **Fixed 2026-11-06 (OMNI-59):** `tests/conftest.py` removes every `SIS_*`
+  variable, `ANTHROPIC_API_KEY` and the AWS credentials (`AWS_ACCESS_KEY_ID`,
+  `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_PROFILE`) when it is
+  imported, before any test module and so before any Ray actor exists. The
+  run's header names what it ignored, never the values. A test that means to
+  reach a real backend asks for the `real_env` fixture, which puts them back
+  for that test in its own process. Regression tests
+  (`tests/test_env_isolation.py`): the scrub itself, and a pytest started from
+  a shell with `SIS_ADAPTERS=real`, `SIS_PROPOSER=claude` and a key exported
+  that still runs on the in-memory adapters and the stub proposer.
+
+- [OMNI-58] **M22 — The Serve baseline (blue) is the local target file, not the merged
+  base, and reverts to it whenever `ServeCloud` is rebuilt** *(found
+  2026-09-26; confirmed by reading the code)* — unlike the offline gauntlet
+  (fixed under H1 to benchmark against `live_target_source()`), the Serve
+  canary's blue deployment is seeded from the local `runtime/*.py` file, so a
+  rebuilt `ServeCloud` (e.g. after a DevOps restart) can silently regress
+  blue to stale code. Fix: seed blue from `live_target_source()` too.
+  **Fixed 2026-11-05 (OMNI-58):** `ServeCloud.serve_blue()` without a
+  `source` serves the target as merged on the base branch, and the local file
+  only when nothing is merged there (`serve_cloud.baseline_source`, the same
+  rule the SWE and QA use for the offline baseline). `DevOps._cloud_for`
+  builds its `ServeCloud` with a reader of `Workspace.live_target_source`, so
+  a rebuild after a restart serves what a human merged. The
+  `serve.blue_deployed` event names where blue came from (`merged_base`,
+  `local_file` or `given`). Regression tests (`tests/test_serve_cloud.py`): the
+  rule itself, a rebuilt `ServeCloud` that reads the merged source, and a live
+  deployment whose blue answers with it.
+
 - [OMNI-170] **M34 — The prediction-error report could show a predictor the week it is
   scored on** *(found 2026-10-26 by the weekly code review; reproduced on
   `develop` @ 88aaaae)* — `prediction_error.questions()` asks each week at the
@@ -787,7 +1043,12 @@ any long-lived cluster exists.
   *first* vintage of the predicted week is known by then, which also covers
   the old check. Regression test: a late release plus a revision refuses the
   build, and fails without the fix; on schedule, the revision builds and no
-  input shows the predicted week.
+  input shows the predicted week. **Since 2026-11-02 (OMNI-163)** such a week
+  is skipped and listed in the README instead of refusing the build, since the
+  2020–2026 record has two catch-up releases (2022-06-27, 2026-09-21) with no
+  honest question; a build with every week skipped still refuses. The
+  regression test now asserts the week is skipped and no episode shows the
+  week it predicts.
 
 - [OMNI-52] **M12 — A `soft_` operator config edit can rewrite `forbidden_` keys through
   unescaped YAML rendering** *(found 2026-09-26; reproduced end to end
@@ -2042,3 +2303,18 @@ any long-lived cluster exists.
 [OMNI-172]: https://olafzumpe.atlassian.net/browse/OMNI-172
 [OMNI-173]: https://olafzumpe.atlassian.net/browse/OMNI-173
 [OMNI-174]: https://olafzumpe.atlassian.net/browse/OMNI-174
+[OMNI-176]: https://olafzumpe.atlassian.net/browse/OMNI-176
+[OMNI-177]: https://olafzumpe.atlassian.net/browse/OMNI-177
+[OMNI-178]: https://olafzumpe.atlassian.net/browse/OMNI-178
+[OMNI-179]: https://olafzumpe.atlassian.net/browse/OMNI-179
+[OMNI-180]: https://olafzumpe.atlassian.net/browse/OMNI-180
+[OMNI-181]: https://olafzumpe.atlassian.net/browse/OMNI-181
+[OMNI-182]: https://olafzumpe.atlassian.net/browse/OMNI-182
+[OMNI-183]: https://olafzumpe.atlassian.net/browse/OMNI-183
+[OMNI-184]: https://olafzumpe.atlassian.net/browse/OMNI-184
+[OMNI-185]: https://olafzumpe.atlassian.net/browse/OMNI-185
+[OMNI-186]: https://olafzumpe.atlassian.net/browse/OMNI-186
+[OMNI-187]: https://olafzumpe.atlassian.net/browse/OMNI-187
+[OMNI-188]: https://olafzumpe.atlassian.net/browse/OMNI-188
+[OMNI-200]: https://olafzumpe.atlassian.net/browse/OMNI-200
+[OMNI-201]: https://olafzumpe.atlassian.net/browse/OMNI-201

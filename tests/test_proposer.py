@@ -179,3 +179,28 @@ def test_an_answer_cut_off_at_the_token_limit_is_not_judged(monkeypatch) -> None
         proposer.propose("def sum_of_divisors(n: int) -> int: ...", 0.001)
     assert proposer.last_cost_usd() == 0.25, "the call's cost still counts"
     assert gate_from_reason("proposer: the m answer stopped at the token limit") == "proposer"
+
+
+def test_the_build_prompt_states_the_backtest_bar() -> None:
+    # A real proposer was told only that episodes were held out, not what it
+    # had to clear on them: within 15% each, and 10% below persistence's mean
+    # error over all of them (OMNI-163). It aimed at the wrong target.
+    from sis.backtest import Backtest, BacktestSkill
+    from sis.contract import ROMAN
+
+    spec = replace(
+        ROMAN, oracle_path="specs/ca_price_wholesale/oracle.py", invariants=(),
+        backtests=(Backtest(name="2022-09-26", fixture="specs/x/private/secret.json",
+                            expect="specs/x/private/secret_expect.json", tolerance=0.15),),
+        skill=BacktestSkill(baseline="persistence", margin=0.10))
+    prompt = proposer._build_prompt("", spec)
+    assert "each answer within 15% of the recorded value" in prompt
+    assert "at least 10% below that of the baseline `persistence`" in prompt
+    assert "def persistence" in prompt, "the baseline it must beat is shown"
+    assert "secret" not in prompt and "2022-09-26" not in prompt
+
+
+def test_a_build_prompt_without_backtests_states_no_bar() -> None:
+    from sis.contract import ROMAN
+
+    assert "recorded value" not in proposer._build_prompt("", ROMAN)

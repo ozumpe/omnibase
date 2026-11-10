@@ -191,15 +191,222 @@ def release_result(seen: Mapping[str, Any]) -> dict[str, Any] | None:
             "pr_id": seen.get("pr"), "contract": seen.get("contract")}
 
 
-def record_release(store: episodic.EpisodicStore, seen: Mapping[str, Any]) -> None:
-    """Append a released hold to the episodic log, at no cost. Never raises."""
-    if (result := release_result(seen)) is None:
+# A merge a human made, recorded beside a decline (OMNI-185). Not "promoted",
+# which is an accepted outcome: the cycle that opened the PR counted the
+# improvement already, and the merge is the human's decision on it.
+HUMAN_MERGED = "human_merged"
+
+
+def decision_result(seen: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The episodic record of a human's decision on a held PR, or None. Pure.
+
+    A release as :func:`release_result` gives it, or a merge. Before OMNI-185
+    only a release was recorded, so a run's dataset could not tell a merged PR
+    from a declined one.
+    """
+    if (released := release_result(seen)) is not None:
+        return released
+    if not seen.get("merged"):
+        return None
+    return {"status": HUMAN_MERGED, "pr_id": seen.get("pr"), "contract": seen.get("contract")}
+
+
+def record_decision(store: episodic.EpisodicStore, seen: Mapping[str, Any]) -> None:
+    """Append a human's merge or release to the episodic log, at no cost. Never raises."""
+    if (result := decision_result(seen)) is None:
         return
     try:
         store.append(episodic.event_from_cycle_result(result, proposer="human"))
     except Exception as exc:  # noqa: BLE001 - the log is auxiliary, as in run_cycle
         print(f"[sis] WARNING: {result['status']} for PR {result['pr_id']} not "
               f"recorded: {exc}", file=sys.stderr)
+
+
+# --- develop blue/green (OMNI-133) -------------------------------------------------
+
+
+def revert_branch(version: str) -> str:
+    """The branch a revert PR for *version* is opened from. Pure."""
+    safe = "".join(c if c.isalnum() or c in "-_." else "-" for c in version)
+    return f"revert/{safe or 'unknown'}"
+
+
+def develop_result(judgment: Any, *, pr_id: str | None, contract: str | None
+                   ) -> dict[str, Any]:
+    """The episodic record of a develop judgment, as a cycle-result dict. Pure.
+
+    A switch carries no ``reason``: the episodic log reads ``reason`` as a
+    rejection. Blue's p95 is the baseline latency, green's the candidate's.
+    """
+    result: dict[str, Any] = {"status": judgment.outcome, "pr_id": pr_id,
+                              "contract": contract, "candidate_sha": judgment.version}
+    if not judgment.switched:
+        result["reason"] = judgment.reason
+    if judgment.verdict is not None:
+        result["baseline_latency"] = judgment.verdict.baseline_p95
+        result["candidate_latency"] = judgment.verdict.candidate_p95
+    return result
+
+
+def start_develop_platform(handles: Mapping[str, Any], *, contract_name: str | None = None
+                           ) -> tuple[Any | None, str | None]:
+    """Serve the head of ``develop`` as blue for the loop's contract (OMNI-133).
+
+    Returns ``(platform, console line)``. None when ``canary.develop_blue_green``
+    is off, the contract is a feature (Class 2: no oracle to draw traffic
+    from), or blue cannot be served; the line says which. Called before the
+    first cycle, so blue is ``develop`` as it was before any merge this run
+    observes.
+    """
+    if not config.get("canary.develop_blue_green"):
+        return None, None
+    from sis.contract import OptimizationContract, default_contract
+    from sis.develop_platform import DevelopPlatform
+
+    sm, ws = handles["SelfModel"], handles["Workspace"]
+    named = contract_name or config.get("contracts.default")
+    spec = ray.get(sm.contract_by_name.remote(named)) if named else default_contract()
+    if not isinstance(spec, OptimizationContract):
+        return None, (f"[sis] develop blue/green off for {named}: a feature has no oracle "
+                      "to judge a merge with")
+    merged = ray.get(ws.live_target_source.remote(spec.target_path))
+    source = merged
+    if not source:
+        try:
+            with open(spec.target_file, encoding="utf-8") as fh:
+                source = fh.read()
+        except OSError:
+            source = ""
+    if not source:
+        return None, f"[sis] develop blue/green off for {spec.name}: no source to serve as blue"
+    gauntlet.ensure_sandbox_ready()
+    platform = DevelopPlatform(spec, blue_source=source,
+                               blue_version="develop" if merged else "local")
+    try:
+        platform.start()
+    except Exception as exc:  # noqa: BLE001 - the loop runs on; merges just go unjudged
+        platform.close()
+        return None, f"[sis] develop blue/green off for {spec.name}: blue did not start ({exc})"
+    ray.get(sm.set_slot.remote("develop_blue", platform.blue_version))
+    return platform, (f"[sis] develop blue/green on for {spec.name}: blue serves "
+                      f"{platform.blue_version}")
+
+
+def apply_develop_judgment(
+    handles: Mapping[str, Any], store: episodic.EpisodicStore, platform: Any,
+    seen: Mapping[str, Any],
+) -> str | None:
+    """Judge a merge the loop just observed, and act on the verdict (OMNI-133).
+
+    *seen* is ``DevOps.observe_merge``'s answer. Only a promotion is judged,
+    and only for the platform's contract. Green passes: blue and green switch.
+    Green fails: it is retired, a revert PR is opened against the base branch
+    and a human is paged; nothing reverts by itself. Blue's own fault: nothing
+    changes and a human is paged. Every outcome lands in the provenance graph
+    and the episodic log. Never raises; returns the console line.
+    """
+    if not seen.get("promoted"):
+        return None
+    sm, ws = handles["SelfModel"], handles["Workspace"]
+    pr_id, version = str(seen.get("pr")), str(seen.get("version"))
+    spec = platform.spec
+    governing = ray.get(sm.contract_for_pr.remote(pr_id))
+    if governing is not None and governing.name != spec.name:
+        return (f"[sis] develop: PR {pr_id} is for {governing.name}, blue/green serves "
+                f"{spec.name}; not judged")
+    from sis.develop_platform import Judgment
+
+    origin = ""
+    try:
+        source, origin = _merged_green_source(ws, pr_id, spec.target_path)
+        if source:
+            judgment = platform.judge(version, source)
+        else:
+            judgment = Judgment(
+                version, platform.blue_version, switched=False, harness=True,
+                reason=(f"harness: no source to judge: {spec.target_path} is on neither "
+                        f"the base branch nor PR {pr_id}'s head"))
+    except Exception as exc:  # noqa: BLE001 - a harness fault; blue is untouched
+        judgment = Judgment(version, platform.blue_version, switched=False, harness=True,
+                            reason=f"harness: the judgment could not run: {exc}")
+    detail: dict[str, Any] = {"pr": pr_id, "previous": judgment.previous,
+                              "reason": judgment.reason, "contract": spec.name}
+    if origin:
+        detail["source"] = origin
+    revert: str | None = None
+    if judgment.switched:
+        ray.get(sm.set_slot.remote("develop_blue", version))
+        ray.get(sm.record.remote("develop.switch", version, **detail))
+        line = (f"[sis] develop: {version} (PR {pr_id}) passed and now serves as blue: "
+                f"{judgment.reason}")
+    else:
+        if not judgment.harness:
+            revert, revert_error = _open_revert_pr(ws, platform, judgment, pr_id)
+            detail["revert_pr"] = revert
+            if revert_error:
+                detail["revert_error"] = revert_error
+        kind = "develop.unjudged" if judgment.harness else "develop.rollback"
+        ray.get(sm.record.remote(kind, version, **detail))
+        what = ("could not be judged" if judgment.harness
+                else "failed and was retired")
+        after = (f"revert PR {revert}" if revert
+                 else "no revert PR" if judgment.harness
+                 else f"revert PR NOT opened ({detail.get('revert_error')})")
+        line = (f"[sis] develop: {version} (PR {pr_id}) {what}; blue still serves "
+                f"{judgment.previous}; {after}: {judgment.reason}")
+        page(ws, store, Severity.CRITICAL,
+             f"develop: {version} {what}",
+             f"PR {pr_id} ({spec.name}) was merged into develop and {what}. Blue still "
+             f"serves {judgment.previous}. {after}. Reason: {judgment.reason}")
+    ray.get(ws.emit.remote(judgment.outcome.replace("_", ".", 1), pr_id=pr_id,
+                           version=version, previous=judgment.previous,
+                           reason=judgment.reason, revert_pr=revert))
+    try:
+        store.append(episodic.event_from_cycle_result(
+            develop_result(judgment, pr_id=pr_id, contract=spec.name), proposer="develop"))
+    except Exception as exc:  # noqa: BLE001 - the log is auxiliary, as in run_cycle
+        print(f"[sis] WARNING: develop judgment of PR {pr_id} not recorded: {exc}",
+              file=sys.stderr)
+    return line
+
+
+def _merged_green_source(ws: Any, pr_id: str, path: str) -> tuple[str, str]:
+    """What ``develop`` serves after the merge, and where it was read.
+
+    The base branch's file, never the PR's head (OMNI-200, M36): the merge can
+    differ from the head (another merge first, a resolved conflict, an edited
+    squash), and a head branch deleted on merge reads as "". Only a backend
+    with no base branch to read (the in-memory adapter answers "") falls back
+    to the PR's file, the rule ``serve_cloud.baseline_source`` follows for
+    Serve's blue (OMNI-58). ``("", "")`` when neither has it.
+    """
+    merged = str(ray.get(ws.live_target_source.remote(path)))
+    if merged:
+        return merged, "merged_base"
+    head = str(ray.get(ws.get_pr.remote(pr_id, path)).artifact)
+    return (head, "pr_head") if head else ("", "")
+
+
+def _open_revert_pr(ws: Any, platform: Any, judgment: Any, pr_id: str
+                    ) -> tuple[str | None, str | None]:
+    """Open a PR that puts blue's source back on the base branch. Never merges it."""
+    from sis.settings import version_control_base
+
+    spec = platform.spec
+    branch = revert_branch(judgment.version)
+    try:
+        ray.get(ws.create_branch.remote(branch, version_control_base()))
+        pr = ray.get(ws.open_pr.remote(
+            branch, f"Revert {judgment.version}: failed its develop judgment",
+            platform.blue_source, spec.target_path,
+            f"PR {pr_id} was merged into develop, deployed as green and failed its "
+            f"judgment against blue ({judgment.previous}):\n\n{judgment.reason}\n\n"
+            "Blue kept serving and green was retired. This PR puts blue's "
+            f"`{spec.target_path}` back. Nothing reverts automatically: a human "
+            "merges or closes it (OMNI-133)."))
+    except Exception as exc:  # noqa: BLE001 - reported in the page and the record
+        return None, f"{type(exc).__name__}: {' '.join(str(exc).split())[:160]}"
+    return str(pr.id), None
 
 
 def restore_pending_pr(
@@ -234,10 +441,11 @@ def restore_pending_pr(
     if not outcome.get("adopted", False):
         return f"[sis] {label} from the last run not restored: {outcome.get('reason')}"
     if outcome.get("promoted") or outcome.get("merged"):
+        record_decision(store, outcome)
         forget_pending_pr(store, pr_id)
         return f"[sis] {label} was merged since the last run: promoted; cycles build on it"
     if outcome.get("released"):
-        record_release(store, outcome)
+        record_decision(store, outcome)
         forget_pending_pr(store, pr_id)
         return f"[sis] {label} from the last run was {outcome.get('reason')}: hold released"
     return (f"[sis] HOLDING: {label} from the last run still awaits a human merge or "
@@ -275,10 +483,11 @@ def hold_for_open_prs(
         return True, (f"[sis] HOLDING: PR {pr_id} is open but not adopted: "
                       f"{outcome.get('reason')}{also}")
     if outcome.get("released"):
-        record_release(store, outcome)
+        record_decision(store, outcome)
         forget_pending_pr(store, pr_id)
         return bool(others), f"[sis] PR {pr_id} was {outcome.get('reason')}: not held{also}"
     if outcome.get("promoted") or outcome.get("merged"):
+        record_decision(store, outcome)
         forget_pending_pr(store, pr_id)
         return bool(others), f"[sis] PR {pr_id} was merged: promoted; cycles build on it{also}"
     return True, (f"[sis] HOLDING: PR {pr_id} is open and awaits a human merge or close"
@@ -475,6 +684,19 @@ def cycle_outcome(approved: bool, canary: dict[str, Any] | None) -> tuple[str, b
     status = ("verified_awaiting_human_merge" if success
               else "canary_rejected" if approved else "qa_rejected")
     return status, success, canary_reason
+
+
+def canary_neutral_status(canary: Mapping[str, Any] | None) -> str | None:
+    """The neutral status a canary result maps to, or ``None``. Pure.
+
+    A live canary whose paired latency interval could not tell (OMNI-50) is
+    neither a pass nor a rejection; it is read through the same
+    :func:`episodic.neutral_status` as QA's inconclusive benchmark, so the
+    two can never disagree about what is benign.
+    """
+    if canary is None or canary.get("canary_passed", True):
+        return None
+    return episodic.neutral_status(canary.get("reason"))
 
 
 def run_cycle(
@@ -815,6 +1037,21 @@ def run_cycle(
                   if approved else None)
         if canary is not None and canary.get("canary_passed", True):
             seen["canary_version"] = canary.get("version")  # green is set: retired on an error
+
+        # A live canary whose paired latency interval could not tell (OMNI-50)
+        # is neutral, exactly like QA's inconclusive benchmark above: spend
+        # recorded, no bug, no breaker increment. DevOps already retired green.
+        canary_neutral = canary_neutral_status(canary)
+        if canary is not None and canary_neutral:
+            trip = _neutral()
+            return _record({"status": canary_neutral, "reason": canary.get("reason"),
+                            "spec_id": spec_id, "story_id": story_id,
+                            "pr_id": impl["pr_id"],
+                            "candidate_sha": impl.get("candidate_sha"),
+                            "canary": canary,
+                            "breaker_bug_id": _breaker_alarm(trip),
+                            "economics": ray.get(ceo.economics.remote()),
+                            "provenance": ray.get(sm.provenance.remote())}, cost_usd)
 
         status, success, canary_reason = cycle_outcome(approved, canary)
 

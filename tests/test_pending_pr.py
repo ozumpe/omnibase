@@ -165,7 +165,7 @@ def test_a_decline_is_never_read_as_a_gauntlet_rejection(tmp_path: Path) -> None
     # A human closing a PR judges the change; it is not the loop failing. No
     # reject gate, no cost, and nothing the breaker or the gate stats count.
     store = _store(tmp_path)
-    org.record_release(store, {"released": True, "reason": "closed without merging",
+    org.record_decision(store, {"released": True, "reason": "closed without merging",
                                "pr": "11", "contract": "sort"})
     (event,) = store.events()
     assert (event.outcome, event.pr_id, event.contract) == ("human_declined", "11", "sort")
@@ -173,6 +173,23 @@ def test_a_decline_is_never_read_as_a_gauntlet_rejection(tmp_path: Path) -> None
     assert event.gauntlet_passed is None and event.cost_usd == 0.0
     assert event.proposer == "human"
     assert store.summary()["rejected_by_gate"] == {}
+
+
+def test_a_merge_is_logged_as_a_human_decision_too(tmp_path: Path) -> None:
+    # OMNI-185: only a decline was logged, so a run's dataset could not tell a
+    # merged PR from a declined one. A merge is the human's decision, not a
+    # second accepted improvement: the cycle that opened the PR counted that.
+    seen = {"merged": True, "promoted": True, "pr": "12", "contract": "sort"}
+    assert org.decision_result(seen) == {"status": "human_merged", "pr_id": "12",
+                                         "contract": "sort"}
+    assert org.decision_result({"merged": False, "promoted": False, "pr": "12"}) is None
+    store = _store(tmp_path)
+    org.record_decision(store, seen)
+    (event,) = store.events()
+    assert (event.outcome, event.pr_id, event.contract) == ("human_merged", "12", "sort")
+    assert event.reject_gate is None and event.gauntlet_passed is None
+    assert event.cost_usd == 0.0 and event.proposer == "human"
+    assert store.summary()["accepted"] == 0
 
 
 # --- the VCS is the source of truth (OMNI-136) ----------------------------------

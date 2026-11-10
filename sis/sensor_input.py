@@ -126,11 +126,14 @@ class SourceRules:
     A series that is not declared is refused: an adapter reads what it was
     written to read, and a new series in the feed is drift until a human adds
     it. ``thousands`` is the source's digit-group separator, if it writes one.
+    ``licensed`` names the declared series that may be modelled but never
+    redistributed: a public fixture refuses to show one (OMNI-187).
     """
 
     source: str
     series: Mapping[str, SeriesRule]
     thousands: str | None = None
+    licensed: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         for name in (self.source, *self.series):
@@ -143,6 +146,10 @@ class SourceRules:
                              "declare it, or its readings would be judged as simulation")
         if self.thousands not in (None, ",", ".", " ", "'"):
             raise ValueError(f"{self.thousands!r} is not a digit-group separator")
+        undeclared = sorted(set(self.licensed) - set(self.series))
+        if undeclared:
+            raise ValueError(f"licensed {', '.join(map(repr, undeclared))} is not a declared "
+                             "series")
 
 
 # The source every generated scenario writes (``specs/scenarios.py``, OMNI-34).

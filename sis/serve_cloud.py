@@ -37,6 +37,7 @@ human gate is unchanged and lives upstream — ``Cloud.promote``'s only caller i
 from __future__ import annotations
 
 import pathlib
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Protocol
 
 from sis.canary import CanaryMode, LiveSample
@@ -76,6 +77,28 @@ DEFAULT_CANARY_WEIGHT = 0.05
 DEFAULT_WINDOW_S = 300.0
 
 
+def baseline_source(merged: str, local_file: str) -> tuple[str, str]:
+    """Blue's source and where it came from: the merged base, else the local file.
+
+    The same rule the SWE and QA use for the offline baseline (H1): what is
+    merged on the base branch is what is live, and the local ``runtime/*.py``
+    is only a fallback for a backend with no base branch to read (the
+    in-memory adapter answers ``""``). Seeding blue from the local file alone
+    meant a ``ServeCloud`` rebuilt after a merge, by a DevOps restart for
+    instance, served whatever that file held, possibly code older than what a
+    human had merged (M22, OMNI-58). A candidate would then be judged against
+    a stale blue.
+    """
+    if merged:
+        return merged, "merged_base"
+    local = pathlib.Path(local_file)
+    if not local.exists():
+        raise FileNotFoundError(
+            f"no baseline to serve: nothing merged at the target and no local "
+            f"file {local_file!r}")
+    return local.read_text(encoding="utf-8"), "local_file"
+
+
 class ServeCloud:
     """``Cloud`` over Ray Serve: weighted split, shadow dispatch, live windows.
 
@@ -105,8 +128,15 @@ class ServeCloud:
         mode: CanaryMode = CanaryMode.SHADOW,
         initial_weight: float = DEFAULT_CANARY_WEIGHT,
         scrub_green_env: bool = True,
+        merged_source: Callable[[str], str] | None = None,
     ) -> None:
+        """``merged_source(target_path)`` reads the target as merged on the base
+        branch (``VersionControl.live_target_source``), ``""`` when there is
+        none. Without it blue falls back to the local file, which is right only
+        where no base branch exists, as in the demo below.
+        """
         self._tel = telemetry
+        self._merged_source = merged_source
         self._contract = contract
         self._mode = mode
         self._initial_weight = initial_weight
@@ -134,17 +164,23 @@ class ServeCloud:
         return route_prefix(self._contract, "blue")
 
     def serve_blue(self, *, source: str | None = None, version: str = "live") -> DeployRecord:
-        """Stand up the baseline. ``source`` defaults to the committed target.
+        """Stand up the baseline. ``source`` defaults to the merged target.
 
-        Calling it again redeploys with a new baseline — which is exactly what
-        :meth:`promote` does once a human merge has been observed.
+        Without a ``source``, blue serves the target as merged on the base
+        branch, and the local file only when nothing is merged there
+        (:func:`baseline_source`, OMNI-58). Calling it again redeploys with a
+        new baseline — which is exactly what :meth:`promote` does once a human
+        merge has been observed.
         """
         from ray import serve
 
-        self._blue_source = (
-            source if source is not None
-            else pathlib.Path(self._contract.target_file).read_text(encoding="utf-8")
-        )
+        if source is not None:
+            origin = "given"
+        else:
+            merged = (self._merged_source(self._contract.target_path)
+                      if self._merged_source is not None else "")
+            source, origin = baseline_source(merged, self._contract.target_file)
+        self._blue_source = source
         self._blue_version = version
         self._router = serve.run(
             build_canary(self._contract, blue_source=self._blue_source,
@@ -154,7 +190,8 @@ class ServeCloud:
         )
         record = DeployRecord(version=version, slot="blue", live=True)
         self._records.append(record)
-        self._tel.emit("serve.blue_deployed", version=version, app=self.app_name)
+        self._tel.emit("serve.blue_deployed", version=version, app=self.app_name,
+                       source=origin)
         return record
 
     def shutdown(self) -> None:

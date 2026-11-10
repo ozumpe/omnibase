@@ -13,8 +13,8 @@ This doc is the extension of it that makes the canary step real.
 forces shadow dispatch. `--canary serve` is refused for Class-2 contracts and
 for any non-stub proposer. The Class-2/domain-canary discussion and pseudocode
 below describe intended reuse, not a supported Class-2 deployment today. The
-latency and error-rate gates have open defects (OMNI-50); see
-[KNOWN_ISSUES.md](KNOWN_ISSUES.md). Scrubbing a replica's environment does not
+latency gate is paired and the error rate is judged since OMNI-50 (M20/M21,
+see [KNOWN_ISSUES.md](KNOWN_ISSUES.md)). Scrubbing a replica's environment does not
 isolate it from the Ray control plane, which is why a replica serves its
 candidate from a sandbox worker (OMNI-48).
 
@@ -153,7 +153,11 @@ and `gauntlet.validate`'s gate functions: decision logic testable without Ray, t
 or a live cluster. `serve()` (the Ray/network-touching shell) calls it, mirroring how
 `sis/loop.py` separates `decide()` from `run_loop()`/`serve()`.
 
-**Gates to promote, all applicable ones required:**
+**Gates to promote, all applicable ones required** (after an evidence floor):
+0. **Error rate (hard, OMNI-50, M21):** green's share of failed calls is no
+   higher than blue's. Both counts come from the router's window, which also
+   records a request green failed and blue answered as a sample, so that it
+   reaches the agreement gate as a disagreement instead of being dropped.
 1. **Correctness (hard):** `invariant_violations == 0` over the sampled window. Any
    violation → immediate rollback, no negotiation — this is the same "candidate can't
    game it" property the differential-correctness gate protects offline.
@@ -162,14 +166,21 @@ or a live cluster. `serve()` (the Ray/network-touching shell) calls it, mirrorin
    `SPLIT` (there is no paired baseline response to compare), and inapplicable to
    targets with several valid answers, which is the second reason the mode is
    per-target.
-3. **Performance (graded):** candidate's live `p95`/`p99` not worse than baseline's
-   (or ≥ the target's margin, matching the offline `min_speedup` philosophy) —
-   computed over hundreds/thousands of real calls, so it doesn't inherit the
-   synthetic 10-input jitter problem. **p99 gets a small noise allowance, p95
-   none** (`p99_noise_tolerance`, default 10%): at the live path's ~150
-   requests, nearest-rank p99 is the second-slowest request, and CI rejected a
-   known-good candidate on a 1% p99 difference (118.5 vs 117.4 ms). A real tail
-   regression — tens of percent, or a stuck request — still fails.
+3. **Performance:** under `SHADOW`, **paired** (OMNI-50, M20). The router
+   records blue's and green's latency on each sample, and `evaluate_canary`
+   decides as the offline benchmark does (`gauntlet.benchmark_decision`): total
+   cost, `sum(green)/sum(blue)`, with a 90% paired-bootstrap interval, against
+   `max_latency_ratio × (1 + latency_tolerance)` (default 1.0 × 1.10). **Pass**
+   if the interval's upper bound is within the limit, **fail** if the point
+   estimate is over it, otherwise **inconclusive**: green is retired, and the
+   cycle is the neutral `inconclusive` (no bug, no breaker count). Two unpaired
+   percentiles at ratio 1.0 rejected an equal-speed candidate in ~56% of
+   simulated windows; paired, about 2%, with about a quarter inconclusive and
+   a 30%-slower candidate always rejected. Failed calls are left out of the
+   pairs, since a failure returns fast. An unpaired window (`SPLIT`) keeps the
+   percentile rule: p95 within the ratio, p99 with a 10% noise allowance
+   (`p99_noise_tolerance`; CI once rejected a known-good candidate on a 1% p99
+   difference, 118.5 vs 117.4 ms).
 
 ## The `ServeCloud` adapter
 
@@ -429,6 +440,13 @@ step 1 (already done):
    unrouted application and *attached* to the router: deploy, ramp and rollback
    became control-plane calls, and blue is never touched. Regression test:
    `test_deploying_a_canary_does_not_restart_blue`.
+
+   **Blue is what is merged** (OMNI-58, M22). `serve_blue()` without a source
+   serves the target as merged on the base branch, read through
+   `VersionControl.live_target_source`, and the local `runtime/*.py` only when
+   nothing is merged there, the same rule as the offline baseline (H1). A
+   `ServeCloud` rebuilt after a DevOps restart used to read the local file,
+   which can be older than what a human merged.
 
    **Environment scrubbing, not sandboxing.** Green blanks non-allowlisted
    environment variables, but the later H3 review established that it can reach

@@ -180,6 +180,9 @@ DEFAULT_TARGET_PATHS: tuple[str, ...] = (
     # The persistence predictor (OMNI-36), a Class-2 target like roman: absent
     # until an implementer writes it from specs/ca_price_persistence/.
     "runtime/ca_price_persistence.py",
+    # The wholesale-price predictor (OMNI-163), Class 2: absent until built
+    # from specs/ca_price_wholesale/.
+    "runtime/ca_price_wholesale.py",
 )
 
 SCHEMA: tuple[Key, ...] = (
@@ -298,6 +301,15 @@ SCHEMA: tuple[Key, ...] = (
         "'serve' judges the canary against real Ray Serve traffic; unset uses "
         "the legacy in-memory recording.",
         choices=("serve", "legacy")),
+    # Strict: on, it serves every merge into develop as green and judges it
+    # before it replaces blue; off removes that check.
+    Key("canary", "develop_blue_green", ConfigTier.STRICT, Kind.BOOL, False,
+        "SIS_DEVELOP_BLUE_GREEN",
+        "In --loop mode, serve the head of develop as blue in a sandbox worker, "
+        "deploy each observed merge as green and judge it on shadow traffic from "
+        "the contract's oracle: a pass switches blue and green, a failure retires "
+        "green, pages a human and opens a revert PR (OMNI-133). Class-1 contracts "
+        "only."),
 
     # --- loop: pacing. Genuinely soft — nothing here weakens a check. --------
     Key("loop", "interval_seconds", ConfigTier.SOFT, Kind.FLOAT, 30.0,
@@ -309,6 +321,12 @@ SCHEMA: tuple[Key, ...] = (
         "Accepted steps a feature branch collects before its one PR to the base "
         "branch opens; a step that finds no further gain ends the feature sooner "
         "(OMNI-130)."),
+    Key("loop", "review_max_rounds", ConfigTier.SOFT, Kind.INT, 3,
+        "SIS_REVIEW_MAX_ROUNDS",
+        "Reviews a finished feature may have before it is given up (OMNI-131). Its "
+        "PR opens only after a review approves it; each review that asks for "
+        "changes sends it back for one revision. A feature still not approved after "
+        "this many is a counted failure, left on its branch with no PR. At least 1."),
     Key("loop", "converged_after", ConfigTier.SOFT, Kind.INT, 3,
         "SIS_LOOP_CONVERGED_AFTER",
         "Cycles in a row that found nothing to improve (no change, no gain) "
@@ -789,6 +807,7 @@ class ProposerConfig:
 @dataclass(frozen=True)
 class CanaryConfig:
     backend: str | None
+    develop_blue_green: bool
 
 
 @dataclass(frozen=True)
@@ -796,6 +815,7 @@ class LoopConfig:
     interval_seconds: float
     max_cycles: int | None
     feature_max_steps: int
+    review_max_rounds: int
     converged_after: int
     artifact_sync_every: int
 

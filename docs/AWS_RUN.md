@@ -23,7 +23,7 @@ This document has four parts:
 
 | | |
 |---|---|
-| Code | release tag **`v0.5.0`** (`var.repo_ref`), never a branch — see [Which code runs](#which-code-runs) |
+| Code | release tag **`v0.6.0`** (`var.repo_ref`), never a branch — see [Which code runs](#which-code-runs) |
 | Box | one `m7i.xlarge`, `us-east-1`, **no inbound ports**; shell via SSM only |
 | Contract | Class 1, one with room left: `sort` and `sum_of_divisors` have both converged, so re-seed a naive one on `ozumpe/testrun`'s `develop` first ([Before every run](#before-every-run-a-target-with-room-left)). Or Class 2, `roman`: built from its spec, no re-seed (from `v0.3.5`) |
 | Where artifacts land | Jira `TES`, GitHub `ozumpe/testrun` (PRs against `develop`) |
@@ -151,7 +151,13 @@ which of the loop's PRs are still open, and waits for them (OMNI-136).
 
 Builds the secret from `secrets.local.yml` + `$ANTHROPIC_API_KEY` and uploads
 it directly. No plaintext JSON file is written, and nothing is printed but the
-routing and ✓/✗. Run it without `--upload` first to see what it would send:
+routing and ✓/✗. The key comes from `$ANTHROPIC_API_KEY`, or, when that is
+unset, from an `anthropic: {api_key: ...}` block in `secrets.local.yml`; the
+helper names the source and the key's last four characters (compare them with
+the Anthropic console), warns when the two differ, and asks Anthropic whether
+it accepts the key before uploading (free, `GET /v1/models`; `--skip-key-check`
+to upload anyway). A stale key exported in the shell used to be uploaded
+silently. Run it without `--upload` first to see what it would send:
 
 ```bash
 poetry run python scripts/aws_secret.py
@@ -268,6 +274,23 @@ export ANTHROPIC_API_KEY=$(aws secretsmanager get-secret-value \
 bucket, OMNI-140) and `ARTIFACTS_BUCKET` (for the commands below) are already
 set in this login shell by `/etc/profile.d/sis-run.sh`, which `user_data`
 writes.
+
+A contract whose fixture is private (`ca_price_wholesale`, once its
+`specs/ca_price_wholesale/private.json` is promoted, OMNI-163) needs its
+episodes from the bucket first: a clone has only the index, and without the
+files every cycle fails the backtest gate as a `harness:` fault (L62). Fetch
+them, and check each against the index, before step 5b:
+
+```bash
+d=specs/ca_price_wholesale
+aws s3 sync "s3://$ARTIFACTS_BUCKET/$d/private/" "$d/private/" --only-show-errors
+(cd "$d" && jq -r '.episodes[] | "\(.fixture_sha256)  \(.fixture)",
+  "\(.expect_sha256)  \(.expect)"' private.json | sha256sum --check --strict --quiet) \
+  && echo "private fixtures OK"
+```
+
+A scheduled run does this itself, and ends before any spend if it fails
+(OMNI-177).
 
 **b. Prove the wiring before spending anything.** The `Pager` line must show a
 ✓; it fails until [step 3](#3-confirm-the-pager-laptop--dont-click-the-link)
@@ -527,8 +550,10 @@ as `instance destroyed: NO, take it down by hand`, and the script exits 1.
 
 On either kind of box it waits for SSM, and starts step 5c's loop in a tmux
 session `sis` with one `ssm send-command`: the environment of step 5a, then
-`check_connections.py --deep` (a failure ends the run before any spend; it
-checks the Anthropic key and model too, OMNI-82), then
+the private fixtures of a contract that has them, fetched and checked as in
+step 5a (OMNI-177), then `check_connections.py --deep` (a failure of either
+ends the run before any spend; it checks the Anthropic key and model too,
+OMNI-82), then
 `main.py … --loop --loop-max-cycles 10`, teed to `runtime/loop.log` between a
 `[scheduled] <run id> start` and `exit` line. It reads this run's part of the
 log every minute, presses Ctrl-C in the pane once when the loop holds for a PR
@@ -684,7 +709,7 @@ human, one box: a remote state backend is ceremony this doesn't need yet.
 
 ### Which code runs
 
-The box runs the **release tag** in `var.repo_ref` — `v0.5.0` by default
+The box runs the **release tag** in `var.repo_ref` — `v0.6.0` by default
 (OMNI-63). A tag, not `develop`: a run's results are only worth something if
 they name the code that produced them, and a branch names whatever it pointed
 at when the box booted. `tofu plan` refuses a branch unless

@@ -1,7 +1,11 @@
 """Tests for scripts/aws_scheduled_run.py — a scheduled AWS run (OMNI-168, no AWS calls)."""
 
+import hashlib
 import importlib.util
+import json
+import os
 import pathlib
+import shutil
 import subprocess
 import sys
 from types import ModuleType
@@ -77,6 +81,116 @@ def test_the_runner_reads_the_key_on_the_box_and_never_prints_it() -> None:
     # A secret the box cannot read says why (the CLI's error carries no value),
     # rather than looking like a secret with no key in it.
     assert "could not read the secret" in script and "unset secret" in script
+    # Only the key's last four characters are shown, to compare with the console.
+    assert "${ANTHROPIC_API_KEY: -4}" in script
+
+
+# A box cloned from a tag has a private index but not its files (OMNI-177, L62).
+_FAKE_AWS = """#!/bin/bash
+case "$1 $2" in
+  "secretsmanager get-secret-value") echo '{"anthropic": {"api_key": "sk-test-abcd"}}' ;;
+  "s3 sync")
+    echo "aws s3 sync $3 $4" >> "$HOME/calls"
+    src="$FAKE_BUCKET/${3#s3://*/}"
+    if [ ! -d "$src" ]; then echo "fatal error: no such prefix" >&2; exit 1; fi
+    mkdir -p "$4" && cp -R "$src/." "$4" ;;
+  *) echo "unexpected aws $*" >&2; exit 2 ;;
+esac
+"""
+_FAKE_POETRY = """#!/bin/bash
+echo "poetry $*" >> "$HOME/calls"
+"""
+
+
+def _box(tmp_path: pathlib.Path, *, uploaded: dict[str, bytes] | None,
+         indexed: dict[str, bytes] | None) -> pathlib.Path:
+    """A home with a clone holding a private index, a bucket and fake aws/poetry."""
+    home = tmp_path / "home"
+    spec = home / "omnibase" / "specs" / "ca_price_wholesale"
+    spec.mkdir(parents=True)
+    if indexed is not None:
+        episodes = [{"name": name, "fixture": f"private/{name}.fixture.json",
+                     "expect": f"private/{name}.expect.json",
+                     "fixture_sha256": hashlib.sha256(body).hexdigest(),
+                     "expect_sha256": hashlib.sha256(body + b"!").hexdigest()}
+                    for name, body in indexed.items()]
+        (spec / "private.json").write_text(json.dumps({"schema": 1, "episodes": episodes}))
+    store = tmp_path / "bucket" / "specs" / "ca_price_wholesale" / "private"
+    if uploaded is not None:
+        store.mkdir(parents=True)
+        for name, body in uploaded.items():
+            (store / f"{name}.fixture.json").write_bytes(body)
+            (store / f"{name}.expect.json").write_bytes(body + b"!")
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    for name, text in (("aws", _FAKE_AWS), ("poetry", _FAKE_POETRY)):
+        (tools / name).write_text(text)
+        (tools / name).chmod(0o755)
+    (home / "calls").write_text("")
+    return home
+
+
+def _run_box(tmp_path: pathlib.Path, home: pathlib.Path, contract: str = "ca_price_wholesale",
+             bucket: str | None = "the-bucket") -> tuple[int, str, str]:
+    script = tmp_path / "runner.sh"
+    script.write_text(sr.runner_script(_cfg(contract=contract)))
+    env = {"HOME": str(home), "PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}",
+           "FAKE_BUCKET": str(tmp_path / "bucket")}
+    if bucket is not None:
+        env["ARTIFACTS_BUCKET"] = bucket
+    done = subprocess.run(["bash", str(script)], env=env, capture_output=True, text=True,
+                          check=False)
+    log = home / "omnibase" / "runtime" / "loop.log"
+    return done.returncode, log.read_text(), (home / "calls").read_text()
+
+
+_EPISODES = {"2020-01-06": b'{"args": [1]}', "2020-01-13": b'{"args": [2]}'}
+
+
+def test_a_private_fixture_is_fetched_and_checked_before_the_run(tmp_path: pathlib.Path) -> None:
+    home = _box(tmp_path, uploaded=_EPISODES, indexed=_EPISODES)
+    code, log, calls = _run_box(tmp_path, home)
+    assert code == 0, log
+    assert ("aws s3 sync s3://the-bucket/specs/ca_price_wholesale/private/ "
+            "specs/ca_price_wholesale/private/") in calls
+    assert "2 episode(s) fetched and checked against private.json" in log
+    # The fetch comes before the key is read, the preflight and the loop.
+    assert calls.index("aws s3 sync") < calls.index("check_connections.py")
+    assert "main.py --contract ca_price_wholesale" in calls
+    private = home / "omnibase" / "specs" / "ca_price_wholesale" / "private"
+    assert (private / "2020-01-13.fixture.json").read_bytes() == _EPISODES["2020-01-13"]
+
+
+@pytest.mark.parametrize("uploaded, bucket, says", [
+    (None, "the-bucket", "could not fetch specs/ca_price_wholesale/private/"),
+    ({"2020-01-06": _EPISODES["2020-01-06"]}, "the-bucket", "does not match private.json"),
+    ({**_EPISODES, "2020-01-13": b'{"args": [3]}'}, "the-bucket", "does not match private.json"),
+    (_EPISODES, None, "ARTIFACTS_BUCKET is not set"),
+], ids=["not-uploaded", "one-missing", "one-changed", "no-bucket"])
+def test_private_fixtures_that_cannot_be_fetched_or_differ_end_the_run_before_any_spend(
+        tmp_path: pathlib.Path, uploaded: dict[str, bytes] | None, bucket: str | None,
+        says: str) -> None:
+    home = _box(tmp_path, uploaded=uploaded, indexed=_EPISODES)
+    code, log, calls = _run_box(tmp_path, home, bucket=bucket)
+    assert code == 1
+    assert says in log and "nothing was spent" in log
+    assert f"[scheduled] {RUN} exit 1" in log
+    assert "poetry" not in calls       # no preflight, no loop
+    # What reaches the log names files, never their contents.
+    assert '"args"' not in log
+
+
+def test_a_contract_without_a_private_index_fetches_nothing(tmp_path: pathlib.Path) -> None:
+    home = _box(tmp_path, uploaded=None, indexed=None)
+    code, log, calls = _run_box(tmp_path, home, contract="roman")
+    assert code == 0, log
+    assert "s3 sync" not in calls and "private" not in log
+    assert "main.py --contract roman" in calls
+
+
+def test_the_fixture_fetch_refuses_a_name_that_is_not_a_contract() -> None:
+    with pytest.raises(ValueError):
+        sr.private_fixture_lines("x; rm -rf ~", "[scheduled] end")
 
 
 def test_the_start_refuses_a_second_loop_and_writes_a_valid_script(tmp_path: pathlib.Path) -> None:
@@ -99,12 +213,12 @@ def test_the_tail_shows_only_this_runs_part_of_the_log(tmp_path: pathlib.Path) -
     assert "old" not in out
 
 
-def _tail(tmp_path: pathlib.Path, text: str) -> str:
+def _tail(tmp_path: pathlib.Path, text: str, env: dict[str, str] | None = None) -> str:
     log = tmp_path / "loop.log"
     log.write_text(text)
     cmd = sr.tail_commands(RUN)[1].replace(sr.LOG_PATH, str(log))
     return subprocess.run(["bash", "-c", cmd], capture_output=True, text=True,
-                          check=True).stdout
+                          check=True, env=env).stdout
 
 
 def test_a_long_run_is_still_read_once_its_log_passes_the_tail(tmp_path: pathlib.Path) -> None:
@@ -136,6 +250,42 @@ def test_a_long_status_line_is_cut_and_the_output_stays_under_ssms_limit(
     out = _tail(tmp_path, text)
     assert len(out) < 24_000
     assert sr.read_log(out, RUN).crashed
+
+
+def test_the_output_stays_under_ssms_limit_even_if_a_tool_returns_too_much(
+        tmp_path: pathlib.Path) -> None:
+    # OMNI-188: CI once saw 24393 characters for the input above, where 20357
+    # is expected; the re-run on the same commit passed, and the cause was not
+    # found. So each part is capped by construction, not by trusting one tool:
+    # here `tail` ignores its byte count and `awk` its substr, and the output
+    # must still fit what SSM keeps, its status lines first and whole.
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    real_awk = shutil.which("awk")
+    assert real_awk
+    (bin_dir / "tail").write_text("#!/bin/sh\nfor f; do :; done\n"
+                                  'case "$f" in -*|[0-9]*) cat ;; *) cat "$f" ;; esac\n')
+    (bin_dir / "awk").write_text(
+        "#!/bin/sh\n"
+        'for a; do shift; set -- "$@" '
+        '"$(printf %s "$a" | sed "s/substr(\\([^,]*\\),[^)]*)/\\1/g")"; done\n'
+        f'exec {real_awk} "$@"\n')
+    for tool in ("tail", "awk"):
+        (bin_dir / tool).chmod(0o755)
+    text = "\n".join([f"[scheduled] {RUN} start " + "s" * 3_000,
+                      "[loop] crashed: " + "y" * 50_000,
+                      "[sis] artifacts synced to s3://b/" + "a" * 9_000,
+                      *(["z" * 999] * 60)]) + "\n"
+    out = _tail(tmp_path, text, env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"})
+    assert len(out) < 24_000
+    assert 6 * (sr._STATUS_CHARS + 1) + len(sr.TAIL_SEPARATOR) + 1 + sr._TAIL_BYTES < 24_000
+    assert sum(len(line) + 1 for line in out.split(sr.TAIL_SEPARATOR)[0].splitlines()) <= (
+        6 * (sr._STATUS_CHARS + 1))
+    assert len(sr.log_tail(out)) == sr._TAIL_BYTES
+    state = sr.read_log(out, RUN)
+    assert state.crashed and state.synced
+    assert out.splitlines()[0].startswith(f"[scheduled] {RUN} start")
+    assert sr.log_tail(out).endswith("z" * 999 + "\n")   # the newest bytes are kept
 
 
 # --- reading the log and deciding --------------------------------------------

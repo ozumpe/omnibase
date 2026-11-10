@@ -25,6 +25,8 @@ import json
 import os
 import pathlib
 import sys
+import urllib.error
+import urllib.request
 from typing import Any
 
 # Allow running as a plain script: put the repo root (parent of scripts/) on the path.
@@ -67,6 +69,56 @@ def existing_anthropic_key(raw: dict[str, Any]) -> str:
     if isinstance(section, dict):
         return str(section.get("api_key") or "")
     return str(raw.get("anthropic_api_key") or "")
+
+
+def resolve_anthropic_key(raw: dict[str, Any],
+                          environ: dict[str, str]) -> tuple[str, str, list[str]]:
+    """The key to upload, where it came from, and warnings about the choice.
+
+    ``$ANTHROPIC_API_KEY`` wins over the file, as it always has. A stale key
+    exported in the shell used to win silently over the one in
+    ``secrets.local.yml``, so when both are set and differ that is said.
+    Surrounding whitespace (a pasted newline) is trimmed.
+    """
+    from_env = environ.get("ANTHROPIC_API_KEY", "").strip()
+    from_file = existing_anthropic_key(raw).strip()
+    warnings: list[str] = []
+    if from_env and from_file and from_env != from_file:
+        warnings.append(
+            f"$ANTHROPIC_API_KEY (ending {key_hint(from_env)}) differs from the key in "
+            f"the secrets file (ending {key_hint(from_file)}); using $ANTHROPIC_API_KEY. "
+            "Unset it to upload the file's key.")
+    if from_env:
+        return from_env, "$ANTHROPIC_API_KEY", warnings
+    if from_file:
+        return from_file, "the secrets file (anthropic.api_key)", warnings
+    return "", "", warnings
+
+
+def key_hint(key: str) -> str:
+    """The key's last four characters, to compare with the Anthropic console; never more."""
+    return "…" + key[-4:] if len(key) >= 12 else "(too short to be a key)"
+
+
+def check_anthropic_key(key: str) -> str | None:
+    """None if Anthropic accepts the key, else why not. Free: ``GET /v1/models``.
+
+    Plain urllib, so the upload needs no ``anthropic`` SDK on the laptop.
+    """
+    if not key.startswith("sk-ant-") or any(c.isspace() for c in key):
+        return "it does not look like an Anthropic API key (sk-ant-…, no spaces)"
+    request = urllib.request.Request(
+        "https://api.anthropic.com/v1/models?limit=1",
+        headers={"x-api-key": key, "anthropic-version": "2023-06-01"})
+    try:
+        with urllib.request.urlopen(request, timeout=20):
+            return None
+    except urllib.error.HTTPError as exc:
+        if exc.code == 401:
+            return "Anthropic rejected it (401 invalid x-api-key)"
+        return f"Anthropic answered HTTP {exc.code}"
+    except (urllib.error.URLError, TimeoutError) as exc:
+        return f"Anthropic could not be reached ({exc})"
 
 
 def routing_problems(settings: Settings) -> list[str]:
@@ -128,6 +180,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="actually put the value (default: dry run)")
     parser.add_argument("--secrets-file", default=str(REPO_ROOT / "secrets.local.yml"))
     parser.add_argument("--secret-id", default=DEFAULT_SECRET_ID)
+    parser.add_argument("--skip-key-check", action="store_true",
+                        help="upload without first asking Anthropic whether it accepts the key")
     parser.add_argument("--region", default=DEFAULT_REGION)
     args = parser.parse_args(argv)
 
@@ -137,20 +191,36 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     raw = FileSecretSource(path).load()
     settings = load_settings(FileSecretSource(path))
-    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "") or existing_anthropic_key(raw)
+    anthropic_key, key_source, warnings = resolve_anthropic_key(raw, dict(os.environ))
 
     print("\n".join(describe(settings, anthropic_key)))
+    if anthropic_key:
+        print(f"  Anthropic key from {key_source}, ending {key_hint(anthropic_key)}")
+    for warning in warnings:
+        print(f"  ! {warning}")
     problems = routing_problems(settings)
     if problems:
         print("\n✗ Refusing: " + "; ".join(problems))
         return 1
     if not args.upload:
+        if anthropic_key and not args.skip_key_check:
+            rejected = check_anthropic_key(anthropic_key)
+            print("  ✓ Anthropic accepts the key" if rejected is None
+                  else f"  ✗ Anthropic key: {rejected}")
         print(f"\nDry run. With --upload this becomes {args.secret_id!r} in {args.region}."
-              + ("" if anthropic_key else "\nExport ANTHROPIC_API_KEY first."))
+              + ("" if anthropic_key else
+                 "\nExport ANTHROPIC_API_KEY or set anthropic.api_key in the file first."))
         return 0
     if not anthropic_key:
         print("\n✗ Refusing: ANTHROPIC_API_KEY is not set (the run's proposer needs it).")
         return 1
+    if not args.skip_key_check:
+        rejected = check_anthropic_key(anthropic_key)
+        if rejected is not None:
+            print(f"\n✗ Refusing: the Anthropic key ending {key_hint(anthropic_key)}: "
+                  f"{rejected}. Pass --skip-key-check to upload it anyway.")
+            return 1
+        print("  ✓ Anthropic accepts the key")
     version = upload(build_payload(raw, anthropic_key), args.secret_id, args.region)
     print(f"\n✓ Uploaded {args.secret_id!r} in {args.region} (version {version}).")
     return 0

@@ -11,15 +11,32 @@ made up for the test. The real fixture is built from the box's capture.
 from __future__ import annotations
 
 import datetime
+import hashlib
 import json
 import pathlib
+import sys
+from collections.abc import Callable
+from dataclasses import replace
 from typing import Any
 
 import pytest
 
 from sis import gauntlet
-from sis.adapters_real import EASTERN, EIA_RULES, eia_period, eia_published
-from sis.backtest import Backtest, parse_expectation, parse_fixture
+from sis.adapters_real import (
+    EASTERN,
+    EIA_PUBLIC_SERIES,
+    EIA_RULES,
+    EIA_SERIES,
+    eia_period,
+    eia_published,
+)
+from sis.backtest import (
+    PRIVATE_INDEX,
+    Backtest,
+    parse_expectation,
+    parse_fixture,
+    private_backtests,
+)
 from sis.contract import FeatureContract
 from sis.fixture_builder import CALENDAR_FILE, FixtureRefused, Question, ReleaseCalendar, build
 from sis.sensor_trace import Fetched, capture_lines
@@ -187,14 +204,32 @@ def _revised_trace() -> list[dict[str, Any]]:
     return [*first, *second]
 
 
-def test_an_earlier_vintage_of_the_predicted_week_refuses_the_build() -> None:
+def test_a_week_known_before_its_question_is_skipped_and_listed() -> None:
     # M32 (OMNI-164): the 26 Sep price released late, on Wed 5 Oct, after the
     # 3 Oct price's first vintage (5 Oct 17:00). The answer is the revision,
     # known in 2026, so a check on the latest vintage alone passed, and the
-    # inputs carried 6.213 for the very week the model must predict.
+    # inputs carried 6.213 for the very week the model must predict. Such a
+    # catch-up week has no honest question: it is skipped and listed, not an
+    # episode (OMNI-163; EIA's June 2022 outage made two of them).
     late = _calendar(gdu={"2022-09-26": "2022-10-05"})
-    with pytest.raises(FixtureRefused, match="2022-10-03: known before"):
-        build(_revised_trace(), EIA_RULES, late, QUESTION,
+    files = build(_revised_trace(), EIA_RULES, late, QUESTION,
+                  name="ca_price_next_week", spec_ref="OMNI-35").files
+    assert "backtests/2022-10-03_fixture.json" not in files
+    readme = files["README.md"]
+    assert "16 episodes**" in readme and "1 week(s) skipped" in readme
+    assert readme.split("## Skipped", 1)[1].strip().endswith("- 2022-10-03")
+    for name in files:
+        if name.endswith("_fixture.json"):
+            week = name.removeprefix("backtests/").removesuffix("_fixture.json")
+            state, _ = _episode(files, week)
+            assert all(r["event_time"] < week for r in state["readings"] if r["series"] == CA)
+
+
+def test_a_build_with_every_week_skipped_refuses() -> None:
+    late = _calendar(gdu={"2022-09-26": "2022-10-05"})
+    only = replace(QUESTION, first=datetime.date(2022, 10, 3), last=datetime.date(2022, 10, 3))
+    with pytest.raises(FixtureRefused, match="every week from 2022-10-03"):
+        build(_revised_trace(), EIA_RULES, late, only,
               name="ca_price_next_week", spec_ref="OMNI-35")
 
 
@@ -297,6 +332,8 @@ def _script() -> Any:
     spec = importlib.util.spec_from_file_location("build_fixture", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    # Registered first: a dataclass resolves its annotations through its module.
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -337,3 +374,332 @@ def test_the_script_builds_from_a_trace_and_stages_it_for_a_human(
     staged = contract_author.load_staged("ca_price_next_week")
     assert f"digest: {staged.digest}" in out and "17 episodes" in out
     assert _tree(promoted) == before
+
+
+def test_the_script_accepts_a_ci_signed_calendar_and_refuses_a_forged_claim(
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    # OMNI-190: CI's check replaced the human sign-off. Its claim is checked
+    # again before a build, so typing it into checked_by gets nothing.
+    from sis import contract_author
+
+    monkeypatch.setattr(contract_author, "CONTRACT_STAGING_DIR", tmp_path / "staging")
+    trace = tmp_path / "eia.jsonl"
+    trace.write_text("".join(json.dumps(line, sort_keys=True) + "\n" for line in _trace()),
+                     encoding="utf-8")
+    signed = WHOLESALE_CALENDAR.read_text(encoding="utf-8")
+    assert json.loads(signed)["checked_by"].startswith("CI, sources sha256:")
+    forged = tmp_path / "forged.json"
+    forged.write_text(_checked(CALENDAR_DRAFT.read_text(encoding="utf-8"),
+                               by="CI, sources sha256:" + "0" * 64), encoding="utf-8")
+    script = _script()
+
+    assert script.main(["--trace", str(trace), "--calendar", str(forged)]) == 1
+    assert "claims CI's check, which it does not pass" in capsys.readouterr().err
+    assert script.main(["--trace", str(trace), "--calendar", str(WHOLESALE_CALENDAR)]) == 0
+    assert "17 episodes" in capsys.readouterr().out
+
+
+# --- a licensed series stays out of a public fixture (OMNI-163) ------------------------
+
+SPOT = "PET.EER_EPMRR_PF4_Y05LA_DPG.D"
+
+
+def test_a_series_the_question_does_not_show_is_left_out_and_needs_no_release_evidence(
+) -> None:
+    # The LA spot price is Thomson Reuters' data under licence to EIA: modelled,
+    # never redistributed, so the public fixture under specs/ must not hold it.
+    # The calendar has no entry for it, and the build must not ask for one.
+    weekdays = [d for d in _days("2021-06-07", "2022-12-30", 1) if d.weekday() < 5]
+    lines = capture_lines(
+        [], [Fetched(STOCKS, "Thousand Barrels", _series(FRIDAYS, STOCK_LEVELS, 27000.0)),
+             Fetched(CA, "Dollars per Gallon", _series(MONDAYS, CA_PRICES, 4.60)),
+             Fetched(US, "Dollars per Gallon", _series(MONDAYS, US_PRICES, 3.90)),
+             Fetched(SPOT, "Dollars per Gallon", _series(weekdays, {}, 3.25))],
+        EIA_RULES, capture="eia-20261015T020000.000000Z-abcdef01", fetched_at=FETCHED,
+        published=eia_published,
+        provenance={"url": "https://www.eia.gov/opendata/bulk/PET.zip", "sha256": "ab" * 32,
+                    "attribution": "Source: U.S. Energy Information Administration (Oct 2026)"})
+    with pytest.raises(FixtureRefused, match=SPOT):
+        build(lines, EIA_RULES, _calendar(), QUESTION, name="n", spec_ref="OMNI-163")
+    public = Question(target=CA, first=QUESTION.first, last=QUESTION.last,
+                      inputs=EIA_PUBLIC_SERIES)
+    files = build(lines, EIA_RULES, _calendar(), public, name="n", spec_ref="OMNI-163").files
+    assert not any(SPOT in body or "3.25" in body for body in files.values())
+    # The episodes are what a trace without it gives (the README names the trace).
+    without = build(_trace(), EIA_RULES, _calendar(), public, name="n", spec_ref="OMNI-163").files
+    assert {k: v for k, v in files.items() if k != "README.md"} == \
+        {k: v for k, v in without.items() if k != "README.md"}
+
+
+def test_the_shipped_build_shows_only_series_that_may_be_redistributed() -> None:
+    module = _script()
+    public = module.FIXTURES["ca_price_next_week"]
+    assert public.question.inputs == EIA_PUBLIC_SERIES and not public.private
+    assert SPOT not in EIA_PUBLIC_SERIES and {CA, US, STOCKS} <= EIA_PUBLIC_SERIES
+    # The one that shows the spot price is private (OMNI-163).
+    wholesale = module.FIXTURES["ca_price_wholesale"]
+    assert SPOT in wholesale.question.inputs and wholesale.private
+
+
+# --- a private fixture: the wholesale question (OMNI-163) -------------------------------
+
+WEEKDAYS = [d for d in _days("2021-06-07", "2022-12-30", 1) if d.weekday() < 5]
+WHOLESALE = Question(target=CA, first=datetime.date(2022, 9, 5),
+                     last=datetime.date(2022, 10, 10), inputs=frozenset(EIA_SERIES),
+                     ask_after=datetime.timedelta(days=1))
+
+
+def _spot_trace() -> list[dict[str, Any]]:
+    spot = {day.isoformat(): round(2.0 + day.toordinal() % 97 / 100, 3) for day in WEEKDAYS}
+    return capture_lines(
+        [], [Fetched(STOCKS, "Thousand Barrels", _series(FRIDAYS, STOCK_LEVELS, 27000.0)),
+             Fetched(CA, "Dollars per Gallon", _series(MONDAYS, CA_PRICES, 4.60)),
+             Fetched(US, "Dollars per Gallon", _series(MONDAYS, US_PRICES, 3.90)),
+             Fetched(SPOT, "Dollars per Gallon", _series(WEEKDAYS, spot, 3.25))],
+        EIA_RULES, capture="eia-20261015T020000.000000Z-abcdef01", fetched_at=FETCHED,
+        published=eia_published,
+        provenance={"url": "https://www.eia.gov/opendata/bulk/PET.zip", "sha256": "ab" * 32,
+                    "attribution": "Source: U.S. Energy Information Administration (Oct 2026)"})
+
+
+def _spot_calendar() -> ReleaseCalendar:
+    raw = json.loads(_calendar().raw)
+    # Out on the first Wednesday two days or more after the day, as in 2022
+    # (ALFRED's DGASUSGULF vintages): Monday's on Wednesday, Friday's the next.
+    def wednesday(day: datetime.date) -> datetime.date:
+        later = day + datetime.timedelta(days=2)
+        return later + datetime.timedelta(days=(2 - later.weekday()) % 7)
+
+    raw["reports"]["spot"] = {"series": [SPOT], "releases": {
+        d.isoformat(): wednesday(d).isoformat() for d in WEEKDAYS}}
+    return ReleaseCalendar.parse(json.dumps(raw, sort_keys=True))
+
+
+def _wholesale() -> dict[str, str]:
+    return build(_spot_trace(), EIA_RULES, _spot_calendar(), WHOLESALE,
+                 name="ca_price_wholesale", spec_ref="OMNI-163", private=True).files
+
+
+def test_a_private_fixture_keeps_every_episode_under_private_with_its_digest_indexed() -> None:
+    files = _wholesale()
+    episodes = [name for name in files if name.endswith(("_fixture.json", "_expect.json"))]
+    assert episodes and all(name.startswith("private/backtests/") for name in episodes)
+    index = json.loads(files["private.json"])
+    assert [e["name"] for e in index["episodes"]] == \
+        [f"2022-{m}" for m in ("09-05", "09-12", "09-19", "09-26", "10-03", "10-10")]
+    for episode in index["episodes"]:
+        for key in ("fixture", "expect"):
+            assert hashlib.sha256(files[episode[key]].encode()).hexdigest() == \
+                episode[f"{key}_sha256"]
+    # What git would hold shows the series by name, never a value of it.
+    public = {name: body for name, body in files.items() if not name.startswith("private/")}
+    assert set(public) == {"private.json", "README.md", CALENDAR_FILE}
+    spot_values = {json.dumps(r["value"]) for name in episodes if name.endswith("_fixture.json")
+                   for r in json.loads(files[name])["args"][0]["readings"]
+                   if r["series"] == SPOT}
+    assert spot_values and not any(value in public["README.md"] for value in spot_values)
+    assert "Private." in public["README.md"]
+
+
+def test_by_default_the_build_stops_where_the_release_calendar_ends(
+        tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    # OMNI-178 (L63): every box captures from scratch, so all its history is
+    # reconstructed, and a calendar ends somewhere. The documented command, with
+    # no --last, ran to the trace's last week and was refused for any trace
+    # captured after the calendar's end.
+    from dataclasses import replace
+
+    from sis import contract_author
+
+    monkeypatch.setattr(contract_author, "CONTRACT_STAGING_DIR", tmp_path / "staging")
+    script = _script()
+    shipped = script.FIXTURES["ca_price_wholesale"]
+    monkeypatch.setitem(script.FIXTURES, "ca_price_wholesale",
+                        replace(shipped, question=replace(WHOLESALE, last=WHOLESALE.first)))
+    trace = tmp_path / "eia.jsonl"
+    trace.write_text("".join(json.dumps(line, sort_keys=True) + "\n" for line in _spot_trace()),
+                     encoding="utf-8")
+    raw = json.loads(_spot_calendar().raw)
+    for report in raw["reports"].values():   # the calendar ends on Friday 14 October 2022
+        report["releases"] = {p: r for p, r in report["releases"].items() if p <= "2022-10-14"}
+    calendar = tmp_path / "calendar.json"
+    calendar.write_text(json.dumps(raw, sort_keys=True), encoding="utf-8")
+    args = ["--fixture", "ca_price_wholesale", "--trace", str(trace), "--calendar", str(calendar)]
+
+    assert script.main(args) == 0, capsys.readouterr().err
+    out = capsys.readouterr().out
+    # Monday 10 October is the last week whose every value shown is covered.
+    assert "last week: 2022-10-10, the last before 2022-10-17" in out
+    assert "the trace answers to 2022-12-26" in out
+    staged = contract_author.load_staged("ca_price_wholesale")
+    weeks = sorted(name.rsplit("/", 1)[1][:10] for name in staged.files
+                   if name.endswith("_fixture.json"))
+    assert weeks[0] == "2022-09-05" and weeks[-1] == "2022-10-10" and len(weeks) == 6
+    # The episodes are the ones an explicit --last gives.
+    explicit = build(_spot_trace(), EIA_RULES, ReleaseCalendar.parse(json.dumps(raw)),
+                     WHOLESALE, name="ca_price_wholesale", spec_ref="OMNI-163", private=True)
+    assert {k: (staged.directory / k).read_text(encoding="utf-8")
+            for k in staged.files if "/backtests/" in k} == \
+        {k: v for k, v in explicit.files.items() if "/backtests/" in k}
+
+    # An explicit --last past the end is still refused, and says why.
+    assert script.main([*args, "--last", "2022-10-17"]) == 1
+    assert "does not cover" in capsys.readouterr().err
+    # A gap inside the calendar is not its end: still refused, never cut short.
+    del raw["reports"]["gdu"]["releases"]["2022-09-26"]
+    calendar.write_text(json.dumps(raw, sort_keys=True), encoding="utf-8")
+    assert script.main(args) == 1
+    assert "2022-09-26: a reconstructed known_at the release calendar does not cover" in \
+        capsys.readouterr().err
+    # A calendar that ends before the first week asked about builds nothing.
+    for report in raw["reports"].values():
+        report["releases"] = {p: r for p, r in report["releases"].items() if p <= "2022-08-31"}
+    calendar.write_text(json.dumps(raw, sort_keys=True), encoding="utf-8")
+    assert script.main(args) == 1
+    assert "ends before 2022-09-05" in capsys.readouterr().err
+
+
+def test_the_wholesale_question_waits_for_mondays_spot_price() -> None:
+    fixture = json.loads(_wholesale()["private/backtests/2022-10-03_fixture.json"])
+    state = fixture["args"][0]
+    # Monday 26 September's California price was known on Wednesday at 17:00;
+    # the question is asked on Thursday at 17:00, when that Monday's spot is out.
+    assert state["as_of"] == "2022-09-29T17:00:00-04:00"
+    assert _latest(state, CA)["event_time"].startswith("2022-09-26")
+    assert _latest(state, SPOT)["event_time"].startswith("2022-09-26")
+    assert all(r["known_at"] <= state["as_of"] for r in state["readings"])
+    asked_at_once = build(_spot_trace(), EIA_RULES, _spot_calendar(),
+                          Question(target=CA, first=WHOLESALE.first, last=WHOLESALE.last,
+                                   inputs=WHOLESALE.inputs),
+                          name="n", spec_ref="OMNI-163", private=True).files
+    earlier = json.loads(asked_at_once["private/backtests/2022-10-03_fixture.json"])["args"][0]
+    # Asked on Wednesday, the newest spot price shown would be a week old.
+    assert _latest(earlier, SPOT)["event_time"].startswith("2022-09-19")
+
+
+def test_a_public_build_that_would_show_a_licensed_series_is_refused() -> None:
+    # OMNI-187 (L70): the guard was only build_fixture.py's convention of naming
+    # EIA_PUBLIC_SERIES. With a calendar that covers the spot price, a public
+    # build naming it, or naming nothing (every series in the trace), put the
+    # licensed values in a fixture meant for specs/, which is public.
+    for inputs in (None, WHOLESALE.inputs, frozenset({SPOT})):
+        public = replace(WHOLESALE, inputs=inputs)
+        with pytest.raises(FixtureRefused, match=f"{SPOT}.*licensed.*private"):
+            build(_spot_trace(), EIA_RULES, _spot_calendar(), public,
+                  name="n", spec_ref="OMNI-187")
+    # Built private, the same question is fine, and so is a public one that
+    # shows only what may be redistributed, over the same trace.
+    assert _wholesale()
+    public = replace(WHOLESALE, inputs=EIA_PUBLIC_SERIES, ask_after=datetime.timedelta(0))
+    files = build(_spot_trace(), EIA_RULES, _spot_calendar(), public,
+                  name="n", spec_ref="OMNI-187").files
+    # The calendar copied beside it names the series, with release dates only.
+    assert not any(SPOT in body for name, body in files.items()
+                   if name.endswith(("_fixture.json", "_expect.json")))
+
+
+def test_the_eia_rules_name_the_licensed_series() -> None:
+    assert EIA_RULES.licensed == frozenset(EIA_SERIES) - EIA_PUBLIC_SERIES == {SPOT}
+
+
+def _private_gate(tmp_path: pathlib.Path, files: dict[str, str], candidate: str,
+                  *, change: Callable[[pathlib.Path], None] | None = None,
+                  ) -> gauntlet.Result | None:
+    root = tmp_path / "specs" / "ca_price_wholesale"
+    for relative, text in files.items():
+        (root / relative).parent.mkdir(parents=True, exist_ok=True)
+        (root / relative).write_text(text, encoding="utf-8")
+    if change is not None:
+        change(root)
+    contract = FeatureContract(
+        name="ca_price_wholesale", spec_ref="OMNI-163", entry="predict",
+        entry_module="runtime/ca_price_wholesale.py",
+        acceptance_tests="specs/ca_price_wholesale/tests.py", public_api=("predict",),
+        backtests=private_backtests(str(root / PRIVATE_INDEX)))
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    (sandbox / "target.py").write_text(candidate, encoding="utf-8")
+    (sandbox / "sitecustomize.py").write_text(gauntlet._NETWORK_GUARD, encoding="utf-8")
+    return gauntlet._gate_backtest(gauntlet._GateContext(
+        contract=contract, code_str=candidate, tmp=sandbox, tmpdir=str(sandbox),
+        env=gauntlet._sandbox_env(home=str(sandbox), pythonpath=str(sandbox)),
+        candidate=sandbox / "target.py"))
+
+
+def _lookup(files: dict[str, str]) -> str:
+    answers = {json.loads(body)["event_time"]:
+               json.loads(files[name.replace("_fixture", "_expect")])["value"]
+               for name, body in files.items() if name.endswith("_fixture.json")}
+    return f"ANSWERS = {answers!r}\n\n\ndef predict(state):\n    return ANSWERS[state['as_of']]\n"
+
+
+def test_the_gate_judges_a_private_fixture_only_as_its_digests_in_git_say(
+        tmp_path: pathlib.Path) -> None:
+    files = _wholesale()
+    candidate = _lookup(files)
+    assert _private_gate(tmp_path / "as built", files, candidate) is None
+
+    def edit(root: pathlib.Path) -> None:
+        path = root / "private/backtests/2022-09-19_expect.json"
+        path.write_text(path.read_text(encoding="utf-8") + " ", encoding="utf-8")
+
+    changed = _private_gate(tmp_path / "changed", files, candidate, change=edit)
+    assert changed is not None and not changed.passed
+    assert changed.reason.startswith("harness:") and "digest is in git" in changed.reason
+
+    def lose(root: pathlib.Path) -> None:
+        (root / "private/backtests/2022-09-19_fixture.json").unlink()
+
+    missing = _private_gate(tmp_path / "missing", files, candidate, change=lose)
+    assert missing is not None and not missing.passed
+    assert missing.reason.startswith("harness:") and "artifacts bucket" in missing.reason
+
+
+def test_a_private_index_cannot_point_outside_its_private_directory(
+        tmp_path: pathlib.Path) -> None:
+    sha = "0" * 64
+    for path in ("../tests.py", "backtests/x.json", "/etc/passwd", "private/../oracle.py"):
+        index = tmp_path / PRIVATE_INDEX
+        index.write_text(json.dumps({"schema": 1, "episodes": [
+            {"name": "x", "fixture": path, "expect": "private/x.json",
+             "fixture_sha256": sha, "expect_sha256": sha}]}), encoding="utf-8")
+        with pytest.raises(ValueError, match="private/"):
+            private_backtests(str(index))
+    index.write_text(json.dumps({"schema": 1, "episodes": [
+        {"name": "x", "fixture": "private/a.json", "expect": "private/b.json",
+         "fixture_sha256": "not a digest", "expect_sha256": sha}]}), encoding="utf-8")
+    with pytest.raises(ValueError, match="sha256"):
+        private_backtests(str(index))
+
+
+def test_private_fixtures_are_never_committed() -> None:
+    from sis.paths import PROJECT_ROOT
+    ignore = (PROJECT_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    assert "specs/*/private/" in ignore
+
+
+WHOLESALE_CALENDAR = CALENDAR_DRAFT.parent / "eia_release_calendar_2018_2026.json"
+
+
+def test_the_drafted_calendar_covers_every_day_the_wholesale_fixture_can_show() -> None:
+    calendar = ReleaseCalendar.parse(_checked(WHOLESALE_CALENDAR.read_text(encoding="utf-8")))
+    question = _script().FIXTURES["ca_price_wholesale"].question
+    first_shown = question.first - question.horizon - question.lookback
+    last = datetime.date(2026, 10, 19)
+    day = first_shown
+    while day <= last:
+        series = [SPOT] if day.weekday() < 5 else []
+        series += [CA, LA, SF, US] if day.weekday() == 0 else []
+        series += [STOCKS] if day.weekday() == 4 else []
+        for name in series:
+            released = calendar.released(name, eia_period(day.strftime("%Y%m%d")))
+            assert released is not None, (name, day)
+            assert 0 <= (released.date() - day).days <= 40, (name, day, released)
+        day += datetime.timedelta(days=1)
+    # The irregular delays the 2021-2022 calendar's checker confirmed, again.
+    for series, period, on in ((STOCKS, "20220617", "2022-06-29"),
+                               (SPOT, "20220617", "2022-06-29")):
+        released = calendar.released(series, eia_period(period))
+        assert released is not None and released.date().isoformat() == on

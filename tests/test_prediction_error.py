@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 
-from sis import gauntlet, policy, prediction_error, scenarios
+from sis import gauntlet, policy, prediction_error, replay, scenarios
 from sis.adapters import InMemoryTelemetry
 from sis.adapters_real import EIA_RULES, eia_period, eia_published
 from sis.clock import ReplayClock
@@ -223,9 +223,136 @@ def test_a_failed_or_non_numeric_answer_is_a_note_never_a_score() -> None:
         prediction_error.score(asked, answers[:2])
 
 
+@pytest.mark.parametrize("answer", [10**400, -(10**400), 10**5000],
+                         ids=["huge", "-huge", "too-long-to-print"])
+def test_an_answer_too_large_for_a_float_is_not_a_number(answer: int) -> None:
+    # OMNI-201 (L73): JSON carries an int of any size and the sandbox worker
+    # decodes it as one; math.isfinite raised OverflowError on it, and the whole
+    # report was lost instead of one step. Past 4300 digits str() itself raises,
+    # so the note may not print it either.
+    asked = prediction_error.questions(*_readings())[:2]
+    report = prediction_error.score(asked, [answer, 5.0])
+    assert report.steps[0].predicted is None and report.steps[0].error is None
+    assert "not a number" in report.steps[0].note
+    assert report.steps[1].predicted == 5.0
+
+
 def test_an_empty_report_has_no_statistics() -> None:
     s = prediction_error.Report(target=CA, unit=UNIT, source="", steps=()).summary()
     assert s["scored"] == 0 and s["bias"] is None and s["mae"] is None and s["rmse"] is None
+
+
+# -- climatology and skill (OMNI-195) -------------------------------------------
+
+def _monday(year: int, week: int) -> datetime.datetime:
+    return datetime.datetime.combine(datetime.date.fromisocalendar(year, week, 1),
+                                     datetime.time(), tzinfo=datetime.UTC)
+
+
+def test_climatology_is_the_latest_value_plus_the_mean_seasonal_change() -> None:
+    # Week 40 to 41 rose 0.10 in 2019 and 0.30 in 2020; 2021 sits at 4.00.
+    values = {_monday(2019, 40): 3.00, _monday(2019, 41): 3.10,
+              _monday(2020, 40): 2.00, _monday(2020, 41): 2.30,
+              _monday(2021, 40): 4.00}
+    assert prediction_error.climatology(values, _monday(2021, 40)) == pytest.approx(4.20)
+    # Only the latest year if asked for one.
+    assert prediction_error.climatology(values, _monday(2021, 40), years=1) \
+        == pytest.approx(4.30)
+    # No earlier year with the pair, or no value for the week: no forecast.
+    assert prediction_error.climatology(values, _monday(2019, 40)) is None
+    assert prediction_error.climatology(values, _monday(2021, 41)) is None
+    gap = {_monday(2020, 40): 2.0, _monday(2020, 43): 2.5, _monday(2021, 40): 4.0}
+    assert prediction_error.climatology(gap, _monday(2021, 40)) is None
+
+
+def test_skill_is_one_minus_the_ratio_of_maes() -> None:
+    assert prediction_error.skill(0.05, 0.10) == pytest.approx(0.5)
+    assert prediction_error.skill(0.10, 0.10) == pytest.approx(0.0)
+    assert prediction_error.skill(0.20, 0.10) == pytest.approx(-1.0)
+    assert prediction_error.skill(0.1, 0.0) is None
+    assert prediction_error.skill(0.1, 1e-16) is None    # perfect, up to rounding
+    assert prediction_error.skill(None, 0.1) is None and prediction_error.skill(0.1, None) is None
+
+
+def _three_autumns() -> dict[datetime.date, float]:
+    # Each autumn rises 0.05 a week from its own level; the model below
+    # (persistence) misses each rise by 0.05, climatology learns it.
+    prices: dict[datetime.date, float] = {}
+    for year, level in ((2020, 3.0), (2021, 4.0), (2022, 5.0)):
+        start = datetime.date.fromisocalendar(year, 32, 1)
+        for i in range(10):
+            prices[start + datetime.timedelta(weeks=i)] = round(level + 0.05 * i, 3)
+    return prices
+
+
+def test_a_climatology_that_learned_the_season_claims_no_skill_to_beat() -> None:
+    readings, absent = read_back(_trace(_three_autumns()), EIA_RULES)
+    asked = prediction_error.questions(readings, absent)
+    report = prediction_error.score(asked, prediction_error.ask(_persistence, asked))
+    autumn_2022 = [s for s in report.steps if s.week.year == 2022 and s.error is not None]
+    assert len(autumn_2022) == 9
+    assert all(s.climatology_error == pytest.approx(0.0, abs=1e-9) for s in autumn_2022)
+    assert all(s.error == pytest.approx(-0.05) for s in autumn_2022)
+    # 2020 had no earlier year; 2021 learned from 2020; and the jump between
+    # autumns has no next week within reach, so it is not scored at all.
+    assert all(s.climatology is None for s in report.steps if s.week.year == 2020)
+    s = report.summary()
+    assert s["skill_weeks"] == 18
+    assert s["climatology_mae"] == pytest.approx(0.0, abs=1e-9)
+    assert s["skill"] is None     # a perfect climatology leaves nothing to beat
+
+
+def test_skill_against_a_climatology_that_misses() -> None:
+    # Two autumns that disagree: 2021's weekly rise is 0.10, 2022's 0.02, so
+    # climatology in 2022 forecasts +0.10 and misses by 0.08; persistence
+    # misses by 0.02 and has skill 1 - 0.02 / 0.08 = 0.75.
+    prices: dict[datetime.date, float] = {}
+    for year, step in ((2021, 0.10), (2022, 0.02)):
+        start = datetime.date.fromisocalendar(year, 32, 1)
+        for i in range(8):
+            prices[start + datetime.timedelta(weeks=i)] = round(4.0 + step * i, 3)
+    readings, absent = read_back(_trace(prices), EIA_RULES)
+    asked = prediction_error.questions(readings, absent)
+    report = prediction_error.score(asked, prediction_error.ask(_persistence, asked))
+    s = report.summary()
+    assert s["skill_weeks"] == 7
+    assert s["climatology_mae"] == pytest.approx(0.08)
+    assert s["skill"] == pytest.approx(0.75)
+    text = prediction_error.table(report)
+    assert "against climatology over 7 weeks" in text and "skill +0.750" in text
+
+
+def test_climatology_sees_nothing_after_the_question() -> None:
+    # Change everything after a question: its climatology does not move.
+    prices = _three_autumns()
+    later = {day: (value + 1.0 if day.year == 2022 and day.month >= 9 else value)
+             for day, value in prices.items()}
+    before = {q.week: q.climatology for q in prediction_error.questions(
+        *read_back(_trace(prices), EIA_RULES))}
+    after = {q.week: q.climatology for q in prediction_error.questions(
+        *read_back(_trace(later), EIA_RULES))}
+    cut = datetime.datetime(2022, 8, 29, tzinfo=datetime.UTC)
+    early = [week for week in before if week < cut]
+    assert early and all(before[w] == after[w] for w in early)
+    # And it is the same forecast the pure function makes from the as-of view.
+    readings, absent = read_back(_trace(prices), EIA_RULES)
+    for question in prediction_error.questions(readings, absent):
+        view = replay.as_of(readings, absent, question.at)
+        seen = {r.event_time: r.value for r in view.readings if r.series == CA}
+        assert question.climatology == prediction_error.climatology(seen, question.week)
+
+
+def test_skipped_weeks_stay_out_of_the_skill() -> None:
+    asked = prediction_error.questions(*_skipped_capture())
+    report = prediction_error.score(asked, prediction_error.ask(_persistence, asked))
+    skipped = [s for s in report.steps if s.error is None]
+    assert skipped and all(s.climatology_error is None for s in skipped)
+    assert report.summary()["skill_weeks"] <= report.summary()["scored"]
+
+
+def test_an_empty_report_has_no_skill() -> None:
+    s = prediction_error.Report(target=CA, unit=UNIT, source="", steps=()).summary()
+    assert s["skill_weeks"] == 0 and s["skill"] is None and s["climatology_mae"] is None
 
 
 # -- scenarios ----------------------------------------------------------------
@@ -332,6 +459,19 @@ def test_the_script_replays_autumn_2022_from_a_trace(
     out = capsys.readouterr().out
     assert "2022-08-01" in out and "2022-11-28" in out and "2022-07-25" not in out
     assert "2022-12-05" not in out
+
+
+def test_the_script_prints_skill_against_climatology(
+        tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
+    # Two years of history before autumn 2022, so climatology has something to learn.
+    prices = dict(zip(_mondays("2020-07-06", 130), (3.5 + (i % 52) / 50 for i in range(130)),
+                      strict=True))
+    trace = tmp_path / "eia.jsonl"
+    trace.write_text("".join(json.dumps(line, sort_keys=True) + "\n" for line in _trace(prices)),
+                     encoding="utf-8")
+    assert _script().main(["--trace", str(trace)]) == 0
+    out = capsys.readouterr().out
+    assert "climatology" in out and "against climatology over" in out and "skill " in out
 
 
 def test_the_script_refuses_without_a_trace(

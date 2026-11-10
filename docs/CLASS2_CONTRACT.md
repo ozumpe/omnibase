@@ -4,7 +4,7 @@
 that are not on the omnitrack critical path. This was the plan for how the
 gauntlet verifies *feature construction* — the work omnitrack actually needs —
 as an extension of the existing `validate()` gate stack, not a redesign; see
-CLAUDE.md's "Current status" for what each story landed.
+`CHANGELOG.md` (v0.2.0) for what each story landed.
 
 | Piece | Status |
 |---|---|

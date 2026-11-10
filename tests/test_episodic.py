@@ -117,6 +117,19 @@ def test_gate_from_reason() -> None:
     assert gate_from_reason(None) is None
 
 
+@pytest.mark.parametrize(("reason", "gate"), [
+    ("acceptance tests failed: AssertionError: the request timed out", "acceptance"),
+    ("invariant violated in sandbox (seed 7): raised TimeoutError: timeout", "invariant"),
+    ("backtest failed: 2022-09-05: the model timed out on its own", "backtest"),
+    ("correctness mismatch (input 4: 'timed out' != 7)", "correctness"),
+])
+def test_a_candidates_own_words_do_not_make_a_timeout(reason: str, gate: str) -> None:
+    # L27 (OMNI-73): a reason quotes what the candidate raised or returned, so
+    # "timed out" anywhere in it is the candidate's text. Only the harness's own
+    # reasons, which start with it, are timeouts.
+    assert gate_from_reason(reason) == gate
+
+
 def test_gate_from_reason_for_the_canarys_own_gates() -> None:
     # evaluate_canary's four reasons (sis/canary.py), each named distinctly
     # from its offline analogue -- OMNI-14 -- so rejected_by_gate can tell
