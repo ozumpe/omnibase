@@ -13,6 +13,9 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+- OMNI-180 (L65): a backtest fixture or expectation file that is not UTF-8 is
+  reported as a malformed fixture naming the backtest and the file, not as
+  "the backtest gate raised (UnicodeDecodeError ...)".
 - OMNI-163: a real proposer building a contract with backtests is told the bar
   it must clear on the held-out episodes: each answer's tolerance and, with a
   skill check, how far its mean absolute error must fall below the named

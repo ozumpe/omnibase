@@ -66,7 +66,7 @@ reference with no link target below.
 > | L72 | [OMNI-185], from the weekly review of the scheduled AWS run of 2026-10-31 — **fixed** (2026-11-07) |
 > | L73 | [OMNI-201], from the weekly code review of 2026-11-09 (develop @ 165623f) — **fixed** (2026-11-09) |
 > | L60 | [OMNI-173] — **fixed** (2026-10-27) |
-> | L61–L68 | [OMNI-176]–[OMNI-183], one each, from the code and documentation review of 2026-10-31 (develop @ 83bb43c); its documentation findings were fixed with [OMNI-184] (L61 and L63 **fixed** 2026-11-01, L62 2026-11-02) |
+> | L61–L68 | [OMNI-176]–[OMNI-183], one each, from the code and documentation review of 2026-10-31 (develop @ 83bb43c); its documentation findings were fixed with [OMNI-184] (L61 and L63 **fixed** 2026-11-01, L62 2026-11-02, L65 2026-11-10) |
 
 ## High
 
@@ -226,13 +226,6 @@ None open.
   probe-before-blame self-check (OMNI-37). The candidate is blamed either way
   and gains nothing, but a broken sandbox goes unnoticed on that path. Fix:
   one classifier both modules use, with a test.
-- [OMNI-180] **L65** — A backtest fixture that is not UTF-8 is reported as a
-  generic gate error *(found 2026-10-31 by code review)*. Since OMNI-163,
-  `_gate_backtest` decodes the bytes it digested before its `try`, so a
-  `UnicodeDecodeError` no longer becomes `harness: backtest '<name>' has a
-  malformed fixture` but `harness: the backtest gate raised (...)`, naming
-  neither the backtest nor the file. Still a harness verdict. Fix: decode
-  inside the `try`.
 - [OMNI-181] **L66** — `scripts/aws_secret.py`'s `check_anthropic_key` ends
   in a traceback when the connection drops mid-response *(found 2026-10-31 by
   code review)*. It catches `URLError` and `TimeoutError`;
@@ -256,6 +249,18 @@ None open.
   *index* is repo-relative and a test passes an absolute path.
 
 ## Resolved (Low)
+
+- [OMNI-180] **L65** — A backtest fixture that is not UTF-8 is reported as a
+  generic gate error *(found 2026-10-31 by code review)*. Since OMNI-163,
+  `_gate_backtest` decodes the bytes it digested before its `try`, so a
+  `UnicodeDecodeError` no longer becomes `harness: backtest '<name>' has a
+  malformed fixture` but `harness: the backtest gate raised (...)`, naming
+  neither the backtest nor the file. Still a harness verdict.
+  **Fixed 2026-11-10 (OMNI-180):** a fixture or expectation file that does
+  not decode is `harness: backtest '<name>' has a malformed fixture — <file>
+  is not UTF-8 (...)` again. Regression test
+  (`tests/test_backtest.py`): a non-UTF-8 fixture and a non-UTF-8 expectation,
+  each named in the reason.
 
 - [OMNI-201] **L73** — `prediction_error.score` crashed on a predictor answer
   too large for a float *(found 2026-11-09 by the weekly code review, develop
