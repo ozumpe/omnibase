@@ -606,7 +606,7 @@ internal target before it models anything external.
   live runs — don't put planning there.
 
 ## Current status — where to pick up
-Latest release: **v0.5.0** (2026-10-30). What each release carried, and what
+Latest release: **v0.6.0** (2026-11-10). What each release carried, and what
 is on `develop` since, is in `CHANGELOG.md`; the AWS box runs the latest
 release tag, not `develop`. **What to work on next is in Jira**
 ([`OMNI`](https://olafzumpe.atlassian.net/browse/OMNI)): check the board, not
