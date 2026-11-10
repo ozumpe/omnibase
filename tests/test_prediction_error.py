@@ -223,6 +223,20 @@ def test_a_failed_or_non_numeric_answer_is_a_note_never_a_score() -> None:
         prediction_error.score(asked, answers[:2])
 
 
+@pytest.mark.parametrize("answer", [10**400, -(10**400), 10**5000],
+                         ids=["huge", "-huge", "too-long-to-print"])
+def test_an_answer_too_large_for_a_float_is_not_a_number(answer: int) -> None:
+    # OMNI-201 (L73): JSON carries an int of any size and the sandbox worker
+    # decodes it as one; math.isfinite raised OverflowError on it, and the whole
+    # report was lost instead of one step. Past 4300 digits str() itself raises,
+    # so the note may not print it either.
+    asked = prediction_error.questions(*_readings())[:2]
+    report = prediction_error.score(asked, [answer, 5.0])
+    assert report.steps[0].predicted is None and report.steps[0].error is None
+    assert "not a number" in report.steps[0].note
+    assert report.steps[1].predicted == 5.0
+
+
 def test_an_empty_report_has_no_statistics() -> None:
     s = prediction_error.Report(target=CA, unit=UNIT, source="", steps=()).summary()
     assert s["scored"] == 0 and s["bias"] is None and s["mae"] is None and s["rmse"] is None
