@@ -4,14 +4,23 @@ What each release of omnibase carried, newest first. A release is a git tag on
 `main`, cut from `develop` through a release PR; the AWS box runs the latest
 tag, never `develop`. `OMNI-N` is a Jira key
 ([board](https://olafzumpe.atlassian.net/browse/OMNI)); H/M/L IDs are defects
-in [`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md), which has the full write-up
-of each. Until 2026-10-31 this history lived in `CLAUDE.md`'s "Current status"
+in [`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md) (open ones in full,
+resolved ones as one line; the write-up is in the Jira ticket). Until 2026-10-31 this history lived in `CLAUDE.md`'s "Current status"
 (OMNI-184).
 
 When a change merges to `develop`, add a line under **Unreleased**; cutting a
 release renames that heading to the new tag.
 
 ## Unreleased
+
+- OMNI-211: `CLAUDE.md`, loaded into every session, is cut from 733 lines plus
+  two `@`-included files to 122 lines with no includes; the detail moved to
+  `docs/ENGINE_RULES.md`, and `tests/test_claude_md.py` caps it at 200 lines.
+  `docs/KNOWN_ISSUES.md` keeps open and won't-fix entries in full and each
+  resolved one as a line (2,320 to about 500 lines); `docs/AWS_RUN.md` drops
+  its run-by-run history. Both full texts are in git at `0a86c58`.
+  `docs/SENSOR_RUNBOOK.md` now says the capture is weekly and by hand
+  (OMNI-214) and that only promotion still needs a person (OMNI-215).
 
 ## v0.6.0 — 2026-11-10
 

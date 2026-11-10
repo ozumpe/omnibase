@@ -3,9 +3,10 @@
 The sensor implementation reads observations, not a fuel-market model. The
 current EIA adapter captures five weekly series and one daily one into a local trace, and
 generated scenarios (OMNI-34) replay through the simulated sensor, and a
-predictor's error can be computed on either (OMNI-36); approved domain
-fixtures (OMNI-35) remain separate work. No control-loop consumer uses the
-sensor automatically. This guide describes the current working-tree
+predictor's error can be computed on either (OMNI-36). Two domain fixtures
+have been built from the trace and promoted: `ca_price_next_week` (public,
+OMNI-35) and `ca_price_wholesale` (private, OMNI-163). No control-loop
+consumer reads the sensor live; the loop sees only promoted fixtures. This guide describes the current working-tree
 implementation of OMNI-33, not its availability in older release tags.
 
 ## Capture EIA observations
@@ -22,6 +23,13 @@ It extracts declared series, sanitises their records, and appends to
 `runtime/sensor_traces/eia.jsonl`. It does not need Ray, GitHub, Jira or
 Confluence credentials. Run captures explicitly; neither selecting the sensor
 backend nor starting `main.py` schedules them.
+
+**Today a person runs the capture once a week**, after EIA's Wednesday
+release, on the one machine that holds the canonical trace. A missed week is
+not lost (the next capture still records the values, known at its own fetch
+time), but the prediction-error report cannot score a week whose next value
+was already known when it was asked (M34). Scheduling the capture, with the
+trace kept in the artifacts bucket, is [OMNI-214](https://olafzumpe.atlassian.net/browse/OMNI-214).
 
 | Bulk-file series | Observation | Published unit |
 |---|---|---|
@@ -114,12 +122,17 @@ known at the same instant are refused (`AmbiguousVintage`).
 
 ## From a trace to a fixture
 
-A fixture is the exam, so it reaches `specs/` only through a human:
+A fixture is the exam, so it reaches `specs/` only through `promote`, which
+takes a reviewed digest and has no override. The release calendar no longer
+needs a person (CI checks and signs it, OMNI-190); promotion still does.
+Moving promotion to a trusted job outside the loop, on a private runner, is
+[OMNI-215](https://olafzumpe.atlassian.net/browse/OMNI-215).
 
-1. **Check the release calendar.** `scripts/data/eia_release_calendar_2021_2022.json`
+1. **The release calendar.** `scripts/data/eia_release_calendar_2021_2022.json`
    records when each period was really released (WPSR archive for stocks, ALFRED's
-   release dates for retail prices). Compare it with the sources it names, then fill
-   in `checked_by` and `checked_on`. An unchecked calendar refuses every build.
+   release dates for retail prices). It was checked by hand before OMNI-190 and is
+   frozen with its fixture. A new or extended calendar takes the CI-checked path
+   described under "A private fixture" below. An unchecked calendar refuses every build.
 2. **Build and stage:** `poetry run python scripts/build_fixture.py`. It reads the
    trace back through the door, gives every reconstructed reading it shows a
    `known_at` no earlier than the end of its release day, refuses a reading the
@@ -303,8 +316,8 @@ On replay the trace checks capture membership, appended counts and timestamp
 consistency, then sanitises value records again. These checks detect malformed
 or inconsistent records, not a forged capture that is internally consistent.
 The trace is staging, **not an authenticated exam**. Nothing here writes to
-`specs/`; domain fixtures require human-approved promotion through the
-contract-author path.
+`specs/`; domain fixtures require promotion through the contract-author path
+(human-approved today, OMNI-215).
 
 ## Failure and recovery
 

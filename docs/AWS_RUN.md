@@ -14,10 +14,10 @@ opposite on purpose: no systemd unit, no autostart, no autoscaling.
 This document has four parts:
 
 1. [Run day](#run-day): the steps, in order. Start here. A run can also be
-   started and stopped by a scheduled task: [Scheduled runs](#scheduled-runs).
+   started and stopped by a scheduled task: [Scheduled runs](#scheduled-runs-omni-168-omni-169).
 2. [Troubleshooting](#troubleshooting): everything that has gone wrong before.
 3. [How the box is built](#how-the-box-is-built): why each piece is the way it is.
-4. [History](#history): what each run and rehearsal found.
+4. [History](#history): where the run-by-run history went.
 
 ## At a glance
 
@@ -25,11 +25,11 @@ This document has four parts:
 |---|---|
 | Code | release tag **`v0.6.0`** (`var.repo_ref`), never a branch — see [Which code runs](#which-code-runs) |
 | Box | one `m7i.xlarge`, `us-east-1`, **no inbound ports**; shell via SSM only |
-| Contract | Class 1, one with room left: `sort` and `sum_of_divisors` have both converged, so re-seed a naive one on `ozumpe/testrun`'s `develop` first ([Before every run](#before-every-run-a-target-with-room-left)). Or Class 2, `roman`: built from its spec, no re-seed (from `v0.3.5`) |
+| Contract | Class 1, one with room left: `sort` and `sum_of_divisors` have both converged, so re-seed a naive one on `ozumpe/testrun`'s `develop` first ([Before every run](#before-every-run-a-target-with-room-left)). Or Class 2: `roman` (built from its spec, no re-seed) or `ca_price_wholesale`, which the weekly scheduled run uses since `v0.6.0` (its private episodes must be in the artifacts bucket) |
 | Where artifacts land | Jira `TES`, GitHub `ozumpe/testrun` (PRs against `develop`) |
 | Spend brakes | `SIS_BUDGET_USD=1.00` in the loop; an AWS Budget alarm (default $25/month) on the account |
 | Cost | about $0.20 an hour while the instance runs |
-| Latest | run #7 (`v0.3.6`, `roman` built again; a second loop ran beside it, M28), 2026-09-30 — see [History](#history) |
+| Runs | weekly, by a scheduled task ([Scheduled runs](#scheduled-runs-omni-168-omni-169)); results under `runs/` in the artifacts bucket |
 
 ---
 
@@ -176,7 +176,8 @@ sandbox would page nobody.
 
 **Don't click the link** — confirm from the terminal instead, with
 unsubscribing locked behind AWS authentication. Clicking it on 2026-09-27 was
-followed each time by an unsubscribe (see [History](#history)).
+followed each time by an unsubscribe: SNS's confirmation page carries an
+unsubscribe link that works without a login, and something followed it.
 
 1. Find the "AWS Notification - Subscription Confirmation" email (check spam
    too). Right-click **Confirm subscription**, choose "Copy link address", and
@@ -896,106 +897,8 @@ second operator, a second node.
 
 ## History
 
-- **2026-08-16 — designed** (PR #94).
-- **2026-08-30 — pre-flighted** (PR #99). Fixed two boot-time defects, each of
-  which would have cost a full instance lifecycle: `user_data` racing Ubuntu's
-  `unattended-upgrades` for the dpkg lock, and SSM sessions landing as
-  `ssm-user` rather than `ubuntu`. Switched from Terraform to OpenTofu.
-- **2026-09-23 — rehearsed** on a local Ubuntu 24.04 box. Found two defects
-  that neither the unit tests nor the #99 read-through could see:
-  - **The docker sandbox could not read its own temp dir on native Linux.** The
-    temp dir is `0700` and owned by the host user; the container ran as the
-    image's `sandbox` uid (10001) and got `Permission denied`. Docker Desktop's
-    file sharing ignores ownership, which is why every Mac run passed. Worse
-    than a crash: the gate reported `mypy --strict failed`, so on EC2 every
-    Claude candidate would have been rejected as badly typed, billed, filed as a
-    `TES` bug, and tripped the breaker after three cycles. The container now
-    runs as the host user's uid (`sis.gauntlet._container_user`, which also
-    refuses root). The misattribution itself was closed later (OMNI-37).
-  - **The operator console could not start on the box**: the bootstrap did not
-    install the `ui` group, so `python -m sis.frontend` died with
-    `ModuleNotFoundError: panel`.
-- **2026-09-27 — run #1, on `v0.2.0`.** Three cycles ran; the benchmark gate
-  rejected all three (ratios 1.34 / 0.93 / 1.04), the breaker tripped on the
-  third, and the run spent $0.107 of its $1.00 budget. Artifacts are in
-  `s3://sis-first-run-artifacts-696644743351/runs/20260927-0007/`. Findings,
-  all fixed in `v0.2.1`:
-  - it ran the default contract instead of `sort`, and nothing showed which
-    (OMNI-121);
-  - its page reached nobody: 0 confirmed subscriptions passed the preflight
-    (OMNI-122);
-  - `main.py` did not say why a cycle rolled back or why the loop stopped
-    (OMNI-123);
-  - the artifacts sync needed three attempts, with a placeholder bucket name
-    (OMNI-124);
-  - the first `tofu init` timed out on the registry.
-- **2026-09-27 — the pager, again.** An attempt stopped at the confirmation:
-  the Gmail message landed in spam, and every click on *Confirm subscription*
-  was followed immediately by an unsubscribe. SNS's confirmation page carries
-  an unsubscribe link that works without a login, and something followed it.
-  Hence [step 3](#3-confirm-the-pager-laptop--dont-click-the-link)'s terminal
-  confirmation with `--authenticate-on-unsubscribe`.
-- **2026-09-27 — run #2, on `v0.2.1`, contract `sort`.** A single `main.py`
-  cycle followed by the loop proposed the same change twice (testrun PRs #11
-  and #12, 47 s apart): the pending PR lived only in memory and died with the
-  first process. Fixed in `v0.3.0` (OMNI-126): startup restores the hold and
-  prints `[sis] HOLDING: PR ...`.
-- **2026-09-28/29 — run #3, on `v0.3.0`, contract `sum_of_divisors`**: the
-  first run with staged delivery (OMNI-130). The first feature finished after
-  one step and opened testrun #13 (09-28, 02:07 UTC), and the loop held. On
-  09-29 the box was **rebuilt** (02:26 UTC); the new one knew nothing of #13,
-  started a fresh feature from `develop`, and opened #14 (02:53 UTC, two
-  steps) — the same file from the same base, so the two conflict (M26). The
-  pending PR had lived in a file on the old box. Fixed in `v0.3.1`
-  (OMNI-136): before every cycle, the loop asks GitHub which of its PRs are
-  still open.
-- **2026-09-29 — run #4, on `v0.3.1`, contract `sum_of_divisors`**, on a
-  fresh box after #13 and #14 were closed by hand. Staged delivery worked end
-  to end: three accepted steps on one branch, one PR (testrun #15), the loop
-  held, a human merged it, and the loop continued from `develop`. Then
-  `sum_of_divisors` had converged (~1 µs per call): three attempts in a row
-  found no further gain (ratios 0.933, 3.24, 0.949 against the 0.90 margin),
-  each filed a bug, and the third tripped the breaker — a CRITICAL page for a
-  loop that was not broken (M27). $0.27 of $1.00 spent; the pager worked.
-  Fixed in `v0.3.2` (OMNI-138): no gain from `develop` is neutral, and
-  convergence is its own polite stop. Artifacts in
-  `s3://sis-first-run-artifacts-696644743351/runs/20260929-0450/`.
-- **2026-09-29 — run #5, on `v0.3.2`, contracts `sort` and `sum_of_divisors`**
-  (reset to naive). `apply` ran before the `v0.3.2` tag was pushed, so the
-  first box could not clone it and was replaced by hand (`-replace`). Then the
-  fixes of run #4 held. `sort` had converged: three attempts, all `no_gain`
-  (ratios 0.968, 1.025, 0.976), then "sort has converged" and a WARNING page.
-  `sum_of_divisors` took two steps (245 µs → 2 µs → 1 µs); a third attempt found
-  no further gain and opened testrun #16 (20:22 UTC). A human merged it at
-  20:26, the loop started its next cycle 43 s later, and the second feature
-  converged the same way. No bug filed, breaker untouched, two WARNING pages
-  (both arrived), $0.2849 of $1.00, with spend carried across the two
-  processes. One plan per feature (OMNI-135): 9 TES issues for 9 cycles,
-  where run #4 filed 22 for 6. The one loss: an earlier cycle (TES-118 to 121,
-  20:04 UTC, rejected for a correctness mismatch) ran on a box that was then
-  replaced before its log was synced, so only its TES bug survives
-  (OMNI-140). Artifacts in
-  `s3://sis-first-run-artifacts-696644743351/runs/20260929-2028/`.
-- **2026-09-30 — run #6, on `v0.3.5`, contract `roman`**: the first Class-2
-  run (OMNI-147). `claude-opus-4-8` built `runtime/roman.py` at its first
-  attempt: every gate passed in the docker sandbox, and testrun #19 ("Build
-  roman: 1 step") opened at 18:19 UTC for $0.0353. A human merged it at 18:22.
-  The next three cycles found it "already built" ($0, no model call), and the
-  loop stopped as converged with a WARNING page. No bug filed, breaker
-  untouched, $0.0353 of $1.00. Three findings, L51–L53 (OMNI-148 to 150): the
-  intake still says "Speed up", the convergence check filed a second plan and
-  left TES-148 In Progress, and the log names a model for cycles without a
-  call. Artifacts in
-  `s3://sis-first-run-artifacts-696644743351/runs/20260930-1818/`
-  (`-1825` is its by-hand copy, L48).
-- **2026-09-30 — run #7, on `v0.3.6`, contracts `sum_of_divisors` and
-  `roman`**. `sum_of_divisors` (re-seeded) took two steps, 276 µs to 2 µs
-  (testrun #20), then one more feature (#21). `roman` was built again at the
-  first attempt (#22, $0.0315), merged, and after three "already built"
-  cycles the loop stopped as converged. The v0.3.6 fixes held: "Build the roman
-  feature" in Jira, nothing filed by the "already built" cycles, and no model
-  recorded for them. But the `sum_of_divisors` loop, started with `nohup` inside
-  tmux, survived the attempt to stop it. It ran beside `roman` from 23:04, and
-  after #21 merged it spent $0.0282 on a rejected cycle (TES-155 to 158). The two
-  loops did not share the spend cap (M28, OMNI-151). Artifacts in
-  `s3://sis-first-run-artifacts-696644743351/runs/20260930-2252/` and `-2304/`.
+The run-by-run history (runs #1 to #7, 2026-08 to 2026-09-30) was removed on
+2026-11-10: each finding it recorded became a Jira ticket and a CHANGELOG
+line. The full text is in git history (`git show 0a86c58:docs/AWS_RUN.md`).
+Results of the scheduled runs are in the episodic logs under
+`s3://sis-first-run-artifacts-696644743351/runs/`.
