@@ -13,6 +13,11 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+- OMNI-163: a real proposer building a contract with backtests is told the bar
+  it must clear on the held-out episodes: each answer's tolerance and, with a
+  skill check, how far its mean absolute error must fall below the named
+  baseline, whose source it is shown. It was told only that episodes were held
+  out. No fixture's name, path or value reaches the prompt.
 - OMNI-195 (Phase B 1): a climatology baseline and the skill against it in the
   prediction-error report. Climatology is the latest price plus the mean
   change from that ISO week to the next over up to five earlier years, from

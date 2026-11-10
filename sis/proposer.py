@@ -227,17 +227,48 @@ def _build_prompt(current_source: str, spec: FeatureContract,
         laws = "\n".join(f"- {inv.name}: `{inv.check}` must hold for every input "
                          f"`{inv.strategy}` generates" for inv in spec.invariants)
         parts.append(f"Domain laws, checked on generated inputs:\n{laws}\n")
-        if spec.oracle_path is not None:
-            oracle = (PROJECT_ROOT / spec.oracle_path).read_text(encoding="utf-8")
-            parts.append(f"\nThe module that defines those laws and inputs:\n\n{oracle}\n")
+    if (spec.invariants or spec.skill is not None) and spec.oracle_path is not None:
+        oracle = (PROJECT_ROOT / spec.oracle_path).read_text(encoding="utf-8")
+        parts.append(f"\nThe module that defines those laws, inputs and baselines:\n\n"
+                     f"{oracle}\n")
     if spec.backtests:
-        parts.append(f"\nIt must also reproduce {len(spec.backtests)} recorded "
-                     "episode(s), held out and not shown here.\n")
+        parts.append(_backtest_bar(spec))
     parts.append(
         f"\nThe current module, which fails a gate (fix it):\n\n{current_source}\n"
         if current_source.strip() else "\nThere is no module yet: write it from scratch.\n")
     parts.append("\nReturn the complete module, correct and fully typed.")
     return "".join(parts) + _history_section(history, building=True)
+
+
+def _backtest_bar(spec: FeatureContract) -> str:
+    """What the backtest gate asks of the held-out episodes, as a bar to clear.
+
+    Only the rules: how close each answer must be, and how far below a
+    baseline the mean error must fall. Never a fixture's name, path or value:
+    the episodes are held out, and some show licensed data (OMNI-163).
+    """
+    lines = [f"\nIt must also pass {len(spec.backtests)} recorded episode(s), held out "
+             "and not shown here, each called like the entry point with the state "
+             "known at that moment. Every episode must be passed:"]
+    for compare, tolerance in sorted({(bt.compare, bt.tolerance) for bt in spec.backtests}):
+        if compare == "within_tolerance":
+            lines.append(f"- each answer within {tolerance:.0%} of the recorded value "
+                         "(relative)")
+        elif compare == "exact":
+            lines.append("- each answer exactly equal to the recorded value")
+        else:
+            lines.append(f"- each answer accepted by comparator `{compare}` at "
+                         f"tolerance {tolerance:g}")
+    skill = spec.skill
+    if skill is not None:
+        lines.append(
+            f"- and over all of them together, your mean absolute error must be at least "
+            f"{skill.margin:.0%} below that of the baseline `{skill.baseline}` defined in "
+            "the module above. Matching the baseline is a rejection: the module must "
+            "carry information the baseline ignores.")
+    lines.append("A rejection names the rule and the episode that failed it, never a "
+                 "recorded value or by how much it was missed.")
+    return "\n".join(lines) + "\n"
 
 
 def _history_section(history: Sequence[str], *, building: bool = False,
