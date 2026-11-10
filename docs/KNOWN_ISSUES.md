@@ -64,6 +64,7 @@ reference with no link target below.
 > | L70 | [OMNI-187], from the weekly code review of 2026-11-02 (develop @ 7ae6654) — **fixed** (2026-11-07) |
 > | L71 | [OMNI-188]: a test that failed once on CI — **fixed** (2026-11-06) |
 > | L72 | [OMNI-185], from the weekly review of the scheduled AWS run of 2026-10-31 — **fixed** (2026-11-07) |
+> | L73 | [OMNI-201], from the weekly code review of 2026-11-09 (develop @ 165623f) — **fixed** (2026-11-09) |
 > | L60 | [OMNI-173] — **fixed** (2026-10-27) |
 > | L61–L68 | [OMNI-176]–[OMNI-183], one each, from the code and documentation review of 2026-10-31 (develop @ 83bb43c); its documentation findings were fixed with [OMNI-184] (L61 and L63 **fixed** 2026-11-01, L62 2026-11-02) |
 
@@ -255,6 +256,26 @@ None open.
   *index* is repo-relative and a test passes an absolute path.
 
 ## Resolved (Low)
+
+- [OMNI-201] **L73** — `prediction_error.score` crashed on a predictor answer
+  too large for a float *(found 2026-11-09 by the weekly code review, develop
+  @ 165623f)*. It checked an answer with `math.isfinite`, which raises
+  `OverflowError` on an int beyond a float's range; JSON carries such an int
+  and the sandbox worker decodes it as one. A predictor (a SOFT target)
+  answering `10**400` for one week lost the whole report, in
+  `scripts/prediction_error.py` and the twin viewer, instead of that week's
+  step; under Phase B it would crash the monitor that decides whether to start
+  a cycle. The note also printed the answer with `str()`, which raises
+  `ValueError` past 4300 digits. The backtest harness's `_number` had the same
+  expression; a candidate could not reach it (the comparator runs first), but
+  the baseline could. **Fixed 2026-11-09 (OMNI-201):** `score` converts an
+  answer with `float()` inside a try (`prediction_error._finite`), so an int
+  outside a float's range is "not a number" for its step, and a huge int is
+  named by its size in the note (`_shown`). The backtest harness's `_number`
+  treats it as not a number, so a baseline returning one is the harness fault
+  it already was for a string. Regression tests: `10**400`, `-10**400` and
+  `10**5000` as answers (`tests/test_prediction_error.py`), and a baseline
+  returning `10**400` (`tests/test_backtest.py`).
 
 - [OMNI-185] **L72** — a PR merged while `--loop` ran left no trace in
   `loop.log` or the episodic log *(seen in the scheduled AWS run
@@ -2296,3 +2317,4 @@ any long-lived cluster exists.
 [OMNI-187]: https://olafzumpe.atlassian.net/browse/OMNI-187
 [OMNI-188]: https://olafzumpe.atlassian.net/browse/OMNI-188
 [OMNI-200]: https://olafzumpe.atlassian.net/browse/OMNI-200
+[OMNI-201]: https://olafzumpe.atlassian.net/browse/OMNI-201

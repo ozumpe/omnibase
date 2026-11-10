@@ -617,6 +617,7 @@ _BASELINES = (
     "def far(n):\n    return float(n)\n"                 # off by 6.5 and 8.5
     "def near(n):\n    return 12.45 if n == 6 else 18.45\n"  # off by 0.05 each
     "def words(n):\n    return 'twelve'\n"
+    "def huge(n):\n    return 10 ** 400\n"            # an int no float can hold
 )
 
 
@@ -668,13 +669,16 @@ def test_only_held_out_episodes_are_scored(tmp_path: pathlib.Path) -> None:
     assert gauntlet._gate_backtest(_ctx(tmp_path, spec, oracle_source=_BASELINES)) is None
 
 
-@pytest.mark.parametrize("baseline", ["missing", "words"])
+@pytest.mark.parametrize("baseline", ["missing", "words", "huge"])
 def test_a_baseline_that_is_missing_or_not_a_number_is_a_harness_fault(
     tmp_path: pathlib.Path, baseline: str,
 ) -> None:
+    # "huge": an int too large for a float is not a number either (OMNI-201,
+    # L73); math.isfinite raised OverflowError on it and the script crashed.
     result = _skill_gate(tmp_path, _episodes(tmp_path, _RECORDED), baseline)
     assert result is not None and result.reason.startswith("harness:")
     assert gate_from_reason(result.reason) == "harness"
+    assert "crashed" not in result.reason, result.reason
 
 
 def test_a_skill_check_that_could_never_judge_is_refused_at_declaration(
