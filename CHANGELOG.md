@@ -13,6 +13,10 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+- OMNI-180 (L65): a backtest fixture or expectation file that is not UTF-8 is
+  reported as a malformed fixture naming the backtest and the file, not as
+  "the backtest gate raised (UnicodeDecodeError ...)".
+
 ## v0.6.0 — 2026-11-10
 
 The first gated omnitrack contract (`ca_price_wholesale`, OMNI-163) and its
