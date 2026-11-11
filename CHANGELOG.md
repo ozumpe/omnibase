@@ -4,8 +4,8 @@ What each release of omnibase carried, newest first. A release is a git tag on
 `main`, cut from `develop` through a release PR; the AWS box runs the latest
 tag, never `develop`. `OMNI-N` is a Jira key
 ([board](https://olafzumpe.atlassian.net/browse/OMNI)); H/M/L IDs are defects
-in [`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md), which has the full write-up
-of each. Until 2026-10-31 this history lived in `CLAUDE.md`'s "Current status"
+in [`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md) (open ones in full,
+resolved ones as one line; the write-up is in the Jira ticket). Until 2026-10-31 this history lived in `CLAUDE.md`'s "Current status"
 (OMNI-184).
 
 When a change merges to `develop`, add a line under **Unreleased**; cutting a
@@ -13,6 +13,24 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+- OMNI-186 (L69): the `test_merge_observation.py` tests that need a real cycle
+  ending in a PR now build `roman` (Class 2, no benchmark) instead of speeding
+  up `sum_of_divisors`, so an oversubscribed CI box can no longer make them
+  `inconclusive`. They are about observing a merge, not timing.
+- OMNI-211: `CLAUDE.md`, loaded into every session, is cut from 733 lines plus
+  two `@`-included files to 122 lines with no includes; the detail moved to
+  `docs/ENGINE_RULES.md`, and `tests/test_claude_md.py` caps it at 200 lines.
+  `docs/KNOWN_ISSUES.md` keeps open and won't-fix entries in full and each
+  resolved one as a line (2,320 to about 500 lines); `docs/AWS_RUN.md` drops
+  its run-by-run history. Both full texts are in git at `0a86c58`.
+  `docs/SENSOR_RUNBOOK.md` now says the capture is weekly and by hand
+  (OMNI-214) and that only promotion still needs a person (OMNI-215).
+- OMNI-196 (Phase B 2): the two model-error triggers as pure decisions,
+  `sis/model_error.py`. The error budget fires on a window's MAE above the
+  actor's budget, skill decay on its skill against climatology below the
+  actor's floor; each needs a sustained breach and a minimum of scored weeks,
+  keeps its own streak and names its reason. Nothing calls them yet
+  (OMNI-197 wires them into `--loop`).
 - OMNI-180 (L65): a backtest fixture or expectation file that is not UTF-8 is
   reported as a malformed fixture naming the backtest and the file, not as
   "the backtest gate raised (UnicodeDecodeError ...)".
