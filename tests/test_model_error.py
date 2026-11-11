@@ -15,7 +15,7 @@ from collections.abc import Callable
 
 import pytest
 
-from sis import model_error
+from sis import model_error, policy
 from sis.model_error import BudgetRule, SkillRule, Trigger
 from sis.paths import PROJECT_ROOT
 from sis.prediction_error import Step
@@ -181,3 +181,7 @@ def test_the_decisions_are_pure() -> None:
     out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True,
                          cwd=PROJECT_ROOT, timeout=60, check=True)
     assert "LOADED []" in out.stdout, out.stdout + out.stderr
+
+
+def test_the_triggers_are_guardrail_code() -> None:
+    assert policy.classify("sis/model_error.py") is policy.ChangeTier.FORBIDDEN

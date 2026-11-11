@@ -100,6 +100,9 @@ GUARDRAIL_PATHS: tuple[str, ...] = (
     # How a predictor is shown a replay and how its error is computed
     # (OMNI-36): a loop able to edit it could grade its own forecasts.
     "sis/prediction_error.py",
+    # When a model's error starts a cycle (OMNI-196, Phase B's two triggers):
+    # a loop able to edit the budget or skill rule could decide its own work.
+    "sis/model_error.py",
     "sis/cost.py",            # spend accounting that feeds the brakes
     "sis/settings.py",        # secret loading + masking
     "sis/adapters.py",        # RequiresHumanApproval guardrails (in-memory)
