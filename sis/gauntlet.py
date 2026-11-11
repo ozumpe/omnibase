@@ -944,7 +944,16 @@ def _gate_backtest(ctx: _GateContext) -> Result | None:
                     reason=f"harness: backtest {bt.name!r}: {relative} is not the file whose "
                            "digest is in git (private fixture changed or replaced)",
                 )
-            texts.append(data.decode("utf-8"))
+            try:
+                texts.append(data.decode("utf-8"))
+            except UnicodeDecodeError as exc:
+                # Named here: decoded outside the handler below, it escaped as
+                # "the backtest gate raised", naming neither (OMNI-180, L65).
+                return Result(
+                    passed=False,
+                    reason=f"harness: backtest {bt.name!r} has a malformed fixture — "
+                           f"{relative} is not UTF-8 ({exc.reason} at byte {exc.start})",
+                )
         fixture_text, expect_text = texts
         try:
             # Parsed for validation, then copied verbatim: the sandbox re-reads

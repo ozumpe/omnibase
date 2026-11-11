@@ -19,6 +19,10 @@ release renames that heading to the new tag.
   actor's floor; each needs a sustained breach and a minimum of scored weeks,
   keeps its own streak and names its reason. Nothing calls them yet
   (OMNI-197 wires them into `--loop`).
+- OMNI-180 (L65): a backtest fixture or expectation file that is not UTF-8 is
+  reported as a malformed fixture naming the backtest and the file, not as
+  "the backtest gate raised (UnicodeDecodeError ...)".
+
 ## v0.6.0 — 2026-11-10
 
 The first gated omnitrack contract (`ca_price_wholesale`, OMNI-163) and its
