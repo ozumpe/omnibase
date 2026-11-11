@@ -21,6 +21,15 @@ release renames that heading to the new tag.
   its run-by-run history. Both full texts are in git at `0a86c58`.
   `docs/SENSOR_RUNBOOK.md` now says the capture is weekly and by hand
   (OMNI-214) and that only promotion still needs a person (OMNI-215).
+- OMNI-196 (Phase B 2): the two model-error triggers as pure decisions,
+  `sis/model_error.py`. The error budget fires on a window's MAE above the
+  actor's budget, skill decay on its skill against climatology below the
+  actor's floor; each needs a sustained breach and a minimum of scored weeks,
+  keeps its own streak and names its reason. Nothing calls them yet
+  (OMNI-197 wires them into `--loop`).
+- OMNI-180 (L65): a backtest fixture or expectation file that is not UTF-8 is
+  reported as a malformed fixture naming the backtest and the file, not as
+  "the backtest gate raised (UnicodeDecodeError ...)".
 
 ## v0.6.0 — 2026-11-10
 

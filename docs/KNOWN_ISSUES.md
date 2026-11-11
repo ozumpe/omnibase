@@ -168,13 +168,6 @@ None open.
   probe-before-blame self-check (OMNI-37). The candidate is blamed either way
   and gains nothing, but a broken sandbox goes unnoticed on that path. Fix:
   one classifier both modules use, with a test.
-- [OMNI-180] **L65** — A backtest fixture that is not UTF-8 is reported as a
-  generic gate error *(found 2026-10-31 by code review)*. Since OMNI-163,
-  `_gate_backtest` decodes the bytes it digested before its `try`, so a
-  `UnicodeDecodeError` no longer becomes `harness: backtest '<name>' has a
-  malformed fixture` but `harness: the backtest gate raised (...)`, naming
-  neither the backtest nor the file. Still a harness verdict. Fix: decode
-  inside the `try`.
 - [OMNI-181] **L66** — `scripts/aws_secret.py`'s `check_anthropic_key` ends
   in a traceback when the connection drops mid-response *(found 2026-10-31 by
   code review)*. It catches `URLError` and `TimeoutError`;
@@ -249,6 +242,7 @@ None open.
 
 ## Resolved (Low)
 
+- [OMNI-180] **L65** — A backtest fixture that is not UTF-8 is reported as a generic gate error
 - [OMNI-201] **L73** — `prediction_error.score` crashed on a predictor answer too large for a float
 - [OMNI-185] **L72** — a PR merged while `--loop` ran left no trace in `loop.log` or the episodic log
 - [OMNI-187] **L70** — `sis/fixture_builder.build` wrote a public fixture (`private=False`) from whatever series `question.inputs` named, and from every series in the trace…

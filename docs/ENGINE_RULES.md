@@ -54,8 +54,14 @@ touch the code a rule is about. History (what changed when) belongs in
   earlier years. The summary carries its MAE and the model's skill,
   1 − MAE(model)/MAE(climatology), over the weeks both were scored; a week with
   no earlier year has no climatology and claims no skill. Nothing starts a
-  cycle from it: an error budget and skill against climatology are Phase B's
-  triggers (D9, epic OMNI-194).
+  cycle from it yet. Phase B's two triggers (D9, epic OMNI-194) are decided
+  in `sis/model_error.py` (OMNI-196, pure): **error budget** (a window's MAE
+  above the actor's budget: the twin is unfit) and **skill decay** (its skill
+  against climatology below the actor's floor: headroom), each with its own
+  rule and streak. Both need a sustained breach (`windows` ticks in a row,
+  reset on firing) and a minimum of scored weeks; skipped weeks never count,
+  and every threshold is an argument, per actor. Wiring them into `--loop`
+  is OMNI-197.
   **The real sensor is `EIASensor`** (OMNI-33, `sis/adapters_real.py`): EIA's
   bulk file `PET.zip` (no key), five weekly series (PADD 5 gasoline stocks;
   California, Los Angeles, San Francisco and US retail prices) and, since
