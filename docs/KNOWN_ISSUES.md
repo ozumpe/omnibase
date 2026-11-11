@@ -149,14 +149,6 @@ None open.
   cluster, and the suite runs with `episodic.store=none`. The suspect, not
   proven, is a sandboxed gate timing out under heavy load in the first cycle.
   Next time it fails, keep the assertion's `reason` before changing anything.
-- [OMNI-179] **L64** — `gauntlet._attribute` still treats `"timed out"`
-  anywhere in a reason as a timeout *(found 2026-10-31 by code review; L27's
-  other half)*. L27 made `episodic.gate_from_reason` match only the harness's
-  own words (`_HARNESS_TIMEOUT`); `_attribute` still tests the substring, so a
-  failure quoting the candidate's `ReadTimeout: timed out` skips the
-  probe-before-blame self-check (OMNI-37). The candidate is blamed either way
-  and gains nothing, but a broken sandbox goes unnoticed on that path. Fix:
-  one classifier both modules use, with a test.
 - [OMNI-181] **L66** — `scripts/aws_secret.py`'s `check_anthropic_key` ends
   in a traceback when the connection drops mid-response *(found 2026-10-31 by
   code review)*. It catches `URLError` and `TimeoutError`;
@@ -231,6 +223,7 @@ None open.
 
 ## Resolved (Low)
 
+- [OMNI-179] **L64** — `gauntlet._attribute` treated `"timed out"` anywhere in a reason as a timeout and skipped the sandbox probe
 - [OMNI-186] **L69** — Four `tests/test_merge_observation.py` tests that run a real cycle came out `inconclusive` under `-n auto`
 - [OMNI-180] **L65** — A backtest fixture that is not UTF-8 is reported as a generic gate error
 - [OMNI-201] **L73** — `prediction_error.score` crashed on a predictor answer too large for a float
