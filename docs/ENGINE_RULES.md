@@ -55,7 +55,7 @@ touch the code a rule is about. History (what changed when) belongs in
   1 − MAE(model)/MAE(climatology), over the weeks both were scored; a week with
   no earlier year has no climatology and claims no skill. Nothing starts a
   cycle from it yet. Phase B's two triggers (D9, epic OMNI-194) are decided
-  in `sis/model_error.py` (OMNI-196, pure): **error budget** (a window's MAE
+  in `sis/model_error.py` (OMNI-196, pure, POLICY-FORBIDDEN): **error budget** (a window's MAE
   above the actor's budget: the twin is unfit) and **skill decay** (its skill
   against climatology below the actor's floor: headroom), each with its own
   rule and streak. Both need a sustained breach (`windows` ticks in a row,
@@ -351,7 +351,8 @@ touch the code a rule is about. History (what changed when) belongs in
     fixtures built from it (`sis/replay.py`, `sis/fixture_builder.py`,
     OMNI-35), which scenario generator drives a twin (`sis/scenarios.py`,
     OMNI-34; the generator itself is `specs/scenarios.py`), how a predictor's
-    error is computed (`sis/prediction_error.py`, OMNI-36), the contract-author approval gate
+    error is computed (`sis/prediction_error.py`, OMNI-36) and when it starts
+    a cycle (`sis/model_error.py`, OMNI-196), the contract-author approval gate
     (`sis/contract_author.py`),
     `specs/` (the exam itself — oracles, acceptance tests, domain laws, backtest
     fixtures), cost accounting (`sis/cost.py` — the breaker/threshold logic
