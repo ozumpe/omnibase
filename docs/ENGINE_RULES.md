@@ -608,9 +608,9 @@ ignores your shell's `SIS_*` variables, Anthropic key and AWS credentials
 **Known test flakes**: re-run, then file or update the ticket; never call a
 failure environment noise.
 - Open: L58 (`test_fast_on_typical_inputs_but_slower_in_total_is_rejected`,
-  OMNI-141), L59 (`test_a_feature_is_planned_once_and_carried_on_after_a_restart`,
-  OMNI-174) and L69 (four real cycles in `test_merge_observation.py` came out
-  inconclusive, OMNI-186), each seen once under `-n auto`.
+  OMNI-141) and L59 (`test_a_feature_is_planned_once_and_carried_on_after_a_restart`,
+  OMNI-174), each seen once under `-n auto`. L69 (OMNI-186) is fixed: those
+  tests build `roman` now, which has no benchmark.
 - `test_correct_but_not_faster_is_rejected` is **not** test-only: on a heavily
   loaded machine the benchmark can accept its candidate, which is a few percent
   slower than the baseline (M7,

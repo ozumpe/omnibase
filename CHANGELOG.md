@@ -13,6 +13,10 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+- OMNI-186 (L69): the `test_merge_observation.py` tests that need a real cycle
+  ending in a PR now build `roman` (Class 2, no benchmark) instead of speeding
+  up `sum_of_divisors`, so an oversubscribed CI box can no longer make them
+  `inconclusive`. They are about observing a merge, not timing.
 - OMNI-211: `CLAUDE.md`, loaded into every session, is cut from 733 lines plus
   two `@`-included files to 122 lines with no includes; the detail moved to
   `docs/ENGINE_RULES.md`, and `tests/test_claude_md.py` caps it at 200 lines.

@@ -95,7 +95,7 @@ Detail for each: `docs/ENGINE_RULES.md` § Hard rules.
 - One cycle, in-memory: `poetry run python main.py`.
 - Gates: `poetry run pytest` (fast half, `-n auto`), `poetry run pytest -m serve -n 0` (Serve half, serial), `poetry run mypy --strict sis/ main.py scripts/`, `poetry run ruff check .`.
 - The suite ignores your shell's `SIS_*` variables and credentials. A test that needs a real backend asks for `real_env`.
-- Known flakes (L58, L59, L69): re-run, then file or update the ticket. Never call a failure noise.
+- Known flakes (L58, L59): re-run, then file or update the ticket. Never call a failure noise.
 - Optional deps: `poetry install --with llm|real|analytics|ui`.
 - **Configuration is one file, `config.yml`, generated from `sis/config.py`.**
   - Precedence: CLI > env > file > default.

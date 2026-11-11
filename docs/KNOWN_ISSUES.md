@@ -149,17 +149,6 @@ None open.
   cluster, and the suite runs with `episodic.store=none`. The suspect, not
   proven, is a sandboxed gate timing out under heavy load in the first cycle.
   Next time it fails, keep the assertion's `reason` before changing anything.
-- [OMNI-186] **L69** — Four `tests/test_merge_observation.py` tests that run
-  a real `sum_of_divisors` cycle came out `inconclusive` together in one full
-  `pytest -n auto` run *(seen 2026-11-01, on a 4-CPU box with a load average
-  of 11)*: `test_a_real_cycle_reaches_promotion`,
-  `test_a_restart_waits_for_the_last_runs_pr`,
-  `test_a_pr_merged_offline_is_promoted_at_startup` and
-  `test_a_pr_declined_offline_is_released_and_logged`. The file passed alone
-  and the suite passed on a re-run. The suspect, not proven, is L58's: under
-  oversubscription the benchmark's interval widens past the margin. These
-  tests are about merge observation, not timing. Next time, keep the cycle's
-  `reason` (ratio and interval) before changing anything.
 - [OMNI-179] **L64** — `gauntlet._attribute` still treats `"timed out"`
   anywhere in a reason as a timeout *(found 2026-10-31 by code review; L27's
   other half)*. L27 made `episodic.gate_from_reason` match only the harness's
@@ -242,6 +231,7 @@ None open.
 
 ## Resolved (Low)
 
+- [OMNI-186] **L69** — Four `tests/test_merge_observation.py` tests that run a real cycle came out `inconclusive` under `-n auto`
 - [OMNI-180] **L65** — A backtest fixture that is not UTF-8 is reported as a generic gate error
 - [OMNI-201] **L73** — `prediction_error.score` crashed on a predictor answer too large for a float
 - [OMNI-185] **L72** — a PR merged while `--loop` ran left no trace in `loop.log` or the episodic log
