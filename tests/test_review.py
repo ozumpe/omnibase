@@ -18,6 +18,7 @@ import pytest
 
 from sis import config, episodic, feature, gauntlet, llm, org, proposer, review, roles
 from sis.contract import default_contract
+from sis.paths import RUNTIME_DIR
 
 BASE = ("def sum_of_divisors(n: int) -> int:\n"
         "    return sum(d for d in range(1, n + 1) if n % d == 0)\n")
@@ -52,6 +53,61 @@ def test_a_new_io_call_is_a_finding(call: str) -> None:
     name = call.split("(")[0]
     head = HEAD + f"\n\ndef helper() -> object:\n    return {call}\n"
     assert review.rule_findings(_subject(head)) == [f"no new I/O or egress: calls {name}()"]
+
+
+@pytest.mark.parametrize("module", [
+    # OMNI-203 (L75): routes the old denylist did not name. Anything not on the
+    # allowlist is a finding now, so an unlisted route cannot slip through.
+    "codecs", "gzip", "bz2", "lzma", "zipfile", "tarfile", "fileinput", "linecache",
+    "sqlite3", "dbm", "runpy", "code", "pty", "inspect", "gc",
+])
+def test_an_import_not_on_the_allowlist_is_a_finding(module: str) -> None:
+    found = review.rule_findings(_subject(f"import {module}\n{HEAD}"))
+    assert found == [f"no new I/O or egress: imports {module}"]
+
+
+@pytest.mark.parametrize("line", [
+    "from __future__ import annotations", "import math", "import itertools",
+    "from functools import cache", "from collections.abc import Mapping", "import heapq",
+    "import bisect", "from dataclasses import dataclass", "from typing import Any",
+    "import datetime", "from statistics import fmean", "import decimal", "import fractions",
+    "import re", "import random", "import json", "from zoneinfo import ZoneInfo",
+])
+def test_an_import_on_the_allowlist_is_not_a_finding(line: str) -> None:
+    assert review.rule_findings(_subject(f"{line}\n{HEAD}")) == []
+
+
+@pytest.mark.parametrize(("expr", "finding"), [
+    # OMNI-203 (L75): a builtin reached without calling it by name.
+    ("getattr(__builtins__, 'open')", "reads __builtins__"),
+    ("__builtins__['open']", "reads __builtins__"),
+    ("(lambda: 0).__globals__", "reaches .__globals__"),
+    ("type(0).__subclasses__()", "reaches .__subclasses__"),
+    ("getattr(int, 'real' + '')", "getattr() with a computed name"),
+    ("getattr(int, '__class__')", "getattr() with a dunder name"),
+    ("setattr(int, 'x', 1)", "setattr()"),
+])
+def test_reaching_a_builtin_indirectly_is_a_finding(expr: str, finding: str) -> None:
+    head = HEAD + f"\n\ndef helper() -> object:\n    return {expr}\n"
+    assert f"no new I/O or egress: {finding}" in review.rule_findings(_subject(head))
+
+
+@pytest.mark.parametrize("expr", [
+    "getattr(int, 'real')", "hasattr(int, 'real')", "super().__init__()",
+    "helper.__name__",
+])
+def test_plain_attribute_use_is_not_a_finding(expr: str) -> None:
+    head = HEAD + f"\n\ndef helper() -> object:\n    return {expr}\n"
+    assert review.rule_findings(_subject(head)) == []
+
+
+@pytest.mark.parametrize("path", sorted(
+    p.name for p in (RUNTIME_DIR / "candidates").glob("*.py")))
+def test_every_shipped_candidate_passes_the_rules_from_scratch(path: str) -> None:
+    # The allowlist (OMNI-203) must not send the stub's own answers back: each
+    # is judged as a Class-2 head with no base, so every import counts.
+    source = (RUNTIME_DIR / "candidates" / path).read_text(encoding="utf-8")
+    assert review.rule_findings(_subject(source, base="")) == []
 
 
 def test_what_the_base_already_had_is_not_new() -> None:

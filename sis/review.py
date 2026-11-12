@@ -9,10 +9,11 @@ Two parts, and both must approve:
 
 - **Rules** (:func:`rule_findings`), deterministic and always run, the stub's
   only part. The target must be a path the loop may write (the policy's SOFT
-  tier), and the diff may add no I/O or egress: no import of a module that
-  reaches files, processes, the network or the interpreter's internals, and
-  no call to ``open``, ``exec``, ``eval`` and the like, that the base did not
-  already have. The sandbox stops such code at run time; this stops it
+  tier), and the diff may add no I/O or egress that the base did not
+  already have: no import outside :data:`SAFE_MODULES`, no call to ``open``,
+  ``exec``, ``eval`` and the like, and no indirect way to a builtin
+  (``__builtins__``, an unusual dunder attribute, ``getattr`` with a computed
+  or dunder name, ``setattr``). The sandbox stops such code at run time; this stops it
   reaching a human's review queue, and no model's answer can override it.
 - **The reviewer model** (:func:`model_review`), a real LLM when
   ``proposer.backend`` is not ``stub``. It gets its own interface (D3): a
@@ -44,21 +45,30 @@ MAX_TOKENS = 4000
 MAX_FINDINGS = 8
 MAX_FINDING_CHARS = 300
 
-# Modules whose import gives a module I/O or egress, or the means to reach it
-# indirectly (a loaded library, the import system, a pickle). Matched on the
-# top-level name, so ``os.path`` counts as ``os``.
-IO_MODULES: frozenset[str] = frozenset({
-    "asyncio", "builtins", "ctypes", "ftplib", "glob", "http", "importlib", "io",
-    "marshal", "mmap", "multiprocessing", "os", "pathlib", "pickle", "poplib",
-    "requests", "resource", "select", "selectors", "shelve", "shutil", "signal",
-    "smtplib", "socket", "socketserver", "ssl", "subprocess", "sys", "tempfile",
-    "threading", "urllib", "webbrowser", "xmlrpc", "zipimport",
+# The modules a target may import: pure computation, nothing that reaches
+# files, processes, the network or the interpreter's internals. An allowlist,
+# because a denylist misses whatever it forgot to name (`codecs.open`, `gzip`,
+# `runpy`, ...). Matched on the top-level name, so ``collections.abc`` counts
+# as ``collections``. A target that needs another module gets it added here,
+# in a human-reviewed change to this file.
+SAFE_MODULES: frozenset[str] = frozenset({
+    "__future__", "abc", "array", "bisect", "cmath", "collections", "copy",
+    "dataclasses", "datetime", "decimal", "enum", "fractions", "functools",
+    "heapq", "itertools", "json", "math", "numbers", "operator", "random", "re",
+    "statistics", "string", "time", "typing", "zoneinfo",
 })
 
 # Builtins that reach the same things without an import.
 IO_CALLS: frozenset[str] = frozenset({
     "__import__", "breakpoint", "compile", "eval", "exec", "globals", "input",
     "open", "vars",
+})
+
+# Dunder attributes a target may use: they name, document or initialise, and
+# reach nothing. Any other (``__globals__``, ``__subclasses__``, ``__dict__``,
+# ``__class__``, ...) is a way from a plain object to the builtins.
+PLAIN_DUNDERS: frozenset[str] = frozenset({
+    "__doc__", "__init__", "__name__", "__post_init__", "__qualname__",
 })
 
 
@@ -115,6 +125,32 @@ def _called_names(tree: ast.AST) -> set[str]:
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
 
 
+def _is_dunder(name: str) -> bool:
+    return len(name) > 4 and name.startswith("__") and name.endswith("__")
+
+
+def _indirect_reaches(tree: ast.AST) -> set[str]:
+    """Ways to a builtin that name no import and call no I/O builtin by name."""
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id == "__builtins__":
+            found.add("reads __builtins__")
+        elif isinstance(node, ast.Attribute) and _is_dunder(node.attr) \
+                and node.attr not in PLAIN_DUNDERS:
+            found.add(f"reaches .{node.attr}")
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            func = node.func.id
+            if func in ("setattr", "delattr"):
+                found.add(f"{func}()")
+            elif func in ("getattr", "hasattr") and len(node.args) >= 2:
+                name = node.args[1]
+                if not (isinstance(name, ast.Constant) and isinstance(name.value, str)):
+                    found.add(f"{func}() with a computed name")
+                elif _is_dunder(name.value) and name.value not in PLAIN_DUNDERS:
+                    found.add(f"{func}() with a dunder name")
+    return found
+
+
 def _parse(source: str) -> ast.AST | None:
     try:
         return ast.parse(source)
@@ -135,10 +171,13 @@ def rule_findings(subject: Subject) -> list[str]:
     base = _parse(subject.base) if subject.base.strip() else None
     base_imports = _top_imports(base) if base is not None else set()
     base_calls = _called_names(base) if base is not None else set()
-    for name in sorted((_top_imports(head) & IO_MODULES) - base_imports):
+    base_reaches = _indirect_reaches(base) if base is not None else set()
+    for name in sorted(_top_imports(head) - SAFE_MODULES - base_imports):
         found.append(f"no new I/O or egress: imports {name}")
     for name in sorted((_called_names(head) & IO_CALLS) - base_calls):
         found.append(f"no new I/O or egress: calls {name}()")
+    for reach in sorted(_indirect_reaches(head) - base_reaches):
+        found.append(f"no new I/O or egress: {reach}")
     return found
 
 

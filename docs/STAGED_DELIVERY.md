@@ -146,11 +146,14 @@ Both must approve.
 - **The rules**, deterministic, always run, and the only part under the stub
   proposer:
   - the target must be a path the loop may write (the policy's SOFT tier);
-  - the diff may add no I/O or egress, meaning an import of a module that
-    reaches files, processes, the network or the interpreter's internals
-    (`os`, `socket`, `subprocess`, `importlib`, …), or a call to `open`,
-    `exec`, `eval`, `__import__` and the like, that the base did not already
-    have.
+  - the diff may add no I/O or egress that the base did not already have:
+    no import outside an allowlist of pure-computation modules
+    (`review.SAFE_MODULES`: `math`, `itertools`, `collections`, `datetime`,
+    …), no call to `open`, `exec`, `eval`, `__import__` and the like, and no
+    indirect way to a builtin (`__builtins__`, a dunder attribute such as
+    `__globals__` or `__subclasses__`, `getattr` with a computed or dunder
+    name, `setattr`). An allowlist, because a denylist misses whatever it
+    forgot to name.
 
   The sandbox stops such code at run time; the rules stop it reaching a
   human's queue, and no model's answer overrides them. A rule finding
