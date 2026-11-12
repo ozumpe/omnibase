@@ -223,6 +223,7 @@ None open.
 
 ## Resolved (Low)
 
+- [OMNI-203] **L75** — the agent review's "no new I/O" rule was a denylist and missed `codecs`, `gzip`, `runpy` and reaching a builtin through `__builtins__`, a dunder attribute or `getattr`
 - [OMNI-179] **L64** — `gauntlet._attribute` treated `"timed out"` anywhere in a reason as a timeout and skipped the sandbox probe
 - [OMNI-186] **L69** — Four `tests/test_merge_observation.py` tests that run a real cycle came out `inconclusive` under `-n auto`
 - [OMNI-180] **L65** — A backtest fixture that is not UTF-8 is reported as a generic gate error
@@ -472,3 +473,4 @@ None open.
 [OMNI-188]: https://olafzumpe.atlassian.net/browse/OMNI-188
 [OMNI-200]: https://olafzumpe.atlassian.net/browse/OMNI-200
 [OMNI-201]: https://olafzumpe.atlassian.net/browse/OMNI-201
+[OMNI-203]: https://olafzumpe.atlassian.net/browse/OMNI-203

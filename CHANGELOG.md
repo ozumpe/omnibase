@@ -13,6 +13,13 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+- OMNI-203 (L75): the agent review's deterministic rules allow only imports
+  from a list of pure-computation modules (`review.SAFE_MODULES`) instead of
+  refusing a list of I/O ones, which had missed `codecs`, `gzip`, `zipfile`,
+  `runpy`, `inspect` and others. They also flag `__builtins__`, dunder
+  attributes such as `__globals__` and `__subclasses__`, `getattr`/`hasattr`
+  with a computed or dunder name, and `setattr`/`delattr`. Every shipped stub
+  candidate still passes, pinned by a test.
 - OMNI-179 (L64): the gauntlet skips its sandbox self-check only for the
   harness's own timeout words (`gauntlet.is_harness_timeout`), the same test
   the episodic store files a timeout by. A candidate whose failure merely

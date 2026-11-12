@@ -330,7 +330,8 @@ touch the code a rule is about. History (what changed when) belongs in
     an SLO yet (L42, OMNI-86).
   - **No feature PR opens without the agent's own approving review**
     (OMNI-131, `sis/review.py`). Deterministic rules always run (a SOFT
-    target; no new I/O or egress import or call against the base), then,
+    target; against the base, no new import off an allowlist, I/O call or
+    indirect reach of a builtin), then,
     with a real proposer, a reviewer model whose reply is schema-checked and
     fails closed, its cost charged with the step. Changes requested send the
     head back for a revision judged against the base (neutral
