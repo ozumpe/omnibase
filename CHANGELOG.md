@@ -13,6 +13,11 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+- OMNI-179 (L64): the gauntlet skips its sandbox self-check only for the
+  harness's own timeout words (`gauntlet.is_harness_timeout`), the same test
+  the episodic store files a timeout by. A candidate whose failure merely
+  quotes "timed out" is probed like any other failure, so a broken sandbox is
+  no longer missed on that path.
 - OMNI-186 (L69): the `test_merge_observation.py` tests that need a real cycle
   ending in a PR now build `roman` (Class 2, no benchmark) instead of speeding
   up `sum_of_divisors`, so an oversubscribed CI box can no longer make them

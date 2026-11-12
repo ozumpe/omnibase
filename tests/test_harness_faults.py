@@ -231,6 +231,49 @@ def test_an_existing_harness_verdict_is_not_reprobed(monkeypatch: pytest.MonkeyP
     assert gauntlet._attribute(failure, gauntlet.GateName.BACKTEST, ctx) is failure
 
 
+@pytest.mark.parametrize("reason", [
+    # The candidate's own words, quoted by the gate: not a gate that ran out of time.
+    "backtest violation: episode 3 raised ReadTimeout: timed out",
+    "invariant violated: a call timed out after 2s",
+])
+def test_a_candidate_that_says_timed_out_is_still_probed(
+    reason: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # OMNI-179 (L64): `_attribute` skipped the probe on "timed out" anywhere in
+    # the reason, so a broken sandbox went unnoticed whenever the candidate's
+    # text said it. Only the harness's own timeout words skip the probe now,
+    # the same test `gate_from_reason` uses.
+    probed: list[str] = []
+
+    def probe(tmpdir: str, env: dict[str, str]) -> str | None:
+        probed.append(tmpdir)
+        return "cannot read the temp dir"
+
+    monkeypatch.setattr(gauntlet, "probe_sandbox", probe)
+    ctx = gauntlet._GateContext(
+        contract=gauntlet.default_contract(), code_str="", tmp=gauntlet.pathlib.Path("."),
+        tmpdir=".", env={}, candidate=gauntlet.pathlib.Path("x.py"),
+    )
+    failure = gauntlet.Result(passed=False, reason=reason)
+    result = gauntlet._attribute(failure, gauntlet.GateName.BACKTEST, ctx)
+    assert probed == ["."]
+    assert gate_from_reason(result.reason) == "harness"
+
+
+@pytest.mark.parametrize("reason", [
+    "backtest gate timed out",
+    "gauntlet sandbox timed out after 120s",
+])
+def test_the_harness_timeout_words_are_one_classifier(reason: str) -> None:
+    # One classifier for both sides (OMNI-179): what skips the probe is what
+    # the episodic store files as a timeout.
+    assert gauntlet.is_harness_timeout(reason)
+    assert gate_from_reason(reason) == "timeout"
+    quoted = f"backtest violation: {reason}"
+    assert not gauntlet.is_harness_timeout(quoted)
+    assert gate_from_reason(quoted) != "timeout"
+
+
 # --- the advisory baseline says why it is 0.0 ------------------------------
 
 

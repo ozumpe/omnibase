@@ -1096,6 +1096,21 @@ DOCKER_FAULT_CODES = frozenset({125, 126, 127})
 # Gates that never touch the sandbox; a failure there cannot be a sandbox fault.
 _IN_PROCESS_GATES = frozenset({GateName.AST, GateName.NOOP})
 
+# What the gauntlet says when a gate runs out of time: "<gate> gate timed out"
+# (`_timed_out` and the worker gates) or the sandbox's own "gauntlet sandbox
+# timed out after Ns". Only at the start: further in, the words are what the
+# candidate raised or returned.
+_HARNESS_TIMEOUT = re.compile(r"(?:[\w-]+ gate|gauntlet sandbox) timed out\b")
+
+
+def is_harness_timeout(reason: str) -> bool:
+    """True if a rejection reason is the harness's own timeout, not the candidate's text.
+
+    The one classifier for both the probe decision (`_attribute`) and the
+    episodic store's `gate_from_reason`, so the two never disagree.
+    """
+    return _HARNESS_TIMEOUT.match(reason.lower()) is not None
+
 # The probe is a handful of file operations; it must not inherit a two-minute
 # gate timeout when the sandbox it is checking may be the thing that hangs.
 PROBE_TIMEOUT_SECONDS = 30.0
@@ -1180,7 +1195,7 @@ def _attribute(failure: Result, gate: GateName, ctx: _GateContext) -> Result:
     against a hung sandbox would only add a second wait).
     """
     reason = failure.reason.lower()
-    if gate in _IN_PROCESS_GATES or reason.startswith("harness:") or "timed out" in reason:
+    if gate in _IN_PROCESS_GATES or reason.startswith("harness:") or is_harness_timeout(reason):
         return failure
     fault = probe_sandbox(ctx.tmpdir, ctx.env)
     if fault is None:
