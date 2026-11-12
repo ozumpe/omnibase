@@ -155,13 +155,6 @@ None open.
   `http.client.RemoteDisconnected` and `ConnectionResetError` escape. Nothing
   is uploaded either way. Fix: catch `OSError` and
   `http.client.HTTPException`.
-- [OMNI-182] **L67** — An error in the proposal cut-off handler is blamed on
-  the proposer *(found 2026-10-31 by code review; OMNI-175's follow-up)*.
-  `SWE._implement` sets `paid["proposing"]` before `proposer.propose()` and
-  clears it only on success, so if the Workspace call inside the
-  `ProposalCutOff` branch raises, the error reads "in the proposer, while
-  asking for the proposal". Only the label is wrong; cost and breaker count
-  are kept. Fix: scope the flag to the `propose()` call itself.
 - [OMNI-183] **L68** — Three small cleanups from OMNI-163 *(found 2026-10-31
   by code review; nothing wrong today)*: three sha256 helpers for one
   integrity check (`gauntlet.py` hashes inline beside its own `_digest`;
@@ -223,6 +216,7 @@ None open.
 
 ## Resolved (Low)
 
+- [OMNI-182] **L67** — an error in the proposal cut-off handler was labelled the proposer's
 - [OMNI-203] **L75** — the agent review's "no new I/O" rule was a denylist and missed `codecs`, `gzip`, `runpy` and reaching a builtin through `__builtins__`, a dunder attribute or `getattr`
 - [OMNI-179] **L64** — `gauntlet._attribute` treated `"timed out"` anywhere in a reason as a timeout and skipped the sandbox probe
 - [OMNI-186] **L69** — Four `tests/test_merge_observation.py` tests that run a real cycle came out `inconclusive` under `-n auto`

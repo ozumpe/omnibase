@@ -13,6 +13,10 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+- OMNI-182 (L67): when the proposer's answer is cut off at the token limit
+  and recording that then fails (the Workspace unreachable, say), the error is
+  labelled the SWE step's, not the proposer's: the proposer had answered. The
+  cost and the breaker count were right before and are unchanged.
 - OMNI-203 (L75): the agent review's deterministic rules allow only imports
   from a list of pure-computation modules (`review.SAFE_MODULES`) instead of
   refusing a list of I/O ones, which had missed `codecs`, `gzip`, `zipfile`,
