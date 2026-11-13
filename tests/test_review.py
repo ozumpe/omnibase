@@ -498,3 +498,23 @@ def test_a_given_up_branch_is_not_resumed_by_the_next_plan(
     assert cto.open_plan()["resumed"] == "feature/s-1", "not given up: resumed"
     given_up.append("feature/s-1")
     assert cto.open_plan() is None, "given up: a new feature starts instead"
+
+
+def test_an_error_after_a_cut_off_proposal_is_not_the_proposers(
+        world: _World, monkeypatch: pytest.MonkeyPatch) -> None:
+    # OMNI-182 (L67): the proposer answered (cut off at the token limit), then
+    # the Workspace failed while the step recorded that. The reason named the
+    # proposer, which had done nothing wrong; the cost was right either way.
+    def cut_off(source: str, baseline: float, **kwargs: Any) -> str:
+        raise proposer.ProposalCutOff("the answer stopped at the token limit")
+
+    def unreachable(story: str, status: Any, *args: Any) -> None:
+        if status is roles.IssueStatus.TBD:  # the cut-off handler's own move
+            raise RuntimeError("workspace unreachable")
+
+    monkeypatch.setattr(roles.proposer, "propose", cut_off)
+    world.ws.answers["transition"] = unreachable
+    result = world.step()
+    assert result["reason"] == ("error: RuntimeError: workspace unreachable "
+                                "(in the SWE's step, after the proposal)")
+    assert result["cost_usd"] == pytest.approx(0.10), "the proposal's spend is kept"

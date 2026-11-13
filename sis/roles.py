@@ -910,6 +910,8 @@ class SWE(Role):
                 findings=(feature_mod.review_state(feature)["findings"]
                           if revising else ()))
         except proposer.ProposalCutOff as exc:
+            # The proposer answered: what fails from here on is the step's.
+            paid.update(proposing=False, cost=proposer.last_cost_usd())
             # Nothing to judge, and not the candidate's doing: a failed cycle
             # the log names as the proposer's, its spend kept (L33, OMNI-78).
             reason = f"proposer: {exc}"
