@@ -149,12 +149,6 @@ None open.
   cluster, and the suite runs with `episodic.store=none`. The suspect, not
   proven, is a sandboxed gate timing out under heavy load in the first cycle.
   Next time it fails, keep the assertion's `reason` before changing anything.
-- [OMNI-181] **L66** — `scripts/aws_secret.py`'s `check_anthropic_key` ends
-  in a traceback when the connection drops mid-response *(found 2026-10-31 by
-  code review)*. It catches `URLError` and `TimeoutError`;
-  `http.client.RemoteDisconnected` and `ConnectionResetError` escape. Nothing
-  is uploaded either way. Fix: catch `OSError` and
-  `http.client.HTTPException`.
 - [OMNI-183] **L68** — Three small cleanups from OMNI-163 *(found 2026-10-31
   by code review; nothing wrong today)*: three sha256 helpers for one
   integrity check (`gauntlet.py` hashes inline beside its own `_digest`;
@@ -216,6 +210,7 @@ None open.
 
 ## Resolved (Low)
 
+- [OMNI-181] **L66** — `scripts/aws_secret.py`'s `check_anthropic_key` ended in a traceback when the connection dropped mid-response
 - [OMNI-182] **L67** — an error in the proposal cut-off handler was labelled the proposer's
 - [OMNI-203] **L75** — the agent review's "no new I/O" rule was a denylist and missed `codecs`, `gzip`, `runpy` and reaching a builtin through `__builtins__`, a dunder attribute or `getattr`
 - [OMNI-179] **L64** — `gauntlet._attribute` treated `"timed out"` anywhere in a reason as a timeout and skipped the sandbox probe

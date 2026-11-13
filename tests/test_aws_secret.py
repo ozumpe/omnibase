@@ -1,5 +1,6 @@
 """Tests for scripts/aws_secret.py — the OMNI-29 credentials upload (no AWS calls)."""
 
+import http.client
 import importlib.util
 import json
 import pathlib
@@ -22,6 +23,7 @@ def _load() -> ModuleType:
 
 
 aws_secret = _load()
+_REAL_KEY_CHECK = aws_secret.check_anthropic_key  # no_upload stubs it out
 
 _TOKENS = ("ATATT-atlassian-secret-value", "ghp_github-secret-value", "sk-ant-anthropic-secret")
 
@@ -178,3 +180,27 @@ def test_skip_key_check_uploads_without_asking(
 @pytest.mark.parametrize("key", ["not-a-key", "sk-ant-has a space"])
 def test_a_malformed_key_is_refused_without_a_request(key: str) -> None:
     assert "does not look like" in str(aws_secret.check_anthropic_key(key))
+
+
+@pytest.mark.parametrize("error", [
+    http.client.RemoteDisconnected("Remote end closed connection without response"),
+    ConnectionResetError(104, "Connection reset by peer"),
+    http.client.IncompleteRead(b""),
+])
+def test_a_connection_dropped_mid_response_is_unreachable_not_a_traceback(
+    error: Exception, tmp_path: pathlib.Path, no_upload: list[Any],
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def drop(*args: Any, **kwargs: Any) -> Any:
+        raise error
+
+    monkeypatch.setattr(aws_secret.urllib.request, "urlopen", drop)
+    monkeypatch.setattr(aws_secret, "check_anthropic_key", _REAL_KEY_CHECK)
+    reason = aws_secret.check_anthropic_key(_TOKENS[2])
+    assert reason is not None and reason.startswith("Anthropic could not be reached")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", _TOKENS[2])
+    assert aws_secret.main(["--upload", "--secrets-file", str(_secrets(tmp_path))]) == 1
+    out = capsys.readouterr().out
+    assert "could not be reached" in out
+    assert not any(token in out for token in _TOKENS)
+    assert no_upload == []
