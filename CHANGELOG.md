@@ -13,7 +13,7 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
-- OMNI-218: the proposer's output limit, thinking included, is now the
+- OMNI-218 (M37): the proposer's output limit, thinking included, is now the
   `proposer.output_limit` config key and defaults to 16000 instead of a fixed
   8000. In the weekly run of 2026-11-14 two of three `ca_price_wholesale`
   cycles were cut off at 8000 and thrown away unjudged. The per-cycle spend

@@ -16,14 +16,6 @@ None open.
 
 ## Medium
 
-- [OMNI-218] **M37** — The proposer's output limit is too small for its own
-  thinking *(found 2026-11-14 by the weekly AWS run on `ca_price_wholesale`)*.
-  `sis/proposer.py` sends `MAX_TOKENS = 8000`, and `sis/llm.py` asks for
-  adaptive thinking at high effort, which counts toward that limit. Two of
-  three cycles were cut off and thrown away unjudged, and the third used
-  about 95% of the limit; roughly two thirds of the run's spend bought
-  nothing. Fix: raise the limit and make it a config key, and check the
-  per-cycle spend reservation still covers a call at the new limit.
 - [OMNI-219] **M38** — A proposal cut off at the token limit counts toward
   the circuit breaker like a rejected candidate, and the next cycle repeats
   the same call with the same limit *(found 2026-11-14 by the same run)*. Two
@@ -271,6 +263,7 @@ None open.
 
 ## Resolved
 
+- [OMNI-218] **M37 — The proposer's output limit (8000) was too small for its own thinking**
 - [OMNI-200] **M36 — develop blue/green judged the PR's head file, not what `develop` serves after the merge**
 - [OMNI-50] **M20 — The live canary's p95/p99 gate is close to a coin flip for targets where dispatch overhead dominates compute**
 - [OMNI-50] **M21 — The live canary never judges error rate, and SHADOW mode drops any pair where green failed**
