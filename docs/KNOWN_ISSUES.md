@@ -18,7 +18,8 @@ None open.
 
 - [OMNI-219] **M38** — A proposal cut off at the token limit counts toward
   the circuit breaker like a rejected candidate, and the next cycle repeats
-  the same call with the same limit *(found 2026-11-14 by the same run)*. Two
+  the same call with the same limit *(found 2026-11-14 by the weekly AWS run
+  on `ca_price_wholesale`)*. Two
   cut-offs and one real rejection opened the breaker after a single candidate
   had been judged. A cut-off says nothing about the candidate; it is an
   engine setting. Fix (option B, chosen 2026-11-14): after the first
