@@ -29,9 +29,10 @@ None open.
   the same call with the same limit *(found 2026-11-14 by the same run)*. Two
   cut-offs and one real rejection opened the breaker after a single candidate
   had been judged. A cut-off says nothing about the candidate; it is an
-  engine setting. Fix (needs a decision, options in the ticket): keep the
-  spend charged, but don't count a cut-off as a consecutive failure, and stop
-  with a reason that names the limit.
+  engine setting. Fix (option B, chosen 2026-11-14): after the first
+  cut-off in a run, retry that proposal once with a larger, configured limit;
+  if the retry is cut off too, stop with a reason that names the limit. Both
+  calls stay charged and count toward the spend cap.
 
 ## Low
 
