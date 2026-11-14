@@ -248,3 +248,29 @@ def test_the_cycle_reservation_covers_a_cycle_at_the_token_limits() -> None:
     prompts = 2 * 6000 * 1.25   # two calls, a generous prompt each, billed as cache writes
     worst = (output * out_price + prompts * in_price) / 1_000_000
     assert worst <= org.DEFAULT_ESTIMATE_USD, f"${worst:.3f} > ${org.DEFAULT_ESTIMATE_USD}"
+
+
+def test_the_last_call_reports_its_tokens_and_limit(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # OMNI-220 (L76): the cycle logs these, so a cut-off can be told from the log.
+    from sis import llm
+
+    counts = llm.TokenUsage(input_tokens=5210, output_tokens=16000, cache_creation_tokens=1200)
+
+    class _CutOff:
+        model = "m"
+
+        def complete(self, *, system: str, user: str, max_tokens: int) -> llm.LLMResponse:
+            return llm.LLMResponse(text="def sum_of_div", cost_usd=0.4, model="m",
+                                   truncated=True, usage=counts, stop_reason="max_tokens")
+
+    monkeypatch.setenv("SIS_PROPOSER", "claude")
+    monkeypatch.setattr(llm, "get_llm_client", lambda *a, **k: _CutOff())
+    with pytest.raises(proposer.ProposalCutOff):
+        proposer.propose("def sum_of_divisors(n: int) -> int: ...", 0.001)
+    assert proposer.last_usage() == {
+        "input_tokens": 5210, "output_tokens": 16000, "cache_creation_tokens": 1200,
+        "cache_read_tokens": 0, "output_limit": 16000, "stop_reason": "max_tokens"}
+
+    monkeypatch.setenv("SIS_PROPOSER", "stub")
+    proposer.propose("def sum_of_divisors(n: int) -> int: ...", 0.001)
+    assert proposer.last_usage() is None, "the stub calls no model"

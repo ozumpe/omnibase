@@ -104,3 +104,12 @@ def test_an_already_built_feature_names_its_gate() -> None:
                     reason="already built: runtime/roman.py passes every gate")
     assert line == ("[cycle] no_gain: built: already built: "
                     "runtime/roman.py passes every gate")
+
+
+def test_the_line_shows_how_much_of_the_output_limit_the_call_used() -> None:
+    # OMNI-220 (L76): a cut-off showed only its cost on the console.
+    usage = {"input_tokens": 5210, "output_tokens": 7570, "output_limit": 8000}
+    line = _summary(status="rolled_back", reason=_RUN_REASON, cost_usd=0.040155,
+                    economics=_ECON, usage=usage)
+    assert line.endswith("(cost $0.0402; spent $0.0402 of $1.00; out 7570/8000 tokens)")
+    assert "tokens" not in _summary(status="paused", pause_reason="x", usage=None)
