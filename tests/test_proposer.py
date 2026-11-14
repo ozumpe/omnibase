@@ -204,3 +204,47 @@ def test_a_build_prompt_without_backtests_states_no_bar() -> None:
     from sis.contract import ROMAN
 
     assert "recorded value" not in proposer._build_prompt("", ROMAN)
+
+
+def test_the_proposer_asks_for_the_configured_token_limit(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # OMNI-218: a fixed 8000 left adaptive thinking too little room; two of three
+    # cycles on ca_price_wholesale were cut off. The limit is a config key now.
+    from sis import llm
+
+    sent: list[int] = []
+
+    class _Recorder:
+        model = "m"
+
+        def __init__(self, truncated: bool) -> None:
+            self.truncated = truncated
+
+        def complete(self, *, system: str, user: str, max_tokens: int) -> llm.LLMResponse:
+            sent.append(max_tokens)
+            return llm.LLMResponse(text="def sum_of_divisors(n: int) -> int:\n    return n\n",
+                                   cost_usd=0.1, model="m", truncated=self.truncated)
+
+    monkeypatch.setenv("SIS_PROPOSER", "claude")
+    monkeypatch.setattr(llm, "get_llm_client", lambda *a, **k: _Recorder(False))
+    proposer.propose("def sum_of_divisors(n: int) -> int: ...", 0.001)
+    assert sent == [16000], "the default leaves thinking room for the answer"
+
+    monkeypatch.setenv("SIS_PROPOSER_OUTPUT_LIMIT", "20000")
+    monkeypatch.setattr(llm, "get_llm_client", lambda *a, **k: _Recorder(True))
+    with pytest.raises(proposer.ProposalCutOff, match="max_tokens=20000"):
+        proposer.propose("def sum_of_divisors(n: int) -> int: ...", 0.001)
+    assert sent[-1] == 20000
+
+
+def test_the_cycle_reservation_covers_a_cycle_at_the_token_limits() -> None:
+    # OMNI-218: the CEO reserves a cycle's estimate before it spends. A cycle
+    # whose proposal and review both run to their limits must still fit, or the
+    # hard cap can be overshot by the difference.
+    from sis import cost, llm, org, review
+    from sis.config import key_for
+
+    in_price, out_price = cost.price(llm.DEFAULT_ANTHROPIC_MODEL)
+    output = key_for("proposer.output_limit").default + review.MAX_TOKENS
+    prompts = 2 * 6000 * 1.25   # two calls, a generous prompt each, billed as cache writes
+    worst = (output * out_price + prompts * in_price) / 1_000_000
+    assert worst <= org.DEFAULT_ESTIMATE_USD, f"${worst:.3f} > ${org.DEFAULT_ESTIMATE_USD}"
