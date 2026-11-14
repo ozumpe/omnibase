@@ -292,6 +292,14 @@ SCHEMA: tuple[Key, ...] = (
         "SIS_LLM_PROVIDER", "LLM vendor backing a real proposer."),
     Key("proposer", "llm_model", ConfigTier.STRICT, Kind.OPT_STR, None,
         "SIS_LLM_MODEL", "Model id; unset uses the provider's default."),
+    # Thinking tokens count toward the limit and are billed as output, so it
+    # bounds the proposal's cost as well as its length. Above about 21000 the
+    # SDK refuses a non-streaming call. The cycle reservation
+    # (org.DEFAULT_ESTIMATE_USD) has to cover the default.
+    Key("proposer", "output_limit", ConfigTier.STRICT, Kind.INT, 16000,
+        "SIS_PROPOSER_OUTPUT_LIMIT",
+        "Output token limit of one proposal, thinking included. An answer cut "
+        "off at it is not judged.", positive=True),
 
     # --- canary: how a candidate is judged against traffic. ------------------
     # Strict despite the asymmetry: turning the live canary *on* only adds rigour,
@@ -802,6 +810,7 @@ class ProposerConfig:
     backend: str
     llm_provider: str
     llm_model: str | None
+    output_limit: int
 
 
 @dataclass(frozen=True)

@@ -64,6 +64,12 @@ NAMESPACE = "sis"
 # literal repeated at each lookup site, which is how the two come to disagree.
 CEO_NAME = "CEO"
 
+# What the CEO reserves for one cycle before it spends (OMNI-157). It has to
+# cover a proposal and its review both run to their token limits
+# (proposer.output_limit, review.MAX_TOKENS) on the default model, or the last
+# cycle under the cap can overshoot it (OMNI-218).
+DEFAULT_ESTIMATE_USD = 0.6
+
 
 def _get_or_create(name: str, cls: Any, *args: Any) -> Any:
     # get_if_exists is atomic: it returns the existing detached actor or creates
@@ -704,7 +710,7 @@ def run_cycle(
     proposal_title: str,
     proposal_body: str,
     *,
-    estimate_usd: float = 0.5,
+    estimate_usd: float = DEFAULT_ESTIMATE_USD,
     contract_name: str | None = None,
     canary_backend: str | None = None,
 ) -> dict[str, Any]:

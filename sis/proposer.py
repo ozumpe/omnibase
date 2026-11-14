@@ -41,7 +41,6 @@ from sis.contract import Contract, FeatureContract, OptimizationContract, defaul
 from sis.paths import PROJECT_ROOT
 
 MODEL = llm.DEFAULT_ANTHROPIC_MODEL  # back-compat: the default model
-MAX_TOKENS = 8000
 
 # Cost + model of the most recent propose() call (0.0 / None for the stub). The
 # CEO reads the cost to enforce the spend cap and the cost-per-accepted SLO.
@@ -312,15 +311,16 @@ def _findings_section(findings: Sequence[str]) -> str:
 
 def _complete(system: str, user_prompt: str) -> str:
     """One call to the configured LLM (sis.llm); its cost and model are recorded."""
+    max_tokens = int(config.get("proposer.output_limit"))
     response = llm.get_llm_client().complete(
-        system=system, user=user_prompt, max_tokens=MAX_TOKENS)
+        system=system, user=user_prompt, max_tokens=max_tokens)
     global _last_cost_usd, _last_model
     _last_cost_usd = response.cost_usd
     _last_model = response.model
     if response.truncated:
         raise ProposalCutOff(
             f"the {response.model} answer stopped at the token limit "
-            f"(max_tokens={MAX_TOKENS}), so it was not judged")
+            f"(max_tokens={max_tokens}), so it was not judged")
     return _extract_code(response.text)
 
 

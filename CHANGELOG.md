@@ -13,6 +13,12 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+- OMNI-218: the proposer's output limit, thinking included, is now the
+  `proposer.output_limit` config key and defaults to 16000 instead of a fixed
+  8000. In the weekly run of 2026-11-14 two of three `ca_price_wholesale`
+  cycles were cut off at 8000 and thrown away unjudged. The per-cycle spend
+  reservation rises from $0.50 to $0.60 so it still covers a proposal and its
+  review at their limits.
 - OMNI-181 (L66): `scripts/aws_secret.py` now says "Anthropic could not be
   reached" and refuses the upload when the connection drops mid-response
   (`RemoteDisconnected`, a reset socket, a cut-off read), instead of ending in
