@@ -109,6 +109,10 @@ proposer:
   # Model id; unset uses the provider's default.
   # env: SIS_LLM_MODEL   flag: --proposer-llm-model
   strict_llm_model: null
+  # Output token limit of one proposal, thinking included. An answer cut off at it is
+  # not judged.
+  # env: SIS_PROPOSER_OUTPUT_LIMIT   flag: --proposer-output-limit
+  strict_output_limit: 16000
 
 canary:
   # 'serve' judges the canary against real Ray Serve traffic; unset uses the legacy

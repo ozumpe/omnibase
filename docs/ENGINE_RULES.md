@@ -409,7 +409,10 @@ touch the code a rule is about. History (what changed when) belongs in
   **Spend is reserved and saved before it is spent** (OMNI-157, H12): after
   the budget gate the CEO reserves the cycle's estimate, and the state is
   saved before the cycle goes on; the outcome replaces the reservation with
-  the real cost. A save that fails, before or after, opens the breaker and
+  the real cost. The estimate (`org.DEFAULT_ESTIMATE_USD`) must cover a
+  proposal and its review both run to their token limits
+  (`proposer.output_limit`, `review.MAX_TOKENS`) on the default model; a test
+  pins it, so raising a limit means raising the estimate (OMNI-218). A save that fails, before or after, opens the breaker and
   pages, and a reservation no outcome replaced (found at boot, or still
   outstanding at the next reservation) counts as spent and as a failure. A failed save used to warn and go on, so a restart forgot the
   spend since the last save. **An older snapshot never replaces a newer one**
