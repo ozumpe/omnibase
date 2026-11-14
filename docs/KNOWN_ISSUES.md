@@ -16,7 +16,22 @@ None open.
 
 ## Medium
 
-None open.
+- [OMNI-218] **M37** — The proposer's output limit is too small for its own
+  thinking *(found 2026-11-14 by the weekly AWS run on `ca_price_wholesale`)*.
+  `sis/proposer.py` sends `MAX_TOKENS = 8000`, and `sis/llm.py` asks for
+  adaptive thinking at high effort, which counts toward that limit. Two of
+  three cycles were cut off and thrown away unjudged, and the third used
+  about 95% of the limit; roughly two thirds of the run's spend bought
+  nothing. Fix: raise the limit and make it a config key, and check the
+  per-cycle spend reservation still covers a call at the new limit.
+- [OMNI-219] **M38** — A proposal cut off at the token limit counts toward
+  the circuit breaker like a rejected candidate, and the next cycle repeats
+  the same call with the same limit *(found 2026-11-14 by the same run)*. Two
+  cut-offs and one real rejection opened the breaker after a single candidate
+  had been judged. A cut-off says nothing about the candidate; it is an
+  engine setting. Fix (needs a decision, options in the ticket): keep the
+  spend charged, but don't count a cut-off as a consecutive failure, and stop
+  with a reason that names the limit.
 
 ## Low
 
@@ -157,6 +172,15 @@ None open.
   `2020-01-06` that is always overwritten; and `private_backtests(root=)`,
   which no caller passes and the gate ignores, while its docstring says
   *index* is repo-relative and a test passes an absolute path.
+- [OMNI-220] **L76** — A cycle records its cost but not its token usage or
+  stop reason *(found 2026-11-14 analysing the weekly AWS run)*, so how close
+  a call came to the output limit has to be worked back from the price list.
+  Also: `estimate_usd` reserves more than twice what a cycle on
+  `ca_price_wholesale` costs, so the reservation, not the spend, decides how
+  many cycles start; and the breaker's "paged" line is printed before the
+  `[cycle]` line of the cycle that tripped it. Fix: carry the API's usage and
+  stop reason on the response, record them on the episodic record and the
+  `[cycle]` line (counts only, no prompt or answer text).
 
 ## Won't fix
 
@@ -463,3 +487,6 @@ None open.
 [OMNI-200]: https://olafzumpe.atlassian.net/browse/OMNI-200
 [OMNI-201]: https://olafzumpe.atlassian.net/browse/OMNI-201
 [OMNI-203]: https://olafzumpe.atlassian.net/browse/OMNI-203
+[OMNI-218]: https://olafzumpe.atlassian.net/browse/OMNI-218
+[OMNI-219]: https://olafzumpe.atlassian.net/browse/OMNI-219
+[OMNI-220]: https://olafzumpe.atlassian.net/browse/OMNI-220
