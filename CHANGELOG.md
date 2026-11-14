@@ -13,6 +13,10 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+- OMNI-181 (L66): `scripts/aws_secret.py` now says "Anthropic could not be
+  reached" and refuses the upload when the connection drops mid-response
+  (`RemoteDisconnected`, a reset socket, a cut-off read), instead of ending in
+  a traceback. It catches `OSError` and `http.client.HTTPException`.
 - OMNI-182 (L67): when the proposer's answer is cut off at the token limit
   and recording that then fails (the Workspace unreachable, say), the error is
   labelled the SWE step's, not the proposer's: the proposer had answered. The
