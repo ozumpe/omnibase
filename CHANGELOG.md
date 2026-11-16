@@ -13,6 +13,15 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+- OMNI-219 (M38): a proposal cut off at its output limit is retried once in
+  the same cycle, at the new `proposer.retry_output_limit` (32000, FORBIDDEN),
+  instead of the next cycle repeating the same call at the same limit. The
+  cut-off call is charged and the retry reserved and saved before it is sent;
+  the spend cap may refuse it. The retry's verdict decides the cycle, which
+  counts once toward the breaker. Cut off again, the breaker opens with
+  "proposal cut off twice, at N and then M output tokens; raise
+  proposer.retry_output_limit", and a human is paged. A call above 20000
+  output tokens is streamed, which the SDK requires.
 - OMNI-220 (L76): each cycle now records the proposer call's token counts
   (input, output, cache written and read), its output limit and why it
   stopped, on the episodic record and as `out N/LIMIT tokens` on the

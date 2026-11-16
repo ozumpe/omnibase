@@ -113,6 +113,10 @@ proposer:
   # not judged.
   # env: SIS_PROPOSER_OUTPUT_LIMIT   flag: --proposer-output-limit
   strict_output_limit: 16000
+  # Output limit of the one retry a proposal cut off at output_limit gets. Cut off
+  # again, the run stops.
+  # env: SIS_PROPOSER_RETRY_OUTPUT_LIMIT   flag: --proposer-retry-output-limit
+  forbidden_retry_output_limit: 32000
 
 canary:
   # 'serve' judges the canary against real Ray Serve traffic; unset uses the legacy

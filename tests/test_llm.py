@@ -114,3 +114,44 @@ def test_the_anthropic_client_reports_its_token_counts(monkeypatch) -> None:  # 
     assert response.usage == llm.TokenUsage(input_tokens=5210, output_tokens=7570,
                                             cache_creation_tokens=1200, cache_read_tokens=0)
     assert response.stop_reason == "end_turn"
+
+
+def test_a_call_over_the_sdks_non_streaming_limit_is_streamed(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # OMNI-219: the SDK refuses a non-streaming call much above 21000 output
+    # tokens, and the retry of a cut-off proposal asks for more. The first
+    # call is sent as before.
+    import sys
+    from types import SimpleNamespace
+
+    message = SimpleNamespace(
+        content=[SimpleNamespace(type="text", text="def f(): ...")],
+        usage=SimpleNamespace(input_tokens=10, output_tokens=25000,
+                              cache_creation_input_tokens=0, cache_read_input_tokens=0),
+        stop_reason="end_turn")
+    how: list[tuple[str, int]] = []
+
+    class _Stream:
+        def __enter__(self) -> "_Stream":
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+        def get_final_message(self) -> SimpleNamespace:
+            return message
+
+    def create(**kw):  # type: ignore[no-untyped-def]
+        how.append(("create", kw["max_tokens"]))
+        return message
+
+    def stream(**kw):  # type: ignore[no-untyped-def]
+        how.append(("stream", kw["max_tokens"]))
+        return _Stream()
+
+    fake = SimpleNamespace(Anthropic=lambda: SimpleNamespace(
+        messages=SimpleNamespace(create=create, stream=stream)))
+    monkeypatch.setitem(sys.modules, "anthropic", fake)
+    for limit in (16000, 32000):
+        response = llm.AnthropicClient().complete(system="s", user="u", max_tokens=limit)
+        assert response.text == "def f(): ..." and not response.truncated
+    assert how == [("create", 16000), ("stream", 32000)]
