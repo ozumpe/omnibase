@@ -119,18 +119,6 @@ None open.
   first/last `cycle_id`, spend at start and end), or upload this process's
   slice alongside the cumulative files.
 
-- [OMNI-166] **L55** — Atomic writes leave the file readable by its owner
-  only *(found 2026-10-25 by the weekly code review)*. `write_text_atomic`
-  (`sis/atomic.py`) writes through `tempfile.mkstemp`, which creates mode 0600,
-  and `os.replace` puts that file in place of the original. So the first
-  operator edit through `sis.operator.save_edits`, or `python -m sis.config
-  --write`, turns `config.yml` from 0644 into 0600, and every other file
-  written this way ends the same. Git tracks only the executable bit and does
-  not notice; a console or CI step under another uid then fails with an
-  unrelated-looking `PermissionError`. Fix: keep the destination's mode
-  (`0o666 & ~umask` for a new file), with a test that the mode survives a
-  save; whether brake state should stay 0600 is decided per caller, not by
-  `mkstemp`.
 - [OMNI-172] **L57** — The scheduled-run principal can reach every run
   secret and launch any instance size *(found 2026-10-26 by the weekly code
   review)*. `infra/aws/scheduled_runner_policy.json` grants
@@ -225,6 +213,7 @@ None open.
 
 ## Resolved (Low)
 
+- [OMNI-166] **L55** — an atomic write left the file readable by its owner only (0600), so the first save made `config.yml` unreadable to another user
 - [OMNI-220] **L76** — a cycle recorded its cost but not the proposer's token counts, output limit or stop reason
 - [OMNI-181] **L66** — `scripts/aws_secret.py`'s `check_anthropic_key` ended in a traceback when the connection dropped mid-response
 - [OMNI-182] **L67** — an error in the proposal cut-off handler was labelled the proposer's

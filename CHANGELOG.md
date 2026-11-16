@@ -13,6 +13,12 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+- OMNI-166 (L55): an atomic write (`sis/atomic.py`) keeps the file's
+  permissions, and a new file gets what a plain write would (`0o666` less the
+  umask). It used to create its temporary file 0600 and put it in place of the
+  original, so the first operator save or `python -m sis.config --write` made
+  `config.yml` unreadable to a console or CI step under another uid. Brake
+  state and `config.yml` hold no secret, so no caller asks for less.
 - OMNI-220 (L76): each cycle now records the proposer call's token counts
   (input, output, cache written and read), its output limit and why it
   stopped, on the episodic record and as `out N/LIMIT tokens` on the
