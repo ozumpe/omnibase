@@ -172,15 +172,6 @@ None open.
   `2020-01-06` that is always overwritten; and `private_backtests(root=)`,
   which no caller passes and the gate ignores, while its docstring says
   *index* is repo-relative and a test passes an absolute path.
-- [OMNI-220] **L76** — A cycle records its cost but not its token usage or
-  stop reason *(found 2026-11-14 analysing the weekly AWS run)*, so how close
-  a call came to the output limit has to be worked back from the price list.
-  Also: `estimate_usd` reserves more than twice what a cycle on
-  `ca_price_wholesale` costs, so the reservation, not the spend, decides how
-  many cycles start; and the breaker's "paged" line is printed before the
-  `[cycle]` line of the cycle that tripped it. Fix: carry the API's usage and
-  stop reason on the response, record them on the episodic record and the
-  `[cycle]` line (counts only, no prompt or answer text).
 
 ## Won't fix
 
@@ -234,6 +225,7 @@ None open.
 
 ## Resolved (Low)
 
+- [OMNI-220] **L76** — a cycle recorded its cost but not the proposer's token counts, output limit or stop reason
 - [OMNI-181] **L66** — `scripts/aws_secret.py`'s `check_anthropic_key` ended in a traceback when the connection dropped mid-response
 - [OMNI-182] **L67** — an error in the proposal cut-off handler was labelled the proposer's
 - [OMNI-203] **L75** — the agent review's "no new I/O" rule was a denylist and missed `codecs`, `gzip`, `runpy` and reaching a builtin through `__builtins__`, a dunder attribute or `getattr`

@@ -311,3 +311,23 @@ def test_the_loop_goes_on_after_a_cycle_that_raised(handles: dict[str, Any]) -> 
         interval_s=0.0, max_cycles=2, sleep=lambda _seconds: None)
     # The second cycle ran, and to its own end: QA's neutral verdict.
     assert [r["status"] for r in results] == ["error", "inconclusive"]
+
+
+def test_a_cut_off_cycle_logs_its_token_counts_and_limit(
+    handles: dict[str, Any], store: episodic.JsonlEpisodicStore,
+) -> None:
+    # OMNI-220 (L76): the weekly run's cut-offs showed only their cost, so the
+    # log could not say how close to the limit the call came.
+    usage = {"input_tokens": 5210, "output_tokens": 8000, "cache_creation_tokens": 1200,
+             "cache_read_tokens": 0, "output_limit": 8000, "stop_reason": "max_tokens"}
+    cut_off = {"passed": False, "cost_usd": 0.01, "contract": "sum_of_divisors",
+               "model": "paid-test-model", "candidate_sha": None, "usage": usage,
+               "reason": "proposer: the paid-test-model answer stopped at the token "
+                         "limit (max_tokens=8000), so it was not judged"}
+    result = org.run_cycle({**handles, "SWE": _swe(_returns(cut_off))}, "t", "b")
+    assert result["status"] == "rolled_back"
+    assert "out 8000/8000 tokens" in org.cycle_summary(result)
+    (event,) = store.events()
+    assert (event.input_tokens, event.output_tokens, event.output_limit) == (5210, 8000, 8000)
+    assert (event.cache_creation_tokens, event.cache_read_tokens) == (1200, 0)
+    assert event.stop_reason == "max_tokens"

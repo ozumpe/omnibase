@@ -643,6 +643,11 @@ def cycle_summary(result: Mapping[str, Any]) -> str:
     if isinstance(econ, Mapping):
         money.append(f"spent ${float(econ['spent_usd']):.4f} of "
                      f"${float(econ['budget_usd']):.2f}")
+    usage = result.get("usage")
+    if isinstance(usage, Mapping) and isinstance(usage.get("output_tokens"), int):
+        limit = usage.get("output_limit")
+        out = f"out {usage['output_tokens']}" + (f"/{limit}" if isinstance(limit, int) else "")
+        money.append(f"{out} tokens")
     return f"[cycle] {status}: {detail}" + (f" ({'; '.join(money)})" if money else "")
 
 
@@ -776,7 +781,7 @@ def run_cycle(
     # it on every result, so the episodic log says which target a cycle was
     # about — the first AWS run's log could not.
     known_contract: dict[str, str | None] = {"name": contract_name}
-    called: dict[str, str | None] = {"model": None}
+    called: dict[str, Any] = {"model": None, "usage": None}
     # What this cycle has cost and produced so far, for the error path below:
     # whether the CEO has been told of the cost, and a canary to retire.
     seen: dict[str, Any] = {"cost_usd": 0.0, "charged": False}
@@ -809,6 +814,9 @@ def run_cycle(
         # (the stub, a pause, an already-built feature). Not the configured one,
         # which the log used to stamp on every cycle (L53, OMNI-150).
         res.setdefault("model", called["model"])
+        # The call's token counts and limit, so a cut-off shows in the log and on
+        # the console line (OMNI-220). None when no call was made.
+        res.setdefault("usage", called["usage"])
         # What the cycle cost and where spend stands, on every result — the
         # console line (cycle_summary, OMNI-123) reports both for every exit.
         res.setdefault("cost_usd", cost)
@@ -948,6 +956,7 @@ def run_cycle(
         cost_usd = float(impl.get("cost_usd", 0.0))
         known_contract["name"] = impl.get("contract", contract_name)
         called["model"] = impl.get("model")
+        called["usage"] = impl.get("usage")
         seen.update(cost_usd=cost_usd, pr_id=impl.get("pr_id"),
                     candidate_sha=impl.get("candidate_sha"))
 

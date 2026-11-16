@@ -13,6 +13,13 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+- OMNI-220 (L76): each cycle now records the proposer call's token counts
+  (input, output, cache written and read), its output limit and why it
+  stopped, on the episodic record and as `out N/LIMIT tokens` on the
+  `[cycle]` line. The weekly run's cut-offs showed only their cost, so how
+  close a call came to the limit had to be worked back from the price list.
+  Counts only, never prompt or answer text; older episodic rows and DuckDB
+  files still load.
 - OMNI-218: the proposer's output limit, thinking included, is now the
   `proposer.output_limit` config key and defaults to 16000 instead of a fixed
   8000. In the weekly run of 2026-11-14 two of three `ca_price_wholesale`

@@ -518,3 +518,19 @@ def test_an_error_after_a_cut_off_proposal_is_not_the_proposers(
     assert result["reason"] == ("error: RuntimeError: workspace unreachable "
                                 "(in the SWE's step, after the proposal)")
     assert result["cost_usd"] == pytest.approx(0.10), "the proposal's spend is kept"
+
+
+def test_a_step_reports_the_proposers_token_counts(world: _World,
+                                                   monkeypatch: pytest.MonkeyPatch) -> None:
+    # OMNI-220 (L76): the driver logs them, on success and on a failure alike.
+    usage = {"input_tokens": 5210, "output_tokens": 7570, "output_limit": 16000}
+    monkeypatch.setattr(roles.proposer, "last_usage", lambda: dict(usage))
+    world.proposals = [HEAD]
+    world.verdicts = [review.Review(approved=True, cost_usd=0.05, reviewer="r")]
+
+    def refuse(*args: Any) -> Any:
+        raise PermissionError("403 from the version-control host")
+
+    world.ws.answers["open_pr"] = refuse
+    result = world.step()
+    assert not result["passed"] and result["usage"] == usage

@@ -125,6 +125,15 @@ class EpisodicEvent:
     # `sort`, and that had to be inferred from the console. Last, and optional,
     # so older rows and older DuckDB files still load.
     contract: str | None = None
+    # What the proposer's call used and was allowed (OMNI-220): a cut-off at
+    # the output limit could not be told from the log, only the cost was.
+    # Counts only, never text. Optional, so older rows still load.
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cache_creation_tokens: int | None = None
+    cache_read_tokens: int | None = None
+    output_limit: int | None = None
+    stop_reason: str | None = None
 
     @staticmethod
     def new_cycle_id() -> str:
@@ -323,6 +332,8 @@ _DUCK_TYPES: dict[str, str] = {
     "gauntlet_passed": "BOOLEAN", "reject_gate": "VARCHAR", "reject_reason": "VARCHAR",
     "baseline_latency": "DOUBLE", "candidate_latency": "DOUBLE",
     "improvement_pct": "DOUBLE", "cost_usd": "DOUBLE", "contract": "VARCHAR",
+    "input_tokens": "BIGINT", "output_tokens": "BIGINT", "cache_creation_tokens": "BIGINT",
+    "cache_read_tokens": "BIGINT", "output_limit": "BIGINT", "stop_reason": "VARCHAR",
 }
 assert tuple(_DUCK_TYPES) == _FIELD_NAMES, "DuckDB schema drifted from EpisodicEvent"
 
@@ -601,6 +612,8 @@ def event_from_cycle_result(
         else False if status == "rolled_back" or status in NEUTRAL_STATUSES
         else None
     )
+    raw_usage = result.get("usage")
+    usage: dict[str, Any] = raw_usage if isinstance(raw_usage, dict) else {}
     return EpisodicEvent(
         cycle_id=EpisodicEvent.new_cycle_id(),
         ts=_now(clock),
@@ -619,8 +632,19 @@ def event_from_cycle_result(
         improvement_pct=improvement,
         cost_usd=cost_usd,
         contract=_opt_str(result.get("contract")),
+        input_tokens=_opt_count(usage.get("input_tokens")),
+        output_tokens=_opt_count(usage.get("output_tokens")),
+        cache_creation_tokens=_opt_count(usage.get("cache_creation_tokens")),
+        cache_read_tokens=_opt_count(usage.get("cache_read_tokens")),
+        output_limit=_opt_count(usage.get("output_limit")),
+        stop_reason=_opt_str(usage.get("stop_reason")),
     )
 
 
 def _opt_str(value: Any) -> str | None:
     return None if value is None else str(value)
+
+
+def _opt_count(value: Any) -> int | None:
+    """A token count, or None for anything that is not a whole number."""
+    return value if isinstance(value, int) and not isinstance(value, bool) else None

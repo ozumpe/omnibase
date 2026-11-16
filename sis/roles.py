@@ -778,12 +778,16 @@ class SWE(Role):
         before any proposal still raises; the driver records that one too.
         """
         paid: dict[str, Any] = {}
+        proposer.reset_last_usage()  # a step that asks for no proposal reports none
         try:
-            return self._implement(story_id, contract_name, paid)
+            result = self._implement(story_id, contract_name, paid)
         except Exception as exc:  # noqa: BLE001 - reported with its cost, never lost
             if not paid:
                 raise
-            return self._failed_after_proposal(story_id, exc, paid)
+            result = self._failed_after_proposal(story_id, exc, paid)
+        if (usage := proposer.last_usage()) is not None:
+            result["usage"] = usage  # token counts only, never text (OMNI-220)
+        return result
 
     def _failed_after_proposal(
         self, story_id: str, exc: Exception, paid: dict[str, Any],

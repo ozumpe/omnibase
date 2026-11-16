@@ -224,3 +224,50 @@ def test_a_duckdb_file_from_before_a_field_existed_keeps_accepting_rows(tmp_path
     by_id = {e.cycle_id: e for e in store.events()}
     assert by_id["old"].contract is None
     assert [e.contract for e in store.events() if e.cycle_id != "old"] == ["sort"]
+
+
+# --- OMNI-220: the proposer's token counts are on the record ---------------------
+
+
+def test_an_event_records_the_calls_token_counts() -> None:
+    usage = {"input_tokens": 5210, "output_tokens": 7570, "cache_creation_tokens": 1200,
+             "cache_read_tokens": 300, "output_limit": 8000, "stop_reason": "end_turn"}
+    event = event_from_cycle_result({"status": "rolled_back", "usage": usage})
+    assert (event.input_tokens, event.output_tokens, event.output_limit) == (5210, 7570, 8000)
+    assert (event.cache_creation_tokens, event.cache_read_tokens) == (1200, 300)
+    assert event.stop_reason == "end_turn"
+    none = event_from_cycle_result({"status": "paused"})
+    assert none.output_tokens is None and none.stop_reason is None
+
+
+def test_a_count_that_is_not_a_whole_number_is_not_recorded() -> None:
+    event = event_from_cycle_result(
+        {"status": "rolled_back", "usage": {"output_tokens": "7570", "input_tokens": True}})
+    assert event.output_tokens is None and event.input_tokens is None
+
+
+def test_an_old_jsonl_row_without_token_counts_still_loads(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    path = tmp_path / "ep.jsonl"
+    path.write_text('{"cycle_id": "a1", "ts": "2026-11-13T15:40:00", "outcome": "rolled_back", '
+                    '"cost_usd": 0.4, "contract": "ca_price_wholesale"}\n', encoding="utf-8")
+    (event,) = JsonlEpisodicStore(path).events()
+    assert event.output_tokens is None and event.output_limit is None
+    store = JsonlEpisodicStore(path)
+    store.append(_ev("rolled_back", output_tokens=7570, output_limit=8000))
+    assert [e.output_tokens for e in store.events()] == [None, 7570]
+
+
+def test_a_duckdb_file_without_token_columns_gets_them(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    duckdb = pytest.importorskip("duckdb")
+    path = tmp_path / "ep.duckdb"
+    old = duckdb.connect(str(path))
+    old.execute("CREATE TABLE episodes (cycle_id VARCHAR, ts VARCHAR, outcome VARCHAR, "
+                "cost_usd DOUBLE, contract VARCHAR)")
+    old.execute("INSERT INTO episodes VALUES ('old', '2026-11-13', 'rolled_back', 0.4, 'x')")
+    old.close()
+    store = DuckDBEpisodicStore(path)
+    store.append(_ev("rolled_back", output_tokens=7570, stop_reason="max_tokens"))
+    by_id = {e.cycle_id: e for e in store.events()}
+    assert by_id["old"].output_tokens is None
+    new = next(e for e in store.events() if e.cycle_id != "old")
+    assert (new.output_tokens, new.stop_reason) == (7570, "max_tokens")

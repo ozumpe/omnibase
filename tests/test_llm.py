@@ -94,3 +94,23 @@ def test_the_anthropic_client_says_when_the_answer_was_cut_off(monkeypatch) -> N
         monkeypatch.setitem(sys.modules, "anthropic", fake)
         response = llm.AnthropicClient().complete(system="s", user="u", max_tokens=8000)
         assert response.truncated is cut, stop
+
+
+def test_the_anthropic_client_reports_its_token_counts(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # OMNI-220 (L76): only the cost came back, so a cut-off could not be told
+    # from a long answer in the logs.
+    import sys
+    from types import SimpleNamespace
+
+    message = SimpleNamespace(
+        content=[SimpleNamespace(type="text", text="def f(): ...")],
+        usage=SimpleNamespace(input_tokens=5210, output_tokens=7570,
+                              cache_creation_input_tokens=1200, cache_read_input_tokens=None),
+        stop_reason="end_turn")
+    fake = SimpleNamespace(Anthropic=lambda: SimpleNamespace(
+        messages=SimpleNamespace(create=lambda **kw: message)))
+    monkeypatch.setitem(sys.modules, "anthropic", fake)
+    response = llm.AnthropicClient().complete(system="s", user="u", max_tokens=8000)
+    assert response.usage == llm.TokenUsage(input_tokens=5210, output_tokens=7570,
+                                            cache_creation_tokens=1200, cache_read_tokens=0)
+    assert response.stop_reason == "end_turn"
