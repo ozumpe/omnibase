@@ -13,6 +13,11 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+- OMNI-221 (M39): the model-error triggers count a breaching window toward
+  their streak only when it shares no week with the last window counted.
+  One outlier week used to fire the "sustained" error budget twice, and a
+  tick on unchanged data counted as a new breach. `error_budget` and
+  `skill_decay` take `counted_through` and return it on the `Decision`.
 - OMNI-219 (M38): a proposal cut off at its output limit is retried once in
   the same cycle, at the new `proposer.retry_output_limit` (32000, FORBIDDEN),
   instead of the next cycle repeating the same call at the same limit. The

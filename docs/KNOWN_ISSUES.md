@@ -243,6 +243,7 @@ None open.
 
 ## Resolved
 
+- [OMNI-221] **M39 — One outlier week fired the "sustained" model-error trigger, because consecutive windows overlap**
 - [OMNI-219] **M38 — A cut-off proposal counted as a full breaker failure and was repeated with the same limit**
 - [OMNI-200] **M36 — develop blue/green judged the PR's head file, not what `develop` serves after the merge**
 - [OMNI-50] **M20 — The live canary's p95/p99 gate is close to a coin flip for targets where dispatch overhead dominates compute**
@@ -464,3 +465,4 @@ None open.
 [OMNI-218]: https://olafzumpe.atlassian.net/browse/OMNI-218
 [OMNI-219]: https://olafzumpe.atlassian.net/browse/OMNI-219
 [OMNI-220]: https://olafzumpe.atlassian.net/browse/OMNI-220
+[OMNI-221]: https://olafzumpe.atlassian.net/browse/OMNI-221

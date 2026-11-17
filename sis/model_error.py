@@ -15,10 +15,16 @@ D9 asks two questions of a predictor's error series, and keeps them apart:
 They are separate triggers with separate rules, so one cannot stand in for the
 other, and each :class:`Decision` names which one it is and why.
 
-**Sustained, never a spike**, in the shape of :func:`sis.loop.serve_breach`:
-a window must be in breach for ``windows`` consecutive ticks before a trigger
-fires, and firing resets the streak, so a long breach starts one cycle per
-``windows`` ticks, not one per tick. **Too few samples is never a breach**:
+**Sustained, never a spike**: a trigger fires only after ``windows`` windows
+in a row are in breach, and those windows share no week. Weekly windows
+overlap, so one outlier week sits in the next *N* of them; counting each tick
+would let that one week, or one unchanged window ticked again, look sustained.
+A streak therefore counts a window only when its oldest week is after the
+newest week of the last window it counted (``counted_through``); an
+overlapping window in breach leaves the streak where it is. A healthy window
+resets the streak but not ``counted_through``, so the weeks that fired once
+never start a second streak. Firing resets the streak, so a long breach
+starts one cycle per ``windows`` fresh windows. **Too few samples is never a breach**:
 a window with fewer scored weeks than the rule's minimum is healthy, the safe
 direction, as an empty ``live_metrics`` window is for the SLO trigger. Skipped
 weeks (nothing to compare with, a next week already known, a failed answer)
@@ -31,6 +37,7 @@ acting on a decision is OMNI-197's.
 
 from __future__ import annotations
 
+import datetime
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -84,7 +91,7 @@ class BudgetRule:
 
     mae_budget: float              # a window's MAE above this is a breach
     min_scored: int                # fewer scored weeks than this is never a breach
-    windows: int                   # consecutive breaching ticks before it fires
+    windows: int                   # breaching windows in a row, sharing no week, to fire
 
     def __post_init__(self) -> None:
         _check(self.min_scored, self.windows)
@@ -98,7 +105,7 @@ class SkillRule:
 
     skill_floor: float             # a window's skill below this is a breach
     min_paired: int                # fewer paired weeks than this is never a breach
-    windows: int                   # consecutive breaching ticks before it fires
+    windows: int                   # breaching windows in a row, sharing no week, to fire
 
     def __post_init__(self) -> None:
         _check(self.min_paired, self.windows)
@@ -119,7 +126,9 @@ class Decision:
 
     ``in_breach`` is this window alone; ``fire`` is the sustained verdict.
     ``consecutive`` is the streak to carry into the next tick: 0 after firing
-    or after a healthy window. ``reason`` names the trigger and the numbers.
+    or after a healthy window. ``counted_through`` is the newest week of the
+    last window the streak counted, to carry into the next tick with it.
+    ``reason`` names the trigger and the numbers.
     """
 
     trigger: Trigger
@@ -128,6 +137,7 @@ class Decision:
     consecutive: int
     reason: str
     stats: WindowStats
+    counted_through: datetime.datetime | None
 
 
 def budget_in_breach(stats: WindowStats, rule: BudgetRule) -> tuple[bool, str]:
@@ -160,36 +170,51 @@ def skill_in_breach(stats: WindowStats, rule: SkillRule) -> tuple[bool, str]:
                    f"the floor {rule.skill_floor:+.3f}")
 
 
-def _sustain(trigger: Trigger, stats: WindowStats, in_breach: bool, why: str,
-             consecutive: int, windows: int) -> Decision:
+def _sustain(trigger: Trigger, steps: Sequence[Step], stats: WindowStats, in_breach: bool,
+             why: str, consecutive: int, counted_through: datetime.datetime | None,
+             windows: int) -> Decision:
     if consecutive < 0:
         raise ValueError(f"a streak cannot be negative, got {consecutive}")
     if not in_breach:
-        return Decision(trigger, False, False, 0, why, stats)
+        return Decision(trigger, False, False, 0, why, stats, counted_through)
+    if counted_through is not None and min(step.week for step in steps) <= counted_through:
+        # Same evidence again: an outlier still in the window, or the window
+        # not moved since the last tick. It neither adds to nor breaks the streak.
+        return Decision(trigger, True, False, consecutive,
+                        f"{why}, but it shares a week with the last window counted; "
+                        f"still {consecutive} of {windows} window(s) in a row",
+                        stats, counted_through)
+    newest = max(step.week for step in steps)
     streak = consecutive + 1
     if streak >= windows:
         return Decision(trigger, True, True, 0,
-                        f"{trigger.value}: {why}, {streak} window(s) in a row", stats)
+                        f"{trigger.value}: {why}, {streak} window(s) in a row", stats, newest)
     return Decision(trigger, True, False, streak,
-                    f"{why}, {streak} of {windows} window(s) in a row", stats)
+                    f"{why}, {streak} of {windows} window(s) in a row", stats, newest)
 
 
-def error_budget(steps: Sequence[Step], rule: BudgetRule, *, consecutive: int) -> Decision:
+def error_budget(steps: Sequence[Step], rule: BudgetRule, *, consecutive: int,
+                 counted_through: datetime.datetime | None) -> Decision:
     """The error-budget trigger on one window. Pure.
 
-    *consecutive* is how many prior ticks were already in breach; the caller
-    keeps it (OMNI-197's trigger), and passes back the returned one.
+    *consecutive* is how many earlier windows the streak counted, and
+    *counted_through* the newest week of the last one (``None`` before the
+    first). The caller keeps both (OMNI-197's trigger) and passes back the
+    returned ones.
     """
     stats = window_stats(steps)
     breach, why = budget_in_breach(stats, rule)
-    return _sustain(Trigger.ERROR_BUDGET, stats, breach, why, consecutive, rule.windows)
+    return _sustain(Trigger.ERROR_BUDGET, steps, stats, breach, why, consecutive,
+                    counted_through, rule.windows)
 
 
-def skill_decay(steps: Sequence[Step], rule: SkillRule, *, consecutive: int) -> Decision:
+def skill_decay(steps: Sequence[Step], rule: SkillRule, *, consecutive: int,
+                counted_through: datetime.datetime | None) -> Decision:
     """The skill-decay trigger on one window. Pure; see :func:`error_budget`."""
     stats = window_stats(steps)
     breach, why = skill_in_breach(stats, rule)
-    return _sustain(Trigger.SKILL_DECAY, stats, breach, why, consecutive, rule.windows)
+    return _sustain(Trigger.SKILL_DECAY, steps, stats, breach, why, consecutive,
+                    counted_through, rule.windows)
 
 
 __all__ = ["BudgetRule", "Decision", "SkillRule", "Trigger", "WindowStats",
