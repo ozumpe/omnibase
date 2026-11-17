@@ -300,6 +300,13 @@ SCHEMA: tuple[Key, ...] = (
         "SIS_PROPOSER_OUTPUT_LIMIT",
         "Output token limit of one proposal, thinking included. An answer cut "
         "off at it is not judged.", positive=True),
+    # Forbidden like the brakes (OMNI-219): it decides how much one cycle may
+    # spend. Above output_limit, or a cut-off proposal is not retried. Above
+    # llm.STREAMING_ABOVE the call is streamed.
+    Key("proposer", "retry_output_limit", ConfigTier.FORBIDDEN, Kind.INT, 32000,
+        "SIS_PROPOSER_RETRY_OUTPUT_LIMIT",
+        "Output limit of the one retry a proposal cut off at output_limit gets. "
+        "Cut off again, the run stops.", positive=True),
 
     # --- canary: how a candidate is judged against traffic. ------------------
     # Strict despite the asymmetry: turning the live canary *on* only adds rigour,
@@ -811,6 +818,7 @@ class ProposerConfig:
     llm_provider: str
     llm_model: str | None
     output_limit: int
+    retry_output_limit: int
 
 
 @dataclass(frozen=True)

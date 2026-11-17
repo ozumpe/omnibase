@@ -133,6 +133,7 @@ def propose(
     contract: Contract | None = None,
     history: Sequence[str] = (),
     findings: Sequence[str] = (),
+    output_limit: int | None = None,
 ) -> str:
     """Return a candidate replacement for *contract*'s target module.
 
@@ -149,6 +150,12 @@ def propose(
     the prompt asks for those changes rather than more speed. The stub
     ignores them too.
 
+    *output_limit* is the call's output limit, thinking included; None reads
+    ``proposer.output_limit``. The driver passes the larger
+    ``proposer.retry_output_limit`` when it retries a cut-off proposal
+    (OMNI-219): an argument, because configuration set after bootstrap does
+    not reach the SWE's process.
+
     *contract* says what the candidate must implement and be judged by; it
     falls back to the bootstrap ``sum_of_divisors`` contract when omitted, so
     existing callers keep working unchanged.
@@ -163,15 +170,15 @@ def propose(
     if isinstance(spec, FeatureContract):
         return _complete(_BUILD_SYSTEM_PROMPT,
                          _build_prompt(current_source, spec, history)
-                         + _findings_section(findings))
+                         + _findings_section(findings), output_limit)
     if not isinstance(spec, OptimizationContract):  # pragma: no cover - two classes exist
         raise TypeError(f"no prompt for a {type(spec).__name__}")
     if findings:
         return _complete(_SYSTEM_PROMPT,
                          _user_prompt(current_source, baseline_latency, spec, history,
                                       revising=True)
-                         + _findings_section(findings))
-    return _llm_proposal(current_source, baseline_latency, spec, history)
+                         + _findings_section(findings), output_limit)
+    return _llm_proposal(current_source, baseline_latency, spec, history, output_limit)
 
 
 def _stub_proposal(spec: Contract) -> str:
@@ -306,10 +313,11 @@ def _history_section(history: Sequence[str], *, building: bool = False,
 
 
 def _llm_proposal(current_source: str, baseline_latency: float, spec: OptimizationContract,
-                  history: Sequence[str] = ()) -> str:
+                  history: Sequence[str] = (), output_limit: int | None = None) -> str:
     """Ask the configured LLM (sis.llm) for a typed, optimised variant."""
     return _complete(_SYSTEM_PROMPT,
-                     _user_prompt(current_source, baseline_latency, spec, history))
+                     _user_prompt(current_source, baseline_latency, spec, history),
+                     output_limit)
 
 
 def _findings_section(findings: Sequence[str]) -> str:
@@ -327,9 +335,10 @@ def _findings_section(findings: Sequence[str]) -> str:
     )
 
 
-def _complete(system: str, user_prompt: str) -> str:
+def _complete(system: str, user_prompt: str, output_limit: int | None = None) -> str:
     """One call to the configured LLM (sis.llm); its cost and model are recorded."""
-    max_tokens = int(config.get("proposer.output_limit"))
+    max_tokens = (int(config.get("proposer.output_limit")) if output_limit is None
+                  else int(output_limit))
     response = llm.get_llm_client().complete(
         system=system, user=user_prompt, max_tokens=max_tokens)
     global _last_cost_usd, _last_model, _last_usage

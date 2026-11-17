@@ -37,7 +37,8 @@ def test_non_stub_mode_dispatches_to_llm(monkeypatch) -> None:  # type: ignore[n
     monkeypatch.setenv("SIS_PROPOSER", "claude")
     captured: dict[str, object] = {}
 
-    def fake(source: str, baseline: float, spec: object, history: object = ()) -> str:
+    def fake(source: str, baseline: float, spec: object, history: object = (),
+             output_limit: int | None = None) -> str:
         captured["source"] = source
         captured["baseline"] = baseline
         captured["contract"] = spec
@@ -150,7 +151,7 @@ def test_a_feature_is_built_with_its_own_system_prompt(monkeypatch) -> None:  # 
     monkeypatch.setenv("SIS_PROPOSER", "claude")
     seen: dict[str, str] = {}
 
-    def fake(system: str, user: str) -> str:
+    def fake(system: str, user: str, output_limit: int | None = None) -> str:
         seen.update(system=system, user=user)
         return "def to_roman(n: int) -> str:\n    return ''\n"
 
@@ -234,6 +235,14 @@ def test_the_proposer_asks_for_the_configured_token_limit(monkeypatch) -> None: 
     with pytest.raises(proposer.ProposalCutOff, match="max_tokens=20000"):
         proposer.propose("def sum_of_divisors(n: int) -> int: ...", 0.001)
     assert sent[-1] == 20000
+
+    # OMNI-219: the driver's retry of a cut-off passes its larger limit as an
+    # argument, which wins over the key; the cut-off names that limit.
+    with pytest.raises(proposer.ProposalCutOff, match="max_tokens=32000"):
+        proposer.propose("def sum_of_divisors(n: int) -> int: ...", 0.001,
+                         output_limit=32000)
+    assert sent[-1] == 32000
+    assert proposer.last_usage()["output_limit"] == 32000  # type: ignore[index]
 
 
 def test_the_cycle_reservation_covers_a_cycle_at_the_token_limits() -> None:
