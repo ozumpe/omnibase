@@ -13,6 +13,13 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+- OMNI-222 (L77): climatology is computed from exactly the readings the
+  predictor is shown (the same as-of view, back to the same lookback), not
+  the whole history. With the default 52 weeks it learns from last year
+  alone, and has nothing in reach after a 53-week ISO year (2021, 2027), so
+  no skill is claimed for those weeks. The skill no longer counts a lead
+  built on seasons the predictor never sees. The autumn-2022 figure in
+  `docs/SENSOR_RUNBOOK.md` was measured with five years and needs a re-run.
 - OMNI-221 (M39): the model-error triggers count a breaching window toward
   their streak only when it shares no week with the last window counted.
   One outlier week used to fire the "sustained" error budget twice, and a

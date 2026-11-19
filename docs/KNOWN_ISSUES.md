@@ -205,6 +205,7 @@ None open.
 
 ## Resolved (Low)
 
+- [OMNI-222] **L77** — climatology averaged up to five years of seasons while the predictor is shown 52 weeks, so its skill counted history no code change could use
 - [OMNI-166] **L55** — an atomic write left the file readable by its owner only (0600), so the first save made `config.yml` unreadable to another user
 - [OMNI-220] **L76** — a cycle recorded its cost but not the proposer's token counts, output limit or stop reason
 - [OMNI-181] **L66** — `scripts/aws_secret.py`'s `check_anthropic_key` ended in a traceback when the connection dropped mid-response
@@ -466,3 +467,4 @@ None open.
 [OMNI-219]: https://olafzumpe.atlassian.net/browse/OMNI-219
 [OMNI-220]: https://olafzumpe.atlassian.net/browse/OMNI-220
 [OMNI-221]: https://olafzumpe.atlassian.net/browse/OMNI-221
+[OMNI-222]: https://olafzumpe.atlassian.net/browse/OMNI-222

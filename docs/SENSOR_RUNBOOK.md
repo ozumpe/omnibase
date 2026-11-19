@@ -230,14 +230,17 @@ cycle.
 
 Climatology is the baseline the skill is measured against. At each question
 it forecasts the latest price plus the mean change from that ISO week to the
-next over up to five earlier years, from the same as-of view the predictor is
-shown, computed on the host. It learns a seasonal *change*, not a seasonal
+next in the earlier years the predictor is shown, computed on the host from
+the same readings: the same as-of view, back to the same lookback. With the
+default 52 weeks that is last year alone, and nothing in the year after a
+53-week ISO year (2021, 2027), whose twin week is 53 weeks back. It learns a seasonal *change*, not a seasonal
 level, so a market that moved a dollar since last year is not forecast to
-move back. A week with no earlier year to learn from has no climatology. The
+move back. A week with no earlier year in view has no climatology. The
 summary line adds climatology's MAE and the skill, 1 − MAE(model) /
 MAE(climatology), over the weeks both were scored: above 0 the model beats
-climatology. On autumn 2022, persistence scores about −0.03 (MAE 0.179 against
-climatology's 0.173): it is no better than the season.
+climatology. On autumn 2022, persistence scored about −0.03 (MAE 0.179 against
+climatology's 0.173) while climatology still averaged up to five years; with
+one year it needs measuring again on the canonical trace.
 
 ```bash
 poetry run python scripts/prediction_error.py                    # autumn 2022, from the EIA trace
