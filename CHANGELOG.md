@@ -13,6 +13,12 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+## v0.7.0 — 2026-11-19
+
+Phase B's model-error triggers (OMNI-196, OMNI-221) and climatology fix
+(OMNI-222), the proposer's configurable output limit with one retry when cut
+off (OMNI-218, OMNI-219), token logging (OMNI-220), and the fixes since v0.6.0.
+
 - OMNI-222 (L77): climatology is computed from exactly the readings the
   predictor is shown (the same as-of view, back to the same lookback), not
   the whole history. With the default 52 weeks it learns from last year
