@@ -58,8 +58,10 @@ touch the code a rule is about. History (what changed when) belongs in
   in `sis/model_error.py` (OMNI-196, pure): **error budget** (a window's MAE
   above the actor's budget: the twin is unfit) and **skill decay** (its skill
   against climatology below the actor's floor: headroom), each with its own
-  rule and streak. Both need a sustained breach (`windows` ticks in a row,
-  reset on firing) and a minimum of scored weeks; skipped weeks never count,
+  rule and streak. Both need a sustained breach (`windows` windows in a row
+  that share no week, reset on firing: a window overlapping the last one
+  counted, such as an outlier still inside it or an unchanged window ticked
+  again, adds nothing, OMNI-221) and a minimum of scored weeks; skipped weeks never count,
   and every threshold is an argument, per actor. Wiring them into `--loop`
   is OMNI-197.
   **The real sensor is `EIASensor`** (OMNI-33, `sis/adapters_real.py`): EIA's

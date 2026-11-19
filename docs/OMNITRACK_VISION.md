@@ -556,7 +556,8 @@ to the next over up to five earlier years, from the as-of view; the report carri
 against it. The triggers themselves are OMNI-196/197.*
 → *The two decisions are built (OMNI-196, `sis/model_error.py`): an error budget on a
 window's MAE and a floor on its skill, separate rules and separate streaks, both sustained
-and both refusing to judge too few weeks. Wiring them to a cycle and a page is OMNI-197.*
+(over windows that share no week, OMNI-221) and both refusing to judge too few weeks.
+Wiring them to a cycle and a page is OMNI-197.*
 
 That's a decision to be made case by case, actor by actor and project by project. My opinion is to optimize the implementation
 of a model over time based on historic values/timelines. The situation for each actor can change suddenly and drastically - 
