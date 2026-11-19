@@ -7,12 +7,16 @@ module starts no cycle, files nothing and pages no one, and imports nothing
 that could (a test holds it to that).
 
 **Climatology** (OMNI-195, the baseline D9's skill trigger measures against)
-is asked every question too, on the host from the same as-of view, never in a
-sandbox: the latest value plus the mean change from the same ISO week to the
-next in up to :data:`CLIMATOLOGY_YEARS` earlier years (:func:`climatology`).
-A seasonal change rather than a seasonal level, so a market that moved a
-dollar since last year is not forecast to move back. A week with no earlier
-year to learn from has no climatology, and no skill is claimed for it. The
+is asked every question too, on the host, never in a sandbox, and from exactly
+the readings the predictor is shown: the same as-of view, back to the same
+*lookback*. It is the latest value plus the mean change from the same ISO week
+to the next in up to :data:`CLIMATOLOGY_YEARS` earlier years that view holds
+(:func:`climatology`). With the default 52-week lookback that is the year
+before, and after a 53-week ISO year not even that: last year's week is 53
+weeks back, out of the predictor's sight and so out of the baseline's. A
+seasonal change rather than a seasonal level, so a market that moved a dollar
+since last year is not forecast to move back. A week with no earlier year in
+the view has no climatology, and no skill is claimed for it. The
 skill, ``1 - MAE(model) / MAE(climatology)`` over the weeks both were scored
 on, is in the summary next to bias, MAE and RMSE: above 0 the model beats
 climatology, at 0 it is no better, below 0 worse.
@@ -195,7 +199,8 @@ def questions(readings: Iterable[Reading], absent: Iterable[Absent], *, target: 
     One per week of *target* whose first vintage became known in ``[start,
     end)``, ordered by that moment. *clock*, if given, is advanced to each one
     as it is asked, as :func:`sis.ports.replay` does for a reading. The state
-    holds what was known then, back to *lookback* before the week asked about.
+    holds what was known then, back to *lookback* before the week asked about,
+    and climatology is computed from the same readings.
     """
     readings, absent = tuple(readings), tuple(absent)
     first: dict[datetime.datetime, datetime.datetime] = {}
@@ -214,11 +219,14 @@ def questions(readings: Iterable[Reading], absent: Iterable[Absent], *, target: 
         if clock is not None:
             clock.advance_to(at)
         view = as_of(readings, absent, at)
-        seen = {r.event_time: r.value for r in view.readings if r.series == target}
         floor = week - lookback
+        shown = [r for r in view.readings if r.event_time >= floor]
         state = {"as_of": at.isoformat(),
-                 "readings": [_record(r) for r in view.readings if r.event_time >= floor],
+                 "readings": [_record(r) for r in shown],
                  "absent": [_absent_record(a) for a in view.absent if a.event_time >= floor]}
+        # Climatology sees what the predictor is shown and no more, or part of
+        # its lead would be history no change to the predictor could use (L77).
+        seen = {r.event_time: r.value for r in shown if r.series == target}
         later = [w for w in weeks if w > week]
         next_week = later[0] if later else None
         actual: float | None = None

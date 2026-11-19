@@ -278,7 +278,7 @@ def _three_autumns() -> dict[datetime.date, float]:
     # Each autumn rises 0.05 a week from its own level; the model below
     # (persistence) misses each rise by 0.05, climatology learns it.
     prices: dict[datetime.date, float] = {}
-    for year, level in ((2020, 3.0), (2021, 4.0), (2022, 5.0)):
+    for year, level in ((2021, 3.0), (2022, 4.0), (2023, 5.0)):
         start = datetime.date.fromisocalendar(year, 32, 1)
         for i in range(10):
             prices[start + datetime.timedelta(weeks=i)] = round(level + 0.05 * i, 3)
@@ -289,13 +289,13 @@ def test_a_climatology_that_learned_the_season_claims_no_skill_to_beat() -> None
     readings, absent = read_back(_trace(_three_autumns()), EIA_RULES)
     asked = prediction_error.questions(readings, absent)
     report = prediction_error.score(asked, prediction_error.ask(_persistence, asked))
-    autumn_2022 = [s for s in report.steps if s.week.year == 2022 and s.error is not None]
-    assert len(autumn_2022) == 9
-    assert all(s.climatology_error == pytest.approx(0.0, abs=1e-9) for s in autumn_2022)
-    assert all(s.error == pytest.approx(-0.05) for s in autumn_2022)
-    # 2020 had no earlier year; 2021 learned from 2020; and the jump between
+    autumn_2023 = [s for s in report.steps if s.week.year == 2023 and s.error is not None]
+    assert len(autumn_2023) == 9
+    assert all(s.climatology_error == pytest.approx(0.0, abs=1e-9) for s in autumn_2023)
+    assert all(s.error == pytest.approx(-0.05) for s in autumn_2023)
+    # 2021 had no earlier year; 2022 learned from 2021; and the jump between
     # autumns has no next week within reach, so it is not scored at all.
-    assert all(s.climatology is None for s in report.steps if s.week.year == 2020)
+    assert all(s.climatology is None for s in report.steps if s.week.year == 2021)
     s = report.summary()
     assert s["skill_weeks"] == 18
     assert s["climatology_mae"] == pytest.approx(0.0, abs=1e-9)
@@ -325,21 +325,65 @@ def test_skill_against_a_climatology_that_misses() -> None:
 def test_climatology_sees_nothing_after_the_question() -> None:
     # Change everything after a question: its climatology does not move.
     prices = _three_autumns()
-    later = {day: (value + 1.0 if day.year == 2022 and day.month >= 9 else value)
+    later = {day: (value + 1.0 if day.year == 2023 and day.month >= 9 else value)
              for day, value in prices.items()}
     before = {q.week: q.climatology for q in prediction_error.questions(
         *read_back(_trace(prices), EIA_RULES))}
     after = {q.week: q.climatology for q in prediction_error.questions(
         *read_back(_trace(later), EIA_RULES))}
-    cut = datetime.datetime(2022, 8, 29, tzinfo=datetime.UTC)
+    cut = datetime.datetime(2023, 8, 28, tzinfo=datetime.UTC)
     early = [week for week in before if week < cut]
     assert early and all(before[w] == after[w] for w in early)
     # And it is the same forecast the pure function makes from the as-of view.
     readings, absent = read_back(_trace(prices), EIA_RULES)
     for question in prediction_error.questions(readings, absent):
         view = replay.as_of(readings, absent, question.at)
-        seen = {r.event_time: r.value for r in view.readings if r.series == CA}
+        seen = {r.event_time: r.value for r in view.readings if r.series == CA
+                and r.event_time >= question.week - prediction_error.DEFAULT_LOOKBACK}
         assert question.climatology == prediction_error.climatology(seen, question.week)
+
+
+def _shown(question: prediction_error.Question) -> dict[datetime.datetime, float]:
+    return {datetime.datetime.fromisoformat(r["event_time"]): float(r["value"])
+            for r in question.state["readings"] if r["series"] == CA}
+
+
+def test_climatology_sees_only_what_the_predictor_is_shown() -> None:
+    # L77: the baseline used five years of seasons while the predictor is
+    # shown 52 weeks, so part of its lead was history no code change can see.
+    prices = _three_autumns()
+    steeper = {day: (round(3.0 + 0.30 * (day - min(prices)).days / 7, 3)
+                     if day.year == 2021 else value) for day, value in prices.items()}
+    for trace in (prices, steeper):
+        asked = prediction_error.questions(*read_back(_trace(trace), EIA_RULES))
+        for question in asked:
+            assert question.climatology == prediction_error.climatology(
+                _shown(question), question.week)
+    # 2021 is two years before 2023, outside the 52 weeks shown: changing its
+    # season moves no 2023 climatology.
+    plain = {q.week: q.climatology for q in prediction_error.questions(
+        *read_back(_trace(prices), EIA_RULES)) if q.week.year == 2023}
+    moved = {q.week: q.climatology for q in prediction_error.questions(
+        *read_back(_trace(steeper), EIA_RULES)) if q.week.year == 2023}
+    assert len([c for c in plain.values() if c is not None]) == 9
+    assert moved == plain
+
+
+def test_after_a_53_week_year_last_years_week_is_out_of_reach() -> None:
+    # ISO 2020 has 53 weeks, so a 2021 week's twin is 53 weeks back, outside
+    # the 52 shown: no climatology, as the predictor could not see it either.
+    prices: dict[datetime.date, float] = {}
+    for year in (2020, 2021):
+        start = datetime.date.fromisocalendar(year, 32, 1)
+        for i in range(6):
+            prices[start + datetime.timedelta(weeks=i)] = round(4.0 + 0.05 * i, 3)
+    asked = prediction_error.questions(*read_back(_trace(prices), EIA_RULES))
+    assert [q.climatology for q in asked if q.week.year == 2021] == [None] * 6
+    wide = prediction_error.questions(*read_back(_trace(prices), EIA_RULES),
+                                      lookback=datetime.timedelta(weeks=60))
+    # Shown 60 weeks, it learns from 2020 (the last week has no pair to learn from).
+    assert [q.climatology is not None for q in wide if q.week.year == 2021] \
+        == [True] * 5 + [False]
 
 
 def test_skipped_weeks_stay_out_of_the_skill() -> None:

@@ -49,9 +49,12 @@ touch the code a rule is about. History (what changed when) belongs in
   backtest, since persistence would fail one in the jump week.
   `scripts/prediction_error.py` replays autumn 2022 from the EIA trace, or a
   scenario (`--scenario KIND --seed N`), and prints the errors. **Climatology**
-  is asked too (OMNI-195), on the host from the same as-of view: the latest
+  is asked too (OMNI-195), on the host from exactly the readings the predictor
+  is shown (the same as-of view, back to the same lookback, L77): the latest
   price plus the mean change from that ISO week to the next over up to five
-  earlier years. The summary carries its MAE and the model's skill,
+  earlier years that view holds. With the default 52-week lookback that is
+  one year, and none after a 53-week ISO year, whose week is 53 weeks back.
+  The summary carries its MAE and the model's skill,
   1 − MAE(model)/MAE(climatology), over the weeks both were scored; a week with
   no earlier year has no climatology and claims no skill. Nothing starts a
   cycle from it yet. Phase B's two triggers (D9, epic OMNI-194) are decided
