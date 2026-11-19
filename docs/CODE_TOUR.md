@@ -386,7 +386,8 @@ chosen by `SIS_EPISODIC_STORE`:
 - `none` — disabled.
 
 The schema (`EpisodicEvent`) is the point — `outcome`, `reject_gate`,
-`candidate_sha`, `cost_usd`, before/after latency. A shared pure `summarize()`
+`candidate_sha`, `cost_usd`, before/after latency, and the proposer call's
+token counts against its output limit. A shared pure `summarize()`
 makes rollups identical across backends, and the DuckDB column schema is
 *asserted* against the dataclass so it can't drift. Postgres + pgvector can drop
 in later (multi-node cluster / embedding retrieval) without touching the loop —

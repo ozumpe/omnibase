@@ -17,12 +17,42 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 from sis import config
 
 DEFAULT_PROVIDER = "anthropic"
 DEFAULT_ANTHROPIC_MODEL = "claude-opus-4-8"
+
+# Above about 21000 output tokens the anthropic SDK refuses a non-streaming
+# call (it expects one that long to run past ten minutes). The proposer's
+# first call stays below this and is sent as before; a longer one streams.
+STREAMING_ABOVE = 20000
+
+
+def needs_streaming(max_tokens: int) -> bool:
+    """Whether a call with this output limit must be streamed. Pure."""
+    return max_tokens > STREAMING_ABOVE
+
+
+@dataclass(frozen=True)
+class TokenUsage:
+    """The token counts of one completion; counts only, never text."""
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_creation_tokens: int = 0
+    cache_read_tokens: int = 0
+
+    @classmethod
+    def from_anthropic(cls, usage: Any) -> TokenUsage:
+        """From an Anthropic ``message.usage`` object (duck-typed, like the cost)."""
+        def count(name: str) -> int:
+            return int(getattr(usage, name, 0) or 0)
+
+        return cls(input_tokens=count("input_tokens"), output_tokens=count("output_tokens"),
+                   cache_creation_tokens=count("cache_creation_input_tokens"),
+                   cache_read_tokens=count("cache_read_input_tokens"))
 
 
 @dataclass(frozen=True)
@@ -30,13 +60,16 @@ class LLMResponse:
     """One completion: the text, the model that produced it, and its $ cost.
 
     ``truncated`` says the answer stopped at the token limit, so it is not the
-    whole answer (L33).
+    whole answer (L33). ``usage`` and ``stop_reason`` are what a provider
+    reports about the call, when it reports them.
     """
 
     text: str
     cost_usd: float
     model: str
     truncated: bool = False
+    usage: TokenUsage | None = None
+    stop_reason: str | None = None
 
 
 class LLMClient(Protocol):
@@ -70,7 +103,7 @@ class AnthropicClient:
         from sis.cost import cost_from_usage
 
         client = anthropic.Anthropic()  # resolves ANTHROPIC_API_KEY from the env
-        message = client.messages.create(
+        request: dict[str, Any] = dict(
             model=self.model,
             max_tokens=max_tokens,
             thinking={"type": "adaptive"},
@@ -79,10 +112,19 @@ class AnthropicClient:
                      "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content": user}],
         )
+        if needs_streaming(max_tokens):
+            # The SDK refuses a non-streaming call this long (OMNI-219): the
+            # retry of a cut-off proposal. The final message is the same object.
+            with client.messages.stream(**request) as stream:
+                message = stream.get_final_message()
+        else:
+            message = client.messages.create(**request)
         text = "".join(block.text for block in message.content if block.type == "text")
         return LLMResponse(
             text=text, cost_usd=cost_from_usage(message.usage, self.model), model=self.model,
-            truncated=message.stop_reason == "max_tokens")
+            truncated=message.stop_reason == "max_tokens",
+            usage=TokenUsage.from_anthropic(message.usage),
+            stop_reason=None if message.stop_reason is None else str(message.stop_reason))
 
     def check(self) -> str:
         """``GET /v1/models/{model}``: a 401 for a bad key, a 404 for an unknown model."""

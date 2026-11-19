@@ -554,6 +554,13 @@ form that stays meaningful as the model improves.
 → *Climatology built (OMNI-195): the latest value plus the mean change from that ISO week
 to the next over up to five earlier years, from the as-of view; the report carries the skill
 against it. The triggers themselves are OMNI-196/197.*
+→ *Climatology sees only what the predictor is shown (L77, OMNI-222): the same 52-week view,
+so one earlier year, or none after a 53-week ISO year. A lead built on history the model is
+never shown is not headroom a code change could capture.*
+→ *The two decisions are built (OMNI-196, `sis/model_error.py`): an error budget on a
+window's MAE and a floor on its skill, separate rules and separate streaks, both sustained
+(over windows that share no week, OMNI-221) and both refusing to judge too few weeks.
+Wiring them to a cycle and a page is OMNI-197.*
 
 That's a decision to be made case by case, actor by actor and project by project. My opinion is to optimize the implementation
 of a model over time based on historic values/timelines. The situation for each actor can change suddenly and drastically - 

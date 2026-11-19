@@ -463,6 +463,24 @@ def test_a_malformed_fixture_is_a_harness_fault_and_names_the_file(
     assert "six" in result.reason
 
 
+@pytest.mark.parametrize("which", ["fixture", "expect"])
+def test_a_fixture_that_is_not_utf8_is_malformed_and_names_its_file(
+    tmp_path: pathlib.Path, which: str,
+) -> None:
+    # OMNI-180 (L65): the bytes were decoded outside the malformed-fixture
+    # handler, so a non-UTF-8 file escaped as "the backtest gate raised
+    # (UnicodeDecodeError ...)", naming neither the backtest nor the file.
+    fixture = _write_fixture(tmp_path / "f.json", [6])
+    expect = _write_expect(tmp_path / "e.json", 12)
+    bad = fixture if which == "fixture" else expect
+    pathlib.Path(bad).write_bytes(b'{"value": "\xff\xfe"}')
+    result = _gate(tmp_path, (Backtest(name="six", fixture=fixture, expect=expect),))
+    assert result is not None and result.reason.startswith("harness:")
+    assert gate_from_reason(result.reason) == "harness"
+    assert "'six' has a malformed fixture" in result.reason
+    assert bad in result.reason and "UTF-8" in result.reason
+
+
 def test_an_unknown_comparator_is_a_harness_fault(tmp_path: pathlib.Path) -> None:
     fixture = _write_fixture(tmp_path / "f.json", [6])
     expect = _write_expect(tmp_path / "e.json", 12)

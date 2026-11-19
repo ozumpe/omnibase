@@ -35,13 +35,13 @@ import inspect
 import pathlib
 import re
 from collections.abc import Sequence
+from typing import Any
 
 from sis import config, llm
 from sis.contract import Contract, FeatureContract, OptimizationContract, default_contract
 from sis.paths import PROJECT_ROOT
 
 MODEL = llm.DEFAULT_ANTHROPIC_MODEL  # back-compat: the default model
-MAX_TOKENS = 8000
 
 # Cost + model of the most recent propose() call (0.0 / None for the stub). The
 # CEO reads the cost to enforce the spend cap and the cost-per-accepted SLO.
@@ -57,6 +57,22 @@ def last_cost_usd() -> float:
 def last_model() -> str | None:
     """Model of the most recent propose() call (None for the stub)."""
     return _last_model
+
+
+# Token counts of the most recent call, the limit it was given and why it
+# stopped (OMNI-220): without them a cut-off cannot be told from the logs.
+_last_usage: dict[str, Any] | None = None
+
+
+def last_usage() -> dict[str, Any] | None:
+    """Usage of the most recent propose() call; None for the stub or no call."""
+    return None if _last_usage is None else dict(_last_usage)
+
+
+def reset_last_usage() -> None:
+    """Forget the last usage, so a step that asks for no proposal reports none."""
+    global _last_usage
+    _last_usage = None
 
 
 class ProposalCutOff(RuntimeError):
@@ -117,6 +133,7 @@ def propose(
     contract: Contract | None = None,
     history: Sequence[str] = (),
     findings: Sequence[str] = (),
+    output_limit: int | None = None,
 ) -> str:
     """Return a candidate replacement for *contract*'s target module.
 
@@ -133,6 +150,12 @@ def propose(
     the prompt asks for those changes rather than more speed. The stub
     ignores them too.
 
+    *output_limit* is the call's output limit, thinking included; None reads
+    ``proposer.output_limit``. The driver passes the larger
+    ``proposer.retry_output_limit`` when it retries a cut-off proposal
+    (OMNI-219): an argument, because configuration set after bootstrap does
+    not reach the SWE's process.
+
     *contract* says what the candidate must implement and be judged by; it
     falls back to the bootstrap ``sum_of_divisors`` contract when omitted, so
     existing callers keep working unchanged.
@@ -140,21 +163,22 @@ def propose(
     global _last_cost_usd, _last_model
     _last_cost_usd = 0.0  # reset; the stub is free
     _last_model = None
+    reset_last_usage()
     spec = contract if contract is not None else default_contract()
     if config.get("proposer.backend") == "stub":
         return _stub_proposal(spec)
     if isinstance(spec, FeatureContract):
         return _complete(_BUILD_SYSTEM_PROMPT,
                          _build_prompt(current_source, spec, history)
-                         + _findings_section(findings))
+                         + _findings_section(findings), output_limit)
     if not isinstance(spec, OptimizationContract):  # pragma: no cover - two classes exist
         raise TypeError(f"no prompt for a {type(spec).__name__}")
     if findings:
         return _complete(_SYSTEM_PROMPT,
                          _user_prompt(current_source, baseline_latency, spec, history,
                                       revising=True)
-                         + _findings_section(findings))
-    return _llm_proposal(current_source, baseline_latency, spec, history)
+                         + _findings_section(findings), output_limit)
+    return _llm_proposal(current_source, baseline_latency, spec, history, output_limit)
 
 
 def _stub_proposal(spec: Contract) -> str:
@@ -289,10 +313,11 @@ def _history_section(history: Sequence[str], *, building: bool = False,
 
 
 def _llm_proposal(current_source: str, baseline_latency: float, spec: OptimizationContract,
-                  history: Sequence[str] = ()) -> str:
+                  history: Sequence[str] = (), output_limit: int | None = None) -> str:
     """Ask the configured LLM (sis.llm) for a typed, optimised variant."""
     return _complete(_SYSTEM_PROMPT,
-                     _user_prompt(current_source, baseline_latency, spec, history))
+                     _user_prompt(current_source, baseline_latency, spec, history),
+                     output_limit)
 
 
 def _findings_section(findings: Sequence[str]) -> str:
@@ -310,18 +335,34 @@ def _findings_section(findings: Sequence[str]) -> str:
     )
 
 
-def _complete(system: str, user_prompt: str) -> str:
+def _complete(system: str, user_prompt: str, output_limit: int | None = None) -> str:
     """One call to the configured LLM (sis.llm); its cost and model are recorded."""
+    max_tokens = (int(config.get("proposer.output_limit")) if output_limit is None
+                  else int(output_limit))
     response = llm.get_llm_client().complete(
-        system=system, user=user_prompt, max_tokens=MAX_TOKENS)
-    global _last_cost_usd, _last_model
+        system=system, user=user_prompt, max_tokens=max_tokens)
+    global _last_cost_usd, _last_model, _last_usage
     _last_cost_usd = response.cost_usd
     _last_model = response.model
+    _last_usage = _usage_record(response, max_tokens)
     if response.truncated:
         raise ProposalCutOff(
             f"the {response.model} answer stopped at the token limit "
-            f"(max_tokens={MAX_TOKENS}), so it was not judged")
+            f"(max_tokens={max_tokens}), so it was not judged")
     return _extract_code(response.text)
+
+
+def _usage_record(response: llm.LLMResponse, output_limit: int) -> dict[str, Any]:
+    """The counts the cycle logs; a provider that reports none leaves them None."""
+    counts = response.usage
+    return {
+        "input_tokens": counts.input_tokens if counts else None,
+        "output_tokens": counts.output_tokens if counts else None,
+        "cache_creation_tokens": counts.cache_creation_tokens if counts else None,
+        "cache_read_tokens": counts.cache_read_tokens if counts else None,
+        "output_limit": output_limit,
+        "stop_reason": response.stop_reason,
+    }
 
 
 def _extract_code(text: str) -> str:

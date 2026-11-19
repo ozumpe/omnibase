@@ -10,14 +10,21 @@ holds anything but a complete file.
 
 Shared on purpose: OMNI-52 needs the same discipline for ``config.yml``, and two
 hand-rolled copies of this are how one of them ends up without the fsync.
+
+The new file keeps the old one's permissions, and a file that did not exist
+gets what a plain write would give it (``0o666`` less the umask). None of the
+callers writes a secret, so none asks for less.
 """
 
 from __future__ import annotations
 
 import contextlib
 import os
-import tempfile
+import secrets
+import stat
 from pathlib import Path
+
+_NAME_ATTEMPTS = 8
 
 
 def write_text_atomic(path: Path, text: str) -> None:
@@ -30,10 +37,10 @@ def write_text_atomic(path: Path, text: str) -> None:
     removed and *path* is left exactly as it was.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
-    tmp = Path(tmp_name)
+    fd, tmp = _create_temporary(path)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            _keep_mode(fh.fileno(), path)
             fh.write(text)
             fh.flush()
             os.fsync(fh.fileno())
@@ -43,6 +50,33 @@ def write_text_atomic(path: Path, text: str) -> None:
             tmp.unlink()
         raise
     _fsync_directory(path.parent)
+
+
+def _create_temporary(path: Path) -> tuple[int, Path]:
+    """A new file beside *path*, created ``0o666`` less the umask.
+
+    Not ``tempfile.mkstemp``: that creates its file 0600, and the replace then
+    handed that mode to *path*, so ``config.yml`` became unreadable to any
+    other user after the first save (OMNI-166).
+    """
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
+    for _ in range(_NAME_ATTEMPTS):
+        tmp = path.parent / f".{path.name}.{secrets.token_hex(8)}.tmp"
+        try:
+            return os.open(tmp, flags, 0o666), tmp
+        except FileExistsError:
+            continue
+    raise FileExistsError(f"no free temporary name beside {path}")
+
+
+def _keep_mode(fd: int, path: Path) -> None:
+    # A rewrite keeps the permissions someone gave the file; a new file keeps
+    # the umask-derived mode it was created with.
+    try:
+        mode = stat.S_IMODE(os.stat(path).st_mode)
+    except FileNotFoundError:
+        return
+    os.fchmod(fd, mode)
 
 
 def _fsync_directory(directory: Path) -> None:

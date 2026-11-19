@@ -440,6 +440,31 @@ class CEO(Role):
         self._reserved = float(estimate_usd)
         self._version += 1
 
+    def reserve_retry(self, spent_usd: float, estimate_usd: float) -> bool:
+        """Charge what the cycle has spent so far and reserve its one retry.
+
+        For a proposal cut off at its output limit (OMNI-219): the call is
+        paid for, so *spent_usd* is counted as spent now, and the retry's
+        *estimate_usd* replaces the cycle's reservation, as if it were a
+        cycle of its own, before it is sent. Refused, changing nothing, when
+        the breaker is open or the two together would breach the hard cap;
+        the cycle then ends as it is and reports its cost as usual. The driver
+        persists the state before the retry is sent.
+        """
+        if self._tripped:
+            return False
+        if self._spent + spent_usd + estimate_usd > self._budget:
+            ray.get(self._ws.emit.remote("budget.denied", estimate=estimate_usd,
+                                         spent=self._spent + spent_usd,
+                                         budget=self._budget, retry=True))
+            return False
+        self._spent += spent_usd
+        self._reserved = float(estimate_usd)
+        self._version += 1
+        ray.get(self._ws.emit.remote("budget.approved", estimate=estimate_usd,
+                                     spent=self._spent, budget=self._budget, retry=True))
+        return True
+
     def trip(self, reason: str) -> str | None:
         """Open the breaker for a reason found outside the brakes, and release
         any reservation (nothing more will be spent). Returns *reason* on a
@@ -458,6 +483,7 @@ class CEO(Role):
 
     def report_outcome(
         self, *, success: bool, cost_usd: float = 0.0, reject_gate: str | None = None,
+        halt: str | None = None,
     ) -> str | None:
         """Record real spend + outcome, then evaluate all three brakes.
 
@@ -469,6 +495,10 @@ class CEO(Role):
         Returns the brake reason **on a fresh trip** (None otherwise) so the
         caller can raise the alarm — per ACTORS.md, DevOps files the bug that
         "pages a human".
+
+        *halt* opens the breaker after the outcome is counted, with that
+        reason rather than a brake's: a proposal cut off again on its retry
+        (OMNI-219) needs a person to raise the limit, and the page says so.
         """
         self._spent += cost_usd
         self._reserved = 0.0   # what the cycle really cost replaces its reservation
@@ -479,6 +509,11 @@ class CEO(Role):
         else:
             self._consecutive_failures += failure_weight(
                 reject_gate, slo_failure_weight=self._slo_failure_weight)
+        if halt and not self._tripped:
+            self._tripped = True
+            self._trip_reason = halt
+            ray.get(self._ws.emit.remote("breaker.tripped", reason=halt, **self.economics()))
+            return halt
         return self._evaluate_brakes()
 
     def record_neutral(self, *, cost_usd: float = 0.0) -> str | None:
@@ -766,8 +801,14 @@ class SWE(Role):
             return None
         return _built(spec, source)
 
-    def implement(self, story_id: str, contract_name: str | None = None) -> dict[str, Any]:
+    def implement(
+        self, story_id: str, contract_name: str | None = None,
+        output_limit: int | None = None,
+    ) -> dict[str, Any]:
         """One step of the story: propose, judge, commit, and open the PR when due.
+
+        *output_limit* overrides ``proposer.output_limit`` for this step's
+        proposal: the driver's one retry of a cut-off proposal (OMNI-219).
 
         **What the proposal cost is never lost** (OMNI-55, M16). The cost is
         known only here, and the driver learns it from the return value. So
@@ -778,12 +819,16 @@ class SWE(Role):
         before any proposal still raises; the driver records that one too.
         """
         paid: dict[str, Any] = {}
+        proposer.reset_last_usage()  # a step that asks for no proposal reports none
         try:
-            return self._implement(story_id, contract_name, paid)
+            result = self._implement(story_id, contract_name, paid, output_limit)
         except Exception as exc:  # noqa: BLE001 - reported with its cost, never lost
             if not paid:
                 raise
-            return self._failed_after_proposal(story_id, exc, paid)
+            result = self._failed_after_proposal(story_id, exc, paid)
+        if (usage := proposer.last_usage()) is not None:
+            result["usage"] = usage  # token counts only, never text (OMNI-220)
+        return result
 
     def _failed_after_proposal(
         self, story_id: str, exc: Exception, paid: dict[str, Any],
@@ -822,6 +867,7 @@ class SWE(Role):
 
     def _implement(
         self, story_id: str, contract_name: str | None, paid: dict[str, Any],
+        output_limit: int | None = None,
     ) -> dict[str, Any]:
         # What this target is judged by — reference, inputs, margin. Resolved
         # FIRST, before any artifact is touched: a bad contract name is a
@@ -908,16 +954,22 @@ class SWE(Role):
                 current_source, baseline, contract=spec,
                 history=feature["attempts"] if feature else (),
                 findings=(feature_mod.review_state(feature)["findings"]
-                          if revising else ()))
+                          if revising else ()),
+                output_limit=output_limit)
         except proposer.ProposalCutOff as exc:
+            # The proposer answered: what fails from here on is the step's.
+            paid.update(proposing=False, cost=proposer.last_cost_usd())
             # Nothing to judge, and not the candidate's doing: a failed cycle
             # the log names as the proposer's, its spend kept (L33, OMNI-78).
             reason = f"proposer: {exc}"
             ray.get(self._ws.transition.remote(story_id, IssueStatus.TBD, reason))
             ray.get(self._sm.record.remote("outcome", story_id, passed=False, reason=reason))
+            # "cut_off" tells the driver it may retry once at a larger limit
+            # (OMNI-219); the limit this call had is in its usage.
             return {"passed": False, "reason": reason, "pr_id": None,
                     "cost_usd": proposer.last_cost_usd(), "candidate_sha": None,
-                    "contract": spec.name, "model": proposer.last_model()}
+                    "contract": spec.name, "model": proposer.last_model(),
+                    "cut_off": True}
         paid.update(proposing=False, cost=proposer.last_cost_usd())
         # The model this cycle called, None for the stub: what the episodic log
         # records, rather than whatever is configured (L53, OMNI-150).

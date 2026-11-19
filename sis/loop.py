@@ -383,7 +383,7 @@ def serve(
     trigger: Callable[[], Work | None],
     *,
     interval_s: float = 30.0,
-    estimate_usd: float = 0.5,
+    estimate_usd: float | None = None,
     max_cycles: int | None = None,
     stop_event: threading.Event | None = None,
     one_canary_in_flight: bool = True,
@@ -431,6 +431,7 @@ def serve(
 
     from sis import config, episodic, org
 
+    estimate = estimate_usd if estimate_usd is not None else org.DEFAULT_ESTIMATE_USD
     after = (converged_after if converged_after is not None
              else int(config.config().loop.converged_after))
     sync_every = (artifact_sync_every if artifact_sync_every is not None
@@ -452,7 +453,7 @@ def serve(
 
     def poll() -> Tick:
         econ = ray.get(ceo.economics.remote())  # read-only; no telemetry side effects
-        budget_ok = econ["spent_usd"] + estimate_usd <= econ["budget_usd"]
+        budget_ok = econ["spent_usd"] + estimate <= econ["budget_usd"]
         breaker_open = bool(ray.get(ceo.breaker_open.remote()))
         paused = ray.get(ceo.pause_reason.remote()) is not None
         held_by = None
@@ -508,7 +509,7 @@ def serve(
     converged_note: list[str | None] = [None]
 
     def run_cycle(work: Work) -> dict[str, Any]:
-        result = org.run_cycle(handles, work.title, work.body, estimate_usd=estimate_usd,
+        result = org.run_cycle(handles, work.title, work.body, estimate_usd=estimate,
                                canary_backend=canary_backend)
         print(org.cycle_summary(result), flush=True)  # OMNI-123: every cycle says why
         statuses.append(str(result.get("status")))

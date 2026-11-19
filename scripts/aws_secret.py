@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import http.client
 import json
 import os
 import pathlib
@@ -117,8 +118,10 @@ def check_anthropic_key(key: str) -> str | None:
         if exc.code == 401:
             return "Anthropic rejected it (401 invalid x-api-key)"
         return f"Anthropic answered HTTP {exc.code}"
-    except (urllib.error.URLError, TimeoutError) as exc:
-        return f"Anthropic could not be reached ({exc})"
+    except (OSError, http.client.HTTPException) as exc:
+        # OSError covers URLError, timeouts and a reset socket; HTTPException a
+        # response cut off mid-read (RemoteDisconnected, IncompleteRead).
+        return f"Anthropic could not be reached ({exc!r})"
 
 
 def routing_problems(settings: Settings) -> list[str]:

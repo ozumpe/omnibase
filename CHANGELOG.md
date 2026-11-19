@@ -4,14 +4,102 @@ What each release of omnibase carried, newest first. A release is a git tag on
 `main`, cut from `develop` through a release PR; the AWS box runs the latest
 tag, never `develop`. `OMNI-N` is a Jira key
 ([board](https://olafzumpe.atlassian.net/browse/OMNI)); H/M/L IDs are defects
-in [`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md), which has the full write-up
-of each. Until 2026-10-31 this history lived in `CLAUDE.md`'s "Current status"
+in [`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md) (open ones in full,
+resolved ones as one line; the write-up is in the Jira ticket). Until 2026-10-31 this history lived in `CLAUDE.md`'s "Current status"
 (OMNI-184).
 
 When a change merges to `develop`, add a line under **Unreleased**; cutting a
 release renames that heading to the new tag.
 
 ## Unreleased
+
+## v0.7.0 — 2026-11-19
+
+Phase B's model-error triggers (OMNI-196, OMNI-221) and climatology fix
+(OMNI-222), the proposer's configurable output limit with one retry when cut
+off (OMNI-218, OMNI-219), token logging (OMNI-220), and the fixes since v0.6.0.
+
+- OMNI-222 (L77): climatology is computed from exactly the readings the
+  predictor is shown (the same as-of view, back to the same lookback), not
+  the whole history. With the default 52 weeks it learns from last year
+  alone, and has nothing in reach after a 53-week ISO year (2021, 2027), so
+  no skill is claimed for those weeks. The skill no longer counts a lead
+  built on seasons the predictor never sees. The autumn-2022 figure in
+  `docs/SENSOR_RUNBOOK.md` was measured with five years and needs a re-run.
+- OMNI-221 (M39): the model-error triggers count a breaching window toward
+  their streak only when it shares no week with the last window counted.
+  One outlier week used to fire the "sustained" error budget twice, and a
+  tick on unchanged data counted as a new breach. `error_budget` and
+  `skill_decay` take `counted_through` and return it on the `Decision`.
+- OMNI-219 (M38): a proposal cut off at its output limit is retried once in
+  the same cycle, at the new `proposer.retry_output_limit` (32000, FORBIDDEN),
+  instead of the next cycle repeating the same call at the same limit. The
+  cut-off call is charged and the retry reserved and saved before it is sent;
+  the spend cap may refuse it. The retry's verdict decides the cycle, which
+  counts once toward the breaker. Cut off again, the breaker opens with
+  "proposal cut off twice, at N and then M output tokens; raise
+  proposer.retry_output_limit", and a human is paged. A call above 20000
+  output tokens is streamed, which the SDK requires.
+- OMNI-166 (L55): an atomic write (`sis/atomic.py`) keeps the file's
+  permissions, and a new file gets what a plain write would (`0o666` less the
+  umask). It used to create its temporary file 0600 and put it in place of the
+  original, so the first operator save or `python -m sis.config --write` made
+  `config.yml` unreadable to a console or CI step under another uid. Brake
+  state and `config.yml` hold no secret, so no caller asks for less.
+- OMNI-220 (L76): each cycle now records the proposer call's token counts
+  (input, output, cache written and read), its output limit and why it
+  stopped, on the episodic record and as `out N/LIMIT tokens` on the
+  `[cycle]` line. The weekly run's cut-offs showed only their cost, so how
+  close a call came to the limit had to be worked back from the price list.
+  Counts only, never prompt or answer text; older episodic rows and DuckDB
+  files still load.
+- OMNI-218: the proposer's output limit, thinking included, is now the
+  `proposer.output_limit` config key and defaults to 16000 instead of a fixed
+  8000. In the weekly run of 2026-11-14 two of three `ca_price_wholesale`
+  cycles were cut off at 8000 and thrown away unjudged. The per-cycle spend
+  reservation rises from $0.50 to $0.60 so it still covers a proposal and its
+  review at their limits.
+- OMNI-181 (L66): `scripts/aws_secret.py` now says "Anthropic could not be
+  reached" and refuses the upload when the connection drops mid-response
+  (`RemoteDisconnected`, a reset socket, a cut-off read), instead of ending in
+  a traceback. It catches `OSError` and `http.client.HTTPException`.
+- OMNI-182 (L67): when the proposer's answer is cut off at the token limit
+  and recording that then fails (the Workspace unreachable, say), the error is
+  labelled the SWE step's, not the proposer's: the proposer had answered. The
+  cost and the breaker count were right before and are unchanged.
+- OMNI-203 (L75): the agent review's deterministic rules allow only imports
+  from a list of pure-computation modules (`review.SAFE_MODULES`) instead of
+  refusing a list of I/O ones, which had missed `codecs`, `gzip`, `zipfile`,
+  `runpy`, `inspect` and others. They also flag `__builtins__`, dunder
+  attributes such as `__globals__` and `__subclasses__`, `getattr`/`hasattr`
+  with a computed or dunder name, and `setattr`/`delattr`. Every shipped stub
+  candidate still passes, pinned by a test.
+- OMNI-179 (L64): the gauntlet skips its sandbox self-check only for the
+  harness's own timeout words (`gauntlet.is_harness_timeout`), the same test
+  the episodic store files a timeout by. A candidate whose failure merely
+  quotes "timed out" is probed like any other failure, so a broken sandbox is
+  no longer missed on that path.
+- OMNI-186 (L69): the `test_merge_observation.py` tests that need a real cycle
+  ending in a PR now build `roman` (Class 2, no benchmark) instead of speeding
+  up `sum_of_divisors`, so an oversubscribed CI box can no longer make them
+  `inconclusive`. They are about observing a merge, not timing.
+- OMNI-211: `CLAUDE.md`, loaded into every session, is cut from 733 lines plus
+  two `@`-included files to 122 lines with no includes; the detail moved to
+  `docs/ENGINE_RULES.md`, and `tests/test_claude_md.py` caps it at 200 lines.
+  `docs/KNOWN_ISSUES.md` keeps open and won't-fix entries in full and each
+  resolved one as a line (2,320 to about 500 lines); `docs/AWS_RUN.md` drops
+  its run-by-run history. Both full texts are in git at `0a86c58`.
+  `docs/SENSOR_RUNBOOK.md` now says the capture is weekly and by hand
+  (OMNI-214) and that only promotion still needs a person (OMNI-215).
+- OMNI-196 (Phase B 2): the two model-error triggers as pure decisions,
+  `sis/model_error.py`. The error budget fires on a window's MAE above the
+  actor's budget, skill decay on its skill against climatology below the
+  actor's floor; each needs a sustained breach and a minimum of scored weeks,
+  keeps its own streak and names its reason. Nothing calls them yet
+  (OMNI-197 wires them into `--loop`).
+- OMNI-180 (L65): a backtest fixture or expectation file that is not UTF-8 is
+  reported as a malformed fixture naming the backtest and the file, not as
+  "the backtest gate raised (UnicodeDecodeError ...)".
 
 ## v0.6.0 — 2026-11-10
 

@@ -3,9 +3,10 @@
 The sensor implementation reads observations, not a fuel-market model. The
 current EIA adapter captures five weekly series and one daily one into a local trace, and
 generated scenarios (OMNI-34) replay through the simulated sensor, and a
-predictor's error can be computed on either (OMNI-36); approved domain
-fixtures (OMNI-35) remain separate work. No control-loop consumer uses the
-sensor automatically. This guide describes the current working-tree
+predictor's error can be computed on either (OMNI-36). Two domain fixtures
+have been built from the trace and promoted: `ca_price_next_week` (public,
+OMNI-35) and `ca_price_wholesale` (private, OMNI-163). No control-loop
+consumer reads the sensor live; the loop sees only promoted fixtures. This guide describes the current working-tree
 implementation of OMNI-33, not its availability in older release tags.
 
 ## Capture EIA observations
@@ -22,6 +23,13 @@ It extracts declared series, sanitises their records, and appends to
 `runtime/sensor_traces/eia.jsonl`. It does not need Ray, GitHub, Jira or
 Confluence credentials. Run captures explicitly; neither selecting the sensor
 backend nor starting `main.py` schedules them.
+
+**Today a person runs the capture once a week**, after EIA's Wednesday
+release, on the one machine that holds the canonical trace. A missed week is
+not lost (the next capture still records the values, known at its own fetch
+time), but the prediction-error report cannot score a week whose next value
+was already known when it was asked (M34). Scheduling the capture, with the
+trace kept in the artifacts bucket, is [OMNI-214](https://olafzumpe.atlassian.net/browse/OMNI-214).
 
 | Bulk-file series | Observation | Published unit |
 |---|---|---|
@@ -114,12 +122,17 @@ known at the same instant are refused (`AmbiguousVintage`).
 
 ## From a trace to a fixture
 
-A fixture is the exam, so it reaches `specs/` only through a human:
+A fixture is the exam, so it reaches `specs/` only through `promote`, which
+takes a reviewed digest and has no override. The release calendar no longer
+needs a person (CI checks and signs it, OMNI-190); promotion still does.
+Moving promotion to a trusted job outside the loop, on a private runner, is
+[OMNI-215](https://olafzumpe.atlassian.net/browse/OMNI-215).
 
-1. **Check the release calendar.** `scripts/data/eia_release_calendar_2021_2022.json`
+1. **The release calendar.** `scripts/data/eia_release_calendar_2021_2022.json`
    records when each period was really released (WPSR archive for stocks, ALFRED's
-   release dates for retail prices). Compare it with the sources it names, then fill
-   in `checked_by` and `checked_on`. An unchecked calendar refuses every build.
+   release dates for retail prices). It was checked by hand before OMNI-190 and is
+   frozen with its fixture. A new or extended calendar takes the CI-checked path
+   described under "A private fixture" below. An unchecked calendar refuses every build.
 2. **Build and stage:** `poetry run python scripts/build_fixture.py`. It reads the
    trace back through the door, gives every reconstructed reading it shows a
    `known_at` no earlier than the end of its release day, refuses a reading the
@@ -217,14 +230,17 @@ cycle.
 
 Climatology is the baseline the skill is measured against. At each question
 it forecasts the latest price plus the mean change from that ISO week to the
-next over up to five earlier years, from the same as-of view the predictor is
-shown, computed on the host. It learns a seasonal *change*, not a seasonal
+next in the earlier years the predictor is shown, computed on the host from
+the same readings: the same as-of view, back to the same lookback. With the
+default 52 weeks that is last year alone, and nothing in the year after a
+53-week ISO year (2021, 2027), whose twin week is 53 weeks back. It learns a seasonal *change*, not a seasonal
 level, so a market that moved a dollar since last year is not forecast to
-move back. A week with no earlier year to learn from has no climatology. The
+move back. A week with no earlier year in view has no climatology. The
 summary line adds climatology's MAE and the skill, 1 − MAE(model) /
 MAE(climatology), over the weeks both were scored: above 0 the model beats
-climatology. On autumn 2022, persistence scores about −0.03 (MAE 0.179 against
-climatology's 0.173): it is no better than the season.
+climatology. On autumn 2022, persistence scored about −0.03 (MAE 0.179 against
+climatology's 0.173) while climatology still averaged up to five years; with
+one year it needs measuring again on the canonical trace.
 
 ```bash
 poetry run python scripts/prediction_error.py                    # autumn 2022, from the EIA trace
@@ -303,8 +319,8 @@ On replay the trace checks capture membership, appended counts and timestamp
 consistency, then sanitises value records again. These checks detect malformed
 or inconsistent records, not a forged capture that is internally consistent.
 The trace is staging, **not an authenticated exam**. Nothing here writes to
-`specs/`; domain fixtures require human-approved promotion through the
-contract-author path.
+`specs/`; domain fixtures require promotion through the contract-author path
+(human-approved today, OMNI-215).
 
 ## Failure and recovery
 

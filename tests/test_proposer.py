@@ -37,7 +37,8 @@ def test_non_stub_mode_dispatches_to_llm(monkeypatch) -> None:  # type: ignore[n
     monkeypatch.setenv("SIS_PROPOSER", "claude")
     captured: dict[str, object] = {}
 
-    def fake(source: str, baseline: float, spec: object, history: object = ()) -> str:
+    def fake(source: str, baseline: float, spec: object, history: object = (),
+             output_limit: int | None = None) -> str:
         captured["source"] = source
         captured["baseline"] = baseline
         captured["contract"] = spec
@@ -150,7 +151,7 @@ def test_a_feature_is_built_with_its_own_system_prompt(monkeypatch) -> None:  # 
     monkeypatch.setenv("SIS_PROPOSER", "claude")
     seen: dict[str, str] = {}
 
-    def fake(system: str, user: str) -> str:
+    def fake(system: str, user: str, output_limit: int | None = None) -> str:
         seen.update(system=system, user=user)
         return "def to_roman(n: int) -> str:\n    return ''\n"
 
@@ -204,3 +205,81 @@ def test_a_build_prompt_without_backtests_states_no_bar() -> None:
     from sis.contract import ROMAN
 
     assert "recorded value" not in proposer._build_prompt("", ROMAN)
+
+
+def test_the_proposer_asks_for_the_configured_token_limit(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # OMNI-218: a fixed 8000 left adaptive thinking too little room; two of three
+    # cycles on ca_price_wholesale were cut off. The limit is a config key now.
+    from sis import llm
+
+    sent: list[int] = []
+
+    class _Recorder:
+        model = "m"
+
+        def __init__(self, truncated: bool) -> None:
+            self.truncated = truncated
+
+        def complete(self, *, system: str, user: str, max_tokens: int) -> llm.LLMResponse:
+            sent.append(max_tokens)
+            return llm.LLMResponse(text="def sum_of_divisors(n: int) -> int:\n    return n\n",
+                                   cost_usd=0.1, model="m", truncated=self.truncated)
+
+    monkeypatch.setenv("SIS_PROPOSER", "claude")
+    monkeypatch.setattr(llm, "get_llm_client", lambda *a, **k: _Recorder(False))
+    proposer.propose("def sum_of_divisors(n: int) -> int: ...", 0.001)
+    assert sent == [16000], "the default leaves thinking room for the answer"
+
+    monkeypatch.setenv("SIS_PROPOSER_OUTPUT_LIMIT", "20000")
+    monkeypatch.setattr(llm, "get_llm_client", lambda *a, **k: _Recorder(True))
+    with pytest.raises(proposer.ProposalCutOff, match="max_tokens=20000"):
+        proposer.propose("def sum_of_divisors(n: int) -> int: ...", 0.001)
+    assert sent[-1] == 20000
+
+    # OMNI-219: the driver's retry of a cut-off passes its larger limit as an
+    # argument, which wins over the key; the cut-off names that limit.
+    with pytest.raises(proposer.ProposalCutOff, match="max_tokens=32000"):
+        proposer.propose("def sum_of_divisors(n: int) -> int: ...", 0.001,
+                         output_limit=32000)
+    assert sent[-1] == 32000
+    assert proposer.last_usage()["output_limit"] == 32000  # type: ignore[index]
+
+
+def test_the_cycle_reservation_covers_a_cycle_at_the_token_limits() -> None:
+    # OMNI-218: the CEO reserves a cycle's estimate before it spends. A cycle
+    # whose proposal and review both run to their limits must still fit, or the
+    # hard cap can be overshot by the difference.
+    from sis import cost, llm, org, review
+    from sis.config import key_for
+
+    in_price, out_price = cost.price(llm.DEFAULT_ANTHROPIC_MODEL)
+    output = key_for("proposer.output_limit").default + review.MAX_TOKENS
+    prompts = 2 * 6000 * 1.25   # two calls, a generous prompt each, billed as cache writes
+    worst = (output * out_price + prompts * in_price) / 1_000_000
+    assert worst <= org.DEFAULT_ESTIMATE_USD, f"${worst:.3f} > ${org.DEFAULT_ESTIMATE_USD}"
+
+
+def test_the_last_call_reports_its_tokens_and_limit(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # OMNI-220 (L76): the cycle logs these, so a cut-off can be told from the log.
+    from sis import llm
+
+    counts = llm.TokenUsage(input_tokens=5210, output_tokens=16000, cache_creation_tokens=1200)
+
+    class _CutOff:
+        model = "m"
+
+        def complete(self, *, system: str, user: str, max_tokens: int) -> llm.LLMResponse:
+            return llm.LLMResponse(text="def sum_of_div", cost_usd=0.4, model="m",
+                                   truncated=True, usage=counts, stop_reason="max_tokens")
+
+    monkeypatch.setenv("SIS_PROPOSER", "claude")
+    monkeypatch.setattr(llm, "get_llm_client", lambda *a, **k: _CutOff())
+    with pytest.raises(proposer.ProposalCutOff):
+        proposer.propose("def sum_of_divisors(n: int) -> int: ...", 0.001)
+    assert proposer.last_usage() == {
+        "input_tokens": 5210, "output_tokens": 16000, "cache_creation_tokens": 1200,
+        "cache_read_tokens": 0, "output_limit": 16000, "stop_reason": "max_tokens"}
+
+    monkeypatch.setenv("SIS_PROPOSER", "stub")
+    proposer.propose("def sum_of_divisors(n: int) -> int: ...", 0.001)
+    assert proposer.last_usage() is None, "the stub calls no model"

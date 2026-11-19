@@ -26,7 +26,7 @@ from typing import Any
 
 import ray
 
-from sis import config, episodic, gauntlet, llm
+from sis import config, cost, episodic, gauntlet, llm, review
 from sis.contract import REGISTERED_CONTRACTS, FeatureContract
 from sis.ports import Severity
 from sis.roles import (
@@ -63,6 +63,56 @@ NAMESPACE = "sis"
 # its brakes (OMNI-28) — so the registered name is a constant rather than a
 # literal repeated at each lookup site, which is how the two come to disagree.
 CEO_NAME = "CEO"
+
+# What the CEO reserves for one cycle before it spends (OMNI-157). It has to
+# cover a proposal and its review both run to their token limits
+# (proposer.output_limit, review.MAX_TOKENS) on the default model, or the last
+# cycle under the cap can overshoot it (OMNI-218).
+DEFAULT_ESTIMATE_USD = 0.6
+
+# A generous prompt for each of the two calls a proposal leads to (the
+# proposal and its review), billed at the cache-write rate: the input side of
+# the reservations below and of DEFAULT_ESTIMATE_USD.
+_PROMPT_ALLOWANCE = 2 * 6000 * 1.25
+
+
+def retry_estimate_usd(output_limit: int, model: str | None = None) -> float:
+    """What the CEO reserves before retrying a cut-off proposal. Pure (OMNI-219).
+
+    The retry run to *output_limit* and its review to ``review.MAX_TOKENS``,
+    on *model* (the one the cut-off call used; None for the default), with a
+    generous prompt for each: a cycle of its own, at the retry's limit.
+    """
+    in_price, out_price = cost.price(model or llm.DEFAULT_ANTHROPIC_MODEL)
+    output = output_limit + review.MAX_TOKENS
+    return (output * out_price + _PROMPT_ALLOWANCE * in_price) / 1_000_000
+
+
+def cut_off_retry_limit(impl: Mapping[str, Any], retry_limit: int) -> int | None:
+    """The limit to retry a step's proposal at, or None for no retry. Pure.
+
+    Only a proposal cut off at its output limit is retried (OMNI-219), and
+    only once, at ``proposer.retry_output_limit``: a retry no larger than the
+    call it repeats would be cut off the same way, so there is none then.
+    """
+    if not impl.get("cut_off"):
+        return None
+    usage = impl.get("usage")
+    first = usage.get("output_limit") if isinstance(usage, Mapping) else None
+    if isinstance(first, int) and retry_limit <= first:
+        return None
+    return retry_limit
+
+
+def cut_off_twice(first_limit: object, retry_limit: int) -> str:
+    """Why the run stops when the retry is cut off too. Pure (OMNI-219).
+
+    A breaker reason a person acts on: the limits are too small for what the
+    contract asks, and no number of cycles at them will change that.
+    """
+    first = f"{first_limit} and then " if isinstance(first_limit, int) else ""
+    return (f"proposal cut off twice, at {first}{retry_limit} output tokens; raise "
+            "proposer.retry_output_limit (and proposer.output_limit)")
 
 
 def _get_or_create(name: str, cls: Any, *args: Any) -> Any:
@@ -637,6 +687,11 @@ def cycle_summary(result: Mapping[str, Any]) -> str:
     if isinstance(econ, Mapping):
         money.append(f"spent ${float(econ['spent_usd']):.4f} of "
                      f"${float(econ['budget_usd']):.2f}")
+    usage = result.get("usage")
+    if isinstance(usage, Mapping) and isinstance(usage.get("output_tokens"), int):
+        limit = usage.get("output_limit")
+        out = f"out {usage['output_tokens']}" + (f"/{limit}" if isinstance(limit, int) else "")
+        money.append(f"{out} tokens")
     return f"[cycle] {status}: {detail}" + (f" ({'; '.join(money)})" if money else "")
 
 
@@ -704,7 +759,7 @@ def run_cycle(
     proposal_title: str,
     proposal_body: str,
     *,
-    estimate_usd: float = 0.5,
+    estimate_usd: float = DEFAULT_ESTIMATE_USD,
     contract_name: str | None = None,
     canary_backend: str | None = None,
 ) -> dict[str, Any]:
@@ -770,20 +825,29 @@ def run_cycle(
     # it on every result, so the episodic log says which target a cycle was
     # about — the first AWS run's log could not.
     known_contract: dict[str, str | None] = {"name": contract_name}
-    called: dict[str, str | None] = {"model": None}
+    called: dict[str, Any] = {"model": None, "usage": None}
     # What this cycle has cost and produced so far, for the error path below:
     # whether the CEO has been told of the cost, and a canary to retire.
-    seen: dict[str, Any] = {"cost_usd": 0.0, "charged": False}
+    # "precharged" is the part of cost_usd the CEO has already counted: the
+    # cut-off call before a retry (OMNI-219). "reserved" is what the CEO holds
+    # for the call in flight, charged if the SWE's process dies during it.
+    seen: dict[str, Any] = {"cost_usd": 0.0, "charged": False, "precharged": 0.0,
+                            "reserved": estimate_usd}
 
-    def _outcome(*, success: bool, gate: str | None = None) -> str | None:
+    def _unreported() -> float:
+        """What the cycle cost that the CEO has not counted yet."""
+        return max(0.0, float(seen["cost_usd"]) - float(seen["precharged"]))
+
+    def _outcome(*, success: bool, gate: str | None = None,
+                 halt: str | None = None) -> str | None:
         """Tell the CEO how the cycle ended and what it cost. Once per cycle."""
         trip: str | None = ray.get(ceo.report_outcome.remote(
-            success=success, cost_usd=seen["cost_usd"], reject_gate=gate))
+            success=success, cost_usd=_unreported(), reject_gate=gate, halt=halt))
         seen["charged"] = True
         return trip
 
     def _neutral() -> str | None:
-        trip: str | None = ray.get(ceo.record_neutral.remote(cost_usd=seen["cost_usd"]))
+        trip: str | None = ray.get(ceo.record_neutral.remote(cost_usd=_unreported()))
         seen["charged"] = True
         return trip
 
@@ -803,6 +867,9 @@ def run_cycle(
         # (the stub, a pause, an already-built feature). Not the configured one,
         # which the log used to stamp on every cycle (L53, OMNI-150).
         res.setdefault("model", called["model"])
+        # The call's token counts and limit, so a cut-off shows in the log and on
+        # the console line (OMNI-220). None when no call was made.
+        res.setdefault("usage", called["usage"])
         # What the cycle cost and where spend stands, on every result — the
         # console line (cycle_summary, OMNI-123) reports both for every exit.
         res.setdefault("cost_usd", cost)
@@ -942,8 +1009,47 @@ def run_cycle(
         cost_usd = float(impl.get("cost_usd", 0.0))
         known_contract["name"] = impl.get("contract", contract_name)
         called["model"] = impl.get("model")
+        called["usage"] = impl.get("usage")
         seen.update(cost_usd=cost_usd, pr_id=impl.get("pr_id"),
                     candidate_sha=impl.get("candidate_sha"))
+
+        # A proposal cut off at its output limit is retried once, at a larger
+        # one (OMNI-219, Olaf's option B). The cut-off call is charged and the
+        # retry reserved and saved before it is sent, like a cycle of its own;
+        # the spend cap may refuse it. Cut off again, the run stops below.
+        halt: str | None = None
+        retry_limit = cut_off_retry_limit(
+            impl, int(config.get("proposer.retry_output_limit")))
+        if retry_limit is not None:
+            first_usage = impl.get("usage")
+            first_limit = (first_usage.get("output_limit")
+                           if isinstance(first_usage, Mapping) else None)
+            retry_estimate = retry_estimate_usd(retry_limit, impl.get("model"))
+            if not ray.get(ceo.reserve_retry.remote(cost_usd, retry_estimate)):
+                impl["reason"] = (f"{impl['reason']}; not retried at {retry_limit}: the "
+                                  f"retry's ${retry_estimate:.2f} would breach the spend cap")
+            else:
+                seen.update(precharged=cost_usd, reserved=retry_estimate)
+                if (unsaved := _persist_brakes()) is not None:
+                    bug_id = _stop_unpersisted(unsaved)
+                    seen["charged"] = True  # the cut-off call is counted; nothing else ran
+                    return _record({"status": "circuit_breaker_open", "breaker_bug_id": bug_id,
+                                    "brakes_unpersisted": str(unsaved)}, cost_usd)
+                print(f"[sis] proposal cut off at {first_limit} output tokens "
+                      f"(${cost_usd:.4f}); retrying once at {retry_limit}", file=sys.stderr)
+                pending = swe.implement.remote(story_id, contract_name, retry_limit)
+                seen["implementing"] = True
+                impl = ray.get(pending)
+                seen["implementing"] = False
+                cost_usd += float(impl.get("cost_usd", 0.0))
+                called["model"] = impl.get("model") or called["model"]
+                called["usage"] = impl.get("usage")
+                seen.update(cost_usd=cost_usd, pr_id=impl.get("pr_id"),
+                            candidate_sha=impl.get("candidate_sha"))
+                # The reason stays the retry's own, which the gate and the
+                # neutral statuses are read from; its usage shows the larger limit.
+                if impl.get("cut_off"):
+                    halt = cut_off_twice(first_limit, retry_limit)
 
         # A "no change" outcome — the candidate is identical to the current baseline
         # — is not a failure: the loop correctly found nothing to improve. Record
@@ -968,8 +1074,9 @@ def run_cycle(
         if not impl["passed"]:
             gate, summary = rejection_bug(story_id, impl.get("reason"))
             # The gate is passed so the CEO can weigh a correct-but-over-budget
-            # rejection (``slo``, OMNI-24) below a wrong one.
-            trip = _outcome(success=False, gate=gate)
+            # rejection (``slo``, OMNI-24) below a wrong one. A retry cut off
+            # too stops the run, with the reason a person needs (OMNI-219).
+            trip = _outcome(success=False, gate=gate, halt=halt)
             # Failures become artifacts (ACTORS.md: DevOps files bug/defect Jiras).
             bug_id = _file_bug(summary)
             if gate == "harness":
@@ -1116,7 +1223,7 @@ def run_cycle(
             # its own arrives as a RayTaskError and, by its contract, before
             # any proposal; anything else may have come after one. What it
             # spent is unknown, so it is charged what was reserved for it.
-            seen["cost_usd"] = estimate_usd
+            seen["cost_usd"] = seen["precharged"] + seen["reserved"]
         if not seen["charged"]:
             # Charged and counted first. If the CEO cannot be told, this raises,
             # and the loop stops: it must not run on without its brakes.

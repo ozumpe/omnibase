@@ -143,9 +143,7 @@ def test_a_real_cycle_reaches_promotion(handles) -> None:  # type: ignore[no-unt
     # intake → ... → canary → (human merges) → promoted. Before OMNI-15 the
     # provenance graph simply stopped at "canary" and never recorded what
     # became live, because nothing could ever call promote().
-    from sis import org
-
-    result = org.run_cycle(handles, "Speed up divisor-sum", "Too slow; same results.")
+    result = _real_cycle(handles)
     assert result["status"] == "verified_awaiting_human_merge"
 
     pr_id = loop.pending_merge(_deployment(handles))
@@ -263,7 +261,7 @@ def test_a_restart_waits_for_the_last_runs_pr(handles, tmp_path, monkeypatch, ca
     # The second AWS run, replayed: a verified cycle leaves a PR, the process
     # ends, the next one starts. Before OMNI-126 it proposed the same change again.
     store = _durable(monkeypatch, tmp_path)
-    result = org.run_cycle(handles, "Speed up divisor-sum", "Too slow; same results.")
+    result = _real_cycle(handles)
     assert result["status"] == "verified_awaiting_human_merge"
     pr_id = str(result["pr_id"])
     assert store.load_state(org.PENDING_PR_KEY)["pr_id"] == pr_id
@@ -283,7 +281,7 @@ def test_a_restart_waits_for_the_last_runs_pr(handles, tmp_path, monkeypatch, ca
 
 def test_a_pr_merged_offline_is_promoted_at_startup(handles, tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     store = _durable(monkeypatch, tmp_path)
-    result = org.run_cycle(handles, "Speed up divisor-sum", "Too slow; same results.")
+    result = _real_cycle(handles)
     pr_id = str(result["pr_id"])
     _forget_in_memory(handles)
     _mark_merged(handles, pr_id)               # merged while no process was running
@@ -321,7 +319,7 @@ def test_restoring_never_takes_green_from_another_pr(handles, canary) -> None:  
 
 def test_a_pr_declined_offline_is_released_and_logged(handles, tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     store = _durable(monkeypatch, tmp_path)
-    result = org.run_cycle(handles, "Speed up divisor-sum", "Too slow; same results.")
+    result = _real_cycle(handles)
     pr_id = str(result["pr_id"])
     _forget_in_memory(handles)
     _mark_closed(handles, pr_id)               # declined while no process was running
@@ -402,6 +400,18 @@ def test_a_single_run_starts_no_cycle_beside_an_open_pr(handles, capsys) -> None
     finally:
         _mark_closed(handles, pr_id)
         _forget_in_memory(handles)
+
+
+def _real_cycle(handles):  # type: ignore[no-untyped-def]
+    """One real cycle that ends in a PR whatever the machine's load (L69, OMNI-186).
+
+    A Class-2 build (``roman``) has no benchmark, so it cannot come out
+    ``inconclusive`` when CPUs are oversubscribed, as ``sum_of_divisors`` did
+    under ``-n auto``. These tests are about observing the merge, not timing.
+    """
+    result = org.run_cycle(handles, "Roman numerals", "As specified.", contract_name="roman")
+    assert result["status"] == "verified_awaiting_human_merge", result.get("reason")
+    return result
 
 
 def _durable(monkeypatch, tmp_path):  # type: ignore[no-untyped-def]
