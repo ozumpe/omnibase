@@ -902,9 +902,11 @@ def run_cycle(
         spec = ray.get(sm.contract_by_name.remote(named)) if named else None
         if spec is None:
             return None  # the bootstrap target, or an unknown name the SWE refuses
+        repeats = holdout.counts_repeats(
+            spec.holdout_count_repeats, bool(config.get("brakes.holdout_count_repeats")))
         return holdout.budget(spec.name, spec.backtests, spec.holdout_budget,
                               int(config.get("brakes.holdout_budget")),
-                              holdout.recorded_events(store))
+                              holdout.recorded_events(store), count_repeats=repeats)
 
     def _record(res: dict[str, Any], cost: float = 0.0) -> dict[str, Any]:
         res.setdefault("contract", known_contract["name"])
@@ -929,9 +931,7 @@ def run_cycle(
                 res, cost_usd=cost, proposer=proposer, model=res["model"])
             if budget is not None and event.holdout_digest == budget.digest:
                 # Reported with the outcome: where the budget stands after it.
-                res.setdefault("holdout", holdout.Budget(
-                    budget.contract, budget.digest, budget.limit,
-                    budget.used + holdout.judged_holdout(event)).as_dict())
+                res.setdefault("holdout", budget.after(event).as_dict())
             store.append(event)
         except Exception:  # noqa: BLE001
             pass

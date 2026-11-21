@@ -37,7 +37,10 @@ def _never(path: str) -> bytes:
 
 def _event(cycle: str = "c1", *, outcome: str = "rolled_back", reason: str | None = None,
            digest: str | None = "d", contract: str = "k",
-           candidate_sha: str | None = "sha") -> EpisodicEvent:
+           candidate_sha: str | None = "") -> EpisodicEvent:
+    # Each cycle its own candidate unless a test says otherwise (OMNI-224).
+    if candidate_sha == "":
+        candidate_sha = f"sha-{cycle}"
     recorded = event_from_cycle_result(
         {"status": outcome, "reason": reason, "contract": contract,
          "holdout_digest": digest, "candidate_sha": candidate_sha})
@@ -147,6 +150,86 @@ def test_the_count_is_per_contract_and_per_fixture() -> None:
 def test_a_cycle_logged_twice_is_counted_once() -> None:
     twice = _event("1", reason=_FAIL)
     assert holdout.spent([twice, twice, _event("2", reason=_FAIL)], "k", "d") == 2
+
+
+_BUILT = "already built: runtime/forecast.py passes every gate"
+
+
+def test_re_checks_of_a_merged_module_use_one_judgement_not_one_each() -> None:
+    """OMNI-224 (M41): the 2026-11-21 run built the forecast, a human merged it,
+    and three "already built" checks of the same module each used a judgement."""
+    events = [
+        _event("1", outcome="verified_awaiting_human_merge", candidate_sha="x"),
+        *(_event(n, outcome="no_gain", reason=_BUILT, candidate_sha="x")
+          for n in ("2", "3", "4")),
+    ]
+    assert holdout.spent(events, "k", "d") == 1
+
+
+def test_new_code_is_judged_once_even_when_only_a_re_check_sees_it() -> None:
+    # A hand edit after the merge is code no gate judged yet: it counts, once.
+    events = [_event("1", outcome="verified_awaiting_human_merge", candidate_sha="x"),
+              _event("2", outcome="no_gain", reason=_BUILT, candidate_sha="y"),
+              _event("3", outcome="no_gain", reason=_BUILT, candidate_sha="y")]
+    assert holdout.spent(events, "k", "d") == 2
+
+
+def test_a_candidate_counted_on_another_fixture_or_contract_counts_again() -> None:
+    events = [_event("1", reason=_FAIL, candidate_sha="x", digest="old"),
+              _event("2", reason=_FAIL, candidate_sha="x", contract="other"),
+              _event("3", reason=_FAIL, candidate_sha="x")]
+    assert holdout.spent(events, "k", "d") == 1
+
+
+def test_a_candidate_rejected_before_the_backtest_is_counted_when_it_reaches_it() -> None:
+    events = [_event("1", reason="mypy --strict failed", candidate_sha="x"),
+              _event("2", reason=_FAIL, candidate_sha="x")]
+    assert holdout.spent(events, "k", "d") == 1
+
+
+def test_a_judgement_without_a_candidate_hash_always_counts() -> None:
+    events = [_event(n, outcome="verified_awaiting_human_merge", candidate_sha=None)
+              for n in ("1", "2")]
+    assert holdout.spent(events, "k", "d") == 2
+
+
+def test_the_cycle_line_counts_a_re_check_as_free() -> None:
+    held = (_private("w1"),)
+    digest = str(holdout.fixture_digest(held, _never))
+    built = _event("1", outcome="verified_awaiting_human_merge", candidate_sha="x",
+                   digest=digest)
+    b = holdout.budget("k", held, None, 50, [built], _never)
+    assert b is not None and b.used == 1
+    again = _event("2", outcome="no_gain", reason=_BUILT, candidate_sha="x", digest=digest)
+    assert b.after(again).as_dict()["used"] == 1
+    fresh = _event("3", reason=_FAIL, candidate_sha="z", digest=digest)
+    after = b.after(fresh)
+    assert after.used == 2 and after.after(fresh).used == 2
+
+
+def test_repeats_can_be_made_to_count_by_config_or_contract() -> None:
+    held = (_private("w1"),)
+    digest = str(holdout.fixture_digest(held, _never))
+    events = [_event("1", outcome="verified_awaiting_human_merge", candidate_sha="x",
+                     digest=digest),
+              _event("2", outcome="no_gain", reason=_BUILT, candidate_sha="x",
+                     digest=digest)]
+    assert holdout.spent(events, "k", digest, count_repeats=True) == 2
+    b = holdout.budget("k", held, None, 50, events, _never, count_repeats=True)
+    assert b is not None and b.used == 2
+    again = _event("3", outcome="no_gain", reason=_BUILT, candidate_sha="x", digest=digest)
+    assert b.after(again).used == 3
+    # The contract's choice wins over the config's, either way.
+    assert holdout.counts_repeats(None, False) is False
+    assert holdout.counts_repeats(None, True) is True
+    assert holdout.counts_repeats(True, False) is True
+    assert holdout.counts_repeats(False, True) is False
+
+
+def test_the_repeat_switch_is_off_by_default_and_the_loop_cannot_flip_it() -> None:
+    key = next(k for k in config.SCHEMA if k.path == "brakes.holdout_count_repeats")
+    assert key.default is False and key.tier is config.ConfigTier.FORBIDDEN
+    assert ROMAN.holdout_count_repeats is None
 
 
 def test_the_contract_declares_the_limit_else_the_default() -> None:

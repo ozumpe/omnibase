@@ -116,7 +116,10 @@ def holdout_lines() -> list[str]:
     default = int(config.get("brakes.holdout_budget"))
     lines = []
     for spec in REGISTERED_CONTRACTS:
-        b = holdout.budget(spec.name, spec.backtests, spec.holdout_budget, default, events)
+        repeats = holdout.counts_repeats(
+            spec.holdout_count_repeats, bool(config.get("brakes.holdout_count_repeats")))
+        b = holdout.budget(spec.name, spec.backtests, spec.holdout_budget, default, events,
+                           count_repeats=repeats)
         if b is not None:
             lines.append(b.describe() + (" (SPENT: no cycle on it runs)" if b.exhausted else ""))
     return lines or ["no registered contract has held-out backtests"]

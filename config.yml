@@ -42,6 +42,12 @@ brakes:
   # --rotate refuses and says when enough will be out.
   # env: SIS_HOLDOUT_ROTATION_MIN_WEEKS   flag: --brakes-holdout-rotation-min-weeks
   forbidden_holdout_rotation_min_weeks: 13
+  # Whether a candidate judged again on the same held-out fixture uses another holdout
+  # judgement, unless the contract declares its own holdout_count_repeats (OMNI-224).
+  # Off: each candidate counts once, so the 'already built' re-check of a merged module
+  # is free.
+  # env: SIS_HOLDOUT_COUNT_REPEATS   flag: --brakes-holdout-count-repeats
+  forbidden_holdout_count_repeats: false
 
 sandbox:
   # Isolation for generated code: 'subprocess' (soft) or 'docker' (kernel-enforced,

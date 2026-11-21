@@ -217,6 +217,12 @@ SCHEMA: tuple[Key, ...] = (
         "weeks after the current held-out set's last, never judged. Fewer, and "
         "scripts/build_fixture.py --rotate refuses and says when enough will be out.",
         positive=True),
+    Key("brakes", "holdout_count_repeats", ConfigTier.FORBIDDEN, Kind.BOOL, False,
+        "SIS_HOLDOUT_COUNT_REPEATS",
+        "Whether a candidate judged again on the same held-out fixture uses "
+        "another holdout judgement, unless the contract declares its own "
+        "holdout_count_repeats (OMNI-224). Off: each candidate counts once, so "
+        "the 'already built' re-check of a merged module is free."),
 
     # --- sandbox: how untrusted, generated code is contained. ----------------
     Key("sandbox", "mode", ConfigTier.FORBIDDEN, Kind.STR, "subprocess",
@@ -821,6 +827,7 @@ class BrakesConfig:
     slo_failure_weight: float
     holdout_budget: int
     holdout_rotation_min_weeks: int
+    holdout_count_repeats: bool
 
 
 @dataclass(frozen=True)

@@ -228,6 +228,7 @@ None open.
 
 ## Resolved
 
+- [OMNI-224] **M41 — Each "already built" re-check of an unchanged, merged module used up a holdout judgement**
 - [OMNI-218] **M37 — The proposer's output limit was too small for its own thinking**
 - [OMNI-221] **M39 — One outlier week fired the "sustained" model-error trigger, because consecutive windows overlap**
 - [OMNI-219] **M38 — A cut-off proposal counted as a full breaker failure and was repeated with the same limit**
@@ -453,3 +454,4 @@ None open.
 [OMNI-220]: https://olafzumpe.atlassian.net/browse/OMNI-220
 [OMNI-221]: https://olafzumpe.atlassian.net/browse/OMNI-221
 [OMNI-222]: https://olafzumpe.atlassian.net/browse/OMNI-222
+[OMNI-224]: https://olafzumpe.atlassian.net/browse/OMNI-224
