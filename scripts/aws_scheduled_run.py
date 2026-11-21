@@ -103,7 +103,7 @@ class RunConfig:
     contract: str
     run_id: str
     max_cycles: int = 10
-    budget_usd: float = 1.00
+    budget_usd: float = 2.50
     breaker_threshold: int | None = None
     secret_id: str = DEFAULT_SECRET_ID
 
@@ -815,7 +815,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     run = sub.add_parser("run", help="one run: start, loop, stop")
     run.add_argument("--contract", required=True)
     run.add_argument("--max-cycles", type=int, default=10)
-    run.add_argument("--budget-usd", type=float, default=1.00)
+    run.add_argument("--budget-usd", type=float, default=2.50)
     run.add_argument("--breaker-threshold", type=int, default=None)
     run.add_argument("--limit-minutes", type=float, default=60)
     run.add_argument("--dry-run", action="store_true",

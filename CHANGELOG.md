@@ -19,7 +19,8 @@ release renames that heading to the new tag.
   it can measure its own error against the baseline on history it may see.
   Nothing held out is mounted. Limits and a spend cap in
   `proposer.workbench_*`; a cycle that uses it reserves the cap plus a review
-  (about $1.64 at the defaults), so the budget must allow that.
+  (about $1.64 at the defaults), so the scheduled AWS run's budget is now
+  $2.50 (was $1.00, Olaf's choice).
 - OMNI-205: a forecasting contract may have a training split
   (`specs/<name>/training.json`): public history known before its first
   held-out question, shown to the proposer as compact tables so it can fit a
