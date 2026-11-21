@@ -30,7 +30,7 @@ variable "repo_url" {
 variable "repo_ref" {
   description = "Release tag to check out on the box (OMNI-63); a branch needs allow_branch_ref."
   type        = string
-  default     = "v0.7.0"
+  default     = "v0.8.0"
 }
 
 variable "allow_branch_ref" {

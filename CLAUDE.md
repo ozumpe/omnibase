@@ -112,7 +112,7 @@ Detail for each: `docs/ENGINE_RULES.md` § Hard rules.
 - Planning lives in Jira project `OMNI` (cloudId `760ca470-0091-4601-9704-a56633b5e9b6`), the source of truth for what to work on next. `TES` is the loop's own scratch project. Confluence space SD mirrors the docs.
 
 ## Current status
-Latest release: **v0.7.0** (2026-11-19). The AWS box runs the latest release
+Latest release: **v0.8.0** (2026-11-21). The AWS box runs the latest release
 tag, not `develop`. What to work on next is in Jira, not here; defects are in
 `docs/KNOWN_ISSUES.md`.
 - omnitrack Phase A is done.
