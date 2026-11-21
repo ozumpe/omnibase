@@ -299,7 +299,14 @@ touch the code a rule is about. History (what changed when) belongs in
     a pass, a backtest rejection or anything after it counts; a rejection at an
     earlier gate, a harness fault at or before the backtest, a resubmission and
     a cycle with no candidate do not; a timeout, tampering or exception that
-    may have reached it counts (an over-count only stops sooner). The limit is
+    may have reached it counts (an over-count only stops sooner). Each
+    candidate (`candidate_sha`) counts once per fixture (`holdout.counts`,
+    OMNI-224): the same code on the same weeks gets the same verdict, so the
+    "already built" re-check of a merged module, run on every cycle after the
+    merge, uses no further judgement. New code counts the first time any gate
+    judges it, a re-check included. A contract's `holdout_count_repeats`
+    (else `brakes.holdout_count_repeats`, off) makes every repeat count, for
+    held-out data plentiful enough that the simpler count is wanted. The limit is
     the contract's `holdout_budget`, else `brakes.holdout_budget`. Before any
     spend, a cycle on a contract whose budget is spent is refused as
     `holdout_spent`: no reservation, no breaker count, a WARNING page, and

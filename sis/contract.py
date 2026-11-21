@@ -144,6 +144,11 @@ class Contract(Protocol):
         ...
 
     @property
+    def holdout_count_repeats(self) -> bool | None:
+        """Whether a repeat judgement counts again, or None for the config default."""
+        ...
+
+    @property
     def invariants(self) -> tuple[Invariant, ...]:
         """Domain laws the candidate must obey on generated inputs."""
         ...
@@ -299,6 +304,9 @@ class OptimizationContract:
     # How many candidates the held-out backtests may judge (OMNI-207, D5); None
     # takes brakes.holdout_budget. See sis.holdout.
     holdout_budget: int | None = None
+    # Whether a candidate judged again counts again (OMNI-224); None takes
+    # brakes.holdout_count_repeats. See sis.holdout.counts_repeats.
+    holdout_count_repeats: bool | None = None
     # Almost always DETERMINISTIC. A stochastic *optimisation* is a real cell in
     # the grid, though — "this Monte Carlo simulation is too slow" — which is
     # precisely why determinism is a field here rather than a third contract
@@ -464,6 +472,9 @@ class FeatureContract:
     # stops on this contract (OMNI-207, D5); None takes brakes.holdout_budget.
     # Raised by a human's edit here, never by the loop. See sis.holdout.
     holdout_budget: int | None = None
+    # Whether a candidate judged again counts again (OMNI-224); None takes
+    # brakes.holdout_count_repeats. See sis.holdout.counts_repeats.
+    holdout_count_repeats: bool | None = None
     determinism: Determinism = Determinism.DETERMINISTIC
     invariants: tuple[Invariant, ...] = ()
     # Mirrors ``diff_trials``' role: statistical power is a property of the

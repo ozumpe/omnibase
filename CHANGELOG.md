@@ -13,6 +13,13 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+- OMNI-224 (M41): a candidate judged again on the same held-out fixture no
+  longer uses another holdout judgement. The "already built" check after a
+  merge re-judges the merged module every cycle; the 2026-11-21 run used 4 of
+  its 50 judgements where 1 was due. Each `candidate_sha` now counts once per
+  contract and fixture; new code still counts the first time it is judged.
+  A contract's `holdout_count_repeats` (else `brakes.holdout_count_repeats`,
+  off by default) brings back counting every repeat.
 - OMNI-144 (L49): every artifact sync now also uploads `run.json`, which says
   which part of the box's cumulative files is this run's (byte offsets, first
   and last `cycle_id`, contracts, cost, code version, carried spend at the start

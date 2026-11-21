@@ -20,7 +20,13 @@ raising it is a human's edit, never the loop's. Rotating the holdout, D5's
 other half, is not built here.
 
 What counts as a judgement is decided by :func:`judged_holdout`, which is pure,
-like everything here but the two readers at the bottom.
+like everything here but the two readers at the bottom. A candidate judged
+again on the same fixture (the same ``candidate_sha``) is counted once: the
+same code on the same weeks gets the same verdict, so the repeat tells the loop
+nothing new. That is the "already built" check after a merge, which judges the
+merged module again on every cycle (OMNI-224, M41). Where held-out data is
+plentiful and a repeat should count anyway, a contract's ``holdout_count_repeats``
+(else ``brakes.holdout_count_repeats``) turns that off.
 """
 
 from __future__ import annotations
@@ -28,7 +34,8 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass
+from collections.abc import Set as AbstractSet
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from sis.backtest import Backtest, holdout
@@ -134,22 +141,50 @@ def judged_holdout(event: EpisodicEvent) -> bool:
     return False
 
 
-def spent(events: Iterable[EpisodicEvent], contract: str, digest: str) -> int:
-    """How many candidates the backtest judged on *contract*'s fixture *digest*. Pure.
+def counts(event: EpisodicEvent, judged: AbstractSet[str]) -> bool:
+    """Whether *event* uses a judgement, given the candidates *judged* already. Pure.
 
-    One per cycle (an event is a cycle), each cycle once even when it is in
-    the log twice (``cycle_id``): a box that kept its own log also fetches the
-    copy it uploaded.
+    *judged* holds the ``candidate_sha`` of every candidate already counted on
+    the same contract and fixture. A repeat is free (OMNI-224, M41); a
+    judgement with no recorded hash always counts, which only stops the loop
+    sooner.
     """
+    if not judged_holdout(event):
+        return False
+    return event.candidate_sha is None or event.candidate_sha not in judged
+
+
+def _tally(events: Iterable[EpisodicEvent], contract: str, digest: str,
+           count_repeats: bool = False) -> tuple[int, frozenset[str]]:
+    """The count :func:`spent` returns, and the candidates it counted. Pure.
+
+    With *count_repeats*, every judgement counts, a repeat included, and no
+    candidate is remembered."""
     seen: set[str] = set()
+    judged: set[str] = set()
     count = 0
     for event in events:
         if (event.contract != contract or event.holdout_digest != digest
                 or event.cycle_id in seen):
             continue
         seen.add(event.cycle_id)
-        count += judged_holdout(event)
-    return count
+        if counts(event, judged):
+            count += 1
+            if event.candidate_sha is not None and not count_repeats:
+                judged.add(event.candidate_sha)
+    return count, frozenset(judged)
+
+
+def spent(events: Iterable[EpisodicEvent], contract: str, digest: str,
+          count_repeats: bool = False) -> int:
+    """How many candidates the backtest judged on *contract*'s fixture *digest*. Pure.
+
+    One per cycle (an event is a cycle), each cycle once even when it is in
+    the log twice (``cycle_id``): a box that kept its own log also fetches the
+    copy it uploaded. Each candidate once (:func:`counts`): judging the same
+    code again tells the loop nothing new, unless *count_repeats*.
+    """
+    return _tally(events, contract, digest, count_repeats)[0]
 
 
 @dataclass(frozen=True)
@@ -160,6 +195,11 @@ class Budget:
     digest: str
     limit: int
     used: int
+    # The candidates already counted, so a cycle's own record can say whether
+    # it used a judgement (:meth:`after`). Not reported anywhere.
+    judged: frozenset[str] = field(default=frozenset(), repr=False, compare=False)
+    # Whether a candidate judged again counts again (``holdout_count_repeats``).
+    count_repeats: bool = False
 
     @property
     def remaining(self) -> int:
@@ -168,6 +208,15 @@ class Budget:
     @property
     def exhausted(self) -> bool:
         return self.used >= self.limit
+
+    def after(self, event: EpisodicEvent) -> Budget:
+        """Where the budget stands once *event* is counted. Pure."""
+        if not counts(event, self.judged):
+            return self
+        sha = event.candidate_sha
+        judged = (self.judged if sha is None or self.count_repeats
+                  else self.judged | {sha})
+        return replace(self, used=self.used + 1, judged=judged)
 
     def describe(self) -> str:
         """One line for the console and ``sis.admin``. Names no held-out value."""
@@ -182,13 +231,29 @@ class Budget:
 def budget(
     contract: str, backtests: Sequence[Backtest], declared: int | None, default: int,
     events: Iterable[EpisodicEvent], read: Callable[[str], bytes] | None = None,
+    count_repeats: bool = False,
 ) -> Budget | None:
-    """*contract*'s holdout budget, or None when it has no held-out episodes."""
+    """*contract*'s holdout budget, or None when it has no held-out episodes.
+
+    *count_repeats* is the contract's ``holdout_count_repeats``, else
+    ``brakes.holdout_count_repeats``: see :func:`counts_repeats`."""
     digest = fixture_digest(backtests, read)
     if digest is None:
         return None
     limit = declared if declared is not None else default
-    return Budget(contract, digest, limit, spent(events, contract, digest))
+    used, judged = _tally(events, contract, digest, count_repeats)
+    return Budget(contract, digest, limit, used, judged, count_repeats)
+
+
+def counts_repeats(declared: bool | None, default: bool) -> bool:
+    """Whether a candidate judged again uses another judgement. Pure.
+
+    The contract's ``holdout_count_repeats`` when it declares one, else the
+    config's ``brakes.holdout_count_repeats``. Off by default (OMNI-224): the
+    same code on the same weeks tells the loop nothing new. On, for a contract
+    whose held-out data is plentiful enough that the simpler count is wanted.
+    """
+    return default if declared is None else declared
 
 
 def refusal(b: Budget) -> str:
@@ -233,6 +298,7 @@ def recorded_events(
 
 __all__ = [
     "AFTER_BACKTEST", "BEFORE_BACKTEST", "HISTORY_DIR", "HOLDOUT_SPENT", "Budget", "budget",
-    "fixture_digest", "history_events", "judged_holdout", "recorded_events", "refusal",
+    "counts", "counts_repeats", "fixture_digest", "history_events", "judged_holdout",
+    "recorded_events", "refusal",
     "spent",
 ]
