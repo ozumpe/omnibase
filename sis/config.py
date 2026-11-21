@@ -211,6 +211,12 @@ SCHEMA: tuple[Key, ...] = (
         "(OMNI-207, D5). Counted per held-out fixture from the episodic log; a "
         "new fixture starts at zero. Spent: a neutral stop and a page, no spend.",
         positive=True),
+    Key("brakes", "holdout_count_repeats", ConfigTier.FORBIDDEN, Kind.BOOL, False,
+        "SIS_HOLDOUT_COUNT_REPEATS",
+        "Whether a candidate judged again on the same held-out fixture uses "
+        "another holdout judgement, unless the contract declares its own "
+        "holdout_count_repeats (OMNI-224). Off: each candidate counts once, so "
+        "the 'already built' re-check of a merged module is free."),
 
     # --- sandbox: how untrusted, generated code is contained. ----------------
     Key("sandbox", "mode", ConfigTier.FORBIDDEN, Kind.STR, "subprocess",
@@ -814,6 +820,7 @@ class BrakesConfig:
     slo_min_spend_usd: float
     slo_failure_weight: float
     holdout_budget: int
+    holdout_count_repeats: bool
 
 
 @dataclass(frozen=True)
