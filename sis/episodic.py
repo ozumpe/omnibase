@@ -134,6 +134,11 @@ class EpisodicEvent:
     cache_read_tokens: int | None = None
     output_limit: int | None = None
     stop_reason: str | None = None
+    # The digest of the held-out fixture the contract had when the cycle ran
+    # (OMNI-207, sis.holdout.fixture_digest): what the holdout budget counts
+    # against. None for a contract with no held-out episodes, and for every
+    # record that is not a cycle (a human's merge, a develop judgment).
+    holdout_digest: str | None = None
 
     @staticmethod
     def new_cycle_id() -> str:
@@ -334,6 +339,7 @@ _DUCK_TYPES: dict[str, str] = {
     "improvement_pct": "DOUBLE", "cost_usd": "DOUBLE", "contract": "VARCHAR",
     "input_tokens": "BIGINT", "output_tokens": "BIGINT", "cache_creation_tokens": "BIGINT",
     "cache_read_tokens": "BIGINT", "output_limit": "BIGINT", "stop_reason": "VARCHAR",
+    "holdout_digest": "VARCHAR",
 }
 assert tuple(_DUCK_TYPES) == _FIELD_NAMES, "DuckDB schema drifted from EpisodicEvent"
 
@@ -638,6 +644,7 @@ def event_from_cycle_result(
         cache_read_tokens=_opt_count(usage.get("cache_read_tokens")),
         output_limit=_opt_count(usage.get("output_limit")),
         stop_reason=_opt_str(usage.get("stop_reason")),
+        holdout_digest=_opt_str(result.get("holdout_digest")),
     )
 
 

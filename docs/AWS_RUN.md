@@ -293,6 +293,17 @@ aws s3 sync "s3://$ARTIFACTS_BUCKET/$d/private/" "$d/private/" --only-show-error
 A scheduled run does this itself, and ends before any spend if it fails
 (OMNI-177).
 
+The holdout budget (OMNI-207) counts judgements across runs from the episodic
+logs, so fetch the earlier runs' logs too, or a fresh box counts from zero:
+
+```bash
+aws s3 sync "s3://$ARTIFACTS_BUCKET/runs/" runtime/history/ --exclude '*' \
+  --include '*/episodic.jsonl' --only-show-errors
+poetry run python -m sis.admin holdout
+```
+
+A scheduled run does this itself as well, and ends before any spend if it fails.
+
 **b. Prove the wiring before spending anything.** The `Pager` line must show a
 ✓; it fails until [step 3](#3-confirm-the-pager-laptop--dont-click-the-link)
 is done.
@@ -552,7 +563,8 @@ as `instance destroyed: NO, take it down by hand`, and the script exits 1.
 On either kind of box it waits for SSM, and starts step 5c's loop in a tmux
 session `sis` with one `ssm send-command`: the environment of step 5a, then
 the private fixtures of a contract that has them, fetched and checked as in
-step 5a (OMNI-177), then `check_connections.py --deep` (a failure of either
+step 5a (OMNI-177), then the earlier runs' episodic logs for the holdout
+budget (OMNI-207), then `check_connections.py --deep` (a failure of any
 ends the run before any spend; it checks the Anthropic key and model too,
 OMNI-82), then
 `main.py … --loop --loop-max-cycles 10`, teed to `runtime/loop.log` between a

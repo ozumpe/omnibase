@@ -290,6 +290,26 @@ touch the code a rule is about. History (what changed when) belongs in
     persistence's). Its fixture is private, so the contract is registered only
     once `specs/ca_price_wholesale/private.json` is promoted; a malformed one
     makes only this contract unavailable, with the reason (OMNI-176).
+  - **A held-out fixture gives a limited number of judgements** (`sis/holdout.py`,
+    OMNI-207, D5). Every accept or reject tells the loop a little about the
+    held-out episodes, so a loop that retries until something clears the skill
+    margin would clear it by selection, not by skill. Each cycle's episodic
+    record carries the digest of the held-out fixture (`holdout_digest`), and
+    `holdout.judged_holdout` decides whether the backtest gate gave a verdict:
+    a pass, a backtest rejection or anything after it counts; a rejection at an
+    earlier gate, a harness fault at or before the backtest, a resubmission and
+    a cycle with no candidate do not; a timeout, tampering or exception that
+    may have reached it counts (an over-count only stops sooner). The limit is
+    the contract's `holdout_budget`, else `brakes.holdout_budget`. Before any
+    spend, a cycle on a contract whose budget is spent is refused as
+    `holdout_spent`: no reservation, no breaker count, a WARNING page, and
+    `--loop` stops. A re-promoted fixture has a new digest and starts at zero.
+    The count reads the episodic records, never actor memory: the scheduled
+    AWS run fetches every earlier `runs/*/episodic.jsonl` into
+    `runtime/history/` first and refuses to start if it cannot. `sis.admin
+    holdout` shows each budget; raising one is a human's edit of the contract
+    or the config, which the loop cannot write. Rotation (D5's other half) is
+    not built.
   - **Candidate output is compared only as plain values, and never shares an
     input object with the other side** (OMNI-46/47). `sis/canonical.py`
     rebuilds output from exact builtins before every `==` — differential,
@@ -357,7 +377,8 @@ touch the code a rule is about. History (what changed when) belongs in
     fixtures built from it (`sis/replay.py`, `sis/fixture_builder.py`,
     OMNI-35), which scenario generator drives a twin (`sis/scenarios.py`,
     OMNI-34; the generator itself is `specs/scenarios.py`), how a predictor's
-    error is computed (`sis/prediction_error.py`, OMNI-36), the contract-author approval gate
+    error is computed (`sis/prediction_error.py`, OMNI-36), how judgements of a
+    held-out fixture are counted (`sis/holdout.py`, OMNI-207), the contract-author approval gate
     (`sis/contract_author.py`),
     `specs/` (the exam itself — oracles, acceptance tests, domain laws, backtest
     fixtures), cost accounting (`sis/cost.py` — the breaker/threshold logic

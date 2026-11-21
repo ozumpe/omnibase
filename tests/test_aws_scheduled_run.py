@@ -121,6 +121,10 @@ def _box(tmp_path: pathlib.Path, *, uploaded: dict[str, bytes] | None,
         for name, body in uploaded.items():
             (store / f"{name}.fixture.json").write_bytes(body)
             (store / f"{name}.expect.json").write_bytes(body + b"!")
+    # An earlier run's upload (OMNI-140), which the holdout budget reads (OMNI-207).
+    earlier = tmp_path / "bucket" / "runs" / "20261113-1500"
+    earlier.mkdir(parents=True)
+    (earlier / "episodic.jsonl").write_text('{"cycle_id": "c1"}\n')
     tools = tmp_path / "bin"
     tools.mkdir()
     for name, text in (("aws", _FAKE_AWS), ("poetry", _FAKE_POETRY)):
@@ -184,8 +188,37 @@ def test_a_contract_without_a_private_index_fetches_nothing(tmp_path: pathlib.Pa
     home = _box(tmp_path, uploaded=None, indexed=None)
     code, log, calls = _run_box(tmp_path, home, contract="roman")
     assert code == 0, log
-    assert "s3 sync" not in calls and "private" not in log
+    assert "specs/" not in calls and "private" not in log
     assert "main.py --contract roman" in calls
+
+
+def test_earlier_runs_logs_are_fetched_for_the_holdout_budget(tmp_path: pathlib.Path) -> None:
+    # OMNI-207: a new box counts the judgements earlier runs made.
+    home = _box(tmp_path, uploaded=None, indexed=None)
+    code, log, calls = _run_box(tmp_path, home, contract="roman")
+    assert code == 0, log
+    assert "aws s3 sync s3://the-bucket/runs/ runtime/history/" in calls
+    assert calls.index("runtime/history/") < calls.index("check_connections.py")
+    fetched = home / "omnibase" / "runtime" / "history" / "20261113-1500" / "episodic.jsonl"
+    assert fetched.is_file()
+    assert "1 earlier run log(s) fetched for the holdout budget" in log
+
+
+def test_earlier_runs_logs_that_cannot_be_fetched_end_the_run_before_any_spend(
+        tmp_path: pathlib.Path) -> None:
+    home = _box(tmp_path, uploaded=None, indexed=None)
+    shutil.rmtree(tmp_path / "bucket" / "runs")
+    code, log, calls = _run_box(tmp_path, home, contract="roman")
+    assert code == 1
+    assert "could not fetch earlier runs' episodic logs" in log and "nothing was spent" in log
+    assert "poetry" not in calls
+
+
+def test_without_a_bucket_no_earlier_logs_are_fetched(tmp_path: pathlib.Path) -> None:
+    home = _box(tmp_path, uploaded=None, indexed=None)
+    code, log, calls = _run_box(tmp_path, home, contract="roman", bucket=None)
+    assert code == 0, log
+    assert "s3 sync" not in calls
 
 
 def test_the_fixture_fetch_refuses_a_name_that_is_not_a_contract() -> None:

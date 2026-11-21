@@ -83,7 +83,8 @@ def test_the_box_knows_its_artifacts_bucket() -> None:
     assert 'artifacts_bucket  = "${var.name_prefix}-artifacts-${local.account}"' in box
     runbook = (PROJECT_ROOT / "docs" / "AWS_RUN.md").read_text(encoding="utf-8")
     assert "<artifacts-bucket>" not in runbook
-    assert runbook.count("s3://$ARTIFACTS_BUCKET/runs/") == 2
+    # Two uploads, and the fetch of earlier runs' logs for the holdout budget (OMNI-207).
+    assert runbook.count("s3://$ARTIFACTS_BUCKET/runs/") == 3
 
 
 def test_a_new_tag_builds_a_new_box() -> None:

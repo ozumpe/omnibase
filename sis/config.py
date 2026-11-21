@@ -204,6 +204,13 @@ SCHEMA: tuple[Key, ...] = (
         "How much a correct-but-over-budget cycle (reject gate `slo`) adds to the "
         "consecutive-failure streak; a correctness failure adds 1.0. In (0, 1].",
         positive=True),
+    Key("brakes", "holdout_budget", ConfigTier.FORBIDDEN, Kind.INT, 50,
+        "SIS_HOLDOUT_BUDGET",
+        "Candidates a contract's held-out backtests may judge before the loop "
+        "stops on it, unless the contract declares its own holdout_budget "
+        "(OMNI-207, D5). Counted per held-out fixture from the episodic log; a "
+        "new fixture starts at zero. Spent: a neutral stop and a page, no spend.",
+        positive=True),
 
     # --- sandbox: how untrusted, generated code is contained. ----------------
     Key("sandbox", "mode", ConfigTier.FORBIDDEN, Kind.STR, "subprocess",
@@ -777,6 +784,7 @@ class BrakesConfig:
     max_cost_per_accepted_usd: float
     slo_min_spend_usd: float
     slo_failure_weight: float
+    holdout_budget: int
 
 
 @dataclass(frozen=True)

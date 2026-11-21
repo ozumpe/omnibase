@@ -503,6 +503,9 @@ Rotation implies ongoing writes into `specs/` — the ingestion path is **D12**.
 Decision:
 Go with the recommendation: budget + rotation, with burn measured from the episodic log.
 
+Built: the budget (OMNI-207, `sis/holdout.py`), counted per held-out fixture from the
+episodic log. Rotation is not built.
+
 **D6 — Event time or wall-clock?**
 *Recommend event time behind a `Clock` port, with wall-clock as one adapter.* Backtest and
 replay are impossible without it, and it is nearly free at the start and painful later.

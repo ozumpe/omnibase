@@ -89,6 +89,21 @@ def converged(statuses: Sequence[str], after: int) -> bool:
     return len(statuses) >= n and all(s in CONVERGED_STATUSES for s in statuses[-n:])
 
 
+def holdout_stop_note(result: Mapping[str, Any]) -> str | None:
+    """Why the loop stops after a cycle the holdout budget refused, else None. Pure.
+
+    A spent budget (OMNI-207, D5) refuses every later cycle on the contract
+    too, so the loop ends rather than polling into the same refusal. The
+    cycle itself already paged, as a neutral stop.
+    """
+    if result.get("status") != "holdout_spent":
+        return None
+    held = result.get("holdout")
+    used = held.get("used") if isinstance(held, Mapping) else None
+    return (f"{result.get('contract') or 'the target'} has used its holdout budget"
+            + (f" ({used} judgement(s))" if used is not None else ""))
+
+
 def stop_alert(tick: Tick, cycles_run: int) -> tuple[str, str] | None:
     """The page a loop stop needs, as (title, body), or None. Pure (OMNI-62).
 
@@ -507,6 +522,7 @@ def serve(
 
     statuses: list[str] = []
     converged_note: list[str | None] = [None]
+    spent_note: list[str | None] = [None]
 
     def run_cycle(work: Work) -> dict[str, Any]:
         result = org.run_cycle(handles, work.title, work.body, estimate_usd=estimate,
@@ -515,7 +531,12 @@ def serve(
         statuses.append(str(result.get("status")))
         if artifact_sync.due(len(statuses), sync_every):
             sync_artifacts(sync, workspace, final=False)
-        if converged(statuses, after):
+        if (note := holdout_stop_note(result)) is not None:
+            # Refused before any spend, and already paged by run_cycle: every
+            # later cycle on this contract would be refused too (OMNI-207).
+            spent_note[0] = note
+            stop.set()
+        elif converged(statuses, after):
             target = result.get("contract") or "the target"
             converged_note[0] = (f"{target} has converged ({max(1, after)} cycle(s) in a "
                                  "row found nothing to improve)")
@@ -550,7 +571,7 @@ def serve(
             max_cycles=max_cycles, interrupted=stop.is_set(),
             trip_reason=ray.get(ceo.state_snapshot.remote()).get("trip_reason"),
             spent_usd=float(econ["spent_usd"]), budget_usd=float(econ["budget_usd"]),
-            converged_note=converged_note[0],
+            converged_note=converged_note[0] or spent_note[0],
         ), flush=True)
     except Exception as exc:
         # One line for the console log: Python prints the traceback itself only
