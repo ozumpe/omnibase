@@ -13,6 +13,13 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+## v0.8.0 — 2026-11-21
+
+Epic OMNI-204, the proposer's honest homework: a training split it may see
+(OMNI-205), a limited number of judgements per held-out fixture (OMNI-207),
+and a workbench to test its model on the training split before it answers
+(OMNI-206). The scheduled AWS run's budget rises to $2.50.
+
 - OMNI-206 (epic OMNI-204): the proposer's workbench. A real proposer
   building a forecasting contract may run Python on its training split in the
   docker sandbox before it answers, one run per turn, and see what it printed:
