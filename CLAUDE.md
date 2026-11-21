@@ -35,6 +35,7 @@ gauntlet → canary → human merge → promote/rollback → log → circuit bre
 - **Sensor input is untrusted.** It enters only through `sensor_input.sanitise`; a real adapter builds no `Reading` itself.
 - `EIASensor` captures EIA's bulk file into an append-only trace (`scripts/capture_sensor.py`, `runtime/sensor_traces/eia.jsonl`).
 - **The LA spot price is licensed** (Thomson Reuters via EIA): model it, never redistribute it. Fixtures that need it are private (`specs/<name>/private/`, gitignored, sha256 in `private.json`).
+- A forecasting contract may have a training split (`specs/<name>/training.json`, OMNI-205): public history known before its first held-out question. The proposer sees it; no gate reads it.
 - Scenarios (`specs/scenarios.py`) are seeded and can only refute a candidate, never promote one (D4).
 - Prediction error and skill against climatology are computed and reported, never acted on (`sis/prediction_error.py`). Phase B's two triggers are decided in `sis/model_error.py`, not yet wired.
 - Episodic store (`sis/episodic.py`) records every cycle: spec → diff → verdict → outcome. Backends: jsonl (default), duckdb, none.

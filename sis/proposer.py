@@ -38,6 +38,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from sis import config, llm
+from sis.backtest import TrainingSplit
 from sis.contract import Contract, FeatureContract, OptimizationContract, default_contract
 from sis.paths import PROJECT_ROOT
 
@@ -235,9 +236,10 @@ def _build_prompt(current_source: str, spec: FeatureContract,
 
     What the gauntlet judges it by, as far as the implementer may see it: the
     public API, the acceptance tests (the spec's worked examples) and the
-    domain laws with the module that defines them. The recorded history the
-    backtest gate replays is held out and never shown, or it could be
-    special-cased; only how many episodes there are is said.
+    domain laws with the module that defines them, and the contract's training
+    split if it has one (OMNI-205). The recorded history the backtest gate
+    replays is held out and never shown, or it could be special-cased; only
+    how many episodes there are is said.
     """
     tests_source = pathlib.Path(spec.tests_file).read_text(encoding="utf-8")
     parts = [
@@ -257,6 +259,8 @@ def _build_prompt(current_source: str, spec: FeatureContract,
                      f"{oracle}\n")
     if spec.backtests:
         parts.append(_backtest_bar(spec))
+    if spec.training is not None:
+        parts.append(_training_section(spec.training))
     parts.append(
         f"\nThe current module, which fails a gate (fix it):\n\n{current_source}\n"
         if current_source.strip() else "\nThere is no module yet: write it from scratch.\n")
@@ -293,6 +297,37 @@ def _backtest_bar(spec: FeatureContract) -> str:
     lines.append("A rejection names the rule and the episode that failed it, never a "
                  "recorded value or by how much it was missed.")
     return "\n".join(lines) + "\n"
+
+
+def _training_section(training: TrainingSplit) -> str:
+    """The training split as compact tables the model can fit on (OMNI-205).
+
+    One table per series (``period value``), because mixed anchors are not
+    aligned (Friday stocks, Monday prices; :mod:`sis.replay`). Everything in it
+    is committed under ``specs/`` and became known before the first held-out
+    question, so it shows nothing git does not and nothing of the exam.
+    """
+    state = training.state
+    by_series: dict[str, list[dict[str, Any]]] = {}
+    for record in state["readings"]:
+        by_series.setdefault(str(record["series"]), []).append(record)
+    parts = [
+        f"\nTraining data you may fit on: every reading known on "
+        f"{str(state['as_of'])[:10]}, from {training.first} on, latest vintage per "
+        "period. All of it came before the first held-out episode; none of it is "
+        "judged. It is the history an episode's state shows, one table per series, "
+        "a row per period (`period value`); in an episode a value appears only once "
+        "it was published (its `known_at`), which is the day of its period or later. "
+        f"Fit your model on it. The series to forecast is `{training.target}`.\n"]
+    for series in sorted(by_series):
+        records = sorted(by_series[series], key=lambda r: str(r["event_time"]))
+        unit = records[0].get("unit", "")
+        parts.append(f"\n{series} ({unit}), {len(records)} periods:\n")
+        parts.append("".join(f"{str(r['event_time'])[:10]} {r['value']}\n" for r in records))
+    if state["absent"]:
+        parts.append(f"\n{len(state['absent'])} period(s) the source stated no value for "
+                     "are left out.\n")
+    return "".join(parts)
 
 
 def _history_section(history: Sequence[str], *, building: bool = False,

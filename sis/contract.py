@@ -31,7 +31,16 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
 
-from sis.backtest import Backtest, BacktestSkill, check_skill, private_backtests
+from sis.backtest import (
+    TRAINING_FILE,
+    Backtest,
+    BacktestSkill,
+    TrainingSplit,
+    check_skill,
+    check_training,
+    load_training,
+    private_backtests,
+)
 from sis.invariant import DEFAULT_INVARIANT_EXAMPLES, Invariant
 from sis.paths import PROJECT_ROOT
 from sis.slo import DomainSLO
@@ -432,6 +441,9 @@ class FeatureContract:
     # A baseline to beat on average over the held-out backtests (OMNI-163): a
     # forecast is judged against persistence, not only episode by episode.
     skill: BacktestSkill | None = None
+    # History the proposer may see and fit on (OMNI-205): all of it known before
+    # the first held-out episode. No gate reads it.
+    training: TrainingSplit | None = None
     determinism: Determinism = Determinism.DETERMINISTIC
     invariants: tuple[Invariant, ...] = ()
     # Mirrors ``diff_trials``' role: statistical power is a property of the
@@ -465,6 +477,7 @@ class FeatureContract:
             )
         check_skill(self.skill, self.backtests, contract=self.name,
                     has_oracle=self.oracle_path is not None)
+        check_training(self.training, self.backtests, contract=self.name)
 
     def gate_profile(self) -> tuple[GateName, ...]:
         """The Class-2 profile: the right shape, the spec's cases, and history."""
@@ -594,6 +607,9 @@ CA_PRICE_PERSISTENCE = FeatureContract(
 # (``specs/ca_price_wholesale/private/``, gitignored) and git holds their
 # digests in ``private.json``, which arrives with the human promotion.
 CA_PRICE_WHOLESALE_INDEX = "specs/ca_price_wholesale/private.json"
+# What the proposer may fit on (OMNI-205): public series only, all known
+# before the first held-out question (``scripts/build_fixture.py --training``).
+CA_PRICE_WHOLESALE_TRAINING = f"specs/ca_price_wholesale/{TRAINING_FILE}"
 
 
 def ca_price_wholesale(index: str = CA_PRICE_WHOLESALE_INDEX) -> FeatureContract:
@@ -616,7 +632,20 @@ def ca_price_wholesale(index: str = CA_PRICE_WHOLESALE_INDEX) -> FeatureContract
         ),
         backtests=private_backtests(index, tolerance=0.15),
         skill=BacktestSkill(baseline="persistence", margin=0.10),
+        training=_training(CA_PRICE_WHOLESALE_TRAINING),
     )
+
+
+def _training(path: str) -> TrainingSplit | None:
+    """The training split at *path* once it is promoted, else None (OMNI-205).
+
+    Absent is not an error: the proposer then writes blind, as before. A split
+    that is there but unsound raises, and the contract is unavailable with
+    the reason, like a malformed private index (OMNI-176).
+    """
+    if not (PROJECT_ROOT / path).exists():
+        return None
+    return load_training(path)
 
 
 def _promoted_wholesale() -> tuple[FeatureContract | None, str | None]:

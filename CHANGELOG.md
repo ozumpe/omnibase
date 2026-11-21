@@ -13,6 +13,13 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+- OMNI-205: a forecasting contract may have a training split
+  (`specs/<name>/training.json`): public history known before its first
+  held-out question, shown to the proposer as compact tables so it can fit a
+  model instead of writing blind. No gate reads it; the contract refuses a
+  split that reaches into the held-out weeks. Built with
+  `scripts/build_fixture.py --training` and promoted like any spec file.
+
 ## v0.7.0 — 2026-11-19
 
 Phase B's model-error triggers (OMNI-196, OMNI-221) and climatology fix

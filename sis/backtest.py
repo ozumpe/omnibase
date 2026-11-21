@@ -45,7 +45,7 @@ import json
 import re
 import textwrap
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, date, datetime, time
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -329,6 +329,113 @@ def parse_expectation(raw: str, *, where: str) -> Any:
 def holdout(backtests: tuple[Backtest, ...]) -> tuple[Backtest, ...]:
     """The holdout subset — the fixtures whose outcomes must never reach a prompt."""
     return tuple(b for b in backtests if b.split is Split.HOLDOUT)
+
+
+# The training split (OMNI-205): what a proposer may see and fit on. One file,
+# ``specs/<name>/training.json``, written by
+# :func:`sis.fixture_builder.build_training` and promoted like any spec file.
+TRAINING_FILE = "training.json"
+TRAINING_SCHEMA = 1
+
+
+@dataclass(frozen=True)
+class TrainingSplit:
+    """History a proposer may see (``Split.TRAIN``), all of it known before the exam began.
+
+    *state* has the shape of an episode's argument (``as_of``, ``readings``,
+    ``absent``): what was known at ``state["as_of"]``, by the replay rule, from
+    *first* on. It holds every week's answer too, which is the point: a model
+    is fitted on questions whose answers it can see. No gate reads it; the
+    backtest gate judges on the held-out episodes only.
+
+    It is committed under ``specs/``, so it shows only series that may be
+    redistributed (the build refuses a licensed one), and what reaches a
+    prompt from it is never more than git already holds.
+    """
+
+    path: str                      # repo-relative, under specs/
+    target: str                    # the series the contract forecasts
+    first: str                     # ISO date: the earliest period shown
+    state: dict[str, Any]
+
+    @property
+    def as_of(self) -> datetime:
+        return parse_event_time(str(self.state["as_of"]), where=f"{self.path} as_of")
+
+    def series(self) -> tuple[str, ...]:
+        return tuple(sorted({str(r["series"]) for r in self.state["readings"]}))
+
+
+def load_training(path: str, *, root: Path | None = None) -> TrainingSplit:
+    """The training split at repo-relative *path*, or ValueError naming what is wrong.
+
+    Every reading must be a record with ``known_at`` no later than the split's
+    ``as_of``: a file that showed a value before it was known would teach a
+    model the future, whoever wrote it.
+    """
+    try:
+        data = json.loads(((root or PROJECT_ROOT) / path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise ValueError(f"{path}: cannot be read as JSON ({type(exc).__name__})") from None
+    if not isinstance(data, dict) or data.get("schema") != TRAINING_SCHEMA:
+        raise ValueError(f"{path}: not a schema-{TRAINING_SCHEMA} training split")
+    target, first, state = data.get("target"), data.get("first"), data.get("state")
+    if not (isinstance(target, str) and target and isinstance(first, str)):
+        raise ValueError(f"{path}: names no target or first period")
+    if not isinstance(state, dict) or not isinstance(state.get("readings"), list) \
+            or not isinstance(state.get("absent"), list) or not state["readings"]:
+        raise ValueError(f"{path}: its state holds no readings")
+    if _simulated(state):
+        raise ValueError(f"{path}: holds simulated readings (source {SIMULATED_SOURCE!r}); "
+                         "a model is fitted on recorded history only")
+    split = TrainingSplit(path=path, target=target, first=first, state=state)
+    cutoff = split.as_of
+    for number, record in enumerate([*state["readings"], *state["absent"]]):
+        if not isinstance(record, dict):
+            raise ValueError(f"{path}: record {number} is not an object")
+        known = parse_event_time(str(record.get("known_at")), where=f"{path} record {number}")
+        parse_event_time(str(record.get("event_time")), where=f"{path} record {number}")
+        if known > cutoff:
+            raise ValueError(f"{path}: record {number} became known after the split's "
+                             "as_of; nothing in it may be from later")
+    if target not in split.series():
+        raise ValueError(f"{path}: shows no {target}, the series it is for")
+    return split
+
+
+def check_training(training: TrainingSplit | None, backtests: tuple[Backtest, ...], *,
+                   contract: str) -> None:
+    """Refuse a training split that reaches into the held-out exam, at declaration.
+
+    Every held-out episode is named for the week it asks about, and its answer
+    cannot be known before that week begins. So each record in the split must
+    describe, and have become known, strictly before the first held-out week
+    begins (midnight UTC; the build cuts tighter, at the first held-out
+    question). A held-out episode whose name is not a date cannot be placed in
+    time, and a split beside it cannot be shown separate, so it is refused.
+    """
+    if training is None:
+        return
+    starts = []
+    for backtest in holdout(backtests):
+        try:
+            starts.append(date.fromisoformat(backtest.name))
+        except ValueError:
+            raise ValueError(f"contract {contract!r}: held-out episode {backtest.name!r} is "
+                             "not named for its week, so a training split cannot be shown "
+                             "to precede it") from None
+    if not starts:
+        raise ValueError(f"contract {contract!r}: a training split is fitted on history "
+                         "before the held-out episodes, and it declares none")
+    begins = datetime.combine(min(starts), time(0), tzinfo=UTC)
+    records = [*training.state["readings"], *training.state["absent"]]
+    late = [r for r in records
+            if parse_event_time(str(r["event_time"]), where=training.path) >= begins
+            or parse_event_time(str(r["known_at"]), where=training.path) >= begins]
+    if late or training.as_of >= begins:
+        raise ValueError(f"contract {contract!r}: {training.path} shows "
+                         f"{len(late)} record(s) from on or after {min(starts)}, the first "
+                         "held-out week; the training split must end before the exam begins")
 
 
 def build_script(
