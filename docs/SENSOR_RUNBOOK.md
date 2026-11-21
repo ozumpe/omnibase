@@ -171,7 +171,8 @@ be committed. The steps are the same, with these differences:
    `GASREGW`'s vintages, the later where they differ.
 2. **Build:** `python scripts/build_fixture.py --fixture ca_price_wholesale`
    builds every week from 6 January 2020 to the last the trace answers (about
-   350 episodes, about 40 MB). A fresh capture backfills its history as
+   350 episodes, about 40 MB). Once a `private.json` is promoted, a plain build
+   rebuilds exactly its weeks instead; new weeks come only by rotation (below). A fresh capture backfills its history as
    reconstructed, which needs the calendar, so the build stops at the last
    week the calendar covers and prints it, with the week the trace goes to.
    To build further, extend the calendar (step 1). `--last
@@ -190,6 +191,29 @@ be committed. The steps are the same, with these differences:
    every file against `private.json` and refuses a missing or different one as
    a `harness:` fault, so a verdict is only reached on the data a human
    promoted.
+
+### Rotating the held-out weeks (OMNI-225)
+
+Each held-out fixture gives a limited number of judgements (`sis/holdout.py`).
+When they run out, or earlier, rotate: the weeks published after the current
+held-out set become the new one, and the old held-out weeks join the training
+split. Nothing already judged is judged again.
+
+1. **Capture** as every week (`scripts/capture_sensor.py`), and **extend the
+   release calendar** past the new weeks (step 1 above): the build covers only
+   what the calendar does.
+2. **Build:** `python scripts/build_fixture.py --fixture ca_price_wholesale
+   --rotate`. It needs at least `brakes.holdout_rotation_min_weeks` fresh weeks
+   after the committed set's last one; with fewer it refuses and names the week
+   that makes enough. It stages the new episodes, `private.json`, `README.md`,
+   the calendar and the new `training.json` as one draft.
+3. **Review and promote** that one digest, as above. The promotion overwrites
+   `private.json` and `training.json`; the old private files stay on disk,
+   unlisted, and no gate reads them.
+4. **Upload** `specs/ca_price_wholesale/private/` to the artifacts bucket (step
+   4 above; the new files sit beside the old ones) and open the pull request
+   with `private.json`, `training.json`, `README.md` and the calendar. After the
+   merge, `python -m sis.admin holdout` shows the new fixture at zero used.
 
 ### A training split (OMNI-205)
 
