@@ -23,11 +23,11 @@ This document has four parts:
 
 | | |
 |---|---|
-| Code | release tag **`v0.7.0`** (`var.repo_ref`), never a branch — see [Which code runs](#which-code-runs) |
+| Code | release tag **`v0.8.0`** (`var.repo_ref`), never a branch — see [Which code runs](#which-code-runs) |
 | Box | one `m7i.xlarge`, `us-east-1`, **no inbound ports**; shell via SSM only |
 | Contract | Class 1, one with room left: `sort` and `sum_of_divisors` have both converged, so re-seed a naive one on `ozumpe/testrun`'s `develop` first ([Before every run](#before-every-run-a-target-with-room-left)). Or Class 2: `roman` (built from its spec, no re-seed) or `ca_price_wholesale`, which the weekly scheduled run uses since `v0.6.0` (its private episodes must be in the artifacts bucket) |
 | Where artifacts land | Jira `TES`, GitHub `ozumpe/testrun` (PRs against `develop`) |
-| Spend brakes | `SIS_BUDGET_USD=1.00` in the loop; an AWS Budget alarm (default $25/month) on the account |
+| Spend brakes | `SIS_BUDGET_USD=2.50` in the loop; an AWS Budget alarm (default $25/month) on the account |
 | Cost | about $0.20 an hour while the instance runs |
 | Runs | weekly, by a scheduled task ([Scheduled runs](#scheduled-runs-omni-168-omni-169)); results under `runs/` in the artifacts bucket |
 
@@ -265,7 +265,7 @@ invisible to them.
 cd ~/omnibase
 export SIS_ENV=aws SIS_ADAPTERS=real SIS_AWS_SECRET_ID=sis/first-run/credentials
 export SIS_SANDBOX=docker SIS_PROPOSER=claude
-export SIS_BUDGET_USD=1.00
+export SIS_BUDGET_USD=2.50
 export ANTHROPIC_API_KEY=$(aws secretsmanager get-secret-value \
   --secret-id sis/first-run/credentials --query SecretString --output text \
   | jq -r .anthropic.api_key)
@@ -292,6 +292,17 @@ aws s3 sync "s3://$ARTIFACTS_BUCKET/$d/private/" "$d/private/" --only-show-error
 
 A scheduled run does this itself, and ends before any spend if it fails
 (OMNI-177).
+
+The holdout budget (OMNI-207) counts judgements across runs from the episodic
+logs, so fetch the earlier runs' logs too, or a fresh box counts from zero:
+
+```bash
+aws s3 sync "s3://$ARTIFACTS_BUCKET/runs/" runtime/history/ --exclude '*' \
+  --include '*/episodic.jsonl' --only-show-errors
+poetry run python -m sis.admin holdout
+```
+
+A scheduled run does this itself as well, and ends before any spend if it fails.
 
 **b. Prove the wiring before spending anything.** The `Pager` line must show a
 ✓; it fails until [step 3](#3-confirm-the-pager-laptop--dont-click-the-link)
@@ -552,7 +563,8 @@ as `instance destroyed: NO, take it down by hand`, and the script exits 1.
 On either kind of box it waits for SSM, and starts step 5c's loop in a tmux
 session `sis` with one `ssm send-command`: the environment of step 5a, then
 the private fixtures of a contract that has them, fetched and checked as in
-step 5a (OMNI-177), then `check_connections.py --deep` (a failure of either
+step 5a (OMNI-177), then the earlier runs' episodic logs for the holdout
+budget (OMNI-207), then `check_connections.py --deep` (a failure of any
 ends the run before any spend; it checks the Anthropic key and model too,
 OMNI-82), then
 `main.py … --loop --loop-max-cycles 10`, teed to `runtime/loop.log` between a
@@ -710,7 +722,7 @@ human, one box: a remote state backend is ceremony this doesn't need yet.
 
 ### Which code runs
 
-The box runs the **release tag** in `var.repo_ref` — `v0.7.0` by default
+The box runs the **release tag** in `var.repo_ref` — `v0.8.0` by default
 (OMNI-63). A tag, not `develop`: a run's results are only worth something if
 they name the code that produced them, and a branch names whatever it pointed
 at when the box booted. `tofu plan` refuses a branch unless
@@ -818,7 +830,7 @@ canary (`canary.backend` unset), which never executes candidate code.
 ### Two spend brakes, deliberately independent
 
 - **LLM side:** `SIS_BUDGET_USD`, the CEO brake (M5), enforced *in the loop*,
-  per run, before each proposal. Tiny (`1.00`) for these runs.
+  per run, before each proposal. Small (`2.50`, room for a workbench cycle, OMNI-206) for these runs.
 - **Infra side:** the AWS Budget, enforced *by billing*, monthly, alerting at
   80% and 100% of the cap (default $25). Budget data lags by hours, so it is a
   backstop against a forgotten instance, not a real-time kill; the real-time

@@ -26,7 +26,7 @@ from typing import Any
 
 import ray
 
-from sis import config, cost, episodic, gauntlet, llm, review
+from sis import config, cost, episodic, gauntlet, holdout, llm, review, workbench
 from sis.contract import REGISTERED_CONTRACTS, FeatureContract
 from sis.ports import Severity
 from sis.roles import (
@@ -86,6 +86,18 @@ def retry_estimate_usd(output_limit: int, model: str | None = None) -> float:
     in_price, out_price = cost.price(model or llm.DEFAULT_ANTHROPIC_MODEL)
     output = output_limit + review.MAX_TOKENS
     return (output * out_price + _PROMPT_ALLOWANCE * in_price) / 1_000_000
+
+
+def workbench_estimate_usd(spend_usd: float, model: str | None = None) -> float:
+    """What the CEO reserves for a cycle whose proposal uses the workbench. Pure.
+
+    The workbench's own spend limit (``proposer.workbench_spend_usd``), which
+    it enforces on a worst case before each turn (OMNI-206), plus a review
+    run to ``review.MAX_TOKENS`` with a generous prompt.
+    """
+    in_price, out_price = cost.price(model or llm.DEFAULT_ANTHROPIC_MODEL)
+    review_usd = (review.MAX_TOKENS * out_price + _PROMPT_ALLOWANCE / 2 * in_price) / 1_000_000
+    return spend_usd + review_usd
 
 
 def cut_off_retry_limit(impl: Mapping[str, Any], retry_limit: int) -> int | None:
@@ -660,6 +672,8 @@ def cycle_summary(result: Mapping[str, Any]) -> str:
         detail = "circuit breaker open, no cycle ran (python -m sis.admin status)"
     elif status == "budget_denied":
         detail = "spend cap reached, no cycle ran"
+    elif status == holdout.HOLDOUT_SPENT:
+        detail = "holdout budget spent, no cycle ran (a human promotes a new fixture or raises it)"
     elif status == "error":
         detail = " ".join(str(result.get("reason") or "no reason recorded").split())
         detail = detail.removeprefix("error: ")
@@ -692,6 +706,9 @@ def cycle_summary(result: Mapping[str, Any]) -> str:
         limit = usage.get("output_limit")
         out = f"out {usage['output_tokens']}" + (f"/{limit}" if isinstance(limit, int) else "")
         money.append(f"{out} tokens")
+    held = result.get("holdout")
+    if isinstance(held, Mapping) and status != holdout.HOLDOUT_SPENT:
+        money.append(f"holdout {held.get('remaining')} of {held.get('limit')} left")
     return f"[cycle] {status}: {detail}" + (f" ({'; '.join(money)})" if money else "")
 
 
@@ -812,6 +829,19 @@ def run_cycle(
                 f"canary.backend='serve' cannot judge contract {named!r}: it is a feature "
                 "(Class 2), with no reference or benchmark to compare. Leave canary.backend "
                 "unset (the in-memory canary) for it.")
+    # The workbench runs model-written code on purpose (OMNI-206): only in
+    # docker, refused before any spend. Its spend limit is what the cycle
+    # reserves then, since a proposal made with it may spend up to that.
+    named_spec = (ray.get(sm.contract_by_name.remote(named_bench))
+                  if (named_bench := contract_name or config.get("contracts.default"))
+                  else None)
+    backend, runs = str(config.get("proposer.backend")), int(config.get("proposer.workbench_runs"))
+    if (why := workbench.refusal(named_spec, backend, runs, gauntlet.sandbox_mode())) is not None:
+        raise RuntimeError(why)
+    uses_workbench = workbench.applies(named_spec, backend, runs)
+    if uses_workbench:
+        estimate_usd = max(estimate_usd, workbench_estimate_usd(
+            float(config.get("proposer.workbench_spend_usd")), llm.configured_model()))
     ceo, pm, cto, designer, swe, qa, devops = (
         handles["CEO"], handles["PM"], handles["CTO"],
         handles["Designer"], handles["SWE"], handles["QA"], handles["DevOps"],
@@ -861,8 +891,26 @@ def run_cycle(
                   file=sys.stderr)
             return None
 
+    # The holdout budget of the contract this cycle names (OMNI-207, D5), once
+    # _cycle has read it: its fixture digest goes on the record, and the
+    # result reports where the budget stands after this cycle.
+    held: dict[str, holdout.Budget | None] = {"budget": None}
+
+    def _holdout_budget() -> holdout.Budget | None:
+        """The named contract's holdout budget, from the episodic records."""
+        named = contract_name or config.get("contracts.default")
+        spec = ray.get(sm.contract_by_name.remote(named)) if named else None
+        if spec is None:
+            return None  # the bootstrap target, or an unknown name the SWE refuses
+        return holdout.budget(spec.name, spec.backtests, spec.holdout_budget,
+                              int(config.get("brakes.holdout_budget")),
+                              holdout.recorded_events(store))
+
     def _record(res: dict[str, Any], cost: float = 0.0) -> dict[str, Any]:
         res.setdefault("contract", known_contract["name"])
+        budget = held["budget"]
+        if budget is not None and res["contract"] == budget.contract:
+            res.setdefault("holdout_digest", budget.digest)
         # The model this cycle called, as the SWE reports it; None when none was
         # (the stub, a pause, an already-built feature). Not the configured one,
         # which the log used to stamp on every cycle (L53, OMNI-150).
@@ -877,8 +925,14 @@ def run_cycle(
         # Episodic logging + CEO-state persistence are auxiliary — they must never
         # break a cycle. The driver is the single writer (keeps DuckDB happy).
         try:
-            store.append(episodic.event_from_cycle_result(
-                res, cost_usd=cost, proposer=proposer, model=res["model"]))
+            event = episodic.event_from_cycle_result(
+                res, cost_usd=cost, proposer=proposer, model=res["model"])
+            if budget is not None and event.holdout_digest == budget.digest:
+                # Reported with the outcome: where the budget stands after it.
+                res.setdefault("holdout", holdout.Budget(
+                    budget.contract, budget.digest, budget.limit,
+                    budget.used + holdout.judged_holdout(event)).as_dict())
+            store.append(event)
         except Exception:  # noqa: BLE001
             pass
         # Persist the CEO's brake/spend state so it survives a restart (L9). A
@@ -948,6 +1002,18 @@ def run_cycle(
             return _record({"status": "paused", "pause_reason": paused})
         if ray.get(ceo.breaker_open.remote()):
             return _record({"status": "circuit_breaker_open"})
+        # The holdout budget (OMNI-207, D5), before any spend: a contract whose
+        # held-out fixture has judged its limit of candidates runs no more.
+        # Neutral, like convergence: nothing is broken, and a human decides.
+        if (budget := _holdout_budget()) is not None:
+            held["budget"] = budget
+            known_contract["name"] = known_contract["name"] or budget.contract
+            print(f"[sis] {budget.describe()}", flush=True)
+            if budget.exhausted:
+                page(ws, store, Severity.WARNING,
+                     f"holdout budget spent: {budget.contract}", holdout.refusal(budget))
+                return _record({"status": holdout.HOLDOUT_SPENT,
+                                "holdout": budget.as_dict()})
         if not ray.get(ceo.approve_budget.remote(estimate_usd)):
             econ = ray.get(ceo.economics.remote())
             page(ws, store, Severity.CRITICAL, "spend cap reached: cycle refused",
@@ -1024,7 +1090,8 @@ def run_cycle(
             first_usage = impl.get("usage")
             first_limit = (first_usage.get("output_limit")
                            if isinstance(first_usage, Mapping) else None)
-            retry_estimate = retry_estimate_usd(retry_limit, impl.get("model"))
+            retry_estimate = (estimate_usd if uses_workbench
+                              else retry_estimate_usd(retry_limit, impl.get("model")))
             if not ray.get(ceo.reserve_retry.remote(cost_usd, retry_estimate)):
                 impl["reason"] = (f"{impl['reason']}; not retried at {retry_limit}: the "
                                   f"retry's ${retry_estimate:.2f} would breach the spend cap")

@@ -69,6 +69,9 @@ GUARDRAIL_PATHS: tuple[str, ...] = (
     # `max_latency_ratio=1.0` or `diff_trials=1` and gut two gates.
     "sis/contract.py",
     "sis/backtest.py",        # fixture parsing + the in-sandbox backtest script
+    # How many judgements a held-out fixture may give (OMNI-207, D5): a loop
+    # able to edit the count could keep fitting the exam by selection.
+    "sis/holdout.py",
     "sis/invariant.py",       # the domain-law gate + its in-sandbox script
     "sis/slo.py",             # the latency-budget gate + its in-sandbox script
     # The only write path into specs/. It holds the approval gate that stands
@@ -101,6 +104,10 @@ GUARDRAIL_PATHS: tuple[str, ...] = (
     # (OMNI-36): a loop able to edit it could grade its own forecasts.
     "sis/prediction_error.py",
     "sis/cost.py",            # spend accounting that feeds the brakes
+    # The proposer's workbench (OMNI-206): what model-written code may read
+    # (the training split, never the held-out episodes) and what one
+    # proposal may spend. A loop able to edit it could mount its own exam.
+    "sis/workbench.py",
     "sis/settings.py",        # secret loading + masking
     "sis/adapters.py",        # RequiresHumanApproval guardrails (in-memory)
     "sis/adapters_real.py",   # RequiresHumanApproval guardrails (real)

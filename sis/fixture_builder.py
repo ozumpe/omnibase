@@ -51,7 +51,14 @@ from dataclasses import dataclass
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sis.backtest import FIXTURE_SCHEMA, PRIVATE_DIR, PRIVATE_INDEX, PRIVATE_INDEX_SCHEMA
+from sis.backtest import (
+    FIXTURE_SCHEMA,
+    PRIVATE_DIR,
+    PRIVATE_INDEX,
+    PRIVATE_INDEX_SCHEMA,
+    TRAINING_FILE,
+    TRAINING_SCHEMA,
+)
 from sis.clock import parse_event_time
 from sis.contract_author import ContractDraft
 from sis.ports import Reading
@@ -286,6 +293,89 @@ def build(lines: Sequence[Mapping[str, Any]], rules: SourceRules, calendar: Rele
     return ContractDraft(name=name, spec_ref=spec_ref, files=files)
 
 
+def build_training(lines: Sequence[Mapping[str, Any]], rules: SourceRules,
+                   calendar: ReleaseCalendar, held_out: Question, *, first: datetime.date,
+                   name: str, spec_ref: str) -> ContractDraft:
+    """The training split for the held-out fixture *held_out* asks (OMNI-205).
+
+    What was known just before the first held-out question was asked, from
+    *first* on, by the same rules as an episode: read back through the door,
+    every reconstructed ``known_at`` no earlier than its checked release, the
+    latest vintage per period as of that moment (:func:`sis.replay.as_of`).
+    Each held-out answer became known after its question, so none is in it,
+    and nothing in it became known after any held-out question.
+
+    It goes into a prompt and into ``specs/``, both public, so it shows public
+    series only: a licensed one refuses the build whatever *held_out* shows.
+    Sending licensed values to a model API is a decision a human has not made
+    (OMNI-205, D0).
+    """
+    if is_simulated(rules.source):
+        raise FixtureRefused(f"source {SIMULATED_SOURCE!r} is a generated scenario; a "
+                             "model is fitted on recorded data only")
+    readings, absent = read_back(lines, rules)
+    every: list[Reading | Absent] = [*readings, *absent]
+    named = (held_out.inputs | {held_out.target} if held_out.inputs is not None
+             else {item.series for item in every})
+    inputs = named - rules.licensed
+    if held_out.target not in inputs:
+        raise FixtureRefused(f"{held_out.target}: licensed, so no training split can show it")
+    flagged = _reconstructed(lines)
+    shown = [item for item in every if item.series in inputs
+             and first <= item.event_time.astimezone(calendar.timezone).date()
+             < held_out.first]
+    adjusted = [_adjusted(item, calendar, _key(item) in flagged) for item in shown]
+    asked = held_out.first - held_out.horizon
+    asked_values = sorted((r for r in adjusted if isinstance(r, Reading)
+                           and r.series == held_out.target
+                           and r.event_time.astimezone(calendar.timezone).date() == asked),
+                          key=lambda r: r.known_at)
+    if not asked_values:
+        raise FixtureRefused(f"{held_out.target}: no value for {asked} in the trace, so "
+                             "when the first held-out question was asked is unknown")
+    # The first held-out question is asked here (as in build()); the split
+    # holds only what was known strictly before it.
+    question_at = asked_values[0].known_at + held_out.ask_after
+    before = [item for item in adjusted if item.known_at < question_at]
+    if not before:
+        raise FixtureRefused(f"nothing from {first} on was known before the first held-out "
+                             "question")
+    view = as_of([r for r in before if isinstance(r, Reading)],
+                 [a for a in before if isinstance(a, Absent)], question_at)
+    if not any(r.series == held_out.target for r in view.readings):
+        raise FixtureRefused(f"{held_out.target}: no value from {first} on was known before "
+                             "the first held-out question")
+    known = max([r.known_at for r in view.readings] + [a.known_at for a in view.absent])
+    state = {"as_of": known.isoformat(),
+             "readings": [r.as_record() for r in view.readings],
+             "absent": [_absent_record(a) for a in view.absent]}
+    body = {"schema": TRAINING_SCHEMA, "target": held_out.target, "first": first.isoformat(),
+            "held_out_from": held_out.first.isoformat(),
+            "calendar": {"checked_by": calendar.checked_by, "checked_on": calendar.checked_on},
+            "state": state}
+    return ContractDraft(name=name, spec_ref=spec_ref, files={TRAINING_FILE: _dump_compact(body)})
+
+
+def _dump_compact(body: Mapping[str, Any]) -> str:
+    """*body* as JSON with one record per line: a long split stays reviewable in a diff."""
+    head = {key: value for key, value in body.items() if key != "state"}
+    state = body["state"]
+    lines = [json.dumps(head, sort_keys=True, allow_nan=False)[:-1] + ',',
+             f' "state": {{"as_of": {json.dumps(state["as_of"])},']
+    for key, closing in (("readings", ","), ("absent", "")):
+        records = [json.dumps(record, sort_keys=True, allow_nan=False)
+                   for record in state[key]]
+        if not records:
+            lines.append(f'  "{key}": []{closing}')
+            continue
+        lines.append(f'  "{key}": [')
+        lines.extend(f"   {record}," for record in records[:-1])
+        lines.append(f"   {records[-1]}")
+        lines.append(f"  ]{closing}")
+    lines.append(" }}")
+    return "\n".join(lines) + "\n"
+
+
 def _readme(lines: Sequence[Mapping[str, Any]], calendar: ReleaseCalendar, question: Question,
             *, name: str, spec_ref: str, episodes: Sequence[str], skipped: Sequence[str],
             private: bool) -> str:
@@ -348,4 +438,5 @@ def _when(question: Question) -> str:
     return f"{question.ask_after.total_seconds() / 3600:g} hours after {became}"
 
 
-__all__ = ["CALENDAR_FILE", "FixtureRefused", "Question", "ReleaseCalendar", "build"]
+__all__ = ["CALENDAR_FILE", "FixtureRefused", "Question", "ReleaseCalendar", "build",
+           "build_training"]

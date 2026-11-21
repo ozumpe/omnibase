@@ -4,6 +4,7 @@
     python -m sis.admin pause         --reason "looking into a spend spike"
     python -m sis.admin resume        --reason "spike explained: one retried call"
     python -m sis.admin reset-breaker --reason "state file repaired; spend checked"
+    python -m sis.admin holdout       # each contract's holdout budget; no loop needed
 
 Before this, ``CEO.reset_breaker()`` had no caller outside the tests (KNOWN_ISSUES
 L23): clearing a tripped breaker meant editing state by hand or restarting —
@@ -34,7 +35,7 @@ from typing import Any
 
 from sis.operator import MIN_JUSTIFICATION_CHARS, OPERATOR_AUDIT_JSONL, AuditEntry, append_audit
 
-ACTIONS = ("status", "pause", "resume", "reset-breaker")
+ACTIONS = ("status", "pause", "resume", "reset-breaker", "holdout")
 
 
 @dataclass(frozen=True)
@@ -60,6 +61,9 @@ def plan(action: str, snapshot: Mapping[str, Any], reason: str) -> Plan:
                     refused=True)
     if action == "status":
         return Plan(None, describe(snapshot))
+    if action == "holdout":
+        return Plan(None, "holdout budgets are read from the episodic records "
+                          "(holdout_lines); they change nothing in the CEO")
     if len(reason.strip()) < MIN_JUSTIFICATION_CHARS:
         return Plan(None, f"{action} needs --reason of at least {MIN_JUSTIFICATION_CHARS} "
                           "characters: it is what the audit log will say about why",
@@ -97,6 +101,27 @@ def describe(snapshot: Mapping[str, Any]) -> str:
             f"accepted {int(snapshot.get('accepted', 0))}")
 
 
+def holdout_lines() -> list[str]:
+    """Where each registered contract's holdout budget stands (OMNI-207).
+
+    Read from the episodic records (this box's and the earlier runs' fetched
+    into ``runtime/history``), so no running loop is needed. Read-only:
+    raising a budget is a human's edit of the contract or of
+    ``brakes.holdout_budget``, never an action here.
+    """
+    from sis import config, episodic, holdout
+    from sis.contract import REGISTERED_CONTRACTS
+
+    events = holdout.recorded_events(episodic.get_episodic_store())
+    default = int(config.get("brakes.holdout_budget"))
+    lines = []
+    for spec in REGISTERED_CONTRACTS:
+        b = holdout.budget(spec.name, spec.backtests, spec.holdout_budget, default, events)
+        if b is not None:
+            lines.append(b.describe() + (" (SPENT: no cycle on it runs)" if b.exhausted else ""))
+    return lines or ["no registered contract has held-out backtests"]
+
+
 def _audit(action: str, before: Mapping[str, Any], after: Mapping[str, Any],
            reason: str) -> None:
     append_audit([AuditEntry(
@@ -113,6 +138,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("action", choices=ACTIONS)
     parser.add_argument("--reason", default="", help="why — recorded in the audit log")
     args = parser.parse_args(argv)
+    if args.action == "holdout":
+        print("\n".join(holdout_lines()))
+        return 0
 
     import ray
 
@@ -134,6 +162,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     decided = plan(args.action, before, args.reason)
     if decided.method is None:
         print(decided.message, file=sys.stderr if decided.refused else sys.stdout)
+        if args.action == "status":
+            print("\n".join(holdout_lines()))
         return 1 if decided.refused else 0
 
     if decided.method == "pause":

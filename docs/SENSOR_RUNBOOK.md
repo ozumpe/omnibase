@@ -191,6 +191,26 @@ be committed. The steps are the same, with these differences:
    a `harness:` fault, so a verdict is only reached on the data a human
    promoted.
 
+### A training split (OMNI-205)
+
+A contract judged on held-out history may also have a training split,
+`specs/<name>/training.json`: what was known just before the first held-out
+question, from a start date on, by the same replay rule and release calendar
+as an episode. The proposer sees it in its prompt as one table per series, so
+it can fit a model instead of guessing; no gate reads it. It shows public
+series only (the build drops a licensed one such as the LA spot price), and it
+is committed, so a prompt never holds more than git does.
+
+1. **Build:** `python scripts/build_fixture.py --fixture ca_price_wholesale
+   --training`. It starts at the first week the release calendar covers
+   (3 December 2018); `--first YYYY-MM-DD` starts elsewhere, and a reading the
+   calendar does not cover is refused, so extend the calendar back first for a
+   longer split.
+2. **Review and promote** as above (the draft holds only `training.json`).
+   Commit it through a pull request. The contract picks it up on the next
+   start; it refuses a split with any record from on or after the first
+   held-out week (`check_training`).
+
 ## Generated scenarios
 
 Scenarios drive a twin into situations the record does not hold (OMNI-34). Each

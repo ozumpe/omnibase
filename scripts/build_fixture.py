@@ -20,6 +20,11 @@ per week. Two fixtures:
   private: under ``private/``, gitignored, with ``private.json`` listing their
   digests for git (``docs/SENSOR_RUNBOOK.md``).
 
+``--training`` builds the fixture's training split instead (OMNI-205): the
+public series known just before its first held-out question, from the first
+week the calendar covers (or ``--first``), into ``training.json``. The
+proposer sees it; no gate reads it.
+
 A calendar signed by CI (``checked_by`` ``CI, sources sha256:…``, OMNI-190) is
 checked again here, offline, against the saved sources it names
 (``scripts/draft_release_calendar.py check``): a claim that does not hold is
@@ -53,7 +58,13 @@ from sis import sensor_trace  # noqa: E402
 from sis.adapters_real import EIA_PUBLIC_SERIES, EIA_RULES, EIA_SERIES, EIA_TRACE  # noqa: E402
 from sis.clock import parse_event_time  # noqa: E402
 from sis.contract_author import stage  # noqa: E402
-from sis.fixture_builder import FixtureRefused, Question, ReleaseCalendar, build  # noqa: E402
+from sis.fixture_builder import (  # noqa: E402
+    FixtureRefused,
+    Question,
+    ReleaseCalendar,
+    build,
+    build_training,
+)
 
 DATA = pathlib.Path(__file__).resolve().parent / "data"
 CALIFORNIA = "PET.EMM_EPMRR_PTE_SCA_DPG.W"
@@ -87,6 +98,12 @@ FIXTURES = {
                  ask_after=datetime.timedelta(days=1)),
         DATA / "eia_release_calendar_2018_2026.json", "OMNI-163", private=True),
 }
+
+
+# Where each training split begins (OMNI-205): the first week the release
+# calendar covers, since every reading shown is checked against it. Extend the
+# calendar back (draft_release_calendar.py) for a longer split, then pass --first.
+TRAINING_FIRST = {"ca_price_wholesale": datetime.date(2018, 12, 3)}
 
 
 def _answered(lines: list[dict[str, object]], target: str) -> list[datetime.date]:
@@ -132,6 +149,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--fixture", choices=sorted(FIXTURES), default="ca_price_next_week")
     parser.add_argument("--trace", type=pathlib.Path, default=EIA_TRACE)
     parser.add_argument("--calendar", type=pathlib.Path, default=None)
+    parser.add_argument("--training", action="store_true",
+                        help="build the fixture's training split instead (OMNI-205): public "
+                             "series known before its first held-out question")
+    parser.add_argument("--first", type=datetime.date.fromisoformat, default=None,
+                        help="with --training, the earliest period shown (default: the "
+                             "first week the release calendar covers)")
     parser.add_argument("--last", type=datetime.date.fromisoformat, default=None,
                         help="the last week predicted (default: the fixture's own, or the "
                              "last week the trace answers that the release calendar "
@@ -151,6 +174,8 @@ def main(argv: list[str] | None = None) -> int:
             except draft_release_calendar.CalendarRefused as exc:
                 raise FixtureRefused(f"the release calendar claims CI's check, which it "
                                      f"does not pass: {exc}") from None
+        if args.training:
+            return _stage_training(args, lines, calendar, fixture)
         last, note = args.last or fixture.last, None
         if last is None:
             weeks = _answered(lines, fixture.question.target)
@@ -187,6 +212,22 @@ def main(argv: list[str] | None = None) -> int:
         print(f"private: after promotion, upload specs/{staged.name}/private/ to the "
               f"artifacts bucket (docs/SENSOR_RUNBOOK.md); git keeps only "
               f"specs/{staged.name}/private.json and the public files")
+    print(f"digest: {staged.digest}")
+    print(f"Review it: python -m sis.contract_author review {staged.name}")
+    return 0
+
+
+def _stage_training(args: argparse.Namespace, lines: list[dict[str, object]],
+                    calendar: ReleaseCalendar, fixture: Fixture) -> int:
+    """Build, stage and report the training split *fixture*'s exam is held out from."""
+    first = args.first or TRAINING_FIRST.get(args.fixture)
+    if first is None:
+        raise FixtureRefused(f"{args.fixture} has no training split: pass --first")
+    draft = build_training(lines, EIA_RULES, calendar, fixture.question, first=first,
+                           name=args.fixture, spec_ref=fixture.spec_ref)
+    staged = stage(draft)
+    print(f"staged {staged.name}: training split from {first}, known before the first "
+          f"held-out question ({fixture.question.first}), in {staged.directory}")
     print(f"digest: {staged.digest}")
     print(f"Review it: python -m sis.contract_author review {staged.name}")
     return 0

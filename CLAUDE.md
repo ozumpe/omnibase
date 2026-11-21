@@ -35,6 +35,7 @@ gauntlet → canary → human merge → promote/rollback → log → circuit bre
 - **Sensor input is untrusted.** It enters only through `sensor_input.sanitise`; a real adapter builds no `Reading` itself.
 - `EIASensor` captures EIA's bulk file into an append-only trace (`scripts/capture_sensor.py`, `runtime/sensor_traces/eia.jsonl`).
 - **The LA spot price is licensed** (Thomson Reuters via EIA): model it, never redistribute it. Fixtures that need it are private (`specs/<name>/private/`, gitignored, sha256 in `private.json`).
+- A forecasting contract may have a training split (`specs/<name>/training.json`, OMNI-205): public history known before its first held-out question. The proposer sees it; no gate reads it.
 - Scenarios (`specs/scenarios.py`) are seeded and can only refute a candidate, never promote one (D4).
 - Prediction error and skill against climatology are computed and reported, never acted on (`sis/prediction_error.py`). Phase B's two triggers are decided in `sis/model_error.py`, not yet wired.
 - Episodic store (`sis/episodic.py`) records every cycle: spec → diff → verdict → outcome. Backends: jsonl (default), duckdb, none.
@@ -49,12 +50,14 @@ Detail for each: `docs/ENGINE_RULES.md` § Hard rules.
   - Class 2 (build a feature): syntax → mypy → interface → acceptance → invariants → backtest → optional SLO.
 - **The benchmark decides on total cost with a paired-bootstrap interval.** No input is timed twice. Timed batches run no per-call Python. Each worker gets its own CPU. Before touching it, read the benchmark section of `docs/ENGINE_RULES.md`.
 - **A forecast must beat its baseline on held-out history** (`BacktestSkill`). A rejection shows neither error.
+- **A held-out fixture gives a limited number of judgements** (`sis/holdout.py`, D5). Spent: the next cycle is refused before spend, as a neutral stop that pages.
+- **A forecasting proposer may run code on its training split only** (`sis/workbench.py`, OMNI-206): docker only, never the held-out fixture, bounded by `proposer.workbench_*`.
 - **Output is compared as plain values**, and each side gets its own copy of the input (`sis/canonical.py`).
 - **The exam is read-only to the candidate.** Exam files are hashed and checked after every gate, and a gate needs a positive verdict token, not just exit 0.
 - **A broken sandbox is never blamed on the candidate** (`gauntlet.probe_sandbox`, `harness:` verdicts).
 - **No feature PR opens without the agent's own approving review** (`sis/review.py`).
 - **Policy (`sis/policy.py`):**
-  - FORBIDDEN (never, no override): gauntlet, canonicaliser, sandbox worker, review, contract layer, ports, sensor door and trace, replay, fixture builder, scenarios, prediction error, contract author, `specs/`, cost, config, settings, adapters, `Dockerfile.gauntlet` and the policy itself.
+  - FORBIDDEN (never, no override): gauntlet, canonicaliser, sandbox worker, review, contract layer, ports, sensor door and trace, replay, fixture builder, scenarios, prediction error, holdout budget, workbench, contract author, `specs/`, cost, config, settings, adapters, `Dockerfile.gauntlet` and the policy itself.
   - STRICT: other engine code; needs an opt-in plus human approval.
   - SOFT: the `runtime/` targets.
   - The guardrail classification always wins.
@@ -109,7 +112,7 @@ Detail for each: `docs/ENGINE_RULES.md` § Hard rules.
 - Planning lives in Jira project `OMNI` (cloudId `760ca470-0091-4601-9704-a56633b5e9b6`), the source of truth for what to work on next. `TES` is the loop's own scratch project. Confluence space SD mirrors the docs.
 
 ## Current status
-Latest release: **v0.7.0** (2026-11-19). The AWS box runs the latest release
+Latest release: **v0.8.0** (2026-11-21). The AWS box runs the latest release
 tag, not `develop`. What to work on next is in Jira, not here; defects are in
 `docs/KNOWN_ISSUES.md`.
 - omnitrack Phase A is done.

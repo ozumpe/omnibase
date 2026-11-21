@@ -31,7 +31,16 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
 
-from sis.backtest import Backtest, BacktestSkill, check_skill, private_backtests
+from sis.backtest import (
+    TRAINING_FILE,
+    Backtest,
+    BacktestSkill,
+    TrainingSplit,
+    check_skill,
+    check_training,
+    load_training,
+    private_backtests,
+)
 from sis.invariant import DEFAULT_INVARIANT_EXAMPLES, Invariant
 from sis.paths import PROJECT_ROOT
 from sis.slo import DomainSLO
@@ -88,6 +97,13 @@ class GateName(str, Enum):
     SLO = "slo"
 
 
+def check_holdout_budget(limit: int | None, *, contract: str) -> None:
+    """Refuse a holdout budget that is not a positive whole number, at declaration."""
+    if limit is not None and (type(limit) is not int or limit < 1):
+        raise ValueError(f"contract {contract!r}: holdout_budget must be a whole number of "
+                         f"at least 1, or None for brakes.holdout_budget; got {limit!r}")
+
+
 class Contract(Protocol):
     """What the gauntlet needs from a contract, regardless of its class.
 
@@ -120,6 +136,11 @@ class Contract(Protocol):
     @property
     def skill(self) -> BacktestSkill | None:
         """A baseline the candidate must beat on the held-out backtests, or None."""
+        ...
+
+    @property
+    def holdout_budget(self) -> int | None:
+        """Candidates the held-out backtests may judge, or None for the config default."""
         ...
 
     @property
@@ -275,6 +296,9 @@ class OptimizationContract:
     backtests: tuple[Backtest, ...] = ()
     # A baseline to beat on average over the held-out backtests (OMNI-163).
     skill: BacktestSkill | None = None
+    # How many candidates the held-out backtests may judge (OMNI-207, D5); None
+    # takes brakes.holdout_budget. See sis.holdout.
+    holdout_budget: int | None = None
     # Almost always DETERMINISTIC. A stochastic *optimisation* is a real cell in
     # the grid, though — "this Monte Carlo simulation is too slow" — which is
     # precisely why determinism is a field here rather than a third contract
@@ -334,6 +358,7 @@ class OptimizationContract:
                 "fixture in the episodic log, so they have to be unique to be useful"
             )
         check_skill(self.skill, self.backtests, contract=self.name, has_oracle=True)
+        check_holdout_budget(self.holdout_budget, contract=self.name)
 
     @property
     def slo(self) -> DomainSLO | None:
@@ -432,6 +457,13 @@ class FeatureContract:
     # A baseline to beat on average over the held-out backtests (OMNI-163): a
     # forecast is judged against persistence, not only episode by episode.
     skill: BacktestSkill | None = None
+    # History the proposer may see and fit on (OMNI-205): all of it known before
+    # the first held-out episode. No gate reads it.
+    training: TrainingSplit | None = None
+    # How many candidates the held-out backtests may judge before the loop
+    # stops on this contract (OMNI-207, D5); None takes brakes.holdout_budget.
+    # Raised by a human's edit here, never by the loop. See sis.holdout.
+    holdout_budget: int | None = None
     determinism: Determinism = Determinism.DETERMINISTIC
     invariants: tuple[Invariant, ...] = ()
     # Mirrors ``diff_trials``' role: statistical power is a property of the
@@ -465,6 +497,8 @@ class FeatureContract:
             )
         check_skill(self.skill, self.backtests, contract=self.name,
                     has_oracle=self.oracle_path is not None)
+        check_training(self.training, self.backtests, contract=self.name)
+        check_holdout_budget(self.holdout_budget, contract=self.name)
 
     def gate_profile(self) -> tuple[GateName, ...]:
         """The Class-2 profile: the right shape, the spec's cases, and history."""
@@ -594,6 +628,9 @@ CA_PRICE_PERSISTENCE = FeatureContract(
 # (``specs/ca_price_wholesale/private/``, gitignored) and git holds their
 # digests in ``private.json``, which arrives with the human promotion.
 CA_PRICE_WHOLESALE_INDEX = "specs/ca_price_wholesale/private.json"
+# What the proposer may fit on (OMNI-205): public series only, all known
+# before the first held-out question (``scripts/build_fixture.py --training``).
+CA_PRICE_WHOLESALE_TRAINING = f"specs/ca_price_wholesale/{TRAINING_FILE}"
 
 
 def ca_price_wholesale(index: str = CA_PRICE_WHOLESALE_INDEX) -> FeatureContract:
@@ -616,7 +653,20 @@ def ca_price_wholesale(index: str = CA_PRICE_WHOLESALE_INDEX) -> FeatureContract
         ),
         backtests=private_backtests(index, tolerance=0.15),
         skill=BacktestSkill(baseline="persistence", margin=0.10),
+        training=_training(CA_PRICE_WHOLESALE_TRAINING),
     )
+
+
+def _training(path: str) -> TrainingSplit | None:
+    """The training split at *path* once it is promoted, else None (OMNI-205).
+
+    Absent is not an error: the proposer then writes blind, as before. A split
+    that is there but unsound raises, and the contract is unavailable with
+    the reason, like a malformed private index (OMNI-176).
+    """
+    if not (PROJECT_ROOT / path).exists():
+        return None
+    return load_training(path)
 
 
 def _promoted_wholesale() -> tuple[FeatureContract | None, str | None]:

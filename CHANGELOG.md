@@ -13,6 +13,36 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+## v0.8.0 — 2026-11-21
+
+Epic OMNI-204, the proposer's honest homework: a training split it may see
+(OMNI-205), a limited number of judgements per held-out fixture (OMNI-207),
+and a workbench to test its model on the training split before it answers
+(OMNI-206). The scheduled AWS run's budget rises to $2.50.
+
+- OMNI-206 (epic OMNI-204): the proposer's workbench. A real proposer
+  building a forecasting contract may run Python on its training split in the
+  docker sandbox before it answers, one run per turn, and see what it printed:
+  it can measure its own error against the baseline on history it may see.
+  Nothing held out is mounted. Limits and a spend cap in
+  `proposer.workbench_*`; a cycle that uses it reserves the cap plus a review
+  (about $1.64 at the defaults), so the scheduled AWS run's budget is now
+  $2.50 (was $1.00, Olaf's choice).
+- OMNI-205: a forecasting contract may have a training split
+  (`specs/<name>/training.json`): public history known before its first
+  held-out question, shown to the proposer as compact tables so it can fit a
+  model instead of writing blind. No gate reads it; the contract refuses a
+  split that reaches into the held-out weeks. Built with
+  `scripts/build_fixture.py --training` and promoted like any spec file.
+- OMNI-207: the holdout budget (D5). Each cycle's record names the held-out
+  fixture it was judged on, and a contract's fixture gives at most
+  `holdout_budget` judgements (default `brakes.holdout_budget`, 50). When
+  they are spent the next cycle is refused before any spend, pages a WARNING,
+  and the loop stops; a new fixture starts at zero. Each cycle prints the
+  budget left; `python -m sis.admin holdout` shows every contract's. The
+  scheduled AWS run fetches earlier runs' episodic logs first, so the count
+  survives a new box.
+
 ## v0.7.0 — 2026-11-19
 
 Phase B's model-error triggers (OMNI-196, OMNI-221) and climatology fix
