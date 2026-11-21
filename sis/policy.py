@@ -104,6 +104,10 @@ GUARDRAIL_PATHS: tuple[str, ...] = (
     # (OMNI-36): a loop able to edit it could grade its own forecasts.
     "sis/prediction_error.py",
     "sis/cost.py",            # spend accounting that feeds the brakes
+    # The proposer's workbench (OMNI-206): what model-written code may read
+    # (the training split, never the held-out episodes) and what one
+    # proposal may spend. A loop able to edit it could mount its own exam.
+    "sis/workbench.py",
     "sis/settings.py",        # secret loading + masking
     "sis/adapters.py",        # RequiresHumanApproval guardrails (in-memory)
     "sis/adapters_real.py",   # RequiresHumanApproval guardrails (real)

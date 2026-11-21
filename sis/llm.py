@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 from sis import config
 
@@ -70,6 +70,51 @@ class LLMResponse:
     truncated: bool = False
     usage: TokenUsage | None = None
     stop_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class ToolCall:
+    """One tool call the model asked for: its id, the tool's name and its input."""
+
+    id: str
+    name: str
+    input: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ToolTurn:
+    """One turn of a conversation with tools (OMNI-206).
+
+    *response* is the turn as a completion: its text, cost, usage and stop
+    reason. *calls* are the tools it asked to run. *content* is the turn as the
+    provider returned it, to be sent back unchanged in the next request (the
+    thinking that led to a tool call must accompany it).
+    """
+
+    response: LLMResponse
+    calls: tuple[ToolCall, ...]
+    content: tuple[dict[str, Any], ...]
+
+
+@runtime_checkable
+class ToolLLMClient(Protocol):
+    """A client that can hold a conversation in which the model calls tools.
+
+    *messages* and *tools* are in the Anthropic Messages format, which other
+    providers' adapters translate. *allow_tools* False lets the model answer
+    only in text (``tool_choice: none``), which ends the conversation.
+    """
+
+    model: str
+
+    def converse(self, *, system: str, messages: list[dict[str, Any]],
+                 tools: list[dict[str, Any]], max_tokens: int,
+                 allow_tools: bool) -> ToolTurn: ...
+
+    def count_input(self, *, system: str, messages: list[dict[str, Any]],
+                    tools: list[dict[str, Any]]) -> int:
+        """The input tokens a turn with this prompt would bill; free, no completion."""
+        ...
 
 
 class LLMClient(Protocol):
@@ -126,12 +171,82 @@ class AnthropicClient:
             usage=TokenUsage.from_anthropic(message.usage),
             stop_reason=None if message.stop_reason is None else str(message.stop_reason))
 
+    def converse(self, *, system: str, messages: list[dict[str, Any]],
+                 tools: list[dict[str, Any]], max_tokens: int,
+                 allow_tools: bool) -> ToolTurn:
+        """One turn of a tool conversation (OMNI-206); its cost from the turn's usage."""
+        import anthropic
+
+        from sis.cost import cost_from_usage
+
+        client = anthropic.Anthropic()
+        request: dict[str, Any] = dict(
+            model=self.model,
+            max_tokens=max_tokens,
+            thinking={"type": "adaptive"},
+            output_config={"effort": "high"},
+            system=[{"type": "text", "text": system,
+                     "cache_control": {"type": "ephemeral"}}],
+            messages=_cache_last_turn(messages),
+            tools=tools,
+            tool_choice={"type": "auto" if allow_tools else "none"},
+        )
+        if needs_streaming(max_tokens):
+            with client.messages.stream(**request) as stream:
+                message = stream.get_final_message()
+        else:
+            message = client.messages.create(**request)
+        text = "".join(block.text for block in message.content if block.type == "text")
+        calls = tuple(ToolCall(id=str(block.id), name=str(block.name),
+                               input=dict(block.input) if isinstance(block.input, dict) else {})
+                      for block in message.content if block.type == "tool_use")
+        response = LLMResponse(
+            text=text, cost_usd=cost_from_usage(message.usage, self.model), model=self.model,
+            truncated=message.stop_reason == "max_tokens",
+            usage=TokenUsage.from_anthropic(message.usage),
+            stop_reason=None if message.stop_reason is None else str(message.stop_reason))
+        content = tuple(block.model_dump(exclude_none=True) for block in message.content)
+        return ToolTurn(response=response, calls=calls, content=content)
+
+    def count_input(self, *, system: str, messages: list[dict[str, Any]],
+                    tools: list[dict[str, Any]]) -> int:
+        """``POST /v1/messages/count_tokens``: free, and no completion is made."""
+        import anthropic
+
+        counted = anthropic.Anthropic().messages.count_tokens(
+            model=self.model, system=system, messages=messages,  # type: ignore[arg-type]
+            tools=tools)  # type: ignore[arg-type]
+        return int(counted.input_tokens)
+
     def check(self) -> str:
         """``GET /v1/models/{model}``: a 401 for a bad key, a 404 for an unknown model."""
         import anthropic
 
         info = anthropic.Anthropic().models.retrieve(self.model)
         return str(getattr(info, "display_name", None) or self.model)
+
+
+def _cache_last_turn(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """*messages* with a cache breakpoint on the first and the last user turn. Pure.
+
+    A tool conversation sends everything again each turn; cached, the
+    repeated prefix bills at a tenth of the input rate. The caller's list is
+    not changed.
+    """
+    marked: list[dict[str, Any]] = []
+    users = [i for i, m in enumerate(messages) if m.get("role") == "user"]
+    points = {users[0], users[-1]} if users else set()
+    for i, message in enumerate(messages):
+        content = message.get("content")
+        if i in points and isinstance(content, list) and content:
+            blocks = [dict(block) for block in content]
+            blocks[-1]["cache_control"] = {"type": "ephemeral"}
+            message = {**message, "content": blocks}
+        elif i in points and isinstance(content, str):
+            message = {**message, "content": [{"type": "text", "text": content,
+                                               "cache_control": {"type": "ephemeral"}}]}
+        marked.append(message)
+    return marked
 
 
 def _make_anthropic(model: str | None) -> LLMClient:

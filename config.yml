@@ -123,6 +123,27 @@ proposer:
   # again, the run stops.
   # env: SIS_PROPOSER_RETRY_OUTPUT_LIMIT   flag: --proposer-retry-output-limit
   forbidden_retry_output_limit: 32000
+  # Programs the proposer may run on the training split before it submits, one per turn.
+  # 0 turns the workbench off (one-shot proposals).
+  # env: SIS_WORKBENCH_RUNS   flag: --proposer-workbench-runs
+  forbidden_workbench_runs: 8
+  # Wall time of one workbench run; a run past it is stopped.
+  # env: SIS_WORKBENCH_RUN_SECONDS   flag: --proposer-workbench-run-seconds
+  forbidden_workbench_run_seconds: 60.0
+  # Characters of one run's output the proposer is shown; the rest is cut.
+  # env: SIS_WORKBENCH_OUTPUT_CHARS   flag: --proposer-workbench-output-chars
+  forbidden_workbench_output_chars: 6000
+  # Wall time of a whole workbench conversation; past it, the proposer must answer.
+  # env: SIS_WORKBENCH_WALL_SECONDS   flag: --proposer-workbench-wall-seconds
+  forbidden_workbench_wall_seconds: 900.0
+  # What one proposal with the workbench may spend, its answer included. Checked on a
+  # worst case before each turn.
+  # env: SIS_WORKBENCH_SPEND_USD   flag: --proposer-workbench-spend-usd
+  forbidden_workbench_spend_usd: 1.5
+  # Output limit of a workbench turn that may run code, thinking included. The answer
+  # gets proposer.output_limit.
+  # env: SIS_WORKBENCH_TURN_LIMIT   flag: --proposer-workbench-turn-limit
+  forbidden_workbench_turn_limit: 8000
 
 canary:
   # 'serve' judges the canary against real Ray Serve traffic; unset uses the legacy

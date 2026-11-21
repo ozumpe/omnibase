@@ -26,7 +26,7 @@ from typing import Any
 
 import ray
 
-from sis import config, cost, episodic, gauntlet, holdout, llm, review
+from sis import config, cost, episodic, gauntlet, holdout, llm, review, workbench
 from sis.contract import REGISTERED_CONTRACTS, FeatureContract
 from sis.ports import Severity
 from sis.roles import (
@@ -86,6 +86,18 @@ def retry_estimate_usd(output_limit: int, model: str | None = None) -> float:
     in_price, out_price = cost.price(model or llm.DEFAULT_ANTHROPIC_MODEL)
     output = output_limit + review.MAX_TOKENS
     return (output * out_price + _PROMPT_ALLOWANCE * in_price) / 1_000_000
+
+
+def workbench_estimate_usd(spend_usd: float, model: str | None = None) -> float:
+    """What the CEO reserves for a cycle whose proposal uses the workbench. Pure.
+
+    The workbench's own spend limit (``proposer.workbench_spend_usd``), which
+    it enforces on a worst case before each turn (OMNI-206), plus a review
+    run to ``review.MAX_TOKENS`` with a generous prompt.
+    """
+    in_price, out_price = cost.price(model or llm.DEFAULT_ANTHROPIC_MODEL)
+    review_usd = (review.MAX_TOKENS * out_price + _PROMPT_ALLOWANCE / 2 * in_price) / 1_000_000
+    return spend_usd + review_usd
 
 
 def cut_off_retry_limit(impl: Mapping[str, Any], retry_limit: int) -> int | None:
@@ -817,6 +829,19 @@ def run_cycle(
                 f"canary.backend='serve' cannot judge contract {named!r}: it is a feature "
                 "(Class 2), with no reference or benchmark to compare. Leave canary.backend "
                 "unset (the in-memory canary) for it.")
+    # The workbench runs model-written code on purpose (OMNI-206): only in
+    # docker, refused before any spend. Its spend limit is what the cycle
+    # reserves then, since a proposal made with it may spend up to that.
+    named_spec = (ray.get(sm.contract_by_name.remote(named_bench))
+                  if (named_bench := contract_name or config.get("contracts.default"))
+                  else None)
+    backend, runs = str(config.get("proposer.backend")), int(config.get("proposer.workbench_runs"))
+    if (why := workbench.refusal(named_spec, backend, runs, gauntlet.sandbox_mode())) is not None:
+        raise RuntimeError(why)
+    uses_workbench = workbench.applies(named_spec, backend, runs)
+    if uses_workbench:
+        estimate_usd = max(estimate_usd, workbench_estimate_usd(
+            float(config.get("proposer.workbench_spend_usd")), llm.configured_model()))
     ceo, pm, cto, designer, swe, qa, devops = (
         handles["CEO"], handles["PM"], handles["CTO"],
         handles["Designer"], handles["SWE"], handles["QA"], handles["DevOps"],
@@ -1065,7 +1090,8 @@ def run_cycle(
             first_usage = impl.get("usage")
             first_limit = (first_usage.get("output_limit")
                            if isinstance(first_usage, Mapping) else None)
-            retry_estimate = retry_estimate_usd(retry_limit, impl.get("model"))
+            retry_estimate = (estimate_usd if uses_workbench
+                              else retry_estimate_usd(retry_limit, impl.get("model")))
             if not ray.get(ceo.reserve_retry.remote(cost_usd, retry_estimate)):
                 impl["reason"] = (f"{impl['reason']}; not retried at {retry_limit}: the "
                                   f"retry's ${retry_estimate:.2f} would breach the spend cap")

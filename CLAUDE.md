@@ -51,12 +51,13 @@ Detail for each: `docs/ENGINE_RULES.md` § Hard rules.
 - **The benchmark decides on total cost with a paired-bootstrap interval.** No input is timed twice. Timed batches run no per-call Python. Each worker gets its own CPU. Before touching it, read the benchmark section of `docs/ENGINE_RULES.md`.
 - **A forecast must beat its baseline on held-out history** (`BacktestSkill`). A rejection shows neither error.
 - **A held-out fixture gives a limited number of judgements** (`sis/holdout.py`, D5). Spent: the next cycle is refused before spend, as a neutral stop that pages.
+- **A forecasting proposer may run code on its training split only** (`sis/workbench.py`, OMNI-206): docker only, never the held-out fixture, bounded by `proposer.workbench_*`.
 - **Output is compared as plain values**, and each side gets its own copy of the input (`sis/canonical.py`).
 - **The exam is read-only to the candidate.** Exam files are hashed and checked after every gate, and a gate needs a positive verdict token, not just exit 0.
 - **A broken sandbox is never blamed on the candidate** (`gauntlet.probe_sandbox`, `harness:` verdicts).
 - **No feature PR opens without the agent's own approving review** (`sis/review.py`).
 - **Policy (`sis/policy.py`):**
-  - FORBIDDEN (never, no override): gauntlet, canonicaliser, sandbox worker, review, contract layer, ports, sensor door and trace, replay, fixture builder, scenarios, prediction error, holdout budget, contract author, `specs/`, cost, config, settings, adapters, `Dockerfile.gauntlet` and the policy itself.
+  - FORBIDDEN (never, no override): gauntlet, canonicaliser, sandbox worker, review, contract layer, ports, sensor door and trace, replay, fixture builder, scenarios, prediction error, holdout budget, workbench, contract author, `specs/`, cost, config, settings, adapters, `Dockerfile.gauntlet` and the policy itself.
   - STRICT: other engine code; needs an opt-in plus human approval.
   - SOFT: the `runtime/` targets.
   - The guardrail classification always wins.

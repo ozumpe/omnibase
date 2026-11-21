@@ -155,3 +155,41 @@ def test_a_call_over_the_sdks_non_streaming_limit_is_streamed(monkeypatch) -> No
         response = llm.AnthropicClient().complete(system="s", user="u", max_tokens=limit)
         assert response.text == "def f(): ..." and not response.truncated
     assert how == [("create", 16000), ("stream", 32000)]
+
+
+def test_a_tool_turn_is_sent_back_as_the_sdk_returned_it(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # OMNI-206: the thinking before a tool call must go back with it, and every
+    # turn's cost comes from that turn's usage. Real SDK types, a fake transport.
+    import sys
+    import types
+
+    from anthropic.types import Message, TextBlock, ThinkingBlock, ToolUseBlock, Usage
+
+    sent: dict[str, object] = {}
+    message = Message(
+        id="m", type="message", role="assistant", model="claude-opus-4-8",
+        content=[ThinkingBlock(type="thinking", thinking="fit it", signature="sig"),
+                 TextBlock(type="text", text="running"),
+                 ToolUseBlock(type="tool_use", id="t1", name="run_python",
+                              input={"code": "print(1)"})],
+        stop_reason="tool_use", stop_sequence=None,
+        usage=Usage(input_tokens=1000, output_tokens=200))
+
+    class _Messages:
+        def create(self, **kwargs: object) -> Message:
+            sent.update(kwargs)
+            return message
+
+    fake = types.SimpleNamespace(Anthropic=lambda: types.SimpleNamespace(messages=_Messages()))
+    monkeypatch.setitem(sys.modules, "anthropic", fake)
+    turn = llm.AnthropicClient("claude-opus-4-8").converse(
+        system="s", messages=[{"role": "user", "content": "go"}],
+        tools=[{"name": "run_python"}], max_tokens=8000, allow_tools=False)
+
+    assert turn.calls == (llm.ToolCall("t1", "run_python", {"code": "print(1)"}),)
+    assert [block["type"] for block in turn.content] == ["thinking", "text", "tool_use"]
+    assert turn.content[0]["signature"] == "sig"
+    assert turn.response.cost_usd > 0 and turn.response.text == "running"
+    assert sent["tool_choice"] == {"type": "none"}
+    first = sent["messages"][0]  # type: ignore[index]
+    assert first["content"][-1]["cache_control"] == {"type": "ephemeral"}

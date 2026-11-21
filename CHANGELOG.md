@@ -13,6 +13,13 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+- OMNI-206 (epic OMNI-204): the proposer's workbench. A real proposer
+  building a forecasting contract may run Python on its training split in the
+  docker sandbox before it answers, one run per turn, and see what it printed:
+  it can measure its own error against the baseline on history it may see.
+  Nothing held out is mounted. Limits and a spend cap in
+  `proposer.workbench_*`; a cycle that uses it reserves the cap plus a review
+  (about $1.64 at the defaults), so the budget must allow that.
 - OMNI-205: a forecasting contract may have a training split
   (`specs/<name>/training.json`): public history known before its first
   held-out question, shown to the proposer as compact tables so it can fit a
