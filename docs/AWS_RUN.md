@@ -27,7 +27,7 @@ This document has four parts:
 | Box | one `m7i.xlarge`, `us-east-1`, **no inbound ports**; shell via SSM only |
 | Contract | Class 1, one with room left: `sort` and `sum_of_divisors` have both converged, so re-seed a naive one on `ozumpe/testrun`'s `develop` first ([Before every run](#before-every-run-a-target-with-room-left)). Or Class 2: `roman` (built from its spec, no re-seed) or `ca_price_wholesale`, which the weekly scheduled run uses since `v0.6.0` (its private episodes must be in the artifacts bucket) |
 | Where artifacts land | Jira `TES`, GitHub `ozumpe/testrun` (PRs against `develop`) |
-| Spend brakes | `SIS_BUDGET_USD=1.00` in the loop; an AWS Budget alarm (default $25/month) on the account |
+| Spend brakes | `SIS_BUDGET_USD=2.50` in the loop; an AWS Budget alarm (default $25/month) on the account |
 | Cost | about $0.20 an hour while the instance runs |
 | Runs | weekly, by a scheduled task ([Scheduled runs](#scheduled-runs-omni-168-omni-169)); results under `runs/` in the artifacts bucket |
 
@@ -265,7 +265,7 @@ invisible to them.
 cd ~/omnibase
 export SIS_ENV=aws SIS_ADAPTERS=real SIS_AWS_SECRET_ID=sis/first-run/credentials
 export SIS_SANDBOX=docker SIS_PROPOSER=claude
-export SIS_BUDGET_USD=1.00
+export SIS_BUDGET_USD=2.50
 export ANTHROPIC_API_KEY=$(aws secretsmanager get-secret-value \
   --secret-id sis/first-run/credentials --query SecretString --output text \
   | jq -r .anthropic.api_key)
@@ -830,7 +830,7 @@ canary (`canary.backend` unset), which never executes candidate code.
 ### Two spend brakes, deliberately independent
 
 - **LLM side:** `SIS_BUDGET_USD`, the CEO brake (M5), enforced *in the loop*,
-  per run, before each proposal. Tiny (`1.00`) for these runs.
+  per run, before each proposal. Small (`2.50`, room for a workbench cycle, OMNI-206) for these runs.
 - **Infra side:** the AWS Budget, enforced *by billing*, monthly, alerting at
   80% and 100% of the cap (default $25). Budget data lags by hours, so it is a
   backstop against a forgotten instance, not a real-time kill; the real-time

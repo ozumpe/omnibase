@@ -310,6 +310,26 @@ touch the code a rule is about. History (what changed when) belongs in
     holdout` shows each budget; raising one is a human's edit of the contract
     or the config, which the loop cannot write. Rotation (D5's other half) is
     not built.
+  - **A forecasting proposer may run code on its training split, and on
+    nothing else** (`sis/workbench.py`, OMNI-206). A real proposer building a
+    feature that has a training split (OMNI-205) gets a bounded tool loop: it
+    may call `run_python`, one run per turn, and sees what the program printed,
+    quoted as data; then it answers with the module as before. Each run is a
+    fresh container of the gauntlet's docker sandbox with only `training.json`
+    and the program, read-only, plus an empty scratch: no held-out fixture, no
+    oracle, no tests, no network. It is refused in the subprocess sandbox, and
+    `sandbox.allow_unsandboxed_llm` does not lift that; `run_cycle` refuses
+    such a cycle before any spend. The limits are `proposer.workbench_*`
+    (FORBIDDEN): runs, seconds per run, characters of output shown, wall time,
+    the output limit of a turn that runs code, and spend. Before each turn that
+    may run code, the spend limit must hold for that turn and an answer after
+    it at their worst (input at the cache-write rate, output at its limit), or
+    the turn may only answer; so the cycle reserves the spend limit plus a
+    review (`org.workbench_estimate_usd`), and a cut-off answer's retry
+    reserves the same. Every turn's cost is added as soon as it is known, so
+    a later turn that raises loses none of it. A turn cut off mid-way is
+    discarded and the model told. `proposer.workbench_runs=0` keeps the
+    one-shot proposal; the stub and Class 1 always do.
   - **Candidate output is compared only as plain values, and never shares an
     input object with the other side** (OMNI-46/47). `sis/canonical.py`
     rebuilds output from exact builtins before every `==` — differential,
@@ -378,7 +398,9 @@ touch the code a rule is about. History (what changed when) belongs in
     OMNI-35), which scenario generator drives a twin (`sis/scenarios.py`,
     OMNI-34; the generator itself is `specs/scenarios.py`), how a predictor's
     error is computed (`sis/prediction_error.py`, OMNI-36), how judgements of a
-    held-out fixture are counted (`sis/holdout.py`, OMNI-207), the contract-author approval gate
+    held-out fixture are counted (`sis/holdout.py`, OMNI-207), what the
+    proposer's workbench may reach and spend (`sis/workbench.py`, OMNI-206),
+    the contract-author approval gate
     (`sis/contract_author.py`),
     `specs/` (the exam itself — oracles, acceptance tests, domain laws, backtest
     fixtures), cost accounting (`sis/cost.py` — the breaker/threshold logic

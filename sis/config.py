@@ -314,6 +314,35 @@ SCHEMA: tuple[Key, ...] = (
         "SIS_PROPOSER_RETRY_OUTPUT_LIMIT",
         "Output limit of the one retry a proposal cut off at output_limit gets. "
         "Cut off again, the run stops.", positive=True),
+    # The workbench (OMNI-206): a real proposer building a feature with a
+    # training split may run code on it in the docker sandbox before it
+    # submits. Forbidden like the sandbox and the brakes: these decide what
+    # model-written code may do and what one proposal may spend.
+    Key("proposer", "workbench_runs", ConfigTier.FORBIDDEN, Kind.INT, 8,
+        "SIS_WORKBENCH_RUNS",
+        "Programs the proposer may run on the training split before it submits, "
+        "one per turn. 0 turns the workbench off (one-shot proposals)."),
+    Key("proposer", "workbench_run_seconds", ConfigTier.FORBIDDEN, Kind.FLOAT, 60.0,
+        "SIS_WORKBENCH_RUN_SECONDS",
+        "Wall time of one workbench run; a run past it is stopped.", positive=True),
+    Key("proposer", "workbench_output_chars", ConfigTier.FORBIDDEN, Kind.INT, 6000,
+        "SIS_WORKBENCH_OUTPUT_CHARS",
+        "Characters of one run's output the proposer is shown; the rest is cut.",
+        positive=True),
+    Key("proposer", "workbench_wall_seconds", ConfigTier.FORBIDDEN, Kind.FLOAT, 900.0,
+        "SIS_WORKBENCH_WALL_SECONDS",
+        "Wall time of a whole workbench conversation; past it, the proposer must "
+        "answer.", positive=True),
+    # The cycle reserves this plus the review (org.workbench_estimate_usd), so
+    # the budget must hold that for a workbench cycle to be approved.
+    Key("proposer", "workbench_spend_usd", ConfigTier.FORBIDDEN, Kind.FLOAT, 1.5,
+        "SIS_WORKBENCH_SPEND_USD",
+        "What one proposal with the workbench may spend, its answer included. "
+        "Checked on a worst case before each turn.", positive=True),
+    Key("proposer", "workbench_turn_limit", ConfigTier.FORBIDDEN, Kind.INT, 8000,
+        "SIS_WORKBENCH_TURN_LIMIT",
+        "Output limit of a workbench turn that may run code, thinking included. "
+        "The answer gets proposer.output_limit.", positive=True),
 
     # --- canary: how a candidate is judged against traffic. ------------------
     # Strict despite the asymmetry: turning the live canary *on* only adds rigour,
@@ -827,6 +856,12 @@ class ProposerConfig:
     llm_model: str | None
     output_limit: int
     retry_output_limit: int
+    workbench_runs: int
+    workbench_run_seconds: float
+    workbench_output_chars: int
+    workbench_wall_seconds: float
+    workbench_spend_usd: float
+    workbench_turn_limit: int
 
 
 @dataclass(frozen=True)
