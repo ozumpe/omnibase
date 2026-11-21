@@ -19,6 +19,14 @@ release renames that heading to the new tag.
   model instead of writing blind. No gate reads it; the contract refuses a
   split that reaches into the held-out weeks. Built with
   `scripts/build_fixture.py --training` and promoted like any spec file.
+- OMNI-207: the holdout budget (D5). Each cycle's record names the held-out
+  fixture it was judged on, and a contract's fixture gives at most
+  `holdout_budget` judgements (default `brakes.holdout_budget`, 50). When
+  they are spent the next cycle is refused before any spend, pages a WARNING,
+  and the loop stops; a new fixture starts at zero. Each cycle prints the
+  budget left; `python -m sis.admin holdout` shows every contract's. The
+  scheduled AWS run fetches earlier runs' episodic logs first, so the count
+  survives a new box.
 
 ## v0.7.0 — 2026-11-19
 

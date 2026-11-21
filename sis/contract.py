@@ -97,6 +97,13 @@ class GateName(str, Enum):
     SLO = "slo"
 
 
+def check_holdout_budget(limit: int | None, *, contract: str) -> None:
+    """Refuse a holdout budget that is not a positive whole number, at declaration."""
+    if limit is not None and (type(limit) is not int or limit < 1):
+        raise ValueError(f"contract {contract!r}: holdout_budget must be a whole number of "
+                         f"at least 1, or None for brakes.holdout_budget; got {limit!r}")
+
+
 class Contract(Protocol):
     """What the gauntlet needs from a contract, regardless of its class.
 
@@ -129,6 +136,11 @@ class Contract(Protocol):
     @property
     def skill(self) -> BacktestSkill | None:
         """A baseline the candidate must beat on the held-out backtests, or None."""
+        ...
+
+    @property
+    def holdout_budget(self) -> int | None:
+        """Candidates the held-out backtests may judge, or None for the config default."""
         ...
 
     @property
@@ -284,6 +296,9 @@ class OptimizationContract:
     backtests: tuple[Backtest, ...] = ()
     # A baseline to beat on average over the held-out backtests (OMNI-163).
     skill: BacktestSkill | None = None
+    # How many candidates the held-out backtests may judge (OMNI-207, D5); None
+    # takes brakes.holdout_budget. See sis.holdout.
+    holdout_budget: int | None = None
     # Almost always DETERMINISTIC. A stochastic *optimisation* is a real cell in
     # the grid, though — "this Monte Carlo simulation is too slow" — which is
     # precisely why determinism is a field here rather than a third contract
@@ -343,6 +358,7 @@ class OptimizationContract:
                 "fixture in the episodic log, so they have to be unique to be useful"
             )
         check_skill(self.skill, self.backtests, contract=self.name, has_oracle=True)
+        check_holdout_budget(self.holdout_budget, contract=self.name)
 
     @property
     def slo(self) -> DomainSLO | None:
@@ -444,6 +460,10 @@ class FeatureContract:
     # History the proposer may see and fit on (OMNI-205): all of it known before
     # the first held-out episode. No gate reads it.
     training: TrainingSplit | None = None
+    # How many candidates the held-out backtests may judge before the loop
+    # stops on this contract (OMNI-207, D5); None takes brakes.holdout_budget.
+    # Raised by a human's edit here, never by the loop. See sis.holdout.
+    holdout_budget: int | None = None
     determinism: Determinism = Determinism.DETERMINISTIC
     invariants: tuple[Invariant, ...] = ()
     # Mirrors ``diff_trials``' role: statistical power is a property of the
@@ -478,6 +498,7 @@ class FeatureContract:
         check_skill(self.skill, self.backtests, contract=self.name,
                     has_oracle=self.oracle_path is not None)
         check_training(self.training, self.backtests, contract=self.name)
+        check_holdout_budget(self.holdout_budget, contract=self.name)
 
     def gate_profile(self) -> tuple[GateName, ...]:
         """The Class-2 profile: the right shape, the spec's cases, and history."""

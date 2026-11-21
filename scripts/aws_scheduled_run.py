@@ -180,6 +180,34 @@ fi
 """
 
 
+def history_lines(end: str) -> str:
+    """Shell that fetches earlier runs' episodic logs into ``runtime/history/`` (OMNI-207).
+
+    The holdout budget counts every judgement a held-out fixture has given,
+    across runs, from the episodic records (``sis.holdout``). A new box starts
+    with an empty log, so without this each weekly run would count from zero
+    and the budget would never stop anything. Every ``runs/<run>/episodic.jsonl``
+    the artifact sync uploaded (OMNI-140) is fetched, and nothing else; below
+    ``runtime/``, so the sync never uploads them again. Fails closed: a box
+    that cannot read them could count too few, so the run ends with *end*
+    before anything is spent. Without ARTIFACTS_BUCKET (not an AWS box) it does
+    nothing.
+    """
+    return f"""if [ -n "${{ARTIFACTS_BUCKET:-}}" ]; then
+  mkdir -p runtime/history
+  if ! aws s3 sync "s3://$ARTIFACTS_BUCKET/runs/" runtime/history/ --exclude '*' \\
+      --include '*/episodic.jsonl' --only-show-errors 2>"$HOME/.sis-history.err"; then
+    why=$(tr '\\n' ' ' < "$HOME/.sis-history.err" | tail -c 400)
+    echo "[scheduled] could not fetch earlier runs' episodic logs for the holdout" \\
+      "budget: $why; nothing was spent" | tee -a "$log"
+    echo "{end} 1" | tee -a "$log"; exit 1
+  fi
+  echo "[scheduled] runtime/history/: $(find runtime/history -name episodic.jsonl | wc -l)" \\
+    "earlier run log(s) fetched for the holdout budget" | tee -a "$log"
+fi
+"""
+
+
 def runner_script(cfg: RunConfig) -> str:
     """The script tmux runs as ``ubuntu``: AWS_RUN.md steps 5a to 5c.
 
@@ -192,7 +220,7 @@ def runner_script(cfg: RunConfig) -> str:
         flags += f" --brakes-breaker-threshold {cfg.breaker_threshold}"
     flags += f" --loop --loop-max-cycles {cfg.max_cycles}"
     start, end = start_marker(cfg.run_id), exit_marker(cfg.run_id)
-    fetch = private_fixture_lines(cfg.contract, end)
+    fetch = private_fixture_lines(cfg.contract, end) + history_lines(end)
     return f"""#!/bin/bash
 # Written by scripts/aws_scheduled_run.py (OMNI-168) for run {cfg.run_id}. No secrets.
 set -o pipefail

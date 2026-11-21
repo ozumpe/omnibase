@@ -31,6 +31,12 @@ brakes:
   # consecutive-failure streak; a correctness failure adds 1.0. In (0, 1].
   # env: SIS_SLO_FAILURE_WEIGHT   flag: --brakes-slo-failure-weight
   forbidden_slo_failure_weight: 0.5
+  # Candidates a contract's held-out backtests may judge before the loop stops on it,
+  # unless the contract declares its own holdout_budget (OMNI-207, D5). Counted per
+  # held-out fixture from the episodic log; a new fixture starts at zero. Spent: a
+  # neutral stop and a page, no spend.
+  # env: SIS_HOLDOUT_BUDGET   flag: --brakes-holdout-budget
+  forbidden_holdout_budget: 50
 
 sandbox:
   # Isolation for generated code: 'subprocess' (soft) or 'docker' (kernel-enforced,
