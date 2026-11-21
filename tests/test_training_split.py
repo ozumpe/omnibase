@@ -240,6 +240,7 @@ def test_the_script_stages_the_split_for_a_human_and_leaves_specs_alone(
     calendar = tmp_path / "calendar.json"
     calendar.write_text(_spot_calendar().raw, encoding="utf-8")
     script = _script()
+    monkeypatch.setattr(script, "SPECS", tmp_path / "specs")   # nothing promoted yet
     monkeypatch.setitem(script.FIXTURES, "ca_price_wholesale",
                         replace(script.FIXTURES["ca_price_wholesale"], question=WHOLESALE))
     promoted = pathlib.Path(contract_author.SPECS_DIR) / "ca_price_wholesale"

@@ -504,7 +504,9 @@ Decision:
 Go with the recommendation: budget + rotation, with burn measured from the episodic log.
 
 Built: the budget (OMNI-207, `sis/holdout.py`), counted per held-out fixture from the
-episodic log. Rotation is not built.
+episodic log, and rotation (OMNI-225, `scripts/build_fixture.py --rotate`): the weeks
+after the held-out set become the new one, the old set joins the training split, and
+both reach `specs/` by one human promotion (D12). Automating that promotion is OMNI-215.
 
 **D6 — Event time or wall-clock?**
 *Recommend event time behind a `Clock` port, with wall-clock as one adapter.* Backtest and

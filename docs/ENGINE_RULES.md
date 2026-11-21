@@ -308,8 +308,20 @@ touch the code a rule is about. History (what changed when) belongs in
     AWS run fetches every earlier `runs/*/episodic.jsonl` into
     `runtime/history/` first and refuses to start if it cannot. `sis.admin
     holdout` shows each budget; raising one is a human's edit of the contract
-    or the config, which the loop cannot write. Rotation (D5's other half) is
-    not built.
+    or the config, which the loop cannot write.
+  - **A held-out set is replaced only by weeks no candidate has seen judged**
+    (`holdout.plan_rotation`, OMNI-225, D5's rotation). `scripts/build_fixture.py
+    --fixture <name> --rotate` takes the unbroken run of weeks after the
+    committed set's last one (`specs/<name>/private.json`) that the trace answers
+    and the release calendar covers, and stages them as the new held-out set
+    together with a training split that now runs up to them, over the old set.
+    One draft, so one review and one promotion move both; the new fixture's
+    digest starts its budget at zero. It refuses with fewer than
+    `brakes.holdout_rotation_min_weeks` fresh weeks and says which week makes
+    enough: a small held-out set lets a lucky candidate clear the skill margin.
+    A plain build or `--training` of a promoted private fixture keeps its
+    committed weeks, because adding fresh weeks to a judged set would give
+    judged weeks a new budget. The training split stays public series only.
   - **A forecasting proposer may run code on its training split, and on
     nothing else** (`sis/workbench.py`, OMNI-206). A real proposer building a
     feature that has a training split (OMNI-205) gets a bounded tool loop: it

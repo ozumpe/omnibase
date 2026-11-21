@@ -16,8 +16,15 @@ contract is refused before any spend, as a neutral stop that pages a human.
 The limit is the contract's ``holdout_budget``, else ``brakes.holdout_budget``.
 Both live where the loop cannot write (``specs/`` and the contract layer, the
 config schema and ``config.yml``, and this module are all POLICY-FORBIDDEN), so
-raising it is a human's edit, never the loop's. Rotating the holdout, D5's
-other half, is not built here.
+raising it is a human's edit, never the loop's.
+
+D5's other half is rotation (OMNI-225): :func:`plan_rotation` decides when a
+new held-out set can be built. It holds only weeks after the current set's
+last, which no candidate has been judged on and no training split shows, so a
+rotation never restarts the count on data the loop has seen judged. Every week
+of the old set then joins the public training split. The build is
+``scripts/build_fixture.py --rotate``; it reaches ``specs/`` by the same human
+promotion as any fixture.
 
 What counts as a judgement is decided by :func:`judged_holdout`, which is pure,
 like everything here but the two readers at the bottom.
@@ -25,6 +32,7 @@ like everything here but the two readers at the bottom.
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import re
 from collections.abc import Callable, Iterable, Sequence
@@ -198,9 +206,104 @@ def refusal(b: Budget) -> str:
             "Each judgement tells the loop a little about the held-out weeks, so more "
             "attempts would start to fit them by selection rather than by skill "
             "(docs/OMNITRACK_VISION.md D5). No cycle on this contract runs, and nothing "
-            "was spent. To go on: promote a new held-out fixture (its count starts at "
-            "zero), or raise the contract's holdout_budget (or brakes.holdout_budget) "
-            "by hand.")
+            "was spent. To go on: rotate the held-out weeks (scripts/build_fixture.py "
+            f"--fixture {b.contract} --rotate, then review and promote; the new fixture's "
+            "count starts at zero and the old weeks join the training split), or raise "
+            "the contract's holdout_budget (or brakes.holdout_budget) by hand.")
+
+
+# --------------------------------------------------------------------------
+# Rotation (OMNI-225, D5's other half)
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Rotation:
+    """Whether a held-out set can be replaced by fresh weeks, and by which. Pure.
+
+    *current* is the held-out set in use, *fresh* the weeks after its last one
+    that the trace answers and the release calendar covers, in order and with
+    no gap, so a build over them cannot refuse for one.
+    """
+
+    current: tuple[datetime.date, ...]
+    fresh: tuple[datetime.date, ...]
+    min_weeks: int
+    horizon: datetime.timedelta = datetime.timedelta(weeks=1)
+
+    @property
+    def ready(self) -> bool:
+        return len(self.fresh) >= self.min_weeks
+
+    @property
+    def first(self) -> datetime.date:
+        """The first week of the new held-out set: the week after the current set's last."""
+        return self.current[-1] + self.horizon
+
+    @property
+    def last(self) -> datetime.date | None:
+        return self.fresh[-1] if self.fresh else None
+
+    @property
+    def enough_on(self) -> datetime.date:
+        """The week whose value makes the fresh weeks enough (it is published a
+        few days later, and the release calendar must reach it)."""
+        return self.current[-1] + self.min_weeks * self.horizon
+
+    def describe(self) -> str:
+        """What the rotation would do, or why it cannot yet. Names no held-out value."""
+        old = (f"{len(self.current)} held-out week(s) {self.current[0]} to "
+               f"{self.current[-1]}")
+        if not self.ready:
+            return (f"not enough fresh weeks to rotate: {len(self.fresh)} of "
+                    f"{self.min_weeks} (brakes.holdout_rotation_min_weeks) after "
+                    f"{self.current[-1]}. Enough once the week of {self.enough_on} is "
+                    "captured and the release calendar reaches it.")
+        return (f"rotation: {len(self.fresh)} fresh week(s) {self.first} to {self.last} "
+                f"become the held-out set; the {old} join the training split, which "
+                f"then runs to {self.first - self.horizon}")
+
+
+def held_out_weeks(backtests: Sequence[Backtest]) -> tuple[datetime.date, ...]:
+    """The weeks a contract's held-out episodes ask about, in order. Pure.
+
+    Episodes are named for their week (``2020-01-06``); one that is not
+    cannot be placed in time, so rotation refuses rather than guess.
+    """
+    weeks = []
+    for b in holdout(tuple(backtests)):
+        try:
+            weeks.append(datetime.date.fromisoformat(b.name))
+        except ValueError:
+            raise ValueError(f"held-out episode {b.name!r} is not named for its week; "
+                             "it cannot be rotated") from None
+    return tuple(sorted(weeks))
+
+
+def plan_rotation(
+    current: Sequence[datetime.date], available: Iterable[datetime.date], min_weeks: int,
+    horizon: datetime.timedelta = datetime.timedelta(weeks=1),
+) -> Rotation:
+    """Which fresh weeks could replace the held-out set *current*. Pure.
+
+    *available* is every week the trace answers and the release calendar
+    covers. Only the unbroken run of weeks right after *current*'s last one
+    counts: a week the trace or calendar is missing ends it, since the build
+    would refuse the gap. Weeks at or before that last one never count: they
+    were judged, or are in the training split.
+    """
+    if not current:
+        raise ValueError("there is no held-out set to rotate: build and promote one first")
+    if min_weeks < 1:
+        raise ValueError(f"min_weeks must be at least 1, got {min_weeks}")
+    ordered = tuple(sorted(current))
+    have = set(available)
+    fresh = []
+    week = ordered[-1] + horizon
+    while week in have:
+        fresh.append(week)
+        week += horizon
+    return Rotation(ordered, tuple(fresh), min_weeks, horizon)
 
 
 # --------------------------------------------------------------------------
@@ -232,7 +335,7 @@ def recorded_events(
 
 
 __all__ = [
-    "AFTER_BACKTEST", "BEFORE_BACKTEST", "HISTORY_DIR", "HOLDOUT_SPENT", "Budget", "budget",
-    "fixture_digest", "history_events", "judged_holdout", "recorded_events", "refusal",
-    "spent",
+    "AFTER_BACKTEST", "BEFORE_BACKTEST", "HISTORY_DIR", "HOLDOUT_SPENT", "Budget", "Rotation",
+    "budget", "fixture_digest", "held_out_weeks", "history_events", "judged_holdout",
+    "plan_rotation", "recorded_events", "refusal", "spent",
 ]

@@ -13,6 +13,11 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+- OMNI-225 (D5): held-out rotation. `scripts/build_fixture.py --rotate` stages
+  the weeks after the held-out set as the new one and a training split that
+  now covers the old one, as one draft for one promotion; its budget starts at
+  zero. New config `brakes.holdout_rotation_min_weeks` (13). A plain rebuild
+  of a promoted private fixture now keeps its committed weeks.
 - OMNI-144 (L49): every artifact sync now also uploads `run.json`, which says
   which part of the box's cumulative files is this run's (byte offsets, first
   and last `cycle_id`, contracts, cost, code version, carried spend at the start
