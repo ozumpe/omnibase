@@ -175,7 +175,9 @@ def test_the_loop_syncs_every_n_cycles_and_once_more_when_it_stops(
 
     assert len(results) == 5
     # After cycles 2 and 4, then the stop.
-    assert uploads.keys == ["runs/20260929-2028/episodic.jsonl"] * 3
+    # Each sync ends with the run's manifest (OMNI-144).
+    assert uploads.keys == ["runs/20260929-2028/episodic.jsonl",
+                            "runs/20260929-2028/run.json"] * 3
     out = capsys.readouterr().out
     assert out.count("artifacts synced to s3://b/runs/20260929-2028/") == 1, \
         "only the last sync of a run says so; the console is not a line longer per cycle"
@@ -193,7 +195,7 @@ def test_a_convergence_stop_syncs_too(handles, tmp_path) -> None:  # type: ignor
                          artifact_sync_every=0)   # only when the loop stops
 
     assert len(results) == 2
-    assert uploads.keys == ["runs/20260929-2028/episodic.jsonl"]
+    assert uploads.keys == ["runs/20260929-2028/episodic.jsonl", "runs/20260929-2028/run.json"]
 
 
 @pytest.mark.parametrize(
@@ -235,7 +237,7 @@ def test_a_crash_still_syncs(handles, tmp_path, capsys) -> None:  # type: ignore
         loop.serve(handles, trigger, interval_s=0.01, max_cycles=9, converged_after=99,
                    artifacts=lambda: _sync_of(tmp_path, uploads), artifact_sync_every=0)
 
-    assert uploads.keys == ["runs/20260929-2028/episodic.jsonl"], \
+    assert uploads.keys == ["runs/20260929-2028/episodic.jsonl", "runs/20260929-2028/run.json"], \
         "the log is the point of the run: it goes to the bucket even when the loop dies"
     # And the console log says why it ended: Python prints the traceback only
     # when the process exits, after the upload (OMNI-139).
@@ -266,7 +268,8 @@ def test_the_last_sync_follows_the_stop_summary(
 
     class _Watch:
         def upload(self, path: Any, key: str) -> None:
-            said_before_upload.append(capsys.readouterr().out)
+            if path.name == "loop.log":
+                said_before_upload.append(capsys.readouterr().out)
 
     (tmp_path / "loop.log").write_text("[cycle] no_change: ...\n")
     sync = ArtifactSync(_Watch(), bucket="b", prefix="runs/x/", runtime_dir=tmp_path)

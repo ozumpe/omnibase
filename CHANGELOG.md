@@ -13,6 +13,13 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+- OMNI-144 (L49): every artifact sync now also uploads `run.json`, which says
+  which part of the box's cumulative files is this run's (byte offsets, first
+  and last `cycle_id`, contracts, cost, code version, carried spend at the start
+  and now). A run's S3 folder read as one run no longer double-counts.
+- Docs: `docs/KNOWN_ISSUES.md` listed M37 (OMNI-218) as open after #235 fixed
+  it; it is now a Resolved row.
+
 ## v0.8.0 — 2026-11-21
 
 Epic OMNI-204, the proposer's honest homework: a training split it may see

@@ -404,9 +404,28 @@ the episodic log, its state, the operator audit and the console log
 `s3://<bucket>/runs/<start time>/` after every cycle
 (`loop.artifact_sync_every`), and once more when it stops for any reason:
 converged, breaker, `--loop-max-cycles`, Ctrl-C, or a crash. It ends with
-`[sis] artifacts synced to s3://… (episodic.jsonl, …)`. A killed process or a
-replaced box loses at most the cycle in flight. A slow or failing bucket prints
-`[sis] WARNING: artifacts not synced …` and the loop carries on.
+`[sis] artifacts synced to s3://… (episodic.jsonl, …, run.json)`. A killed
+process or a replaced box loses at most the cycle in flight. A slow or failing
+bucket prints `[sis] WARNING: artifacts not synced …` and the loop carries on.
+
+A run's folder holds the box's files whole: the log, the audit and
+`loop.log` are appended to by every process on the box, and the spend in
+`episodic_state.json` carries over by design. So a folder also holds every
+earlier run's records, and read as one run it double-counts. Its `run.json`
+(OMNI-144) says which part is this run's: `files.<name>.from_byte` is where
+this run's part of each appended file starts, and it names the run's
+`records`, `first_cycle_id`/`last_cycle_id`, `contracts`, `cost_usd`,
+`code_version`, and the carried spend at its start (`spent_usd_at_start`) and
+at the last sync (`spent_usd`). This run's records only:
+
+```bash
+run="s3://$ARTIFACTS_BUCKET/runs/<start time>"
+aws s3 cp "$run/run.json" . && aws s3 cp "$run/episodic.jsonl" .
+tail -c +$(( $(jq '.files["episodic.jsonl"].from_byte' run.json) + 1 )) episodic.jsonl
+```
+
+Folders from before the manifest have no `run.json`; slice those by
+`cycle_id` against the previous folder.
 
 By hand, for `v0.3.2` and earlier, for a single `main.py` run (only `--loop`
 syncs), or after a process was killed:

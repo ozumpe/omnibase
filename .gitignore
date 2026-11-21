@@ -38,6 +38,8 @@ runtime/operator_audit.jsonl
 # The console output of a supervised run, tee'd by the runbook's step 5c.
 runtime/loop.log
 runtime/loop.lock
+# Which part of the files above a run's S3 folder owns (OMNI-144).
+runtime/run.json
 # Earlier runs' episodic logs, fetched by the scheduled AWS run for the
 # holdout budget (OMNI-207).
 runtime/history/
