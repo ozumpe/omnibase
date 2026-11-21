@@ -213,9 +213,9 @@ class AnthropicClient:
         """``POST /v1/messages/count_tokens``: free, and no completion is made."""
         import anthropic
 
-        counted = anthropic.Anthropic().messages.count_tokens(
-            model=self.model, system=system, messages=messages,  # type: ignore[arg-type]
-            tools=tools)  # type: ignore[arg-type]
+        request: dict[str, Any] = dict(model=self.model, system=system,
+                                       messages=messages, tools=tools)
+        counted = anthropic.Anthropic().messages.count_tokens(**request)
         return int(counted.input_tokens)
 
     def check(self) -> str:
