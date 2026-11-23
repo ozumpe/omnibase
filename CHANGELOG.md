@@ -13,6 +13,11 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+- OMNI-225 (D5): held-out rotation. `scripts/build_fixture.py --rotate` stages
+  the weeks after the held-out set as the new one and a training split that
+  now covers the old one, as one draft for one promotion; its budget starts at
+  zero. New config `brakes.holdout_rotation_min_weeks` (13). A plain rebuild
+  of a promoted private fixture now keeps its committed weeks.
 - OMNI-224 (M41): a candidate judged again on the same held-out fixture no
   longer uses another holdout judgement. The "already built" check after a
   merge re-judges the merged module every cycle; the 2026-11-21 run used 4 of

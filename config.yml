@@ -37,6 +37,11 @@ brakes:
   # neutral stop and a page, no spend.
   # env: SIS_HOLDOUT_BUDGET   flag: --brakes-holdout-budget
   forbidden_holdout_budget: 50
+  # Fresh weeks a rotated held-out fixture needs at least (OMNI-225, D5): weeks after
+  # the current held-out set's last, never judged. Fewer, and scripts/build_fixture.py
+  # --rotate refuses and says when enough will be out.
+  # env: SIS_HOLDOUT_ROTATION_MIN_WEEKS   flag: --brakes-holdout-rotation-min-weeks
+  forbidden_holdout_rotation_min_weeks: 13
   # Whether a candidate judged again on the same held-out fixture uses another holdout
   # judgement, unless the contract declares its own holdout_count_repeats (OMNI-224).
   # Off: each candidate counts once, so the 'already built' re-check of a merged module

@@ -211,6 +211,12 @@ SCHEMA: tuple[Key, ...] = (
         "(OMNI-207, D5). Counted per held-out fixture from the episodic log; a "
         "new fixture starts at zero. Spent: a neutral stop and a page, no spend.",
         positive=True),
+    Key("brakes", "holdout_rotation_min_weeks", ConfigTier.FORBIDDEN, Kind.INT, 13,
+        "SIS_HOLDOUT_ROTATION_MIN_WEEKS",
+        "Fresh weeks a rotated held-out fixture needs at least (OMNI-225, D5): "
+        "weeks after the current held-out set's last, never judged. Fewer, and "
+        "scripts/build_fixture.py --rotate refuses and says when enough will be out.",
+        positive=True),
     Key("brakes", "holdout_count_repeats", ConfigTier.FORBIDDEN, Kind.BOOL, False,
         "SIS_HOLDOUT_COUNT_REPEATS",
         "Whether a candidate judged again on the same held-out fixture uses "
@@ -820,6 +826,7 @@ class BrakesConfig:
     slo_min_spend_usd: float
     slo_failure_weight: float
     holdout_budget: int
+    holdout_rotation_min_weeks: int
     holdout_count_repeats: bool
 
 
