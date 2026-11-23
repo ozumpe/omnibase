@@ -13,6 +13,13 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+- OMNI-189: a new box remembers what earlier runs rejected. A rejected step's
+  episodic record now carries `baseline_sha`, and each step is handed the
+  rejections in this box's log and in `runtime/history/`. A step from the same
+  base no longer re-judges a candidate an earlier run rejected (the
+  2026-11-06 run of `sort` paid to judge one again), and its prompt carries
+  the earlier reasons. Records from before this change have no
+  `baseline_sha` and are not matched.
 - OMNI-225 (D5): held-out rotation. `scripts/build_fixture.py --rotate` stages
   the weeks after the held-out set as the new one and a training split that
   now covers the old one, as one draft for one promotion; its budget starts at

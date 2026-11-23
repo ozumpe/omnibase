@@ -42,6 +42,9 @@ MAX_REJECTED = 20
 # loaded to finish. The same code deserves another run once the harness is well.
 _NOT_THE_CANDIDATES = frozenset({"harness", "timeout"})
 
+# What :func:`resubmitted` puts after a verdict it repeats.
+_RESUBMITTED = "[resubmitted:"
+
 
 BRANCH_PREFIX = "feature/"
 
@@ -157,6 +160,53 @@ def rejected_before(feature: Mapping[str, Any] | None, candidate_sha: str,
     return None
 
 
+def earlier_rejections(events: Iterable[episodic.EpisodicEvent]) -> list[dict[str, str]]:
+    """The rejections a log recorded with the baseline they were judged on. Pure.
+
+    What a new box needs from earlier runs' logs (OMNI-189): an ephemeral box
+    starts with an empty SelfModel, so the memory :func:`with_rejection` keeps
+    is gone, and a converged target would pay to judge last run's candidates
+    again.
+    Only a record with both shas and a verdict counts, the last
+    :data:`MAX_REJECTED` of each contract, oldest first. A verdict that was
+    not the candidate's is left out, as :func:`with_rejection` leaves it out,
+    and so is a resubmission: the record it repeats is already there.
+    """
+    by_contract: dict[str, list[dict[str, str]]] = {}
+    for event in events:
+        reason = event.reject_reason
+        if not (event.contract and event.candidate_sha and event.baseline_sha and reason):
+            continue
+        if _RESUBMITTED in reason or episodic.gate_from_reason(reason) in _NOT_THE_CANDIDATES:
+            continue
+        by_contract.setdefault(event.contract, []).append(
+            {"contract": event.contract, "candidate": event.candidate_sha,
+             "baseline": event.baseline_sha, "reason": reason})
+    return [entry for entries in by_contract.values() for entry in entries[-MAX_REJECTED:]]
+
+
+def with_earlier_runs(feature: dict[str, Any], earlier: Iterable[Mapping[str, str]],
+                      contract: str, baseline_sha: str) -> dict[str, Any]:
+    """*feature* remembering earlier runs' rejections of *contract* at this baseline. Pure.
+
+    Each one becomes a note the next prompt sees and an entry
+    :func:`rejected_before` answers from, as if this run had judged it
+    (OMNI-189). One the feature remembers already is not added twice: this
+    run's own log is among the records *earlier* is read from.
+    """
+    known = {(entry["candidate"], entry["baseline"]) for entry in feature.get("rejected", [])}
+    for entry in earlier:
+        key = (entry["candidate"], entry["baseline"])
+        if entry["contract"] != contract or entry["baseline"] != baseline_sha or key in known:
+            continue
+        known.add(key)
+        noted = with_note(feature, f"rejected in an earlier run: {entry['reason']}")
+        remembered = {"candidate": key[0], "baseline": key[1], "reason": entry["reason"]}
+        feature = {**noted,
+                   "rejected": [*feature.get("rejected", []), remembered][-MAX_REJECTED:]}
+    return feature
+
+
 def resubmitted(reason: str) -> str:
     """The verdict for a resubmission of a candidate rejected for *reason*. Pure.
 
@@ -166,7 +216,7 @@ def resubmitted(reason: str) -> str:
     proposing the same module must still stop politely (OMNI-138), not trip
     the breaker on duplicates.
     """
-    return (f"{reason} [resubmitted: identical to a candidate already rejected "
+    return (f"{reason} {_RESUBMITTED} identical to a candidate already rejected "
             "against this baseline, not judged again]")
 
 

@@ -204,7 +204,7 @@ class _DyingSWE:
     def already_built(self, *args: Any) -> None:
         return None
 
-    def implement(self, *args: Any) -> None:
+    def implement(self, *args: Any, **kwargs: Any) -> None:
         import os
 
         os._exit(1)

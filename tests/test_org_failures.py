@@ -32,7 +32,8 @@ def handles():  # type: ignore[no-untyped-def]
     # expects from a real actor call.
     h["SWE"] = SimpleNamespace(
         already_built=SimpleNamespace(remote=lambda contract_name=None: ray.put(None)),
-        implement=SimpleNamespace(remote=lambda story_id, contract_name=None: ray.put(FAILED_IMPL)))
+        implement=SimpleNamespace(
+            remote=lambda story_id, contract_name=None, earlier=(): ray.put(FAILED_IMPL)))
     yield h
     ray.shutdown()
 

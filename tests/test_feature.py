@@ -105,6 +105,63 @@ def test_a_replayed_verdict_is_classified_like_the_original(reason: str) -> None
     assert feature.ends_feature(replayed) is feature.ends_feature(reason)
 
 
+def _event(reason: str | None, *, contract: str | None = "sort", candidate: str | None = "c1",
+           baseline: str | None = "base1") -> Any:
+    from sis import episodic
+    return episodic.EpisodicEvent(cycle_id="x", ts="t", outcome="rolled_back",
+                                  contract=contract, candidate_sha=candidate,
+                                  baseline_sha=baseline, reject_reason=reason)
+
+
+def test_a_new_box_remembers_what_an_earlier_run_rejected() -> None:
+    # OMNI-189: the 2026-11-06 run re-judged a candidate the 2026-10-31 run
+    # had rejected against the same base, because only the log remembered it.
+    earlier = feature.earlier_rejections([_event("no improvement: ratio 0.97")])
+    assert earlier == [{"contract": "sort", "candidate": "c1", "baseline": "base1",
+                        "reason": "no improvement: ratio 0.97"}]
+    f = feature.with_earlier_runs(feature.new_feature("b", "TES-9"), earlier, "sort", "base1")
+    assert feature.rejected_before(f, "c1", "base1") == "no improvement: ratio 0.97"
+    # The next prompt sees why, too.
+    assert f["attempts"] == ["rejected in an earlier run: no improvement: ratio 0.97"]
+
+
+def test_only_the_same_contract_at_the_same_baseline_is_remembered() -> None:
+    earlier = feature.earlier_rejections([_event("acceptance tests failed")])
+    fresh = feature.new_feature("b", "TES-9")
+    assert feature.with_earlier_runs(fresh, earlier, "sort", "base2") == fresh
+    assert feature.with_earlier_runs(fresh, earlier, "other", "base1") == fresh
+
+
+@pytest.mark.parametrize("event", [
+    _event("harness: the sandbox cannot run"),  # not the candidate's verdict
+    _event("mypy gate timed out"),
+    _event(feature.resubmitted("acceptance tests failed")),  # its original is there
+    _event("acceptance tests failed", baseline=None),  # recorded before OMNI-189
+    _event("acceptance tests failed", candidate=None),
+    _event("acceptance tests failed", contract=None),
+    _event(None),
+])
+def test_a_record_that_proves_nothing_is_not_remembered(event: Any) -> None:
+    assert feature.earlier_rejections([event]) == []
+
+
+def test_a_rejection_already_remembered_is_not_added_twice() -> None:
+    # This run's own log is read too: what the feature holds is not repeated.
+    f = feature.with_rejection(feature.new_feature("b", "TES-9"), "c1", "base1",
+                               "acceptance tests failed")
+    earlier = feature.earlier_rejections([_event("acceptance tests failed")] * 2)
+    assert feature.with_earlier_runs(f, earlier, "sort", "base1") == f
+
+
+def test_earlier_rejections_are_capped_per_contract() -> None:
+    events = [_event(f"rejected {i}", candidate=f"c{i}") for i in range(feature.MAX_REJECTED + 3)]
+    events.append(_event("acceptance tests failed", contract="other"))
+    earlier = feature.earlier_rejections(events)
+    kept = [e["candidate"] for e in earlier if e["contract"] == "sort"]
+    assert kept == [f"c{i}" for i in range(3, feature.MAX_REJECTED + 3)], "the latest, in order"
+    assert [e["contract"] for e in earlier].count("other") == 1
+
+
 def test_the_rejection_record_is_capped() -> None:
     f = feature.new_feature("b", "TES-1")
     for i in range(feature.MAX_REJECTED + 5):

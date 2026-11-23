@@ -124,7 +124,13 @@ touch the code a rule is about. History (what changed when) belongs in
   spec → diff → gauntlet verdict → outcome, incl. every rejected diff and the
   gate that caught it. Backends via `SIS_EPISODIC_STORE`: `jsonl` (default),
   `duckdb` (SQL analytics), `none`. This is the dataset the system learns from;
-  Postgres+pgvector can drop in later as another backend.
+  Postgres+pgvector can drop in later as another backend. A rejected step
+  records the `baseline_sha` it was judged against beside its `candidate_sha`.
+  Each step is handed every such rejection in this box's log and in
+  `runtime/history/` (`feature.earlier_rejections`, OMNI-189), so a step from
+  the base remembers what an earlier run, on another box, rejected against the
+  same base: an identical candidate is not judged again, and the prompt
+  carries the reason.
 - Control loop: monitor → budget/goal gate → propose Python on a branch → validation
   gauntlet → canary → promote/rollback → log → circuit breaker.
 

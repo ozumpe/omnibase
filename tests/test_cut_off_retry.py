@@ -108,7 +108,7 @@ class _Steps:
         self.saved_reservations: list[float] = []
 
     def remote(self, story_id: str, contract_name: str | None = None,
-               output_limit: int | None = None) -> Any:
+               output_limit: int | None = None, earlier: Any = ()) -> Any:
         self.limits.append(output_limit)
         self.saved_reservations.append(
             float((self._store.load_state("ceo") or {}).get("reserved_usd") or 0.0))
@@ -195,7 +195,7 @@ class _DiesOnRetry:
         return None
 
     def implement(self, story_id: str, contract_name: str | None = None,
-                  output_limit: int | None = None) -> dict[str, Any]:
+                  output_limit: int | None = None, earlier: Any = ()) -> dict[str, Any]:
         if output_limit is None:
             return _CUT
         import os

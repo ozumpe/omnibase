@@ -27,6 +27,7 @@ from typing import Any
 import ray
 
 from sis import config, cost, episodic, gauntlet, holdout, llm, review, workbench
+from sis import feature as feature_mod
 from sis.contract import REGISTERED_CONTRACTS, FeatureContract
 from sis.ports import Severity
 from sis.roles import (
@@ -169,6 +170,22 @@ def record_page_outcome(
 
 # The episodic-state key for a verified PR still awaiting a human (OMNI-126).
 PENDING_PR_KEY = "pending_pr"
+
+
+def _earlier_rejections(store: episodic.EpisodicStore) -> list[dict[str, str]]:
+    """What the episodic records say was rejected, and against which baseline.
+
+    This box's records and earlier runs' (:func:`sis.holdout.recorded_events`),
+    so a new box does not pay to judge a known-rejected candidate again
+    (OMNI-189). A memory only: a log that cannot be read is reported and
+    leaves it empty, as a fresh box had it before; the cycle goes on.
+    """
+    try:
+        return feature_mod.earlier_rejections(holdout.recorded_events(store))
+    except Exception as exc:  # noqa: BLE001 - the cycle does not depend on it
+        print(f"[sis] WARNING: earlier rejections not read ({type(exc).__name__}: {exc})",
+              file=sys.stderr)
+        return []
 
 
 def durable_vcs() -> str | None:
@@ -1065,7 +1082,10 @@ def run_cycle(
         seen.update(spec_id=spec_id, story_id=story_id)
 
         # 5. Implement (SWE → validated change on a feature branch + PR).
-        pending = swe.implement.remote(story_id, contract_name)
+        # What earlier runs rejected, from this box's log and the logs fetched
+        # from earlier boxes: a new box must not pay to judge it again (OMNI-189).
+        earlier = _earlier_rejections(store)
+        pending = swe.implement.remote(story_id, contract_name, earlier=earlier)
         # From here the SWE may pay for a proposal. Its step reports the cost
         # even when it fails (OMNI-55), unless its process dies: then the
         # cost is unknown, and _failed charges the reservation (OMNI-157).
@@ -1104,7 +1124,8 @@ def run_cycle(
                                     "brakes_unpersisted": str(unsaved)}, cost_usd)
                 print(f"[sis] proposal cut off at {first_limit} output tokens "
                       f"(${cost_usd:.4f}); retrying once at {retry_limit}", file=sys.stderr)
-                pending = swe.implement.remote(story_id, contract_name, retry_limit)
+                pending = swe.implement.remote(story_id, contract_name, retry_limit,
+                                               earlier=earlier)
                 seen["implementing"] = True
                 impl = ray.get(pending)
                 seen["implementing"] = False
@@ -1134,6 +1155,7 @@ def run_cycle(
             return _record({"status": neutral_status, "reason": impl["reason"],
                             "spec_id": spec_id, "story_id": story_id,
                             "candidate_sha": impl.get("candidate_sha"),
+                            "baseline_sha": impl.get("baseline_sha"),
                             "breaker_bug_id": breaker_bug_id,
                             "economics": ray.get(ceo.economics.remote()),
                             "provenance": ray.get(sm.provenance.remote())}, cost_usd)
@@ -1162,6 +1184,7 @@ def run_cycle(
                             "reason": impl["reason"],
                             "spec_id": spec_id, "story_id": story_id,
                             "candidate_sha": impl.get("candidate_sha"),
+                            "baseline_sha": impl.get("baseline_sha"),
                             "bug_id": bug_id, "breaker_bug_id": breaker_bug_id,
                             "economics": ray.get(ceo.economics.remote()),
                             "provenance": ray.get(sm.provenance.remote())}, cost_usd)
