@@ -313,6 +313,52 @@ records the summary in the SelfModel's provenance.
 A trace replay needs a capture first (`scripts/capture_sensor.py`); without
 one the script exits 1 and says so.
 
+### The error series, scored after each capture (OMNI-198)
+
+The report above replays a window and keeps nothing. Phase B's triggers need a
+history that survives a restart and a new box, so after each capture
+`scripts/capture_sensor.py` also scores the live predictor (the same one as
+above) on the weeks that became scorable, and appends one row per week to the
+episodic store's error series: `runtime/episodic_scored.jsonl` with the jsonl
+backend, the `scored_weeks` table with duckdb. `--no-score` skips it, and a
+scoring that fails is printed and leaves the capture in place. To score a
+trace captured elsewhere:
+
+```bash
+poetry run python scripts/score_capture.py                      # the EIA trace
+poetry run python scripts/score_capture.py --trace PATH --from 2022-08-01
+```
+
+- **Each week is scored once per predictor version** (the first 12 hex
+  digits of the predictor source's sha256). A week already in the series is
+  not asked again, so a second scoring after one capture adds nothing. A week
+  that cannot be scored yet (its next week not yet published, the predictor
+  failed) is not written and is tried again after the next capture. A week
+  whose next value was already known when it was asked (a catch-up capture)
+  is skipped, as in the report.
+- **Where it starts:** where the series already starts for that series, so a
+  new predictor version is scored over the same weeks as the one before it;
+  with no series yet, 13 weeks before the trace's last question. `--from` sets
+  it.
+- **A revision is a new row, never an overwrite.** When a later vintage of a
+  week's actual differs from the one its row saw, the week gets a row with
+  the next `revision`, the same prediction and the new actual and errors
+  (`note` `revised`); a withdrawn actual is a revision with no actual
+  (`withdrawn`). The latest revision of each week is the one that counts.
+- **Each row** carries the target, predictor version, the capture it was
+  scored after, the week, when it was asked, the forecast week, the
+  prediction, the actual and when that vintage became known, the model's and
+  climatology's errors, and the skill against climatology over the series up
+  to that week. Each new row is also emitted as `prediction.error` (with
+  `predictor`, `capture` and `revision`), and each scoring as
+  `prediction.scored`.
+
+From code, `sis.error_series.score_trace` scores a trace and
+`sis.error_series.as_steps(store.scored(), target=..., predictor=...)` turns
+the series into the steps `sis.model_error`'s triggers judge. Nothing acts on
+the series yet: wiring it to a cycle and a page is OMNI-197. The scheduled AWS
+run's artifact sync already uploads the file (`episodic*.jsonl`).
+
 ## Times and historical limits
 
 `event_time` places EIA's period date at midnight in `America/New_York`. That is
