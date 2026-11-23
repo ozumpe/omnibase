@@ -170,6 +170,41 @@ def _from_dict(data: dict[str, Any]) -> EpisodicEvent:
     return EpisodicEvent(**{k: v for k, v in data.items() if k in set(_FIELD_NAMES)})
 
 
+@dataclass(frozen=True)
+class ScoredWeek:
+    """One week a predictor was scored on, as the error series keeps it (OMNI-198).
+
+    The series is append-only: a later vintage of the actual is a new row with
+    the next ``revision``, never an overwrite, so what the trigger saw at any
+    time can be read back. ``revision`` 0 is the first scoring; a row whose
+    ``actual`` is None is a withdrawal of that week's value.
+    """
+
+    target: str                      # the series predicted
+    predictor: str                   # the predictor's version: sha256 of its source, 12 hex
+    capture: str                     # the trace's last capture when this row was scored
+    week: str                        # ISO: the last week the predictor was shown
+    at: str                          # ISO: when it was asked (that week's first known_at)
+    next_week: str                   # ISO: the week it forecast
+    predicted: float
+    actual: float | None             # the next week's value, the vintage this row saw
+    actual_known_at: str | None      # when that vintage became known
+    error: float | None              # predicted - actual
+    climatology: float | None
+    climatology_error: float | None  # climatology - actual
+    skill: float | None              # skill over this predictor's series up to this row
+    revision: int = 0
+    note: str = ""
+    ts: str = ""                     # when it was scored (wall clock)
+
+
+_SCORED_FIELDS: tuple[str, ...] = tuple(f.name for f in fields(ScoredWeek))
+
+
+def _scored_from_dict(data: dict[str, Any]) -> ScoredWeek:
+    return ScoredWeek(**{k: v for k, v in data.items() if k in set(_SCORED_FIELDS)})
+
+
 def summarize(events: list[EpisodicEvent]) -> dict[str, Any]:
     """Pure rollup used by every backend, so summaries are identical across them."""
     accepted = sum(1 for e in events if e.outcome in ACCEPTED_OUTCOMES)
@@ -238,6 +273,9 @@ class EpisodicStore(Protocol):
     # False when it kept the saved state for that reason.
     def save_state(self, key: str, value: dict[str, Any]) -> bool: ...
     def load_state(self, key: str) -> dict[str, Any] | None: ...
+    # The prediction-error series (OMNI-198): append-only, in the order scored.
+    def append_scored(self, rows: list[ScoredWeek]) -> None: ...
+    def scored(self) -> list[ScoredWeek]: ...
 
 
 class NullEpisodicStore:
@@ -258,6 +296,12 @@ class NullEpisodicStore:
     def load_state(self, key: str) -> dict[str, Any] | None:
         return None
 
+    def append_scored(self, rows: list[ScoredWeek]) -> None:
+        return None
+
+    def scored(self) -> list[ScoredWeek]:
+        return []
+
 
 class JsonlEpisodicStore:
     """Append-only JSON lines — the durable, zero-dependency default."""
@@ -270,6 +314,8 @@ class JsonlEpisodicStore:
         # Held around each read-compare-write of that file, by every process
         # that saves (OMNI-158). Separate, since the state file is replaced.
         self._lock_path = path.with_name(f"{path.stem}_state.lock")
+        # The prediction-error series (OMNI-198), its own append-only file.
+        self.scored_path = path.with_name(f"{path.stem}_scored.jsonl")
 
     def append(self, event: EpisodicEvent) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -332,6 +378,28 @@ class JsonlEpisodicStore:
     def summary(self) -> dict[str, Any]:
         return summarize(self.events())
 
+    def append_scored(self, rows: list[ScoredWeek]) -> None:
+        if not rows:
+            return
+        self.scored_path.parent.mkdir(parents=True, exist_ok=True)
+        # One write for the batch, so a crash leaves at most one torn last
+        # line, which scored() skips.
+        with self.scored_path.open("a", encoding="utf-8") as fh:
+            fh.write("".join(json.dumps(asdict(row)) + "\n" for row in rows))
+
+    def scored(self) -> list[ScoredWeek]:
+        if not self.scored_path.exists():
+            return []
+        out: list[ScoredWeek] = []
+        for line in self.scored_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                out.append(_scored_from_dict(json.loads(line)))
+            except (json.JSONDecodeError, TypeError):
+                continue  # a torn last line, as events() skips one
+        return out
+
 
 # DuckDB column types, keyed by field name. Asserted to match the dataclass so
 # the schema can't silently drift.
@@ -348,6 +416,15 @@ _DUCK_TYPES: dict[str, str] = {
     "baseline_sha": "VARCHAR",
 }
 assert tuple(_DUCK_TYPES) == _FIELD_NAMES, "DuckDB schema drifted from EpisodicEvent"
+
+_DUCK_SCORED_TYPES: dict[str, str] = {
+    "target": "VARCHAR", "predictor": "VARCHAR", "capture": "VARCHAR", "week": "VARCHAR",
+    "at": "VARCHAR", "next_week": "VARCHAR", "predicted": "DOUBLE", "actual": "DOUBLE",
+    "actual_known_at": "VARCHAR", "error": "DOUBLE", "climatology": "DOUBLE",
+    "climatology_error": "DOUBLE", "skill": "DOUBLE", "revision": "BIGINT", "note": "VARCHAR",
+    "ts": "VARCHAR",
+}
+assert tuple(_DUCK_SCORED_TYPES) == _SCORED_FIELDS, "DuckDB schema drifted from ScoredWeek"
 
 
 class DuckDBEpisodicStore:
@@ -372,6 +449,11 @@ class DuckDBEpisodicStore:
         # Latest-wins key/value state (e.g. persisted CEO brake state, L9).
         self._con.execute(
             "CREATE TABLE IF NOT EXISTS kv_state (key VARCHAR PRIMARY KEY, value VARCHAR)")
+        # The prediction-error series (OMNI-198). ``seq`` keeps the order rows
+        # were scored in, which ``ts`` alone cannot when a batch shares it.
+        # Quoted: ``at`` is an SQL keyword.
+        scored = ", ".join(f'"{name}" {dtype}' for name, dtype in _DUCK_SCORED_TYPES.items())
+        self._con.execute(f"CREATE TABLE IF NOT EXISTS scored_weeks (seq BIGINT, {scored})")
 
     def append(self, event: EpisodicEvent) -> None:
         cols = ", ".join(_FIELD_NAMES)
@@ -427,6 +509,23 @@ class DuckDBEpisodicStore:
         if not isinstance(parsed, dict):
             raise StateUnreadable(f"duckdb kv_state[{key!r}]: not an object")
         return parsed
+
+    def append_scored(self, rows: list[ScoredWeek]) -> None:
+        if not rows:
+            return
+        row = self._con.execute("SELECT COALESCE(MAX(seq), -1) FROM scored_weeks").fetchone()
+        first = int(row[0]) + 1 if row is not None else 0
+        cols = ", ".join(f'"{name}"' for name in ("seq", *_SCORED_FIELDS))
+        placeholders = ", ".join("?" for _ in range(len(_SCORED_FIELDS) + 1))
+        self._con.executemany(
+            f"INSERT INTO scored_weeks ({cols}) VALUES ({placeholders})",
+            [[first + i, *(getattr(item, name) for name in _SCORED_FIELDS)]
+             for i, item in enumerate(rows)])
+
+    def scored(self) -> list[ScoredWeek]:
+        cols = ", ".join(f'"{name}"' for name in _SCORED_FIELDS)
+        rows = self._con.execute(f"SELECT {cols} FROM scored_weeks ORDER BY seq").fetchall()
+        return [ScoredWeek(*row) for row in rows]
 
     def sql(self, query: str) -> list[tuple[Any, ...]]:
         """Run an ad-hoc analytical query against the `episodes` table."""

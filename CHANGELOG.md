@@ -20,6 +20,16 @@ release renames that heading to the new tag.
   2026-11-06 run of `sort` paid to judge one again), and its prompt carries
   the earlier reasons. Records from before this change have no
   `baseline_sha` and are not matched.
+- OMNI-198 (Phase B 4): the predictor's error series is kept. After each
+  capture, `scripts/capture_sensor.py` scores the live predictor on the weeks
+  that became scorable (`--no-score` skips it; `scripts/score_capture.py`
+  scores a trace on its own) and appends one row per week to the episodic
+  store (`runtime/episodic_scored.jsonl`, or duckdb's `scored_weeks`), with
+  the predictor version, capture, errors and running skill. Each week is
+  scored once per predictor version; a later vintage of its actual is a
+  revision row, never an overwrite. `sis/error_series.py` (STRICT);
+  `as_steps` feeds `sis.model_error`. `capture_sensor.py --help` now prints
+  help instead of capturing.
 - OMNI-225 (D5): held-out rotation. `scripts/build_fixture.py --rotate` stages
   the weeks after the held-out set as the new one and a training split that
   now covers the old one, as one draft for one promotion; its budget starts at

@@ -65,8 +65,11 @@ touch the code a rule is about. History (what changed when) belongs in
   that share no week, reset on firing: a window overlapping the last one
   counted, such as an outlier still inside it or an unchanged window ticked
   again, adds nothing, OMNI-221) and a minimum of scored weeks; skipped weeks never count,
-  and every threshold is an argument, per actor. Wiring them into `--loop`
-  is OMNI-197.
+  and every threshold is an argument, per actor. The series they judge is kept
+  after each capture (OMNI-198, `sis/error_series.py`, STRICT): each week
+  scored once per predictor version, appended to the episodic store, a later
+  vintage of an actual a revision row, never an overwrite; `as_steps` turns it
+  into their steps. Wiring them into `--loop` is OMNI-197.
   **The real sensor is `EIASensor`** (OMNI-33, `sis/adapters_real.py`): EIA's
   bulk file `PET.zip` (no key), five weekly series (PADD 5 gasoline stocks;
   California, Los Angeles, San Francisco and US retail prices) and, since
