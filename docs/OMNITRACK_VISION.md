@@ -566,6 +566,9 @@ never shown is not headroom a code change could capture.*
 window's MAE and a floor on its skill, separate rules and separate streaks, both sustained
 (over windows that share no week, OMNI-221) and both refusing to judge too few weeks.
 Wiring them to a cycle and a page is OMNI-197.*
+→ *The error series they judge is kept (OMNI-198, `sis/error_series.py`): scored after each
+capture, each week once per predictor version, in the episodic store, a revised actual a new
+row, never an overwrite.*
 
 That's a decision to be made case by case, actor by actor and project by project. My opinion is to optimize the implementation
 of a model over time based on historic values/timelines. The situation for each actor can change suddenly and drastically - 
