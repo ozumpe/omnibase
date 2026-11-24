@@ -26,7 +26,7 @@ from typing import Any
 
 import ray
 
-from sis import config, cost, episodic, gauntlet, holdout, llm, review, workbench
+from sis import config, cost, episodic, gauntlet, holdout, llm, review, verdict, workbench
 from sis import feature as feature_mod
 from sis.contract import REGISTERED_CONTRACTS, FeatureContract
 from sis.ports import Severity
@@ -172,7 +172,7 @@ def record_page_outcome(
 PENDING_PR_KEY = "pending_pr"
 
 
-def _earlier_rejections(store: episodic.EpisodicStore) -> list[dict[str, str]]:
+def _earlier_rejections(store: episodic.EpisodicStore) -> list[dict[str, Any]]:
     """What the episodic records say was rejected, and against which baseline.
 
     This box's records and earlier runs' (:func:`sis.holdout.recorded_events`),
@@ -321,6 +321,10 @@ def develop_result(judgment: Any, *, pr_id: str | None, contract: str | None
                               "contract": contract, "candidate_sha": judgment.version}
     if not judgment.switched:
         result["reason"] = judgment.reason
+        gate = ("harness" if getattr(judgment, "harness", False)
+                else judgment.verdict.gate if judgment.verdict is not None else "")
+        if gate:
+            result[verdict.KEY] = verdict.Verdict.of(gate, judgment.reason).to_dict()
     if judgment.verdict is not None:
         result["baseline_latency"] = judgment.verdict.baseline_p95
         result["candidate_latency"] = judgment.verdict.candidate_p95
@@ -663,13 +667,14 @@ def neutral_cycle_status(impl: Mapping[str, Any]) -> str | None:
 
     Neutral means spend recorded, no bug filed, no breaker count: a verdict
     that says nothing against the loop. The gate decides for "no change" and
-    "inconclusive" (``episodic.neutral_status``); the SWE decides for "no
-    gain", because the same "no improvement" reason is neutral only when no
-    feature is in progress (OMNI-138).
+    "inconclusive" (its typed verdict, OMNI-208); the SWE decides for "no
+    gain", because the same "no improvement" is neutral only when no feature
+    is in progress (OMNI-138).
     """
     if impl.get("passed"):
         return None
-    return episodic.neutral_status(impl.get("reason")) or (
+    judged = verdict.read(impl)
+    return (judged.neutral if judged else None) or (
         episodic.NO_GAIN if impl.get("no_gain") else None)
 
 
@@ -704,8 +709,8 @@ def cycle_summary(result: Mapping[str, Any]) -> str:
     else:
         reason = result.get("reason")
         if isinstance(reason, str) and reason:
-            gate = episodic.gate_from_reason(reason) or "gate unknown"
-            detail = f"{gate}: {' '.join(reason.split())}"
+            judged = verdict.read(result)
+            detail = f"{judged.gate if judged else 'gate unknown'}: {' '.join(reason.split())}"
         else:
             detail = "no reason recorded"
     if result.get("brakes_unpersisted"):
@@ -730,7 +735,7 @@ def cycle_summary(result: Mapping[str, Any]) -> str:
 
 
 def rejection_bug(
-    story_id: str, reason: str | None, *, pr_id: str | None = None
+    story_id: str, judged: verdict.Verdict | None, *, pr_id: str | None = None
 ) -> tuple[str | None, str]:
     """The reject gate of a rejected cycle, and the summary its bug is filed under. Pure.
 
@@ -739,7 +744,8 @@ def rejection_bug(
     the CEO weighs, and a harness fault filed as what it is (OMNI-37): the
     sandbox broke, the candidate was never judged.
     """
-    gate = episodic.gate_from_reason(reason)
+    gate = judged.gate if judged else None
+    reason = judged.detail if judged else None
     where = f"QA of {story_id} (PR {pr_id})" if pr_id else story_id
     if gate == "harness":
         headline = f"Infrastructure fault (sandbox) during {where} — the candidate was not judged"
@@ -755,7 +761,7 @@ def cycle_outcome(approved: bool, canary: dict[str, Any] | None) -> tuple[str, b
 
     Pure — no Ray, no I/O — per the project convention that decision logic is
     unit-testable without standing up a cluster (``evaluate_brakes``,
-    ``gate_from_reason``, ``loop.decide``). Returns ``(status, success,
+    ``verdict.read``, ``loop.decide``). Returns ``(status, success,
     canary_reason)``.
 
     Before OMNI-14, QA approval alone decided success; a live canary
@@ -779,13 +785,13 @@ def canary_neutral_status(canary: Mapping[str, Any] | None) -> str | None:
     """The neutral status a canary result maps to, or ``None``. Pure.
 
     A live canary whose paired latency interval could not tell (OMNI-50) is
-    neither a pass nor a rejection; it is read through the same
-    :func:`episodic.neutral_status` as QA's inconclusive benchmark, so the
-    two can never disagree about what is benign.
+    neither a pass nor a rejection; its typed verdict is read like QA's
+    inconclusive benchmark, so the two can never disagree about what is benign.
     """
     if canary is None or canary.get("canary_passed", True):
         return None
-    return episodic.neutral_status(canary.get("reason"))
+    judged = verdict.read(canary)
+    return judged.neutral if judged else None
 
 
 def run_cycle(
@@ -1054,6 +1060,7 @@ def run_cycle(
             known_contract["name"] = built["contract"]
             trip = _neutral()
             return _record({"status": episodic.NO_GAIN, "reason": built["reason"],
+                            verdict.KEY: built.get(verdict.KEY),
                             "candidate_sha": built["candidate_sha"],
                             "breaker_bug_id": _breaker_alarm(trip),
                             "economics": ray.get(ceo.economics.remote()),
@@ -1153,6 +1160,7 @@ def run_cycle(
             trip = _neutral()
             breaker_bug_id = _breaker_alarm(trip)
             return _record({"status": neutral_status, "reason": impl["reason"],
+                            verdict.KEY: impl.get(verdict.KEY),
                             "spec_id": spec_id, "story_id": story_id,
                             "candidate_sha": impl.get("candidate_sha"),
                             "baseline_sha": impl.get("baseline_sha"),
@@ -1161,7 +1169,7 @@ def run_cycle(
                             "provenance": ray.get(sm.provenance.remote())}, cost_usd)
 
         if not impl["passed"]:
-            gate, summary = rejection_bug(story_id, impl.get("reason"))
+            gate, summary = rejection_bug(story_id, verdict.read(impl))
             # The gate is passed so the CEO can weigh a correct-but-over-budget
             # rejection (``slo``, OMNI-24) below a wrong one. A retry cut off
             # too stops the run, with the reason a person needs (OMNI-219).
@@ -1181,7 +1189,7 @@ def run_cycle(
                      f"{impl['reason']}\nCost ${cost_usd:.4f}, charged. Filed as {bug_id}.")
             breaker_bug_id = _breaker_alarm(trip)
             return _record({"status": "error" if gate == "error" else "rolled_back",
-                            "reason": impl["reason"],
+                            "reason": impl["reason"], verdict.KEY: impl.get(verdict.KEY),
                             "spec_id": spec_id, "story_id": story_id,
                             "candidate_sha": impl.get("candidate_sha"),
                             "baseline_sha": impl.get("baseline_sha"),
@@ -1204,17 +1212,19 @@ def run_cycle(
                             "provenance": ray.get(sm.provenance.remote())}, cost_usd)
 
         # 6. Verify (QA + deterministic gauntlet).
-        approved, qa_reason = ray.get(qa.review.remote(story_id, impl["pr_id"], contract_name))
+        approved, qa_reason, qa_typed = ray.get(
+            qa.review.remote(story_id, impl["pr_id"], contract_name))
+        qa_verdict = verdict.from_dict(qa_typed)
 
         # QA re-measures, so it can land on a neutral verdict the SWE's run did not
         # (OMNI-41: an inconclusive benchmark). Same fact, same handling — spend
         # recorded, no bug, no breaker increment — or a noisy re-measurement would
         # file a bug against a candidate the SWE's run had just accepted.
-        qa_neutral = None if approved else episodic.neutral_status(qa_reason)
+        qa_neutral = None if approved or qa_verdict is None else qa_verdict.neutral
         if qa_neutral:
             trip = _neutral()
             breaker_bug_id = _breaker_alarm(trip)
-            return _record({"status": qa_neutral, "reason": qa_reason,
+            return _record({"status": qa_neutral, "reason": qa_reason, verdict.KEY: qa_typed,
                             "spec_id": spec_id, "story_id": story_id,
                             "pr_id": impl["pr_id"],
                             "candidate_sha": impl.get("candidate_sha"),
@@ -1242,6 +1252,7 @@ def run_cycle(
         if canary is not None and canary_neutral:
             trip = _neutral()
             return _record({"status": canary_neutral, "reason": canary.get("reason"),
+                            verdict.KEY: canary.get(verdict.KEY),
                             "spec_id": spec_id, "story_id": story_id,
                             "pr_id": impl["pr_id"],
                             "candidate_sha": impl.get("candidate_sha"),
@@ -1256,13 +1267,15 @@ def run_cycle(
         # A rejection keeps its reason and gate, as at the SWE stage (OMNI-56).
         reason = (canary_reason if status == "canary_rejected"
                   else qa_reason if status == "qa_rejected" else None)
+        judged = (verdict.read(canary) if status == "canary_rejected"
+                  else qa_verdict if status == "qa_rejected" else None)
         ray.get(pm.accept.remote(spec_id, satisfied=success))
-        trip = _outcome(success=success, gate=episodic.gate_from_reason(reason))
+        trip = _outcome(success=success, gate=judged.gate if judged else None)
         if status == "canary_rejected":
             bug_id = _file_bug(
                 f"Live canary rejected {story_id} (PR {impl['pr_id']}): {canary_reason}")
         elif status == "qa_rejected":
-            qa_gate, summary = rejection_bug(story_id, qa_reason, pr_id=impl["pr_id"])
+            qa_gate, summary = rejection_bug(story_id, qa_verdict, pr_id=impl["pr_id"])
             bug_id = _file_bug(summary)
             if qa_gate == "harness":
                 page(ws, store, Severity.WARNING, f"sandbox broken during QA of {story_id}",
@@ -1273,11 +1286,10 @@ def run_cycle(
 
         result = _record({
             "status": status,
-            # Feeds episodic.event_from_cycle_result's existing reason/reject_gate
-            # extraction (result.get("reason")) with zero new plumbing there —
-            # CanaryVerdict.reason (evaluate_canary) is a distinct failure family
-            # from the offline gauntlet's, so gate_from_reason grows matching names.
+            # The episodic row's reject_reason and, from the typed verdict,
+            # its reject_gate (OMNI-208).
             "reason": reason,
+            verdict.KEY: judged.to_dict() if judged else None,
             "bug_id": bug_id,
             "breaker_bug_id": breaker_bug_id,
             "spec_id": spec_id,
@@ -1338,7 +1350,7 @@ def run_cycle(
         except Exception as alarm_exc:  # noqa: BLE001
             print(f"[sis] WARNING: breaker alarm not raised: {alarm_exc}", file=sys.stderr)
             breaker_bug_id = None
-        return _record({"status": "error", "reason": reason,
+        return _record({"status": "error", **verdict.carried(reason, "error"),
                         "spec_id": seen.get("spec_id"), "story_id": seen.get("story_id"),
                         "pr_id": seen.get("pr_id"),
                         "candidate_sha": seen.get("candidate_sha"),

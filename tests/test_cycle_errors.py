@@ -256,7 +256,7 @@ def test_a_canary_set_by_a_cycle_that_then_fails_is_retired(handles: dict[str, A
         retire_canary=SimpleNamespace(remote=retire),
         file_bug=handles["DevOps"].file_bug)
     faked = {**handles, "SWE": _swe(_returns(_PASSED)),
-             "QA": SimpleNamespace(review=_returns((True, None))),
+             "QA": SimpleNamespace(review=_returns((True, None, None))),
              "DevOps": devops, "PM": SimpleNamespace(
                  refine_proposal=handles["PM"].refine_proposal,
                  accept=_raises("the document store is down"))}
@@ -304,7 +304,9 @@ def test_the_loop_goes_on_after_a_cycle_that_raised(handles: dict[str, Any]) -> 
         return next(outcomes).remote(*args, **kwargs)
 
     faked = {**handles, "SWE": _swe(SimpleNamespace(remote=implement)),
-             "QA": SimpleNamespace(review=_returns((False, "benchmark inconclusive: noise")))}
+             "QA": SimpleNamespace(review=_returns((False, "benchmark inconclusive: noise", {
+                 "gate": "benchmark_inconclusive", "kind": "neutral",
+                 "detail": "benchmark inconclusive: noise"})))}
     results = loop.run_loop(
         lambda: loop.Tick(breaker_open=False, budget_ok=True, work=loop.Work("t", "b")),
         lambda work: org.run_cycle(faked, work.title, work.body),

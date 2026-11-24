@@ -144,6 +144,9 @@ class CanaryVerdict:
     latency_ratio: float | None = None
     latency_ci_low: float | None = None
     latency_ci_high: float | None = None
+    # The episodic name of the canary gate that refused it (OMNI-208):
+    # "canary_regression", "canary_inconclusive", ... Empty on a pass.
+    gate: str = ""
 
 
 def _violations(
@@ -280,7 +283,8 @@ def evaluate_canary(
     paired = list(pairs) if pairs is not None else (
         _shadow_pairs(samples) if mode is CanaryMode.SHADOW else None)
 
-    def verdict(passed: bool, reason: str, *, violations: int = 0, disagreements: int = 0,
+    def verdict(passed: bool, reason: str, *, gate: str = "",
+                violations: int = 0, disagreements: int = 0,
                 inconclusive: bool = False, ratio: tuple[float, float, float] | None = None,
                 ) -> CanaryVerdict:
         return CanaryVerdict(
@@ -288,7 +292,7 @@ def evaluate_canary(
             invariant_violations=violations, response_disagreements=disagreements,
             baseline_p95=b_p95, baseline_p99=b_p99,
             candidate_p95=c_p95, candidate_p99=c_p99,
-            passed=passed, reason=reason, inconclusive=inconclusive,
+            passed=passed, reason=reason, inconclusive=inconclusive, gate=gate,
             baseline_errors=baseline_errors, candidate_errors=candidate_errors,
             latency_ratio=ratio[0] if ratio else None,
             latency_ci_low=ratio[1] if ratio else None,
@@ -305,7 +309,7 @@ def evaluate_canary(
             False,
             f"insufficient evidence: {thinnest} observations, need {min_samples} "
             "(a percentile over a handful of requests is not a measurement)",
-        )
+            gate="canary_evidence")
 
     # A shadow window that lost its baselines is a harness fault, not a verdict on
     # the candidate — say so, the way the gauntlet's missing-test-suite reason
@@ -314,8 +318,7 @@ def evaluate_canary(
         return verdict(
             False,
             "harness: SHADOW mode sample is missing its baseline_response — "
-            "the shadow dispatcher recorded only one side",
-        )
+            "the shadow dispatcher recorded only one side", gate="harness")
 
     # --- Gate 2: error rate (hard) ---
     # Rates, not counts: the two sides need not have served as many calls
@@ -327,8 +330,7 @@ def evaluate_canary(
             False,
             f"live error rate: candidate failed {candidate_errors} of "
             f"{len(candidate_latencies)} calls ({c_rate:.1%}), baseline "
-            f"{baseline_errors} of {len(baseline_latencies)} ({b_rate:.1%})",
-        )
+            f"{baseline_errors} of {len(baseline_latencies)} ({b_rate:.1%})", gate="canary_errors")
 
     # --- Gate 3: correctness (hard) ---
     violations, first_broken = _violations(invariants, samples)
@@ -337,8 +339,7 @@ def evaluate_canary(
             False,
             f"invariant violated: {first_broken} ({violations} of "
             f"{len(samples) * max(len(invariants), 1)} checks failed)",
-            violations=violations,
-        )
+            violations=violations, gate="canary_invariant")
 
     # --- Gate 4: response agreement (hard, SHADOW only) ---
     disagreements = _disagreements(samples) if mode is CanaryMode.SHADOW else 0
@@ -347,8 +348,7 @@ def evaluate_canary(
             False,
             f"response disagreement: {disagreements} of {len(samples)} sampled "
             "requests got a different answer from the candidate",
-            disagreements=disagreements,
-        )
+            disagreements=disagreements, gate="canary_disagreement")
 
     # --- Gate 5: performance ---
     if paired is not None:
@@ -364,8 +364,7 @@ def evaluate_canary(
             return verdict(
                 False,
                 f"live {label} regression: candidate {candidate:.6f}s vs baseline "
-                f"{baseline:.6f}s (need <= {baseline * ratio:.6f}s)",
-            )
+                f"{baseline:.6f}s (need <= {baseline * ratio:.6f}s)", gate="canary_regression")
 
     return verdict(True, f"canary passed on {len(samples)} live samples")
 
@@ -389,9 +388,11 @@ def _paired_latency(
             True, f"canary passed on {samples} live samples ({evidence})", ratio=ratio)
     if d.verdict is BenchmarkVerdict.INCONCLUSIVE:
         return verdict(
-            False, f"live latency inconclusive: {evidence}", inconclusive=True, ratio=ratio)
+            False, f"live latency inconclusive: {evidence}", inconclusive=True, ratio=ratio,
+            gate="canary_inconclusive")
     if d.verdict is BenchmarkVerdict.UNMEASURABLE:
         return verdict(
-            False, f"insufficient evidence: {d.samples} usable latency pairs")
+            False, f"insufficient evidence: {d.samples} usable latency pairs",
+            gate="canary_evidence")
     return verdict(
-        False, f"live latency regression: {evidence}", ratio=ratio)
+        False, f"live latency regression: {evidence}", ratio=ratio, gate="canary_regression")
