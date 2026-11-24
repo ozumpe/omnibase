@@ -18,7 +18,7 @@ import hashlib
 import pathlib
 import sys
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
@@ -804,11 +804,15 @@ class SWE(Role):
     def implement(
         self, story_id: str, contract_name: str | None = None,
         output_limit: int | None = None,
+        earlier: Sequence[Mapping[str, str]] = (),
     ) -> dict[str, Any]:
         """One step of the story: propose, judge, commit, and open the PR when due.
 
         *output_limit* overrides ``proposer.output_limit`` for this step's
         proposal: the driver's one retry of a cut-off proposal (OMNI-219).
+        *earlier* is what earlier runs' logs say was rejected
+        (:func:`sis.feature.earlier_rejections`): a new box remembers it as if
+        it had judged it itself (OMNI-189).
 
         **What the proposal cost is never lost** (OMNI-55, M16). The cost is
         known only here, and the driver learns it from the return value. So
@@ -821,7 +825,7 @@ class SWE(Role):
         paid: dict[str, Any] = {}
         proposer.reset_last_usage()  # a step that asks for no proposal reports none
         try:
-            result = self._implement(story_id, contract_name, paid, output_limit)
+            result = self._implement(story_id, contract_name, paid, output_limit, earlier)
         except Exception as exc:  # noqa: BLE001 - reported with its cost, never lost
             if not paid:
                 raise
@@ -867,7 +871,7 @@ class SWE(Role):
 
     def _implement(
         self, story_id: str, contract_name: str | None, paid: dict[str, Any],
-        output_limit: int | None = None,
+        output_limit: int | None = None, earlier: Sequence[Mapping[str, str]] = (),
     ) -> dict[str, Any]:
         # What this target is judged by — reference, inputs, margin. Resolved
         # FIRST, before any artifact is touched: a bad contract name is a
@@ -943,6 +947,16 @@ class SWE(Role):
             feature = feature_mod.with_note(
                 feature_mod.new_feature(feature_mod.feature_branch(story_id), story_id),
                 f"the current module fails: {standing.reason}")
+        baseline_sha = _sha(judged_against)
+        if not revising and (feature is None or not feature["steps"]):
+            # A step from the base: what earlier runs rejected against this
+            # same base is remembered, though this process never judged it.
+            # An ephemeral box starts with an empty SelfModel (OMNI-189).
+            seeded = feature_mod.with_earlier_runs(
+                feature or feature_mod.new_feature(feature_mod.feature_branch(story_id), story_id),
+                earlier, spec.name, baseline_sha)
+            if feature is not None or seeded["rejected"]:
+                feature = seeded
         # sandboxed, not in-process
         baseline = (gauntlet.measure_baseline(judged_against, contract=spec)
                     if isinstance(spec, contract.OptimizationContract) else 0.0)
@@ -979,17 +993,16 @@ class SWE(Role):
         paid.update(candidate_sha=candidate_sha, cost=cost_usd)
         # The same code against the same baseline was judged already: its verdict
         # stands, without a second run (OMNI-127, L46). The proposal was paid for.
-        baseline_sha = _sha(judged_against)
-        earlier = feature_mod.rejected_before(feature, candidate_sha, baseline_sha)
+        judged_before = feature_mod.rejected_before(feature, candidate_sha, baseline_sha)
         if revising and candidate_sha == _sha(current_source):
             # The head the review sent back, unchanged: nothing was revised.
             report = gauntlet.Result(
                 passed=False, reason="no change: the revision is identical to the head "
                                      "the review sent back")
-        elif earlier is not None:
+        elif judged_before is not None:
             ray.get(self._ws.emit.remote("candidate.resubmitted", story_id=story_id,
-                                         candidate_sha=candidate_sha, reason=earlier))
-            report = gauntlet.Result(passed=False, reason=feature_mod.resubmitted(earlier))
+                                         candidate_sha=candidate_sha, reason=judged_before))
+            report = gauntlet.Result(passed=False, reason=feature_mod.resubmitted(judged_before))
         else:
             # Benchmark the candidate against the source the cycle is based on (the
             # merged target), not the stale local file — see KNOWN_ISSUES.md H1.
@@ -1008,8 +1021,9 @@ class SWE(Role):
                 # code at the base, where nothing was remembered (OMNI-127).
                 feature = feature_mod.new_feature(
                     feature_mod.feature_branch(story_id), story_id)
-            feature = (feature_mod.with_note(feature, f"resubmitted, rejected again: {earlier}")
-                       if earlier is not None else
+            feature = (feature_mod.with_note(feature,
+                                             f"resubmitted, rejected again: {judged_before}")
+                       if judged_before is not None else
                        feature_mod.with_rejection(feature, candidate_sha, baseline_sha,
                                                   report.reason))
             if (feature["steps"] and not revising
@@ -1024,6 +1038,9 @@ class SWE(Role):
             return {"passed": False, "reason": report.reason, "pr_id": None,
                     "cost_usd": cost_usd, "candidate_sha": candidate_sha,
                     "contract": spec.name, "model": model,
+                    # What it was judged against, for a later run on another box
+                    # (OMNI-189). Not a revision's: its verdict answered a review.
+                    "baseline_sha": None if revising else baseline_sha,
                     # Nothing beats the base: the target has converged (OMNI-138).
                     "no_gain": feature_mod.finds_no_gain(started, report.reason)}
 

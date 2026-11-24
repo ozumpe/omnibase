@@ -294,7 +294,8 @@ A scheduled run does this itself, and ends before any spend if it fails
 (OMNI-177).
 
 The holdout budget (OMNI-207) counts judgements across runs from the episodic
-logs, so fetch the earlier runs' logs too, or a fresh box counts from zero:
+logs, so fetch the earlier runs' logs too, or a fresh box counts from zero
+(and judges again what earlier runs rejected, OMNI-189):
 
 ```bash
 aws s3 sync "s3://$ARTIFACTS_BUCKET/runs/" runtime/history/ --exclude '*' \

@@ -13,6 +13,13 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+- OMNI-189: a new box remembers what earlier runs rejected. A rejected step's
+  episodic record now carries `baseline_sha`, and each step is handed the
+  rejections in this box's log and in `runtime/history/`. A step from the same
+  base no longer re-judges a candidate an earlier run rejected (the
+  2026-11-06 run of `sort` paid to judge one again), and its prompt carries
+  the earlier reasons. Records from before this change have no
+  `baseline_sha` and are not matched.
 - OMNI-198 (Phase B 4): the predictor's error series is kept. After each
   capture, `scripts/capture_sensor.py` scores the live predictor on the weeks
   that became scorable (`--no-score` skips it; `scripts/score_capture.py`

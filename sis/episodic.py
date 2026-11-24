@@ -139,6 +139,11 @@ class EpisodicEvent:
     # against. None for a contract with no held-out episodes, and for every
     # record that is not a cycle (a human's merge, a develop judgment).
     holdout_digest: str | None = None
+    # The short sha of the source a rejected candidate was judged against
+    # (OMNI-189): with candidate_sha, what lets a later run on a new box know
+    # the same code was already rejected against the same baseline. None for
+    # everything else.
+    baseline_sha: str | None = None
 
     @staticmethod
     def new_cycle_id() -> str:
@@ -408,6 +413,7 @@ _DUCK_TYPES: dict[str, str] = {
     "input_tokens": "BIGINT", "output_tokens": "BIGINT", "cache_creation_tokens": "BIGINT",
     "cache_read_tokens": "BIGINT", "output_limit": "BIGINT", "stop_reason": "VARCHAR",
     "holdout_digest": "VARCHAR",
+    "baseline_sha": "VARCHAR",
 }
 assert tuple(_DUCK_TYPES) == _FIELD_NAMES, "DuckDB schema drifted from EpisodicEvent"
 
@@ -744,6 +750,7 @@ def event_from_cycle_result(
         output_limit=_opt_count(usage.get("output_limit")),
         stop_reason=_opt_str(usage.get("stop_reason")),
         holdout_digest=_opt_str(result.get("holdout_digest")),
+        baseline_sha=_opt_str(result.get("baseline_sha")),
     )
 
 

@@ -85,3 +85,46 @@ def test_a_rejection_at_the_base_is_remembered_and_its_resubmission_not_rerun(
     assert rerun[0]["candidate_sha"] == first["candidate_sha"] == second["candidate_sha"]
     attempts = ray.get(sm.feature.remote(name))["attempts"]
     assert len(attempts) == 2 and attempts[1].startswith("resubmitted")
+
+
+def test_a_new_box_does_not_judge_again_what_an_earlier_run_rejected(
+    handles: dict[str, Any], workdir: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # OMNI-189: an ephemeral box starts with an empty SelfModel. The 2026-11-06
+    # run of `sort` paid to judge again a candidate the 2026-10-31 run had
+    # rejected against the same base: only the episodic log remembered it.
+    from sis import episodic, holdout
+
+    name = _register(handles, workdir, "sod_new_box")
+    sm, ws = handles["SelfModel"], handles["Workspace"]
+    earlier_box = episodic.JsonlEpisodicStore(workdir / "box1" / "episodic.jsonl")
+    monkeypatch.setattr(episodic, "get_episodic_store", lambda kind=None: earlier_box)
+    monkeypatch.setattr(holdout, "HISTORY_DIR", workdir / "no-history-yet")
+
+    # Each rejection counts toward the breaker; the runs here are not about it.
+    ray.get(handles["CEO"].reset_breaker.remote())
+    first = org.run_cycle(handles, "Speed up divisor-sum", "Too slow; same results.",
+                          contract_name=name)
+    assert first["status"] == "rolled_back", first.get("reason")
+    assert first["baseline_sha"], "the log says what it was judged against"
+
+    # The next run, on a new box: an empty SelfModel and store, and the
+    # earlier box's log fetched into runtime/history (OMNI-207).
+    ray.get(sm.set_feature.remote(name, None))
+    ray.get(sm.set_plan.remote(name, None))
+    new_box = episodic.JsonlEpisodicStore(workdir / "box2" / "episodic.jsonl")
+    monkeypatch.setattr(episodic, "get_episodic_store", lambda kind=None: new_box)
+    monkeypatch.setattr(holdout, "HISTORY_DIR", workdir / "box1")
+    ray.get(handles["CEO"].reset_breaker.remote())
+
+    second = org.run_cycle(handles, "Speed up divisor-sum", "Too slow; same results.",
+                           contract_name=name)
+    assert second["candidate_sha"] == first["candidate_sha"]
+    assert second["reason"].startswith(first["reason"])
+    assert "resubmitted" in second["reason"], "the same code is not judged again"
+    rerun = [e for e in ray.get(ws.events.remote()) if e.get("event") == "candidate.resubmitted"
+             and e.get("story_id") == second["story_id"]]
+    assert len(rerun) == 1, rerun
+    # The proposer's prompt had last run's reason too.
+    attempts = ray.get(sm.feature.remote(name))["attempts"]
+    assert attempts[0] == f"rejected in an earlier run: {first['reason']}"
