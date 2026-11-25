@@ -208,6 +208,91 @@ fi
 """
 
 
+# Where the canonical EIA trace lives once captures are scheduled (OMNI-214).
+TRACE_KEY = "traces/eia.jsonl"
+TRACE_PATH = "runtime/sensor_traces/eia.jsonl"
+
+# Reads the trace back through the door after a capture; inline, because the
+# box runs a release tag and this must not need a script newer than it.
+_READ_BACK = ("from sis import sensor_trace; from sis.adapters_real import EIA_RULES, EIA_TRACE; "
+              "r, a = sensor_trace.read_back(sensor_trace.load(EIA_TRACE), EIA_RULES); "
+              "print(len(r), 'readings and', len(a), 'stated absences read back')")
+
+
+def trace_lines(run_id: str) -> str:
+    """Shell that captures EIA's week into the bucket's trace (OMNI-214). Never ends the run.
+
+    The canonical trace lives in the artifacts bucket under :data:`TRACE_KEY`
+    and holds the licensed LA spot series, so it never leaves the bucket and
+    the box: the log gets counts only. The trace is fetched with its ETag,
+    ``scripts/capture_sensor.py`` appends the week (and, from the release that
+    has OMNI-198, scores it), the trace is read back through the door, and it
+    is written back only if the bucket still holds the version that was read
+    (``--if-match``), so two writers cannot interleave. Any failure leaves the
+    bucket's trace as it was, says why in the log and pages through the SNS
+    topic: the loop's run goes on, since its contract judges on its own
+    fixtures. Without ARTIFACTS_BUCKET (not an AWS box) it does nothing.
+    """
+    if not _RUN_ID.match(run_id):
+        raise ValueError(f"run id {run_id!r} is not YYYYMMDDTHHMMSSZ")
+    return f"""if [ -n "${{ARTIFACTS_BUCKET:-}}" ]; then
+  capture_failed() {{
+    echo "[scheduled] sensor capture: $1; the bucket's trace is unchanged" | tee -a "$log"
+    if [ -n "${{SIS_NOTIFY_SNS_TOPIC_ARN:-}}" ]; then
+      aws sns publish --topic-arn "$SIS_NOTIFY_SNS_TOPIC_ARN" \\
+          --subject "sis: the weekly EIA capture failed" \\
+          --message "Run {run_id}: $1. The loop's run goes on." >/dev/null 2>&1 \\
+        || echo "[scheduled] sensor capture: the page could not be sent" | tee -a "$log"
+    fi
+  }}
+  capture_trace() {{
+    local err="$HOME/.sis-trace.err" etag before code
+    mkdir -p "$(dirname {TRACE_PATH})"
+    if ! etag=$(aws s3api head-object --bucket "$ARTIFACTS_BUCKET" --key {TRACE_KEY} \\
+        --query ETag --output text 2>"$err"); then
+      if grep -qE "Not Found|404" "$err"; then
+        capture_failed "no trace at s3://$ARTIFACTS_BUCKET/{TRACE_KEY} yet: \\
+seed it once from the canonical trace (docs/SENSOR_RUNBOOK.md)"
+      else
+        capture_failed "could not read the bucket's trace: $(tr '\\n' ' ' < "$err" | tail -c 300)"
+      fi
+      return 0
+    fi
+    if ! aws s3api get-object --bucket "$ARTIFACTS_BUCKET" --key {TRACE_KEY} \\
+        --if-match "$etag" {TRACE_PATH} >/dev/null 2>"$err"; then
+      capture_failed "could not fetch the trace: $(tr '\\n' ' ' < "$err" | tail -c 300)"
+      return 0
+    fi
+    before=$(wc -l < {TRACE_PATH})
+    poetry run python scripts/capture_sensor.py 2>&1 | sed -u 's/^/[capture] /' | tee -a "$log"
+    code=${{PIPESTATUS[0]}}
+    if ! poetry run python -c "{_READ_BACK}" >"$err" 2>&1; then
+      capture_failed "the trace does not read back after the capture: \\
+$(tail -n 1 "$err" | tail -c 300)"
+      return 0
+    fi
+    echo "[scheduled] sensor capture: $(cat "$err")" | tee -a "$log"
+    if [ "$(wc -l < {TRACE_PATH})" -le "$before" ]; then
+      capture_failed "capture_sensor.py (exit $code) appended nothing"
+      return 0
+    fi
+    if ! aws s3api put-object --bucket "$ARTIFACTS_BUCKET" --key {TRACE_KEY} \\
+        --body {TRACE_PATH} --if-match "$etag" >/dev/null 2>"$err"; then
+      capture_failed "could not write the trace back (changed in the bucket since it was read?): \\
+$(tr '\\n' ' ' < "$err" | tail -c 300)"
+      return 0
+    fi
+    echo "[scheduled] sensor capture: $before -> $(wc -l < {TRACE_PATH}) trace lines," \\
+      "written back to the bucket" | tee -a "$log"
+    if [ "$code" -ne 0 ]; then
+      capture_failed "capture_sensor.py exited $code (what it accepted was kept and written back)"
+    fi
+  }}
+  capture_trace
+fi
+"""
+
+
 def runner_script(cfg: RunConfig) -> str:
     """The script tmux runs as ``ubuntu``: AWS_RUN.md steps 5a to 5c.
 
@@ -220,7 +305,7 @@ def runner_script(cfg: RunConfig) -> str:
         flags += f" --brakes-breaker-threshold {cfg.breaker_threshold}"
     flags += f" --loop --loop-max-cycles {cfg.max_cycles}"
     start, end = start_marker(cfg.run_id), exit_marker(cfg.run_id)
-    fetch = private_fixture_lines(cfg.contract, end) + history_lines(end)
+    fetch = private_fixture_lines(cfg.contract, end) + history_lines(end) + trace_lines(cfg.run_id)
     return f"""#!/bin/bash
 # Written by scripts/aws_scheduled_run.py (OMNI-168) for run {cfg.run_id}. No secrets.
 set -o pipefail

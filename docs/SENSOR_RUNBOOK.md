@@ -24,12 +24,34 @@ It extracts declared series, sanitises their records, and appends to
 Confluence credentials. Run captures explicitly; neither selecting the sensor
 backend nor starting `main.py` schedules them.
 
-**Today a person runs the capture once a week**, after EIA's Wednesday
-release, on the one machine that holds the canonical trace. A missed week is
-not lost (the next capture still records the values, known at its own fetch
-time), but the prediction-error report cannot score a week whose next value
-was already known when it was asked (M34). Scheduling the capture, with the
-trace kept in the artifacts bucket, is [OMNI-214](https://olafzumpe.atlassian.net/browse/OMNI-214).
+**The canonical trace is the artifacts bucket's** `traces/eia.jsonl`
+(OMNI-214), and the weekly scheduled AWS run captures into it, on Friday,
+after EIA's Wednesday release ([AWS_RUN.md](AWS_RUN.md#scheduled-runs-omni-168-omni-169)).
+Before its preflight the run fetches the trace with its ETag, runs
+`scripts/capture_sensor.py`, reads the trace back through the door, and writes
+it back only if the bucket still holds the version it read (`--if-match`), so
+two writers cannot interleave. The log shows line counts, never values. A
+capture that fails, appends nothing, or cannot be written back leaves the
+bucket's trace as it was and pages through the SNS topic; the loop's run goes
+on, since its contract judges on its own fixtures. A missed week is not lost
+(the next capture still records the values, known at its own fetch time), but
+the prediction-error report cannot score a week whose next value was already
+known when it was asked (M34).
+
+**Seed the bucket once**, from the machine that held the canonical trace until
+now, before the first scheduled capture (S3 versioning keeps every later
+write):
+
+```bash
+aws s3 cp runtime/sensor_traces/eia.jsonl \
+  "s3://$ARTIFACTS_BUCKET/traces/eia.jsonl" --if-none-match '*'
+```
+
+After that a local trace is a mirror: copy it down
+(`aws s3 cp "s3://$ARTIFACTS_BUCKET/traces/eia.jsonl" runtime/sensor_traces/eia.jsonl`)
+and don't capture into it by hand, or the bucket and the copy part ways. A
+capture you must run by hand goes through the bucket: fetch, capture, and
+upload with `aws s3api put-object … --if-match <the ETag you fetched>`.
 
 | Bulk-file series | Observation | Published unit |
 |---|---|---|

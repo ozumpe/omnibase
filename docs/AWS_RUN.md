@@ -584,7 +584,11 @@ On either kind of box it waits for SSM, and starts step 5c's loop in a tmux
 session `sis` with one `ssm send-command`: the environment of step 5a, then
 the private fixtures of a contract that has them, fetched and checked as in
 step 5a (OMNI-177), then the earlier runs' episodic logs for the holdout
-budget (OMNI-207), then `check_connections.py --deep` (a failure of any
+budget (OMNI-207), then this week's EIA capture into the bucket's canonical
+trace (`traces/eia.jsonl`, OMNI-214; a capture that fails pages and leaves the
+trace as it was, and the run goes on: see
+[SENSOR_RUNBOOK.md](SENSOR_RUNBOOK.md#capture-eia-observations)), then
+`check_connections.py --deep` (a failure of any of the others
 ends the run before any spend; it checks the Anthropic key and model too,
 OMNI-82), then
 `main.py … --loop --loop-max-cycles 10`, teed to `runtime/loop.log` between a

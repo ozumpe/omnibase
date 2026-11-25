@@ -94,11 +94,54 @@ case "$1 $2" in
     src="$FAKE_BUCKET/${3#s3://*/}"
     if [ ! -d "$src" ]; then echo "fatal error: no such prefix" >&2; exit 1; fi
     mkdir -p "$4" && cp -R "$src/." "$4" ;;
+  "s3api "*)
+    # The bucket's trace (OMNI-214): an ETag per content, --if-match honoured.
+    op=$2; shift 2; key="" match="" body="" out=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --bucket|--query|--output) shift 2 ;;
+        --key) key=$2; shift 2 ;;
+        --if-match) match=$2; shift 2 ;;
+        --body) body=$2; shift 2 ;;
+        *) out=$1; shift ;;
+      esac
+    done
+    echo "aws s3api $op $key" >> "$HOME/calls"
+    obj="$FAKE_BUCKET/$key"
+    tag() { echo "\"$(md5sum < "$obj" | cut -c1-32)\""; }
+    if [ ! -f "$obj" ]; then
+      echo "An error occurred (404) when calling the HeadObject operation: Not Found" >&2
+      exit 254
+    fi
+    if [ "$op" = put-object ] && [ -n "${FAKE_RACE:-}" ]; then echo "$FAKE_RACE" >> "$obj"; fi
+    if [ -n "$match" ] && [ "$match" != "$(tag)" ]; then
+      echo "An error occurred (PreconditionFailed) when calling the $op operation" >&2
+      exit 254
+    fi
+    case "$op" in
+      head-object) tag ;;
+      get-object) cp "$obj" "$out" ;;
+      put-object) cp "$body" "$obj" ;;
+    esac ;;
+  "sns publish") echo "aws $*" >> "$HOME/calls" ;;
   *) echo "unexpected aws $*" >&2; exit 2 ;;
 esac
 """
 _FAKE_POETRY = """#!/bin/bash
 echo "poetry $*" >> "$HOME/calls"
+trace=runtime/sensor_traces/eia.jsonl
+case "$*" in
+  *capture_sensor.py*)
+    if [ -z "${FAKE_NOTHING_NEW:-}" ]; then
+      echo '{"kind": "capture", "fetched_at": "2026-11-27T15:00:00+00:00"}' >> "$trace"
+      echo '{"kind": "reading", "value": 4.321}' >> "$trace"
+    fi
+    echo "capture: 1 new value"
+    exit "${FAKE_CAPTURE_EXIT:-0}" ;;
+  *"run python -c"*)
+    if [ -n "${FAKE_UNREADABLE:-}" ]; then echo "TraceRefused: line 3 is not JSON" >&2; exit 1; fi
+    echo "$(wc -l < "$trace") readings and 0 stated absences read back" ;;
+esac
 """
 
 
@@ -135,11 +178,12 @@ def _box(tmp_path: pathlib.Path, *, uploaded: dict[str, bytes] | None,
 
 
 def _run_box(tmp_path: pathlib.Path, home: pathlib.Path, contract: str = "ca_price_wholesale",
-             bucket: str | None = "the-bucket") -> tuple[int, str, str]:
+             bucket: str | None = "the-bucket",
+             extra: dict[str, str] | None = None) -> tuple[int, str, str]:
     script = tmp_path / "runner.sh"
     script.write_text(sr.runner_script(_cfg(contract=contract)))
     env = {"HOME": str(home), "PATH": f"{tmp_path / 'bin'}:{os.environ['PATH']}",
-           "FAKE_BUCKET": str(tmp_path / "bucket")}
+           "FAKE_BUCKET": str(tmp_path / "bucket"), **(extra or {})}
     if bucket is not None:
         env["ARTIFACTS_BUCKET"] = bucket
     done = subprocess.run(["bash", str(script)], env=env, capture_output=True, text=True,
@@ -219,6 +263,88 @@ def test_without_a_bucket_no_earlier_logs_are_fetched(tmp_path: pathlib.Path) ->
     code, log, calls = _run_box(tmp_path, home, contract="roman", bucket=None)
     assert code == 0, log
     assert "s3 sync" not in calls
+
+
+# The bucket's trace before this week's capture: a licensed value the log must never show.
+_TRACE = b'{"kind": "capture", "fetched_at": "2026-11-20T15:00:00+00:00"}\n' \
+         b'{"kind": "reading", "value": 9.876}\n'
+_TOPIC = {"SIS_NOTIFY_SNS_TOPIC_ARN": "arn:aws:sns:us-east-1:1:alerts"}
+
+
+def _seed(tmp_path: pathlib.Path) -> pathlib.Path:
+    trace = tmp_path / "bucket" / "traces" / "eia.jsonl"
+    trace.parent.mkdir(parents=True)
+    trace.write_bytes(_TRACE)
+    return trace
+
+
+def test_the_weekly_capture_appends_to_the_buckets_trace(tmp_path: pathlib.Path) -> None:
+    # OMNI-214: the bucket's trace is canonical; the run captures the week into it.
+    home = _box(tmp_path, uploaded=None, indexed=None)
+    trace = _seed(tmp_path)
+    code, log, calls = _run_box(tmp_path, home, contract="roman", extra=_TOPIC)
+    assert code == 0, log
+    assert trace.read_bytes().startswith(_TRACE) and trace.read_bytes().count(b"\n") == 4
+    assert (home / "omnibase" / sr.TRACE_PATH).read_bytes() == trace.read_bytes()
+    assert "[capture] capture: 1 new value" in log
+    assert "4 readings and 0 stated absences read back" in log
+    assert "2 -> 4 trace lines, written back to the bucket" in log
+    # Fetched with its ETag, written back only if unchanged, before the preflight.
+    assert calls.index("s3api get-object traces/eia.jsonl") < calls.index("capture_sensor.py")
+    assert calls.index("s3api put-object traces/eia.jsonl") < calls.index("check_connections.py")
+    assert "sns publish" not in calls
+    # The licensed series stays in the bucket: the log carries counts only.
+    assert "9.876" not in log and "4.321" not in log
+
+
+@pytest.mark.parametrize("extra, says", [
+    ({"FAKE_UNREADABLE": "1"}, "the trace does not read back after the capture: TraceRefused"),
+    ({"FAKE_NOTHING_NEW": "1"}, "capture_sensor.py (exit 0) appended nothing"),
+    ({"FAKE_RACE": "another writer"}, "could not write the trace back"),
+], ids=["unreadable", "nothing-appended", "changed-meanwhile"])
+def test_a_failed_capture_pages_and_leaves_the_buckets_trace_alone(
+        tmp_path: pathlib.Path, extra: dict[str, str], says: str) -> None:
+    home = _box(tmp_path, uploaded=None, indexed=None)
+    trace = _seed(tmp_path)
+    code, log, calls = _run_box(tmp_path, home, contract="roman", extra={**_TOPIC, **extra})
+    assert says in log and "the bucket's trace is unchanged" in log
+    raced = extra.get("FAKE_RACE")
+    assert trace.read_bytes() == _TRACE + (f"{raced}\n".encode() if raced else b"")
+    assert "aws sns publish --topic-arn arn:aws:sns:us-east-1:1:alerts" in calls
+    assert f"Run {RUN}: " in calls
+    # The loop's run goes on: its contract judges on its own fixtures.
+    assert code == 0, log
+    assert "main.py --contract roman" in calls
+
+
+def test_a_capture_that_exits_1_is_kept_and_still_pages(tmp_path: pathlib.Path) -> None:
+    # capture_sensor.py keeps what it accepted when it refuses a value.
+    home = _box(tmp_path, uploaded=None, indexed=None)
+    trace = _seed(tmp_path)
+    code, log, calls = _run_box(tmp_path, home, contract="roman",
+                                extra={**_TOPIC, "FAKE_CAPTURE_EXIT": "1"})
+    assert code == 0, log
+    assert trace.read_bytes().count(b"\n") == 4
+    assert "capture_sensor.py exited 1 (what it accepted was kept and written back)" in log
+    assert "sns publish" in calls
+
+
+def test_an_unseeded_bucket_says_how_to_seed_it(tmp_path: pathlib.Path) -> None:
+    home = _box(tmp_path, uploaded=None, indexed=None)
+    code, log, calls = _run_box(tmp_path, home, contract="roman")
+    assert code == 0, log
+    assert "no trace at s3://the-bucket/traces/eia.jsonl yet: seed it once" in log
+    assert "capture_sensor.py" not in calls and "put-object" not in calls
+    # Without a topic the failure is logged, and nothing tries to page.
+    assert "sns publish" not in calls
+
+
+def test_without_a_bucket_nothing_is_captured(tmp_path: pathlib.Path) -> None:
+    home = _box(tmp_path, uploaded=None, indexed=None)
+    _seed(tmp_path)
+    code, log, calls = _run_box(tmp_path, home, contract="roman", bucket=None)
+    assert code == 0, log
+    assert "s3api" not in calls and "capture_sensor.py" not in calls
 
 
 def test_the_fixture_fetch_refuses_a_name_that_is_not_a_contract() -> None:

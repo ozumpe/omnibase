@@ -13,6 +13,14 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+- OMNI-214: the weekly EIA capture runs unattended. The scheduled AWS run
+  fetches the canonical trace from the artifacts bucket (`traces/eia.jsonl`),
+  runs `scripts/capture_sensor.py`, reads the trace back and writes it back
+  with a conditional write (`--if-match`), before its preflight. Only line
+  counts reach the log; the licensed LA spot series stays in the bucket. A
+  failed, empty or raced capture leaves the bucket's trace as it was and
+  pages through SNS; the loop's run goes on. The bucket needs seeding once
+  (docs/SENSOR_RUNBOOK.md).
 - OMNI-189: a new box remembers what earlier runs rejected. A rejected step's
   episodic record now carries `baseline_sha`, and each step is handed the
   rejections in this box's log and in `runtime/history/`. A step from the same
