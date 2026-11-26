@@ -32,7 +32,7 @@ never count: they carry no error.
 
 Thresholds are per actor (D9), so every one is an argument; nothing here has a
 default threshold. Pure: no Ray, no clock, no I/O. Reading the series and
-acting on a decision is OMNI-197's.
+acting on a decision is :func:`sis.loop.model_error_trigger`'s.
 """
 
 from __future__ import annotations
@@ -217,6 +217,62 @@ def skill_decay(steps: Sequence[Step], rule: SkillRule, *, consecutive: int,
                     counted_through, rule.windows)
 
 
+def replay(steps: Sequence[Step], budget: BudgetRule, floor: SkillRule, *,
+           window_weeks: int) -> list[tuple[Decision, Decision]]:
+    """Both triggers' decisions on every window of the series, oldest first. Pure.
+
+    Each window of *window_weeks* weeks is judged in turn with the streak
+    carried from the one before (OMNI-197), so the verdicts are a function of
+    the series alone: a restarted loop, or a new box reading the same series,
+    reaches the same ones without remembering a streak. A series shorter than
+    one window has none.
+    """
+    if window_weeks < 1:
+        raise ValueError(f"a window needs at least one week, got {window_weeks}")
+    ordered = sorted(steps, key=lambda step: step.week)
+    b_streak, b_through = 0, None
+    s_streak, s_through = 0, None
+    out: list[tuple[Decision, Decision]] = []
+    for end in range(window_weeks, len(ordered) + 1):
+        window = ordered[end - window_weeks:end]
+        b = error_budget(window, budget, consecutive=b_streak, counted_through=b_through)
+        s = skill_decay(window, floor, consecutive=s_streak, counted_through=s_through)
+        b_streak, b_through = b.consecutive, b.counted_through
+        s_streak, s_through = s.consecutive, s.counted_through
+        out.append((b, s))
+    return out
+
+
+def standing(decisions: Sequence[tuple[Decision, Decision]]) -> tuple[Decision, ...]:
+    """Each trigger's latest firing, if its breach has not ended since. Pure.
+
+    A firing the loop did not see on the tick it happened (two captures
+    between ticks, a loop that was not running) still stands while every
+    later window is in breach: the error has not come back. A healthy window
+    after it means the breach ended on its own, and nothing is owed.
+    """
+    out: list[Decision] = []
+    for kind in (0, 1):
+        column = [pair[kind] for pair in decisions]
+        fired = [i for i, d in enumerate(column) if d.fire]
+        if fired and all(d.in_breach for d in column[fired[-1] + 1:]):
+            out.append(column[fired[-1]])
+    return tuple(out)
+
+
+def windows_for(breach_weeks: int, window_weeks: int) -> int:
+    """Windows in a row, sharing no week, that cover *breach_weeks*. Pure.
+
+    The operator's knob is how long the error may stay out of bounds
+    (``model_error.breach_weeks``); the rules count windows. A breach shorter
+    than one window still needs one whole window.
+    """
+    if breach_weeks < 1 or window_weeks < 1:
+        raise ValueError(f"breach_weeks and window_weeks must be >= 1, got "
+                         f"{breach_weeks} and {window_weeks}")
+    return max(1, -(-breach_weeks // window_weeks))
+
+
 __all__ = ["BudgetRule", "Decision", "SkillRule", "Trigger", "WindowStats",
-           "budget_in_breach", "error_budget", "latest_window", "skill_decay",
-           "skill_in_breach", "window_stats"]
+           "budget_in_breach", "error_budget", "latest_window", "replay", "skill_decay",
+           "skill_in_breach", "standing", "window_stats", "windows_for"]

@@ -355,8 +355,9 @@ poetry run python scripts/score_capture.py --trace PATH --from 2022-08-01
 
 From code, `sis.error_series.score_trace` scores a trace and
 `sis.error_series.as_steps(store.scored(), target=..., predictor=...)` turns
-the series into the steps `sis.model_error`'s triggers judge. Nothing acts on
-the series yet: wiring it to a cycle and a page is OMNI-197. The scheduled AWS
+the series into the steps `sis.model_error`'s triggers judge. `main.py --loop
+--loop-trigger model-error` acts on it (OMNI-197, docs/ENGINE_RULES.md): a
+sustained breach starts a cycle, and an error-budget one pages. The scheduled AWS
 run's artifact sync already uploads the file (`episodic*.jsonl`).
 
 ## Times and historical limits

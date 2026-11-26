@@ -13,6 +13,16 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+- OMNI-197 (Phase B 3): prediction error can start a cycle. With
+  `--loop-trigger model-error` (`loop.trigger`, default `repeat`), `--loop`
+  reads the live predictor's scored error series each tick and replays the
+  two D9 triggers over it: a sustained error-budget breach pages (WARNING)
+  and starts a cycle, sustained skill decay starts one without a page, a
+  spike starts none. A firing starts one cycle; the cycle's body and
+  `Work.evidence` say which trigger fired and the numbers. New STRICT keys
+  `model_error.mae_budget` (acceptable error), `breach_weeks` (how long),
+  `skill_floor`, `window_weeks` and `min_weeks`; docs/ENGINE_RULES.md has a
+  tight "refine often" and a loose "leave it alone" setting.
 - OMNI-189: a new box remembers what earlier runs rejected. A rejected step's
   episodic record now carries `baseline_sha`, and each step is handed the
   rejections in this box's log and in `runtime/history/`. A step from the same
