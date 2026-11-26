@@ -34,6 +34,7 @@ gauntlet → canary → human merge → promote/rollback → log → circuit bre
 - **Sensor:** a `Reading` has a unit, `event_time` and `known_at`; every read names its `TimeAxis`. A replay never shows a value before its `known_at`.
 - **Sensor input is untrusted.** It enters only through `sensor_input.sanitise`; a real adapter builds no `Reading` itself.
 - `EIASensor` captures EIA's bulk file into an append-only trace (`scripts/capture_sensor.py`, `runtime/sensor_traces/eia.jsonl`).
+- `sis/events.py` derives a weekly refinery-outage flag from PADD 5 utilisation into `runtime/sensor_traces/events.jsonl` (OMNI-227); training splits may show it as context (`--events`), no gate reads it.
 - **The LA spot price is licensed** (Thomson Reuters via EIA): model it, never redistribute it. Fixtures that need it are private (`specs/<name>/private/`, gitignored, sha256 in `private.json`).
 - A forecasting contract may have a training split (`specs/<name>/training.json`, OMNI-205): public history known before its first held-out question. The proposer sees it; no gate reads it.
 - Scenarios (`specs/scenarios.py`) are seeded and can only refute a candidate, never promote one (D4).
@@ -58,7 +59,7 @@ Detail for each: `docs/ENGINE_RULES.md` § Hard rules.
 - **A broken sandbox is never blamed on the candidate** (`gauntlet.probe_sandbox`, `harness:` verdicts).
 - **No feature PR opens without the agent's own approving review** (`sis/review.py`).
 - **Policy (`sis/policy.py`):**
-  - FORBIDDEN (never, no override): gauntlet, canonicaliser, sandbox worker, review, contract layer, ports, sensor door and trace, replay, fixture builder, scenarios, prediction error, holdout budget, workbench, contract author, `specs/`, cost, config, settings, adapters, `Dockerfile.gauntlet` and the policy itself.
+  - FORBIDDEN (never, no override): gauntlet, canonicaliser, sandbox worker, review, contract layer, ports, sensor door and trace, event signal, replay, fixture builder, scenarios, prediction error, holdout budget, workbench, contract author, `specs/`, cost, config, settings, adapters, `Dockerfile.gauntlet` and the policy itself.
   - STRICT: other engine code; needs an opt-in plus human approval.
   - SOFT: the `runtime/` targets.
   - The guardrail classification always wins.

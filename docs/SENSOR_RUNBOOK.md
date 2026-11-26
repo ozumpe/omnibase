@@ -65,6 +65,30 @@ means a refusal, missing series or vanished period; **accepted values may still
 have been appended**. Inspect the report and its capture header before retrying.
 Fetch/format errors raise rather than producing a normal successful report.
 
+### The refinery-outage events (OMNI-227)
+
+A coarse event signal for price shocks stocks and prices cannot explain.
+
+- **Source:** EIA's weekly West Coast (PADD 5) refinery utilisation,
+  `PET.W_NA_YUP_R50_PER.W`, from the same bulk file and the same Wednesday
+  release (Weekly Petroleum Status Report) the capture above already fetches.
+  No extra download, no key, history from 2010.
+- **Licence:** EIA's own data, public domain (the bulk file says
+  `copyright: None`). It may be shown in public fixtures and prompts.
+  (EIA's "This Week in Petroleum" commentary, the other free candidate, stopped
+  in October 2025.)
+- **Event:** a week whose utilisation fell at least 4 percentage points from
+  the week before is 1, any other week 0 (`sis/events.py`). 2018 to 2026 has
+  about five such weeks a year, the September 2019 refinery outages among them.
+- **Refresh:** every capture. `scripts/capture_sensor.py` derives the flags
+  after appending the EIA values and appends what is new or changed to
+  `runtime/sensor_traces/events.jsonl` (`--no-events` skips it). The first run
+  backfills each flag known when the later of its two utilisation values was;
+  later, a new or revised flag is known at the capture that found it.
+- **Where it shows:** only in a training split built with `--events`
+  (below), marked to the proposer as context that an episode never shows. No
+  gate reads it.
+
 ## Check connectivity
 
 `poetry run python scripts/check_connections.py --deep` includes a sensor check
@@ -230,6 +254,8 @@ is committed, so a prompt never holds more than git does.
    (3 December 2018); `--first YYYY-MM-DD` starts elsewhere, and a reading the
    calendar does not cover is refused, so extend the calendar back first for a
    longer split.
+   Add `--events` to show the refinery-outage events too, as context (from
+   `runtime/sensor_traces/events.jsonl`, or `--events-trace PATH`).
 2. **Review and promote** as above (the draft holds only `training.json`).
    Commit it through a pull request. The contract picks it up on the next
    start; it refuses a split with any record from on or after the first

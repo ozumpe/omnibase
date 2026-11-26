@@ -13,6 +13,15 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+- OMNI-227 (Phase B): a free event signal for price shocks. The EIA sensor
+  now also captures West Coast (PADD 5) refinery utilisation
+  (`PET.W_NA_YUP_R50_PER.W`, public domain, same release), and
+  `scripts/capture_sensor.py` derives from it a weekly refinery-outage flag (a
+  fall of 4 points or more) into its own append-only trace,
+  `runtime/sensor_traces/events.jsonl`, through the sanitising door, never
+  known before the values it rests on (`sis/events.py`, FORBIDDEN).
+  `scripts/build_fixture.py --training --events` shows it in a training split
+  as context; no gate reads it and no episode shows it. No recurring cost.
 - OMNI-189: a new box remembers what earlier runs rejected. A rejected step's
   episodic record now carries `baseline_sha`, and each step is handed the
   rejections in this box's log and in `runtime/history/`. A step from the same
