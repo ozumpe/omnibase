@@ -144,6 +144,12 @@ class EpisodicEvent:
     # the same code was already rejected against the same baseline. None for
     # everything else.
     baseline_sha: str | None = None
+    # A cycle a model-error trigger started (OMNI-228, sis.futility): which
+    # trigger, the window's error that started it, and the basis (the inputs
+    # the contract had) it ran on. None for every other record.
+    trigger: str | None = None
+    trigger_mae: float | None = None
+    trigger_basis: str | None = None
 
     @staticmethod
     def new_cycle_id() -> str:
@@ -414,6 +420,7 @@ _DUCK_TYPES: dict[str, str] = {
     "cache_read_tokens": "BIGINT", "output_limit": "BIGINT", "stop_reason": "VARCHAR",
     "holdout_digest": "VARCHAR",
     "baseline_sha": "VARCHAR",
+    "trigger": "VARCHAR", "trigger_mae": "DOUBLE", "trigger_basis": "VARCHAR",
 }
 assert tuple(_DUCK_TYPES) == _FIELD_NAMES, "DuckDB schema drifted from EpisodicEvent"
 

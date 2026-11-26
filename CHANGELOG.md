@@ -13,6 +13,18 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+- OMNI-228 (Phase B): retraining that does not help stops. `sis/futility.py`
+  (FORBIDDEN) decides, from the episodic records, whether the last
+  `brakes.futility_retrains` (3) retrains a model-error trigger started for a
+  contract each failed to cut the window's error by
+  `brakes.futility_min_improvement` (5%). If so, the trigger starts no more
+  retrains for it (no spend), records `futile_stopped`, and pages once
+  (WARNING, "likely missing input", with the weeks of largest error). A new
+  input (a new basis) or `python -m sis.admin reset-futility --contract <name>
+  --reason "..."` resets it; `sis.admin futility` shows where each contract
+  stands. The breaker is untouched. New episodic fields `trigger`,
+  `trigger_mae`, `trigger_basis`. OMNI-197 calls `Guard.may_start` and
+  `Guard.started` when it wires the triggers.
 - OMNI-189: a new box remembers what earlier runs rejected. A rejected step's
   episodic record now carries `baseline_sha`, and each step is handed the
   rejections in this box's log and in `runtime/history/`. A step from the same

@@ -48,6 +48,17 @@ brakes:
   # is free.
   # env: SIS_HOLDOUT_COUNT_REPEATS   flag: --brakes-holdout-count-repeats
   forbidden_holdout_count_repeats: false
+  # Retrains in a row that a model-error trigger may start for one contract without the
+  # error improving, before it stops starting them and pages 'likely missing input'
+  # (OMNI-228). Reset by `sis.admin reset-futility`, or by a change of the contract's
+  # inputs.
+  # env: SIS_FUTILITY_RETRAINS   flag: --brakes-futility-retrains
+  forbidden_futility_retrains: 3
+  # The fraction a retrain must cut the window's error by to count as an improvement
+  # (OMNI-228): 0.05 means the error after it is at most 95% of the error that started
+  # it. In [0, 1).
+  # env: SIS_FUTILITY_MIN_IMPROVEMENT   flag: --brakes-futility-min-improvement
+  forbidden_futility_min_improvement: 0.05
 
 sandbox:
   # Isolation for generated code: 'subprocess' (soft) or 'docker' (kernel-enforced,

@@ -223,6 +223,18 @@ SCHEMA: tuple[Key, ...] = (
         "another holdout judgement, unless the contract declares its own "
         "holdout_count_repeats (OMNI-224). Off: each candidate counts once, so "
         "the 'already built' re-check of a merged module is free."),
+    Key("brakes", "futility_retrains", ConfigTier.FORBIDDEN, Kind.INT, 3,
+        "SIS_FUTILITY_RETRAINS",
+        "Retrains in a row that a model-error trigger may start for one contract "
+        "without the error improving, before it stops starting them and pages "
+        "'likely missing input' (OMNI-228). Reset by `sis.admin reset-futility`, "
+        "or by a change of the contract's inputs.",
+        positive=True),
+    Key("brakes", "futility_min_improvement", ConfigTier.FORBIDDEN, Kind.FLOAT, 0.05,
+        "SIS_FUTILITY_MIN_IMPROVEMENT",
+        "The fraction a retrain must cut the window's error by to count as an "
+        "improvement (OMNI-228): 0.05 means the error after it is at most 95% of "
+        "the error that started it. In [0, 1)."),
 
     # --- sandbox: how untrusted, generated code is contained. ----------------
     Key("sandbox", "mode", ConfigTier.FORBIDDEN, Kind.STR, "subprocess",
@@ -828,6 +840,8 @@ class BrakesConfig:
     holdout_budget: int
     holdout_rotation_min_weeks: int
     holdout_count_repeats: bool
+    futility_retrains: int
+    futility_min_improvement: float
 
 
 @dataclass(frozen=True)

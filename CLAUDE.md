@@ -58,7 +58,7 @@ Detail for each: `docs/ENGINE_RULES.md` § Hard rules.
 - **A broken sandbox is never blamed on the candidate** (`gauntlet.probe_sandbox`, `harness:` verdicts).
 - **No feature PR opens without the agent's own approving review** (`sis/review.py`).
 - **Policy (`sis/policy.py`):**
-  - FORBIDDEN (never, no override): gauntlet, canonicaliser, sandbox worker, review, contract layer, ports, sensor door and trace, replay, fixture builder, scenarios, prediction error, holdout budget, workbench, contract author, `specs/`, cost, config, settings, adapters, `Dockerfile.gauntlet` and the policy itself.
+  - FORBIDDEN (never, no override): gauntlet, canonicaliser, sandbox worker, review, contract layer, ports, sensor door and trace, replay, fixture builder, scenarios, prediction error, holdout budget, futility stop, workbench, contract author, `specs/`, cost, config, settings, adapters, `Dockerfile.gauntlet` and the policy itself.
   - STRICT: other engine code; needs an opt-in plus human approval.
   - SOFT: the `runtime/` targets.
   - The guardrail classification always wins.
@@ -69,6 +69,7 @@ Detail for each: `docs/ENGINE_RULES.md` § Hard rules.
   - An exception inside a cycle is a charged outcome.
   - One loop per box (`runtime/loop.lock`).
   - A trip pages a human through SNS.
+  - Retraining that stops improving stops (`sis/futility.py`, OMNI-228): N retrains in a row without a cut in error pages "likely missing input" and starts no more until a new input or `sis.admin reset-futility`.
 - **Secrets** live in `secrets.local.yml` (gitignored) or AWS Secrets Manager. Never commit tokens.
 
 ## Repo & GitHub workflow
