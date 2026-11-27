@@ -363,10 +363,15 @@ def _training_section(training: TrainingSplit) -> str:
         "a row per period (`period value`); in an episode a value appears only once "
         "it was published (its `known_at`), which is the day of its period or later. "
         f"Fit your model on it. The series to forecast is `{training.target}`.\n"]
+    # Another source's series is context (OMNI-227, the refinery-outage events):
+    # shown here to learn from, never in an episode's state.
+    own = {str(r.get("source")) for r in by_series.get(training.target, [])}
     for series in sorted(by_series):
         records = sorted(by_series[series], key=lambda r: str(r["event_time"]))
         unit = records[0].get("unit", "")
-        parts.append(f"\n{series} ({unit}), {len(records)} periods:\n")
+        context = ("; context only: an episode's state never shows it"
+                   if own and str(records[0].get("source")) not in own else "")
+        parts.append(f"\n{series} ({unit}), {len(records)} periods{context}:\n")
         parts.append("".join(f"{str(r['event_time'])[:10]} {r['value']}\n" for r in records))
     if state["absent"]:
         parts.append(f"\n{len(state['absent'])} period(s) the source stated no value for "

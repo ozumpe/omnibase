@@ -23,7 +23,9 @@ per week. Two fixtures:
 ``--training`` builds the fixture's training split instead (OMNI-205): the
 public series known just before its first held-out question, from the first
 week the calendar covers (or ``--first``), into ``training.json``. The
-proposer sees it; no gate reads it.
+proposer sees it; no gate reads it. With ``--events`` (OMNI-227) it also shows
+the refinery-outage event series from ``runtime/sensor_traces/events.jsonl``
+(``sis.events``; ``--events-trace`` for another path), in the split only.
 
 ``--rotate`` replaces a private fixture's held-out set (OMNI-225, D5): the
 weeks after the committed set's last one become the new held-out episodes,
@@ -61,6 +63,7 @@ import json
 import pathlib
 import sys
 from dataclasses import dataclass, replace
+from typing import Any
 
 # Allow running as a plain script: put the repo root (parent of scripts/) on the
 # path, and scripts/ itself for the calendar check.
@@ -86,6 +89,7 @@ from sis.fixture_builder import (  # noqa: E402
     build_training,
 )
 from sis.paths import SPECS_DIR  # noqa: E402
+from sis.sensor_input import SourceRules  # noqa: E402
 
 DATA = pathlib.Path(__file__).resolve().parent / "data"
 CALIFORNIA = "PET.EMM_EPMRR_PTE_SCA_DPG.W"
@@ -196,6 +200,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--first", type=datetime.date.fromisoformat, default=None,
                         help="with --training or --rotate, the earliest period shown (default: the "
                              "first week the release calendar covers)")
+    parser.add_argument("--events", action="store_true",
+                        help="with --training or --rotate, also show the refinery-outage "
+                             "event series in the training split (OMNI-227)")
+    parser.add_argument("--events-trace", type=pathlib.Path, default=None,
+                        help="the event trace --events reads (default: "
+                             "runtime/sensor_traces/events.jsonl)")
     parser.add_argument("--rotate", action="store_true",
                         help="replace a private fixture's held-out weeks with the fresh "
                              "weeks after them, and move the old ones into its training "
@@ -303,7 +313,8 @@ def _stage_rotation(args: argparse.Namespace, lines: list[dict[str, object]],
     held = build(lines, EIA_RULES, calendar, question, name=args.fixture,
                  spec_ref=fixture.spec_ref, private=True)
     training = build_training(lines, EIA_RULES, calendar, question, first=first,
-                              name=args.fixture, spec_ref=fixture.spec_ref)
+                              name=args.fixture, spec_ref=fixture.spec_ref,
+                              context=_context(args))
     clash = set(held.files) & set(training.files)
     if clash:
         raise FixtureRefused(f"the held-out and training drafts both write {sorted(clash)}")
@@ -323,6 +334,19 @@ def _stage_rotation(args: argparse.Namespace, lines: list[dict[str, object]],
     return 0
 
 
+def _context(args: argparse.Namespace) -> list[tuple[list[dict[str, Any]], SourceRules]]:
+    """The other sources a training split shows (OMNI-227): the event trace with --events."""
+    if not args.events:
+        return []
+    from sis.events import EVENT_RULES, EVENTS_TRACE
+
+    path = args.events_trace or EVENTS_TRACE
+    lines = sensor_trace.load(path)
+    if not lines:
+        raise FixtureRefused(f"no event trace at {path}: run scripts/capture_sensor.py first")
+    return [(lines, EVENT_RULES)]
+
+
 def _stage_training(args: argparse.Namespace, lines: list[dict[str, object]],
                     calendar: ReleaseCalendar, fixture: Fixture) -> int:
     """Build, stage and report the training split *fixture*'s exam is held out from."""
@@ -330,7 +354,8 @@ def _stage_training(args: argparse.Namespace, lines: list[dict[str, object]],
     if first is None:
         raise FixtureRefused(f"{args.fixture} has no training split: pass --first")
     draft = build_training(lines, EIA_RULES, calendar, fixture.question, first=first,
-                           name=args.fixture, spec_ref=fixture.spec_ref)
+                           name=args.fixture, spec_ref=fixture.spec_ref,
+                           context=_context(args))
     staged = stage(draft)
     print(f"staged {staged.name}: training split from {first}, known before the first "
           f"held-out question ({fixture.question.first}), in {staged.directory}")

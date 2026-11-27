@@ -99,6 +99,9 @@ GUARDRAIL_PATHS: tuple[str, ...] = (
     # backfilled history. A loop able to edit it could shape what its own
     # models are later judged against.
     "sis/sensor_trace.py",
+    # The event signal derived from a trace, and its own trace (OMNI-227): a
+    # sensor like the others, so the loop may not shape what it is shown.
+    "sis/events.py",
     # What a model is shown at each moment of a replay, and the fixtures built
     # from it (OMNI-35): a loop able to edit either could choose its own exam.
     "sis/replay.py",
