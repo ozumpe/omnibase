@@ -223,7 +223,7 @@ def test_a_timeout_stays_a_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_an_existing_harness_verdict_is_not_reprobed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(gauntlet, "probe_sandbox", _no_probe)
-    failure = gauntlet.Result(passed=False, reason="harness: comparators missing")
+    failure = gauntlet._harness("harness: comparators missing")
     ctx = gauntlet._GateContext(
         contract=gauntlet.default_contract(), code_str="", tmp=gauntlet.pathlib.Path("."),
         tmpdir=".", env={}, candidate=gauntlet.pathlib.Path("x.py"),
@@ -258,6 +258,47 @@ def test_a_candidate_that_says_timed_out_is_still_probed(
     result = gauntlet._attribute(failure, gauntlet.GateName.BACKTEST, ctx)
     assert probed == ["."]
     assert gate_from_reason(result.reason) == "harness"
+
+
+def test_a_typed_timeout_is_not_reprobed(monkeypatch: pytest.MonkeyPatch) -> None:
+    # OMNI-208: the timeout is the verdict's gate, not words in its reason.
+    monkeypatch.setattr(gauntlet, "probe_sandbox", _no_probe)
+    failure = gauntlet._reject("timeout", "backtest gate timed out")
+    ctx = gauntlet._GateContext(
+        contract=gauntlet.default_contract(), code_str="", tmp=gauntlet.pathlib.Path("."),
+        tmpdir=".", env={}, candidate=gauntlet.pathlib.Path("x.py"),
+    )
+    assert gauntlet._attribute(failure, gauntlet.GateName.BACKTEST, ctx) is failure
+
+
+@pytest.mark.parametrize("reason", [
+    "harness: the sandbox cannot run",
+    "backtest gate timed out",
+    "gauntlet sandbox timed out after 120s",
+    "mypy gate timed out after 120s",
+])
+def test_a_candidate_rejection_that_quotes_harness_words_is_still_probed(
+    reason: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # OMNI-208 acceptance: a candidate whose own output is every phrase the
+    # harness uses is still the candidate's rejection, so the sandbox is
+    # probed before it is blamed, and a well sandbox leaves the verdict alone.
+    probed: list[str] = []
+
+    def well(tmpdir: str, env: dict[str, str]) -> str | None:
+        probed.append(tmpdir)
+        return None
+
+    monkeypatch.setattr(gauntlet, "probe_sandbox", well)
+    ctx = gauntlet._GateContext(
+        contract=gauntlet.default_contract(), code_str="", tmp=gauntlet.pathlib.Path("."),
+        tmpdir=".", env={}, candidate=gauntlet.pathlib.Path("x.py"),
+    )
+    failure = gauntlet._reject("backtest", reason)
+    result = gauntlet._attribute(failure, gauntlet.GateName.BACKTEST, ctx)
+    assert probed == ["."]
+    assert result is failure and result.verdict is not None
+    assert (result.verdict.gate, result.verdict.kind) == ("backtest", "rejected")
 
 
 @pytest.mark.parametrize("reason", [

@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from sis import feature, proposer
+from sis import feature, proposer, verdict
 from sis.adapters import InMemoryTelemetry, InMemoryVersionControl
 from sis.ports import RequiresHumanApproval
 
@@ -25,10 +25,13 @@ def _with_steps(n: int) -> dict[str, Any]:
     (None, False),
 ])
 def test_only_no_further_gain_ends_a_feature(reason: str | None, ends: bool) -> None:
-    if reason and reason.startswith("no change"):
-        from sis import episodic
-        assert episodic.neutral_status(reason) is not None, "fixture no longer neutral"
-    assert feature.ends_feature(reason) is ends
+    assert feature.ends_feature(verdict.legacy(reason)) is ends
+
+
+def test_a_benchmark_worker_failure_does_not_end_a_feature() -> None:
+    # OMNI-208: the benchmark gate's own crash is not "no further gain".
+    crashed = verdict.Verdict.of("benchmark_worker", "benchmark: the candidate's worker failed")
+    assert not feature.ends_feature(crashed)
 
 
 def test_a_feature_is_full_after_n_steps() -> None:
@@ -55,10 +58,10 @@ def test_the_prompt_notes_are_capped() -> None:
 
 
 def test_a_rejection_is_remembered_against_its_baseline() -> None:
-    f = feature.with_rejection(feature.new_feature("b", "TES-1"), "c1", "base1",
-                               "acceptance tests failed")
+    failed = verdict.Verdict.of("acceptance", "acceptance tests failed")
+    f = feature.with_rejection(feature.new_feature("b", "TES-1"), "c1", "base1", failed)
     assert f["attempts"] == ["rejected: acceptance tests failed"]
-    assert feature.rejected_before(f, "c1", "base1") == "acceptance tests failed"
+    assert feature.rejected_before(f, "c1", "base1") == failed
     # Another candidate, or the same one against another baseline, is judged.
     assert feature.rejected_before(f, "c2", "base1") is None
     assert feature.rejected_before(f, "c1", "base2") is None
@@ -67,14 +70,15 @@ def test_a_rejection_is_remembered_against_its_baseline() -> None:
     assert feature.rejected_before({"attempts": [], "steps": []}, "c1", "base1") is None
 
 
-@pytest.mark.parametrize("reason", [
-    "harness: the sandbox cannot run (after the mypy gate failed)",
-    "mypy gate timed out",
+@pytest.mark.parametrize(("gate", "reason"), [
+    ("harness", "harness: the sandbox cannot run (after the mypy gate failed)"),
+    ("timeout", "mypy gate timed out"),
 ])
-def test_a_verdict_that_was_not_the_candidates_is_not_replayed(reason: str) -> None:
+def test_a_verdict_that_was_not_the_candidates_is_not_replayed(gate: str, reason: str) -> None:
     # A broken sandbox or a loaded machine says nothing about the code: the
     # same candidate deserves another run once the harness is well.
-    f = feature.with_rejection(feature.new_feature("b", "TES-1"), "c1", "base1", reason)
+    f = feature.with_rejection(feature.new_feature("b", "TES-1"), "c1", "base1",
+                               verdict.Verdict.of(gate, reason))
     assert f["attempts"] == [f"rejected: {reason}"], "still a note for the prompt"
     assert feature.rejected_before(f, "c1", "base1") is None
 
@@ -83,8 +87,16 @@ def test_a_candidate_that_says_timed_out_is_still_remembered() -> None:
     # L27 (OMNI-73): the words are the candidate's, so the verdict is too, and
     # the same code is not judged and billed again.
     reason = "acceptance tests failed: AssertionError: the request timed out"
-    f = feature.with_rejection(feature.new_feature("b", "TES-1"), "c1", "base1", reason)
-    assert feature.rejected_before(f, "c1", "base1") == reason
+    judged = verdict.Verdict.of("acceptance", reason)
+    f = feature.with_rejection(feature.new_feature("b", "TES-1"), "c1", "base1", judged)
+    assert feature.rejected_before(f, "c1", "base1") == judged
+
+
+def test_a_rejection_saved_before_typed_verdicts_is_still_answered() -> None:
+    # A SelfModel written before OMNI-208 holds reasons only: read as records.
+    old = {"rejected": [{"candidate": "c1", "baseline": "b", "reason": "mypy --strict failed"}]}
+    assert feature.rejected_before(old, "c1", "b") == verdict.Verdict.of(
+        "mypy", "mypy --strict failed")
 
 
 @pytest.mark.parametrize("reason", [
@@ -97,12 +109,13 @@ def test_a_candidate_that_says_timed_out_is_still_remembered() -> None:
 def test_a_replayed_verdict_is_classified_like_the_original(reason: str) -> None:
     # A converged target that keeps proposing the same module must still stop
     # politely (OMNI-138), not trip the breaker on "duplicates".
-    from sis import episodic
-    replayed = feature.resubmitted(reason)
-    assert replayed != reason and "resubmitted" in replayed
-    assert episodic.gate_from_reason(replayed) == episodic.gate_from_reason(reason)
-    assert episodic.neutral_status(replayed) == episodic.neutral_status(reason)
-    assert feature.ends_feature(replayed) is feature.ends_feature(reason)
+    original = verdict.legacy(reason)
+    assert original is not None
+    replayed = feature.resubmitted(original)
+    assert replayed.detail != reason and "resubmitted" in replayed.detail
+    assert (replayed.gate, replayed.kind, replayed.neutral) == (
+        original.gate, original.kind, original.neutral)
+    assert feature.ends_feature(replayed) is feature.ends_feature(original)
 
 
 def _event(reason: str | None, *, contract: str | None = "sort", candidate: str | None = "c1",
@@ -117,10 +130,11 @@ def test_a_new_box_remembers_what_an_earlier_run_rejected() -> None:
     # OMNI-189: the 2026-11-06 run re-judged a candidate the 2026-10-31 run
     # had rejected against the same base, because only the log remembered it.
     earlier = feature.earlier_rejections([_event("no improvement: ratio 0.97")])
+    judged = verdict.Verdict.of("benchmark", "no improvement: ratio 0.97")
     assert earlier == [{"contract": "sort", "candidate": "c1", "baseline": "base1",
-                        "reason": "no improvement: ratio 0.97"}]
+                        "reason": "no improvement: ratio 0.97", verdict.KEY: judged.to_dict()}]
     f = feature.with_earlier_runs(feature.new_feature("b", "TES-9"), earlier, "sort", "base1")
-    assert feature.rejected_before(f, "c1", "base1") == "no improvement: ratio 0.97"
+    assert feature.rejected_before(f, "c1", "base1") == judged
     # The next prompt sees why, too.
     assert f["attempts"] == ["rejected in an earlier run: no improvement: ratio 0.97"]
 
@@ -135,7 +149,8 @@ def test_only_the_same_contract_at_the_same_baseline_is_remembered() -> None:
 @pytest.mark.parametrize("event", [
     _event("harness: the sandbox cannot run"),  # not the candidate's verdict
     _event("mypy gate timed out"),
-    _event(feature.resubmitted("acceptance tests failed")),  # its original is there
+    _event(feature.resubmitted(  # its original is there
+        verdict.Verdict.of("acceptance", "acceptance tests failed")).detail),
     _event("acceptance tests failed", baseline=None),  # recorded before OMNI-189
     _event("acceptance tests failed", candidate=None),
     _event("acceptance tests failed", contract=None),
@@ -148,7 +163,7 @@ def test_a_record_that_proves_nothing_is_not_remembered(event: Any) -> None:
 def test_a_rejection_already_remembered_is_not_added_twice() -> None:
     # This run's own log is read too: what the feature holds is not repeated.
     f = feature.with_rejection(feature.new_feature("b", "TES-9"), "c1", "base1",
-                               "acceptance tests failed")
+                               verdict.Verdict.of("acceptance", "acceptance tests failed"))
     earlier = feature.earlier_rejections([_event("acceptance tests failed")] * 2)
     assert feature.with_earlier_runs(f, earlier, "sort", "base1") == f
 
@@ -165,7 +180,8 @@ def test_earlier_rejections_are_capped_per_contract() -> None:
 def test_the_rejection_record_is_capped() -> None:
     f = feature.new_feature("b", "TES-1")
     for i in range(feature.MAX_REJECTED + 5):
-        f = feature.with_rejection(f, f"c{i}", "base", f"rejected {i}")
+        f = feature.with_rejection(f, f"c{i}", "base",
+                                   verdict.Verdict.of("acceptance", f"rejected {i}"))
     assert len(f["rejected"]) == feature.MAX_REJECTED
     assert feature.rejected_before(f, "c0", "base") is None
     assert feature.rejected_before(f, f"c{feature.MAX_REJECTED + 4}", "base") is not None
@@ -203,16 +219,19 @@ _NO_IMPROVEMENT = "no improvement: candidate ~0.000001s vs baseline 0.000001s pe
 
 
 def test_no_gain_from_the_base_means_the_target_converged() -> None:
-    assert feature.finds_no_gain(None, _NO_IMPROVEMENT)
-    assert feature.finds_no_gain(None, "no change: candidate is identical to the baseline")
+    assert feature.finds_no_gain(None, verdict.legacy(_NO_IMPROVEMENT))
+    assert feature.finds_no_gain(
+        None, verdict.legacy("no change: candidate is identical to the baseline"))
     # Inside a feature the same verdict ends the feature instead (its PR opens).
-    assert not feature.finds_no_gain(_with_steps(1), _NO_IMPROVEMENT)
+    assert not feature.finds_no_gain(_with_steps(1), verdict.legacy(_NO_IMPROVEMENT))
     # A feature with no step yet only holds notes (OMNI-127): it starts from the
     # base too, so its verdict is the same as with no feature at all.
-    assert feature.finds_no_gain(feature.new_feature("feature/x", "TES-1"), _NO_IMPROVEMENT)
+    assert feature.finds_no_gain(feature.new_feature("feature/x", "TES-1"),
+                                 verdict.legacy(_NO_IMPROVEMENT))
     # A real failure is never "no gain".
-    assert not feature.finds_no_gain(None, "correctness mismatch (candidate disagrees)")
-    assert not feature.finds_no_gain(None, None)
+    assert not feature.finds_no_gain(
+        None, verdict.legacy("correctness mismatch (candidate disagrees)"))
+    assert not feature.finds_no_gain(None, verdict.legacy(None))
 
 
 def test_only_the_swe_can_make_no_improvement_neutral() -> None:

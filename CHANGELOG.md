@@ -23,6 +23,17 @@ release renames that heading to the new tag.
   `model_error.mae_budget` (acceptable error), `breach_weeks` (how long),
   `skill_floor`, `window_weeks` and `min_weeks`; docs/ENGINE_RULES.md has a
   tight "refine often" and a loose "leave it alone" setting.
+- OMNI-208: a rejection is typed, not read from its wording. Every failure
+  the gauntlet returns carries a `Verdict` (gate, kind, sentence;
+  `sis/verdict.py`, FORBIDDEN), and the SWE, QA, the canary, the review and
+  the cycle's own errors carry one next to their reason. The sandbox probe,
+  the neutral statuses, the breaker's gate, the bug headline, the end of a
+  feature and the episodic `reject_gate` read its fields, so a candidate's
+  text can no longer decide whose failure it was (the class of bug behind L27
+  and L64). Old episodic rows and stored rejections are still read by the
+  former parser, and only they. The benchmark's worker crashes are now
+  recorded as `benchmark_worker` (they had no gate before), and QA's
+  `review()` returns the verdict as a third value.
 - OMNI-189: a new box remembers what earlier runs rejected. A rejected step's
   episodic record now carries `baseline_sha`, and each step is handed the
   rejections in this box's log and in `runtime/history/`. A step from the same

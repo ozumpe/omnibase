@@ -20,6 +20,7 @@ from sis.backtest import Backtest, Split
 from sis.contract import ROMAN, FeatureContract
 from sis.episodic import EpisodicEvent, JsonlEpisodicStore, event_from_cycle_result
 from sis.feature import resubmitted
+from sis.verdict import Verdict
 
 A = "a" * 64
 B = "b" * 64
@@ -118,7 +119,8 @@ def test_only_a_verdict_of_the_backtest_gate_is_a_judgement(
 
 
 def test_a_resubmission_was_not_judged_again() -> None:
-    again = resubmitted("backtest failed: candidate did not reproduce recorded history")
+    again = resubmitted(Verdict.of(
+        "backtest", "backtest failed: candidate did not reproduce recorded history")).detail
     assert holdout.judged_holdout(_event(reason=again)) is False
 
 
