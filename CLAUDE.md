@@ -37,7 +37,7 @@ gauntlet → canary → human merge → promote/rollback → log → circuit bre
 - **The LA spot price is licensed** (Thomson Reuters via EIA): model it, never redistribute it. Fixtures that need it are private (`specs/<name>/private/`, gitignored, sha256 in `private.json`).
 - A forecasting contract may have a training split (`specs/<name>/training.json`, OMNI-205): public history known before its first held-out question. The proposer sees it; no gate reads it.
 - Scenarios (`specs/scenarios.py`) are seeded and can only refute a candidate, never promote one (D4).
-- Prediction error and skill against climatology are computed and reported, never acted on (`sis/prediction_error.py`). Each capture appends the scored weeks to the episodic store (`sis/error_series.py`). Phase B's two triggers are decided in `sis/model_error.py`, not yet wired.
+- Prediction error and skill against climatology are computed and reported by `sis/prediction_error.py`, which acts on nothing. Each capture appends the scored weeks to the episodic store (`sis/error_series.py`). Phase B's two triggers are decided in `sis/model_error.py` and start cycles only with `--loop-trigger model-error`.
 - Episodic store (`sis/episodic.py`) records every cycle: spec → diff → verdict → outcome. Backends: jsonl (default), duckdb, none.
 
 ## Hard rules

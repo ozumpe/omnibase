@@ -402,6 +402,45 @@ SCHEMA: tuple[Key, ...] = (
         "adapters.artifacts_bucket; a killed process or a replaced box loses at "
         "most this many. 0 syncs only when the loop stops (OMNI-140)."),
 
+    # What starts a cycle in --loop mode (OMNI-197). Strict, unlike the pacing
+    # above: the model-error trigger decides when LLM budget is spent.
+    Key("loop", "trigger", ConfigTier.STRICT, Kind.STR, "repeat",
+        "SIS_LOOP_TRIGGER",
+        "What starts a cycle in --loop mode: 'repeat' runs the contract's canned "
+        "proposal every interval; 'model-error' runs one only when the predictor's "
+        "scored error series is in sustained breach of model_error.* (OMNI-197). "
+        "The brakes, spend cap and breaker apply either way.",
+        choices=("repeat", "model-error")),
+
+    # --- model_error: when the predictor is wrong enough to act (OMNI-197, D9).
+    # Read only with loop.trigger model-error. Strict: they decide when LLM
+    # budget is spent. Tight early (refine often until there is a good base),
+    # loose later (leave the model alone until its errors can't be ignored):
+    # docs/ENGINE_RULES.md has the two settings.
+    Key("model_error", "mae_budget", ConfigTier.STRICT, Kind.FLOAT, 0.15,
+        "SIS_MODEL_ERROR_MAE_BUDGET",
+        "Acceptable error: a window's mean absolute error above this, in the "
+        "series' unit (dollars per gallon for the California price), is an "
+        "error-budget breach. A sustained one pages and starts a cycle.",
+        positive=True),
+    Key("model_error", "breach_weeks", ConfigTier.STRICT, Kind.INT, 8,
+        "SIS_MODEL_ERROR_BREACH_WEEKS",
+        "How long: weeks the error may stay out of bounds before a cycle starts, "
+        "counted in whole windows that share no week (a spike never starts one).",
+        positive=True),
+    Key("model_error", "skill_floor", ConfigTier.STRICT, Kind.FLOAT, 0.0,
+        "SIS_MODEL_ERROR_SKILL_FLOOR",
+        "Skill against climatology below this, sustained for breach_weeks, starts "
+        "a cycle without a page: headroom a code change could recover. 0 means "
+        "no better than climatology; below 1."),
+    Key("model_error", "window_weeks", ConfigTier.STRICT, Kind.INT, 4,
+        "SIS_MODEL_ERROR_WINDOW_WEEKS",
+        "Weeks in one judged window, skipped weeks included.", positive=True),
+    Key("model_error", "min_weeks", ConfigTier.STRICT, Kind.INT, 3,
+        "SIS_MODEL_ERROR_MIN_WEEKS",
+        "Scored weeks a window needs before it can be in breach; fewer is never "
+        "a breach. At most window_weeks.", positive=True),
+
     # --- sensor: where readings of the modelled world come from (OMNI-31). ---
     # Forbidden, like adapters.mode, and for a sharper reason: real data is the
     # evidence a promotion needs (D4), so a loop that could switch itself to
@@ -892,6 +931,16 @@ class LoopConfig:
     review_max_rounds: int
     converged_after: int
     artifact_sync_every: int
+    trigger: str
+
+
+@dataclass(frozen=True)
+class ModelErrorConfig:
+    mae_budget: float
+    breach_weeks: int
+    skill_floor: float
+    window_weeks: int
+    min_weeks: int
 
 
 @dataclass(frozen=True)
@@ -924,6 +973,7 @@ class Config:
     proposer: ProposerConfig
     canary: CanaryConfig
     loop: LoopConfig
+    model_error: ModelErrorConfig
     sensor: SensorConfig
     contracts: ContractsConfig
     frontend: FrontendConfig
@@ -956,6 +1006,7 @@ def config(*, env: Mapping[str, str] | None = None) -> Config:
         proposer=ProposerConfig(**_section("proposer", env)),
         canary=CanaryConfig(**_section("canary", env)),
         loop=LoopConfig(**_section("loop", env)),
+        model_error=ModelErrorConfig(**_section("model_error", env)),
         sensor=SensorConfig(**_section("sensor", env)),
         contracts=ContractsConfig(**_section("contracts", env)),
         frontend=FrontendConfig(**_section("frontend", env)),
