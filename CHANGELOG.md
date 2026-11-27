@@ -13,6 +13,15 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+## v0.9.0 — 2026-11-27
+
+Phase B (epic OMNI-194) reaches the box: the Friday run captures EIA's weekly
+data itself (OMNI-214), prediction error can start a cycle (OMNI-197), and
+two Phase B parts arrive unwired: the retrain stop rule (OMNI-228; the
+trigger does not call it yet) and the refinery-outage event signal
+(OMNI-227). Gate verdicts are typed (OMNI-208). Not in this release: the
+OMNI-199 demo and wiring OMNI-228 into the trigger.
+
 - OMNI-214: the weekly EIA capture runs unattended. The scheduled AWS run
   fetches the canonical trace from the artifacts bucket (`traces/eia.jsonl`),
   runs `scripts/capture_sensor.py`, reads the trace back and writes it back
