@@ -11,6 +11,7 @@ never here and never in a docstring.
 - `docs/CODE_TOUR.md`: Python + Ray walkthrough. `CONTRIBUTING.md`: contributor flow.
 - `docs/CLASS2_CONTRACT.md`: feature contracts. `docs/STAGED_DELIVERY.md`: feature → develop → main, the sandbox worker, develop blue/green, the agent's own review.
 - `docs/OMNITRACK_VISION.md`: what comes next and decisions D0–D12. Read it before designing anything the twin touches.
+- `docs/DELIVERY_CONTRACT.md`: design (not built) for delivering a Jira ticket's acceptance criteria as a contract (OMNI-193).
 - `docs/SENSOR_RUNBOOK.md`: capture, replay and fixtures. `docs/AWS_RUN.md`: the AWS box. `docs/SERVE_CANARY.md`: the Serve canary.
 - `docs/KNOWN_ISSUES.md`: open defects (H/M/L IDs). `CHANGELOG.md`: what each release carried.
 
