@@ -463,7 +463,9 @@ touch the code a rule is about. History (what changed when) belongs in
     held-out fixture are counted (`sis/holdout.py`, OMNI-207), what the
     proposer's workbench may reach and spend (`sis/workbench.py`, OMNI-206),
     the contract-author approval gate
-    (`sis/contract_author.py`),
+    (`sis/contract_author.py`), the door to the public landing page
+    (`sis/site_export.py`, OMNI-229: only public series, and a rejection's
+    verdict without its reason),
     `specs/` (the exam itself — oracles, acceptance tests, domain laws, backtest
     fixtures), cost accounting (`sis/cost.py` — the breaker/threshold logic
     itself lives in `sis/roles.py`, which is only STRICT; see KNOWN_ISSUES

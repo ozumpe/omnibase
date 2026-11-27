@@ -114,6 +114,10 @@ GUARDRAIL_PATHS: tuple[str, ...] = (
     # (OMNI-36): a loop able to edit it could grade its own forecasts.
     "sis/prediction_error.py",
     "sis/cost.py",            # spend accounting that feeds the brakes
+    # The door to the public landing page (OMNI-229): what of the engine's
+    # records anyone on the web may read. A loop able to edit it could publish
+    # its exam's numbers or a licensed value.
+    "sis/site_export.py",
     # The proposer's workbench (OMNI-206): what model-written code may read
     # (the training split, never the held-out episodes) and what one
     # proposal may spend. A loop able to edit it could mount its own exam.
