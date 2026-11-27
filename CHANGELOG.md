@@ -13,6 +13,12 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+- OMNI-199: Phase B's milestone runs as one command,
+  `scripts/phase_b_demo.py`. A seeded supply shock breaches the error budget
+  for two windows, pages and starts a cycle through the `--loop` trigger; a
+  quiet market starts none. No credentials or LLM; `--cycle` also runs the
+  cycle with the stub proposer. `tests/test_phase_b_demo.py` pins the outcome.
+
 ## v0.9.0 — 2026-11-27
 
 Phase B (epic OMNI-194) reaches the box: the Friday run captures EIA's weekly

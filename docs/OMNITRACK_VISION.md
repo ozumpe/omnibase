@@ -240,6 +240,9 @@ Each phase ends in something runnable, in the style of the RUNBOOK levels.
 | **F** | E5: emergence gate + interaction contracts | system-level backtest over a multi-actor scenario; advisory verdict |
 | **G** | omnibase as its own target, behind a sealed judge ([OMNI-193](https://olafzumpe.atlassian.net/browse/OMNI-193)) | the loop proposes a change to omnibase's own engine code; it is validated, served as green beside blue and swapped in live (E3), or retired and reverted; a human signs off before `main` |
 
+Phase B's milestone runs with no credentials: `poetry run python scripts/phase_b_demo.py`
+(OMNI-199, [SENSOR_RUNBOOK.md](SENSOR_RUNBOOK.md#the-phase-b-demo-omni-199)).
+
 Rationale for the order: **sense → notice you're wrong → verify a fix → parallelise →
 swap live → integrate.** A and B are cheap and unlock the honest version of every later
 demo (you cannot backtest without event time, and you cannot justify a cycle without a
@@ -571,6 +574,9 @@ row, never an overwrite.*
 → *Wired into `--loop` (OMNI-197, `--loop-trigger model-error`, off by default): a standing
 error-budget firing pages and starts a cycle, skill decay starts one; the knobs are config
 (`model_error.mae_budget` and `breach_weeks`), tight early and loose later (OMNI-213).*
+→ *Demonstrated (OMNI-199, `scripts/phase_b_demo.py`): a seeded supply shock breaches the
+budget for two windows, pages and starts a cycle; a quiet market starts none. The scenario
+only starts the cycle; its candidate is still judged on held-out history (D4).*
 
 That's a decision to be made case by case, actor by actor and project by project. My opinion is to optimize the implementation
 of a model over time based on historic values/timelines. The situation for each actor can change suddenly and drastically - 

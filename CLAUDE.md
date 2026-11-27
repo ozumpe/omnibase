@@ -120,7 +120,7 @@ tag, not `develop`. What to work on next is in Jira, not here; defects are in
 `docs/KNOWN_ISSUES.md`.
 - omnitrack Phase A is done.
 - `ca_price_wholesale` (OMNI-163) is the first gated omnitrack contract; its private fixture is promoted.
-- Phase B is epic OMNI-194.
+- Phase B is epic OMNI-194; its milestone runs as `scripts/phase_b_demo.py` (OMNI-199).
 - Engine work continues under staged delivery (OMNI-128).
 
 Two traps worth knowing before writing similar code:
