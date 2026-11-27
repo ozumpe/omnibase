@@ -48,6 +48,10 @@ class Justification(str, Enum):
 GUARDRAIL_PATHS: tuple[str, ...] = (
     "sis/policy.py",          # this policy itself
     "sis/gauntlet.py",        # the validation moat + sandbox + timeout
+    # What a refusal is (OMNI-208): which gates are neutral and which are the
+    # harness's. A loop able to edit it could call every rejection neutral and
+    # keep it off the breaker, or blame its failures on the sandbox.
+    "sis/verdict.py",
     # What every comparing gate reduces candidate output to before `==` (H4):
     # a loop able to loosen it could return a value with its own __eq__ again.
     "sis/canonical.py",

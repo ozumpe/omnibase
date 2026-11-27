@@ -40,6 +40,7 @@ the candidate passes all gates.
 
 import ast
 import contextlib
+import dataclasses
 import functools
 import hashlib
 import json
@@ -64,6 +65,7 @@ from enum import Enum
 from typing import Any
 
 from sis import canonical, config
+from sis import verdict as verdict_mod
 from sis.backtest import (
     EXIT_BAD_FIXTURE,
     EXIT_MISMATCH,
@@ -101,6 +103,7 @@ from sis.paths import COMPARATORS_PATH, INVARIANTS_PATH, PROJECT_ROOT, SCENARIOS
 from sis.slo import EXIT_BAD_WORKLOAD, EXIT_NO_WORKLOAD, EXIT_RAISED, evaluate_slo
 from sis.slo import EXIT_NO_ENTRY as EXIT_NO_ENTRY_SLO
 from sis.slo import build_script as slo_script
+from sis.verdict import Verdict
 
 # Back-compat alias: the margin is now per-contract
 # (``OptimizationContract.max_latency_ratio``), because what counts as a
@@ -415,6 +418,20 @@ class Result:
     # reason string so it survives into the episodic log's reject_reason without
     # every caller having to plumb a new field.
     seed: int | None = None
+    # Which gate refused the candidate and what kind of refusal it is
+    # (OMNI-208). Set on every failure validate() returns; None on a pass.
+    # Code reads this, never the reason's wording.
+    verdict: Verdict | None = None
+
+
+def _reject(gate: str, reason: str, **fields: Any) -> Result:
+    """A failure *gate* decided, its kind fixed by the gate (:func:`sis.verdict.kind_of`)."""
+    return Result(passed=False, reason=reason, verdict=Verdict.of(gate, reason), **fields)
+
+
+def _harness(reason: str, **fields: Any) -> Result:
+    """A failure of the harness itself: the candidate was not judged."""
+    return _reject("harness", reason, **fields)
 
 
 def _digest(data: bytes) -> str:
@@ -771,13 +788,13 @@ def _worker_failure(
              for line in result.stderr.splitlines() if line.startswith(PROXY_NOTE)]
     note = notes[-1] if notes else "no detail"
     if result.returncode == PROXY_EXIT_HARNESS:
-        return Result(passed=False, reason=note if note.startswith("harness:")
-                      else f"harness: the {gate} gate's worker could not start ({note})")
+        return _harness(note if note.startswith("harness:")
+                        else f"harness: the {gate} gate's worker could not start ({note})")
     if result.returncode == PROXY_EXIT_MISSING:
-        return Result(passed=False, reason=f"interface: candidate does not export {note!r} "
+        return _reject("interface", f"interface: candidate does not export {note!r} "
                                            f"(required by contract {spec.name!r})")
     if result.returncode == PROXY_EXIT_NO_START:
-        return Result(passed=False, reason=f"interface: the candidate did not start in its "
+        return _reject("interface", f"interface: the candidate did not start in its "
                                            f"worker for the {gate} gate ({note})")
     return None
 
@@ -802,9 +819,7 @@ def _gate_invariant(ctx: _GateContext) -> Result | None:
 
     shared_src = pathlib.Path(INVARIANTS_PATH)
     if not shared_src.exists():
-        return Result(
-            passed=False,
-            reason=f"harness: shared invariants missing at {INVARIANTS_PATH} "
+        return _harness(f"harness: shared invariants missing at {INVARIANTS_PATH} "
                    "— the invariant gate cannot run",
         )
     shared_mod = ctx.put("invariants.py", shared_src.read_text(encoding="utf-8"))
@@ -836,48 +851,40 @@ def _gate_invariant(ctx: _GateContext) -> Result | None:
 
     detail = result.stdout.strip()
     if result.returncode == EXIT_NO_ENTRY_INV:
-        return Result(
-            passed=False,
-            reason=f"interface: candidate does not export {spec.entry!r} "
+        return _reject("interface", f"interface: candidate does not export {spec.entry!r} "
                    f"(required by contract {spec.name!r})",
             errors=result.stdout.splitlines(),
         )
     if result.returncode == EXIT_UNRESOLVED:
-        return Result(
-            passed=False,
-            reason="harness: an invariant names a strategy or predicate that exists "
+        return _harness("harness: an invariant names a strategy or predicate that exists "
                    "in neither the contract's oracle nor specs/invariants.py "
                    f"({detail.removeprefix('UNRESOLVED').strip()})",
             errors=result.stdout.splitlines(),
         )
     if result.returncode == EXIT_STRATEGY_ERROR:
-        return Result(
-            passed=False,
-            reason="harness: an invariant's strategy raised while generating inputs "
+        return _harness("harness: an invariant's strategy raised while generating inputs "
                    f"({detail.removeprefix('STRATEGY').strip()})",
             errors=result.stdout.splitlines(),
         )
     if result.returncode == EXIT_VIOLATED:
-        return Result(
-            passed=False,
+        return _reject(
+            "invariant",
             # The seed rides in the reason so it reaches ``reject_reason`` in the
             # episodic log. Without it a recorded violation names a counterexample
             # nobody can regenerate, which is most of the value of recording it.
-            reason=f"invariant violated in sandbox (seed={seed}): "
+            f"invariant violated in sandbox (seed={seed}): "
                    f"{detail.removeprefix('VIOLATED').strip()}",
             errors=result.stdout.splitlines(),
             seed=seed,
         )
     if result.returncode != 0:
-        return Result(
-            passed=False,
-            reason="harness: the invariant script crashed",
+        return _harness("harness: the invariant script crashed",
             errors=result.stderr.splitlines(),
         )
     if _ended_without_verdict(result.stdout, nonce):
-        return Result(
-            passed=False,
-            reason=f"invariant violated in sandbox (seed={seed}): the candidate ended the "
+        return _reject(
+            "invariant",
+            f"invariant violated in sandbox (seed={seed}): the candidate ended the "
                    "process before the laws finished, so there is no verdict",
             errors=result.stdout.splitlines(),
             seed=seed,
@@ -915,9 +922,7 @@ def _gate_backtest(ctx: _GateContext) -> Result | None:
 
     comparators_src = pathlib.Path(COMPARATORS_PATH)
     if not comparators_src.exists():
-        return Result(
-            passed=False,
-            reason=f"harness: shared comparators missing at {COMPARATORS_PATH} "
+        return _harness(f"harness: shared comparators missing at {COMPARATORS_PATH} "
                    "— the backtest gate cannot run",
         )
     comparators_mod = ctx.put("comparators.py", comparators_src.read_text(encoding="utf-8"))
@@ -931,17 +936,13 @@ def _gate_backtest(ctx: _GateContext) -> Result | None:
             if not path.exists():
                 where = (" — a private fixture is not in git: fetch it from the artifacts "
                          "bucket (docs/SENSOR_RUNBOOK.md)") if digest else ""
-                return Result(
-                    passed=False,
-                    reason=f"harness: backtest {bt.name!r} references a missing file "
+                return _harness(f"harness: backtest {bt.name!r} references a missing file "
                            f"({path}) — the backtest gate cannot run{where}",
                 )
             # Read once: the bytes checked are the bytes parsed and copied in.
             data = path.read_bytes()
             if digest is not None and hashlib.sha256(data).hexdigest() != digest:
-                return Result(
-                    passed=False,
-                    reason=f"harness: backtest {bt.name!r}: {relative} is not the file whose "
+                return _harness(f"harness: backtest {bt.name!r}: {relative} is not the file whose "
                            "digest is in git (private fixture changed or replaced)",
                 )
             try:
@@ -949,9 +950,7 @@ def _gate_backtest(ctx: _GateContext) -> Result | None:
             except UnicodeDecodeError as exc:
                 # Named here: decoded outside the handler below, it escaped as
                 # "the backtest gate raised", naming neither (OMNI-180, L65).
-                return Result(
-                    passed=False,
-                    reason=f"harness: backtest {bt.name!r} has a malformed fixture — "
+                return _harness(f"harness: backtest {bt.name!r} has a malformed fixture — "
                            f"{relative} is not UTF-8 ({exc.reason} at byte {exc.start})",
                 )
         fixture_text, expect_text = texts
@@ -961,9 +960,7 @@ def _gate_backtest(ctx: _GateContext) -> Result | None:
             parse_fixture(fixture_text, where=bt.fixture)
             parse_expectation(expect_text, where=bt.expect)
         except ValueError as exc:
-            return Result(
-                passed=False,
-                reason=f"harness: backtest {bt.name!r} has a malformed fixture — {exc}",
+            return _harness(f"harness: backtest {bt.name!r} has a malformed fixture — {exc}",
             )
         # Indexed filenames, not bt.name: a name is human-authored and may
         # contain a path separator or a character the filesystem dislikes.
@@ -989,57 +986,47 @@ def _gate_backtest(ctx: _GateContext) -> Result | None:
     if failure := _worker_failure(result, "backtest", spec):
         return failure
     if result.returncode == EXIT_NO_ENTRY:
-        return Result(
-            passed=False,
-            reason=f"interface: candidate does not export {spec.entry!r} "
+        return _reject("interface", f"interface: candidate does not export {spec.entry!r} "
                    f"(required by contract {spec.name!r})",
             errors=result.stdout.splitlines(),
         )
     if result.returncode == EXIT_NO_COMPARATOR:
-        return Result(
-            passed=False,
-            reason="harness: a backtest names a comparator that does not exist in the "
+        return _harness("harness: a backtest names a comparator that does not exist in the "
                    "contract's oracle or in specs/comparators.py",
             errors=result.stdout.splitlines(),
         )
     if result.returncode == EXIT_NO_BASELINE:
-        return Result(
-            passed=False,
-            reason="harness: the contract's skill baseline does not exist in its oracle, "
+        return _harness("harness: the contract's skill baseline does not exist in its oracle, "
                    "or did not return a number",
             errors=result.stdout.splitlines(),
         )
     if result.returncode == EXIT_NO_SKILL:
         detail = result.stdout.strip().rpartition("NOSKILL")[2].strip()
-        return Result(
-            passed=False,
-            reason="backtest failed: candidate did not beat the baseline on held-out "
+        return _reject(
+            "backtest",
+            "backtest failed: candidate did not beat the baseline on held-out "
                    f"history (mean absolute error not far enough below it) — {detail}",
             errors=result.stdout.splitlines(),
         )
     if result.returncode == EXIT_BAD_FIXTURE:
-        return Result(
-            passed=False,
-            reason="harness: a backtest fixture could not be read in the sandbox",
+        return _harness("harness: a backtest fixture could not be read in the sandbox",
             errors=result.stdout.splitlines(),
         )
     if result.returncode == EXIT_MISMATCH:
         detail = result.stdout.strip().removeprefix("MISMATCH").strip()
-        return Result(
-            passed=False,
-            reason=f"backtest failed: candidate did not reproduce recorded history — {detail}",
+        return _reject(
+            "backtest",
+            f"backtest failed: candidate did not reproduce recorded history — {detail}",
             errors=result.stdout.splitlines(),
         )
     if result.returncode != 0:
-        return Result(
-            passed=False,
-            reason="harness: the backtest script crashed",
+        return _harness("harness: the backtest script crashed",
             errors=result.stderr.splitlines(),
         )
     if _ended_without_verdict(result.stdout, nonce):
-        return Result(
-            passed=False,
-            reason="backtest failed: candidate did not reproduce recorded history — it ended "
+        return _reject(
+            "backtest",
+            "backtest failed: candidate did not reproduce recorded history — it ended "
                    "the process before the replay finished, so there is no verdict",
             errors=result.stdout.splitlines(),
         )
@@ -1079,8 +1066,7 @@ def _timed_out(result: subprocess.CompletedProcess[str], gate: str) -> Result | 
     value never appears in the episodic dataset (KNOWN_ISSUES.md L12).
     """
     if result.returncode == 124:
-        return Result(passed=False, reason=f"{gate} gate timed out",
-                      errors=result.stderr.splitlines())
+        return _reject("timeout", f"{gate} gate timed out", errors=result.stderr.splitlines())
     return None
 
 
@@ -1096,20 +1082,9 @@ DOCKER_FAULT_CODES = frozenset({125, 126, 127})
 # Gates that never touch the sandbox; a failure there cannot be a sandbox fault.
 _IN_PROCESS_GATES = frozenset({GateName.AST, GateName.NOOP})
 
-# What the gauntlet says when a gate runs out of time: "<gate> gate timed out"
-# (`_timed_out` and the worker gates) or the sandbox's own "gauntlet sandbox
-# timed out after Ns". Only at the start: further in, the words are what the
-# candidate raised or returned.
-_HARNESS_TIMEOUT = re.compile(r"(?:[\w-]+ gate|gauntlet sandbox) timed out\b")
-
-
-def is_harness_timeout(reason: str) -> bool:
-    """True if a rejection reason is the harness's own timeout, not the candidate's text.
-
-    The one classifier for both the probe decision (`_attribute`) and the
-    episodic store's `gate_from_reason`, so the two never disagree.
-    """
-    return _HARNESS_TIMEOUT.match(reason.lower()) is not None
+# The pre-OMNI-208 reading of an old record's reason; validate() itself sets
+# a typed verdict on every failure and never parses one.
+is_harness_timeout = verdict_mod.is_harness_timeout
 
 # The probe is a handful of file operations; it must not inherit a two-minute
 # gate timeout when the sandbox it is checking may be the thing that hangs.
@@ -1194,15 +1169,14 @@ def _attribute(failure: Result, gate: GateName, ctx: _GateContext) -> Result:
     already name the harness, and timeouts (their own reject gate, and a probe
     against a hung sandbox would only add a second wait).
     """
-    reason = failure.reason.lower()
-    if gate in _IN_PROCESS_GATES or reason.startswith("harness:") or is_harness_timeout(reason):
+    judged = failure.verdict
+    if gate in _IN_PROCESS_GATES or (
+            judged is not None and (judged.kind == "harness" or judged.gate == "timeout")):
         return failure
     fault = probe_sandbox(ctx.tmpdir, ctx.env)
     if fault is None:
         return failure
-    return Result(
-        passed=False,
-        reason=f"harness: the sandbox failed its self-check after the {gate.value} gate "
+    return _harness(f"harness: the sandbox failed its self-check after the {gate.value} gate "
                f"failed — {fault}; the candidate was not judged",
         errors=[f"original {gate.value} verdict: {failure.reason}", *failure.errors],
     )
@@ -1213,7 +1187,7 @@ def _gate_ast(ctx: _GateContext) -> Result | None:
     try:
         ast.parse(ctx.code_str)
     except SyntaxError as exc:
-        return Result(passed=False, reason=f"SyntaxError: {exc}")
+        return _reject("ast", f"SyntaxError: {exc}")
     return None
 
 
@@ -1228,12 +1202,10 @@ def _gate_noop(ctx: _GateContext) -> Result | None:
     prior version to be identical to.
     """
     if ctx.baseline_code is None:
-        return Result(
-            passed=False,
-            reason="harness: the no-op gate needs a baseline and none was prepared",
+        return _harness("harness: the no-op gate needs a baseline and none was prepared",
         )
     if ctx.code_str.strip() == ctx.baseline_code.strip():
-        return Result(passed=False, reason="no change: candidate is identical to the baseline")
+        return _reject("noop", "no change: candidate is identical to the baseline")
     return None
 
 
@@ -1247,9 +1219,9 @@ def _gate_mypy(ctx: _GateContext) -> Result | None:
     if timed_out := _timed_out(result, "mypy"):
         return timed_out
     if result.returncode != 0:
-        return Result(
-            passed=False,
-            reason="mypy --strict failed",
+        return _reject(
+            "mypy",
+            "mypy --strict failed",
             errors=result.stdout.splitlines() + result.stderr.splitlines(),
         )
     return None
@@ -1291,32 +1263,26 @@ def _gate_interface(ctx: _GateContext) -> Result | None:
         ).start()
     except WorkerStartError as exc:
         if exc.harness:
-            return Result(passed=False, reason=str(exc))
+            return _harness(str(exc))
         if exc.timed_out:
-            return Result(passed=False, reason="interface gate timed out",
-                          errors=str(exc).splitlines())
+            return _reject("timeout", "interface gate timed out", errors=str(exc).splitlines())
         if exc.missing:
-            return Result(
-                passed=False,
-                reason=f"interface: candidate does not export {','.join(exc.missing)!r} "
-                       f"(required by contract {spec.name!r})",
-            )
-        return Result(passed=False, reason="interface: candidate could not be imported",
+            return _reject("interface",
+                           f"interface: candidate does not export {','.join(exc.missing)!r} "
+                           f"(required by contract {spec.name!r})")
+        return _reject("interface", "interface: candidate could not be imported",
                       errors=str(exc).splitlines())
     entry = worker.exports[spec.entry]
     worker.close()
     if not entry.callable:
-        return Result(
-            passed=False,
-            reason=f"interface: candidate's {spec.entry!r} is not callable "
+        return _reject("interface", f"interface: candidate's {spec.entry!r} is not callable "
                    f"(required by contract {spec.name!r})",
         )
     if spec.determinism is Determinism.STOCHASTIC and "seed" not in (entry.params or ()):
-        return Result(
-            passed=False,
-            reason=f"interface: contract {spec.name!r} is stochastic, so {spec.entry!r} must "
-                   "accept a 'seed' parameter — without it a failure cannot be reproduced",
-        )
+        return _reject("interface",
+                       f"interface: contract {spec.name!r} is stochastic, so {spec.entry!r} "
+                       "must accept a 'seed' parameter — without it a failure cannot be "
+                       "reproduced")
     return None
 
 
@@ -1346,9 +1312,7 @@ def _gate_acceptance(ctx: _GateContext) -> Result | None:
     spec = ctx.contract
     tests_src = pathlib.Path(spec.tests_file)
     if not tests_src.exists():
-        return Result(
-            passed=False,
-            reason=f"harness: contract acceptance tests missing at {spec.tests_path} "
+        return _harness(f"harness: contract acceptance tests missing at {spec.tests_path} "
                    "— the acceptance gate cannot run",
         )
     tests = tests_src.read_text(encoding="utf-8")
@@ -1368,15 +1332,15 @@ def _gate_acceptance(ctx: _GateContext) -> Result | None:
     if failure := _worker_failure(result, "acceptance", spec):
         return failure
     if result.returncode != 0:
-        return Result(
-            passed=False,
-            reason="acceptance tests failed",
+        return _reject(
+            "acceptance",
+            "acceptance tests failed",
             errors=result.stdout.splitlines() + result.stderr.splitlines(),
         )
     if not _pytest_passed(result.stdout):
-        return Result(
-            passed=False,
-            reason="acceptance tests failed: pytest ended without reporting that the tests "
+        return _reject(
+            "acceptance",
+            "acceptance tests failed: pytest ended without reporting that the tests "
                    "passed, so the candidate is not believed",
             errors=result.stdout.splitlines() + result.stderr.splitlines(),
         )
@@ -1712,20 +1676,16 @@ def _gate_differential_benchmark(ctx: _GateContext) -> Result | None:
     """
     spec = ctx.contract
     if ctx.oracle is None:
-        return Result(
-            passed=False,
-            reason=f"harness: contract oracle missing at {spec.oracle_path} "
+        return _harness(f"harness: contract oracle missing at {spec.oracle_path} "
                    "— correctness and benchmark gates cannot run",
         )
     if ctx.baseline_code is None:
-        return Result(
-            passed=False,
-            reason="harness: the benchmark gate needs a baseline and none was prepared",
+        return _harness("harness: the benchmark gate needs a baseline and none was prepared",
         )
     try:
         oracle = _host_oracle(spec)
     except Exception as exc:  # noqa: BLE001 - trusted code that fails is the harness's fault
-        return Result(passed=False, reason=f"harness: the contract oracle does not load ({exc})")
+        return _harness(f"harness: the contract oracle does not load ({exc})")
 
     from sis.sandbox_worker import SandboxWorker, WorkerStartError
 
@@ -1735,7 +1695,7 @@ def _gate_differential_benchmark(ctx: _GateContext) -> Result | None:
         try:
             cand_cpu, base_cpu = benchmark_cpus(_sandbox_cpus(), _cpu_siblings())
         except (RuntimeError, ValueError) as exc:
-            return Result(passed=False, reason=f"harness: the benchmark's workers cannot be "
+            return _harness(f"harness: the benchmark's workers cannot be "
                                                f"confined to a CPU each ({exc})")
     deadline = time.monotonic() + _timeout_seconds()
     try:
@@ -1745,14 +1705,14 @@ def _gate_differential_benchmark(ctx: _GateContext) -> Result | None:
         # worker cannot start on that CPU either, the candidate was not judged.
         fault = _confinement_fault(cand_cpu)
         if fault is not None:
-            return Result(passed=False, reason=f"harness: a benchmark worker cannot be "
+            return _harness(f"harness: a benchmark worker cannot be "
                                                f"confined to CPU {cand_cpu} ({fault})")
         return _candidate_start_failure(exc, spec)
     try:
         try:
             base = SandboxWorker(ctx.baseline_code, spec.entry, cpu=base_cpu).start()
         except WorkerStartError as exc:
-            return Result(passed=False, reason=f"harness: the baseline did not start in its "
+            return _harness(f"harness: the baseline did not start in its "
                                                f"worker ({exc}) — the benchmark cannot run")
         try:
             return _judge(ctx, oracle, cand, base, deadline)
@@ -1779,14 +1739,13 @@ def _confinement_fault(cpu: int | None) -> str | None:
 
 def _candidate_start_failure(exc: Exception, spec: Contract) -> Result:
     if getattr(exc, "harness", False):
-        return Result(passed=False, reason=str(exc))
+        return _harness(str(exc))
     text = str(exc)
     if getattr(exc, "missing", ()):
-        return Result(passed=False,
-                      reason=f"interface: candidate does not export {spec.entry!r} "
+        return _reject("interface", f"interface: candidate does not export {spec.entry!r} "
                              f"(required by contract {spec.name!r})")
-    return Result(passed=False, reason=f"benchmark: the candidate did not start in its worker "
-                                       f"({' '.join(text.split())[:300]})")
+    return _reject("benchmark_worker", f"benchmark: the candidate did not start in its worker "
+                                f"({' '.join(text.split())[:300]})")
 
 
 def _exchange(worker: Any, calls: list[list[Any]], deadline: float, who: str) -> Any:
@@ -1795,21 +1754,21 @@ def _exchange(worker: Any, calls: list[list[Any]], deadline: float, who: str) ->
 
     remaining = deadline - time.monotonic()
     if remaining <= 0:
-        raise _WorkerFailed(Result(passed=False, reason="benchmark gate timed out"))
+        raise _WorkerFailed(_reject("timeout", "benchmark gate timed out"))
     try:
         return worker.call(calls, timeout_s=remaining)
     except WorkerTimeout as exc:
-        raise _WorkerFailed(Result(passed=False, reason="benchmark gate timed out",
-                                   errors=[str(exc)])) from exc
+        raise _WorkerFailed(_reject("timeout", "benchmark gate timed out",
+                                    errors=[str(exc)])) from exc
     except WorkerError as exc:
         detail = " ".join(str(exc).split())[:300]
         if who == "baseline":
-            raise _WorkerFailed(Result(
-                passed=False, reason=f"harness: the baseline's worker failed ({detail})")) from exc
+            raise _WorkerFailed(
+                _harness(f"harness: the baseline's worker failed ({detail})")) from exc
         # Not "harness:": the candidate can cause this (exit, or write to the
         # channel). _attribute's probe decides whether the sandbox is at fault.
-        raise _WorkerFailed(Result(
-            passed=False, reason=f"benchmark: the candidate's worker failed ({detail})")) from exc
+        raise _WorkerFailed(_reject(
+            "benchmark_worker", f"benchmark: the candidate's worker failed ({detail})")) from exc
 
 
 def _swap_cpus(cand: Any, base: Any, deadline: float) -> None:
@@ -1829,8 +1788,7 @@ def _swap_cpus(cand: Any, base: Any, deadline: float) -> None:
         cand.confine(ours)
         base.confine(theirs)
     except WorkerError as exc:
-        raise _WorkerFailed(Result(
-            passed=False, reason=f"harness: the benchmark's workers could not swap CPUs "
+        raise _WorkerFailed(_harness(f"harness: the benchmark's workers could not swap CPUs "
                                  f"({' '.join(str(exc).split())[:300]})")) from exc
     # One untimed exchange each, so the move has happened before the clock runs.
     _exchange(cand, [], deadline, "candidate")
@@ -1838,9 +1796,9 @@ def _swap_cpus(cand: Any, base: Any, deadline: float) -> None:
 
 
 def _mismatch(args: Any, why: str) -> _WorkerFailed:
-    return _WorkerFailed(Result(
-        passed=False,
-        reason="correctness mismatch (candidate disagrees with reference — "
+    return _WorkerFailed(_reject(
+        "correctness",
+        "correctness mismatch (candidate disagrees with reference — "
                "possible benchmark gaming)",
         errors=[f"MISMATCH {args!r:.300}", why],
     ))
@@ -1917,9 +1875,7 @@ def _judge(ctx: _GateContext, oracle: Any, cand: Any, base: Any,
     if not timed.batches:
         # The exam's fault, not the candidate's: no candidate can cause or cure
         # it. A human has to widen the oracle's random_input.
-        return Result(
-            passed=False,
-            reason=f"harness: the contract oracle's random_input gives too few distinct "
+        return _harness(f"harness: the contract oracle's random_input gives too few distinct "
                    f"inputs to benchmark — {timed.found} unused found, and {samples} samples "
                    f"need one each, since no input is timed twice (seed={bench_seed})",
             seed=bench_seed,
@@ -1960,9 +1916,9 @@ def _judge(ctx: _GateContext, oracle: Any, cand: Any, base: Any,
 
     decision = benchmark_decision(pairs, max_ratio=max_ratio, confidence=confidence)
     if decision.verdict is BenchmarkVerdict.UNMEASURABLE:
-        return Result(
-            passed=False,
-            reason=f"benchmark unmeasurable: only {decision.samples} usable timing pairs "
+        return _reject(
+            "benchmark_unmeasurable",
+            f"benchmark unmeasurable: only {decision.samples} usable timing pairs "
                    f"of {len(pairs)} (need {_MIN_DECIDABLE_PAIRS}); seed={bench_seed}",
             seed=bench_seed,
         )
@@ -1981,12 +1937,12 @@ def _judge(ctx: _GateContext, oracle: Any, cand: Any, base: Any,
         f"seed={bench_seed}"
     )
     if decision.verdict is BenchmarkVerdict.REJECT:
-        return Result(passed=False, reason=f"no improvement: {detail}",
+        return _reject("benchmark", f"no improvement: {detail}",
                       latency_seconds=candidate_latency, seed=bench_seed)
     # Inconclusive: the best estimate clears the margin, the interval cannot
     # confirm it. Neutral in the org (episodic.NEUTRAL_OUTCOMES); benchmark_decision
     # makes it unreachable for a candidate whose best estimate is slower.
-    return Result(passed=False, reason=f"benchmark inconclusive: {detail}",
+    return _reject("benchmark_inconclusive", f"benchmark inconclusive: {detail}",
                   latency_seconds=candidate_latency, seed=bench_seed)
 
 
@@ -2011,9 +1967,7 @@ def _gate_slo(ctx: _GateContext) -> Result | None:
     if slo is None:
         return None
     if slo.workload is not None and ctx.oracle is None:
-        return Result(
-            passed=False,
-            reason=f"harness: the SLO names workload {slo.workload!r} but the contract's "
+        return _harness(f"harness: the SLO names workload {slo.workload!r} but the contract's "
                    "oracle module is missing — the slo gate cannot run",
         )
 
@@ -2027,44 +1981,36 @@ def _gate_slo(ctx: _GateContext) -> Result | None:
     if timed_out := _timed_out(result, "slo"):
         return timed_out
     if result.returncode == EXIT_NO_ENTRY_SLO:
-        return Result(
-            passed=False,
-            reason=f"interface: candidate does not export {spec.entry!r} "
+        return _reject("interface", f"interface: candidate does not export {spec.entry!r} "
                    f"(required by contract {spec.name!r})",
             errors=result.stdout.splitlines(),
         )
     if result.returncode in (EXIT_NO_WORKLOAD, EXIT_BAD_WORKLOAD):
-        return Result(
-            passed=False,
-            reason=f"harness: the SLO workload {slo.workload!r} could not be produced "
+        return _harness(f"harness: the SLO workload {slo.workload!r} could not be produced "
                    f"({result.stdout.strip()}) — the slo gate cannot run",
             errors=result.stdout.splitlines(),
         )
     if result.returncode == EXIT_RAISED:
-        return Result(
-            passed=False,
-            reason="slo workload raised: the candidate raised on an SLO workload input "
+        return _reject(
+            "slo_error",
+            "slo workload raised: the candidate raised on an SLO workload input "
                    f"({result.stdout.strip().removeprefix('RAISED').strip()})",
             errors=result.stdout.splitlines(),
         )
     out = result.stdout.strip()
     if result.returncode != 0 or not out.startswith("TIMINGS"):
-        return Result(
-            passed=False,
-            reason="harness: the slo timing script crashed",
+        return _harness("harness: the slo timing script crashed",
             errors=result.stderr.splitlines(),
         )
     try:
         bests = [float(t) for t in json.loads(out.removeprefix("TIMINGS"))]
     except (ValueError, TypeError):
-        return Result(
-            passed=False,
-            reason="harness: the slo timing script returned unreadable timings",
+        return _harness("harness: the slo timing script returned unreadable timings",
             errors=result.stdout.splitlines(),
         )
     verdict = evaluate_slo(slo, bests)
     if not verdict.passed:
-        return Result(passed=False, reason=verdict.reason, latency_seconds=verdict.observed_seconds)
+        return _reject("slo", verdict.reason, latency_seconds=verdict.observed_seconds)
     # A Class-2 profile has no benchmark, so this is the only latency the
     # cycle has to report; never overwrite a benchmark's measurement.
     if ctx.candidate_latency is None:
@@ -2083,6 +2029,9 @@ _GATES: dict[GateName, Callable[[_GateContext], Result | None]] = {
     GateName.DIFFERENTIAL_BENCHMARK: _gate_differential_benchmark,
     GateName.SLO: _gate_slo,
 }
+
+# The episodic name of a gate whose own name differs from it.
+_REJECT_GATE = {GateName.DIFFERENTIAL_BENCHMARK: "benchmark"}
 
 # Gates that need the baseline written into the sandbox.
 _NEEDS_BASELINE = frozenset({GateName.NOOP, GateName.DIFFERENTIAL_BENCHMARK})
@@ -2186,19 +2135,23 @@ def validate(
                 # the candidate. Returned rather than raised, so the cycle keeps
                 # its episodic record, its spend and its breaker count (OMNI-64).
                 detail = " ".join(f"{type(exc).__name__}: {exc}".split())[:300]
-                return Result(passed=False,
-                              reason=f"harness: the {gate_name.value} gate raised ({detail})",
-                              errors=traceback.format_exc().splitlines())
+                return _harness(f"harness: the {gate_name.value} gate raised ({detail})",
+                                errors=traceback.format_exc().splitlines())
             # Before anything is concluded from the gate: a gate that ran beside
             # a candidate which rewrote the exam has not judged it. Checked when
             # the gate passed too, since a pass is exactly what tampering buys.
             if changed := ctx.tampering():
-                return Result(
-                    passed=False,
-                    reason=f"tampered: the candidate changed the exam files while the "
+                return _reject(
+                    "tampering",
+                    f"tampered: the candidate changed the exam files while the "
                            f"{gate_name.value} gate ran ({changed})",
                 )
             if failure:
+                if failure.verdict is None:
+                    # Every failure site sets its verdict; this only keeps a
+                    # future one that forgets from reaching the org untyped.
+                    failure = dataclasses.replace(failure, verdict=Verdict.of(
+                        _REJECT_GATE.get(gate_name, gate_name.value), failure.reason))
                 return _attribute(failure, gate_name, ctx)
 
         return Result(
