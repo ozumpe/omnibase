@@ -117,7 +117,7 @@ moment in `args[0]`: `{"as_of": ..., "readings": [...], "absent": [...]}`, the
 as-of view of `sis/replay.py`. The gate never reads `event_time` itself, so what a
 model may use has to be in `args`. Such a fixture arrives here only through
 `python -m sis.contract_author promote` with the digest a human reviewed
-([sensor runbook](../docs/SENSOR_RUNBOOK.md), "From a trace to a fixture").
+([sensor runbook](../docs/SENSOR_RUNBOOK.md), "Build a fixture").
 
 When `event_time` is present it is **parsed and validated** (`sis/clock.py`), not
 carried around as whatever string was in the file:

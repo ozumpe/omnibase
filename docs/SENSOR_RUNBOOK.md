@@ -1,497 +1,256 @@
-# Sensor capture and replay
+# Sensor runbook
 
-The sensor implementation reads observations, not a fuel-market model. The
-current EIA adapter captures five weekly series and one daily one into a local trace, and
-generated scenarios (OMNI-34) replay through the simulated sensor, and a
-predictor's error can be computed on either (OMNI-36). Two domain fixtures
-have been built from the trace and promoted: `ca_price_next_week` (public,
-OMNI-35) and `ca_price_wholesale` (private, OMNI-163). No control-loop
-consumer reads the sensor live; the loop sees only promoted fixtures. This guide describes the current working-tree
-implementation of OMNI-33, not its availability in older release tags.
+How to capture EIA data, build fixtures from it, and measure prediction error.
+Run every command from the repository root. Bucket used below:
+`sis-first-run-artifacts-696644743351` (the artifacts bucket).
 
-## Capture EIA observations
+## Weekly: nothing to do
 
-From the repository root:
+The Friday AWS run captures EIA's Wednesday release into the bucket's
+`traces/eia.jsonl` (OMNI-214). That file is the canonical trace. A failed
+capture leaves it unchanged, pages you over SNS, and the run carries on. A
+missed week is not lost: the next capture records it.
+
+## Once: seed the bucket
+
+Do this once, from the machine that held the trace until now (your Mac):
 
 ```bash
+aws s3api put-object --bucket sis-first-run-artifacts-696644743351 --key traces/eia.jsonl --body runtime/sensor_traces/eia.jsonl --if-none-match '*'
+aws s3 ls s3://sis-first-run-artifacts-696644743351/traces/
+```
+
+`--if-none-match '*'` refuses if a trace is already there. From then on, never
+capture into a local copy by hand, or the two drift apart.
+
+## Get a local copy of the trace
+
+```bash
+aws s3 cp s3://sis-first-run-artifacts-696644743351/traces/eia.jsonl runtime/sensor_traces/eia.jsonl
+```
+
+## Capture by hand (only if you must)
+
+Go through the bucket, so nothing is overwritten:
+
+```bash
+aws s3api get-object --bucket sis-first-run-artifacts-696644743351 --key traces/eia.jsonl runtime/sensor_traces/eia.jsonl
+# note the "ETag" it prints, e.g. "\"abc123...\""
 poetry install --with real
 poetry run python scripts/capture_sensor.py
+aws s3api put-object --bucket sis-first-run-artifacts-696644743351 --key traces/eia.jsonl --body runtime/sensor_traces/eia.jsonl --if-match '"abc123..."'
 ```
 
-The script downloads EIA's bulk petroleum file `PET.zip` without an API key.
-It extracts declared series, sanitises their records, and appends to
-`runtime/sensor_traces/eia.jsonl`. It does not need Ray, GitHub, Jira or
-Confluence credentials. Run captures explicitly; neither selecting the sensor
-backend nor starting `main.py` schedules them.
+If `put-object` refuses, someone else wrote first: start again from `get-object`.
 
-**The canonical trace is the artifacts bucket's** `traces/eia.jsonl`
-(OMNI-214), and the weekly scheduled AWS run captures into it, on Friday,
-after EIA's Wednesday release ([AWS_RUN.md](AWS_RUN.md#scheduled-runs-omni-168-omni-169)).
-Before its preflight the run fetches the trace with its ETag, runs
-`scripts/capture_sensor.py`, reads the trace back through the door, and writes
-it back only if the bucket still holds the version it read (`--if-match`), so
-two writers cannot interleave. The log shows line counts, never values. A
-capture that fails, appends nothing, or cannot be written back leaves the
-bucket's trace as it was and pages through the SNS topic; the loop's run goes
-on, since its contract judges on its own fixtures. A missed week is not lost
-(the next capture still records the values, known at its own fetch time), but
-the prediction-error report cannot score a week whose next value was already
-known when it was asked (M34).
+### What a capture does
 
-**Seed the bucket once**, from the machine that held the canonical trace until
-now, before the first scheduled capture (S3 versioning keeps every later
-write):
+- Downloads EIA's bulk file `PET.zip` (about 56 MB, no key), sanitises the
+  declared series and appends to `runtime/sensor_traces/eia.jsonl`.
+- Derives the refinery-outage flags into `runtime/sensor_traces/events.jsonl`
+  (`--no-events` skips it).
+- Scores the live predictor on newly scorable weeks into the episodic error
+  series, `runtime/episodic_scored.jsonl` (`--no-score` skips it).
+- Prints received, appended, reconstructed and refused counts.
+- **Exit 0:** no problem reported. **Exit 1:** a refusal, a missing series or a
+  vanished period; values may still have been appended, so read the report
+  before retrying. Fetch or format errors raise.
 
-```bash
-aws s3 cp runtime/sensor_traces/eia.jsonl \
-  "s3://$ARTIFACTS_BUCKET/traces/eia.jsonl" --if-none-match '*'
-```
+### Series captured
 
-After that a local trace is a mirror: copy it down
-(`aws s3 cp "s3://$ARTIFACTS_BUCKET/traces/eia.jsonl" runtime/sensor_traces/eia.jsonl`)
-and don't capture into it by hand, or the bucket and the copy part ways. A
-capture you must run by hand goes through the bucket: fetch, capture, and
-upload with `aws s3api put-object … --if-match <the ETag you fetched>`.
-
-| Bulk-file series | Observation | Published unit |
+| Bulk-file series | Observation | Unit |
 |---|---|---|
-| `PET.WGTSTP51.W` | PADD 5 total gasoline stocks | Thousand Barrels |
-| `PET.EMM_EPMRR_PTE_SCA_DPG.W` | California regular reformulated retail price | Dollars per Gallon |
-| `PET.EMM_EPMRR_PTE_Y05LA_DPG.W` | Los Angeles regular reformulated retail price | Dollars per Gallon |
-| `PET.EMM_EPMRR_PTE_Y05SF_DPG.W` | San Francisco regular reformulated retail price | Dollars per Gallon |
-| `PET.EMM_EPMRR_PTE_NUS_DPG.W` | US regular reformulated retail price | Dollars per Gallon |
-| `PET.EER_EPMRR_PF4_Y05LA_DPG.D` | Los Angeles RBOB spot price, daily (licensed, see below) | Dollars per Gallon |
+| `PET.WGTSTP51.W` | PADD 5 gasoline stocks | Thousand Barrels |
+| `PET.EMM_EPMRR_PTE_SCA_DPG.W` | California retail price | $/gal |
+| `PET.EMM_EPMRR_PTE_Y05LA_DPG.W` | Los Angeles retail price | $/gal |
+| `PET.EMM_EPMRR_PTE_Y05SF_DPG.W` | San Francisco retail price | $/gal |
+| `PET.EMM_EPMRR_PTE_NUS_DPG.W` | US retail price | $/gal |
+| `PET.EER_EPMRR_PF4_Y05LA_DPG.D` | Los Angeles RBOB spot, daily (**licensed**) | $/gal |
+| `PET.W_NA_YUP_R50_PER.W` | PADD 5 refinery utilisation (events only) | % |
 
-The Los Angeles spot price is Thomson Reuters' data, which EIA republishes
-under licence. EIA's reuse policy puts it under "Protected materials", not the
-public-domain line: it may be modelled, and its raw values may not be
-redistributed. The trace is gitignored. A fixture committed under `specs/`
-shows only `EIA_PUBLIC_SERIES` (`scripts/build_fixture.py`), so never this
-series; one that shows it is private (see "A private fixture" below). Do not
-paste its values into a PR, a ticket or a public log. Spot
-prices are released once a week on Wednesday, so a day's value is taken as
-known on the first Thursday at least three days later, at 17:00 ET.
+**The LA spot price is Thomson Reuters' data.** Model it, never publish its
+values: not in git, a PR, a ticket or a public log. The trace is gitignored,
+and a committed fixture shows only `EIA_PUBLIC_SERIES`. A fixture that needs
+the spot price is private (below).
 
-Stocks and prices have different reporting geographies and anchor days. This
-adapter does not capture production, inter-PADD transfers, traffic or station
-sales. Adding a series requires its declared unit, plausible range and
-publication assumptions to be reviewed in `sis/adapters_real.py`; generated
-code cannot extend that guardrail list.
-
-Every capture prints received, appended, reconstructed and refused counts,
-missing series and any periods the publisher no longer sends. Unchanged values
-add no new value lines, but a capture header is still appended.
-
-Exit code 0 means none of those problem conditions was reported. Exit code 1
-means a refusal, missing series or vanished period; **accepted values may still
-have been appended**. Inspect the report and its capture header before retrying.
-Fetch/format errors raise rather than producing a normal successful report.
-
-### The refinery-outage events (OMNI-227)
-
-A coarse event signal for price shocks stocks and prices cannot explain.
-
-- **Source:** EIA's weekly West Coast (PADD 5) refinery utilisation,
-  `PET.W_NA_YUP_R50_PER.W`, from the same bulk file and the same Wednesday
-  release (Weekly Petroleum Status Report) the capture above already fetches.
-  No extra download, no key, history from 2010.
-- **Licence:** EIA's own data, public domain (the bulk file says
-  `copyright: None`). It may be shown in public fixtures and prompts.
-  (EIA's "This Week in Petroleum" commentary, the other free candidate, stopped
-  in October 2025.)
-- **Event:** a week whose utilisation fell at least 4 percentage points from
-  the week before is 1, any other week 0 (`sis/events.py`). 2018 to 2026 has
-  about five such weeks a year, the September 2019 refinery outages among them.
-- **Refresh:** every capture. `scripts/capture_sensor.py` derives the flags
-  after appending the EIA values and appends what is new or changed to
-  `runtime/sensor_traces/events.jsonl` (`--no-events` skips it). The first run
-  backfills each flag known when the later of its two utilisation values was;
-  later, a new or revised flag is known at the capture that found it.
-- **Where it shows:** only in a training split built with `--events`
-  (below), marked to the proposer as context that an episode never shows. No
-  gate reads it.
+Adding a series means reviewing its unit, range and release schedule in
+`sis/adapters_real.py`. Generated code cannot extend that list.
 
 ## Check connectivity
 
-`poetry run python scripts/check_connections.py --deep` includes a sensor check
-alongside the other adapter checks. It sends a HEAD request to EIA and reports
-the local trace summary. It does not download the bulk data, validate its five
-series or run the trace through the sanitising boundary. An empty trace can
-therefore pass connectivity. Other checks may need configured credentials.
-
-## Read and replay
-
-The configured `sensor.backend` values are `sim` and `real`; see `config.yml`
-for the env/CLI layers. `make_sensor("real")` constructs `EIASensor` and performs
-no download. Pass the resulting sensor explicitly to a consumer, rather than
-looking it up inside an actor. An uncaptured sensor returns no readings.
-
-For example, read observations that became known within a UTC window:
-
-```python
-from datetime import datetime, timezone
-
-from sis.adapters import make_sensor
-from sis.ports import TimeAxis
-
-sensor = make_sensor("real")
-readings = sensor.read(
-    datetime(2026, 10, 1, tzinfo=timezone.utc),
-    datetime(2026, 10, 8, tzinfo=timezone.utc),
-    by=TimeAxis.KNOWN,
-)
+```bash
+poetry run python scripts/check_connections.py --deep
 ```
 
-Windows are half-open `[start, end)` and both bounds must have timezones.
-`TimeAxis.EVENT` selects the period described; `TimeAxis.KNOWN` selects when a
-reading became available. Results are sorted deterministically by the selected
-axis, then the other time, source and series. `replay()` in `sis/adapters.py`
-advances a supplied `ReplayClock` along that explicit axis.
+This only sends a HEAD request to EIA and summarises the local trace. It does
+not download or validate data, so an empty trace passes.
 
-A read returns the matching revisions, not a deduplicated latest-value snapshot.
-An event-time read can therefore include values learned later. Consumers must
-enforce their as-of cutoff and resolve revisions explicitly. A known-time replay
-can process revisions as they arrive.
+## Build a fixture
 
-`EIASensor.read()` returns readings only, so it cannot show a value EIA has
-withdrawn. `EIASensor.absent()` takes the same window and axis, and returns the
-periods EIA stated no value for, each with its own `known_at`. A value EIA
-published and later blanked appears in `read()` at its first `known_at`, and in
-`absent()` from the moment it was blanked. An as-of view that should drop
-withdrawn values must take both.
+A fixture reaches `specs/` only through `promote` with a digest you reviewed.
+Every build reads the trace through the sanitising door and refuses a reading
+the release calendar does not cover.
 
-**What a model may see at a moment** is `sis.replay.as_of(readings, absent, t)`,
-the rule OMNI-35 decided before the first fixture: a replay runs on `known_at`;
-at `t` a model sees, per period, the latest vintage known by `t`, and no value a
-later withdrawal hid. Mixed anchors are not aligned. Two vintages of one period
-known at the same instant are refused (`AmbiguousVintage`).
+### Public: `ca_price_next_week`
 
-## From a trace to a fixture
-
-A fixture is the exam, so it reaches `specs/` only through `promote`, which
-takes a reviewed digest and has no override. The release calendar no longer
-needs a person (CI checks and signs it, OMNI-190); promotion still does.
-Moving promotion to a trusted job outside the loop, on a private runner, is
-[OMNI-215](https://olafzumpe.atlassian.net/browse/OMNI-215).
-
-1. **The release calendar.** `scripts/data/eia_release_calendar_2021_2022.json`
-   records when each period was really released (WPSR archive for stocks, ALFRED's
-   release dates for retail prices). It was checked by hand before OMNI-190 and is
-   frozen with its fixture. A new or extended calendar takes the CI-checked path
-   described under "A private fixture" below. An unchecked calendar refuses every build.
-2. **Build and stage:** `poetry run python scripts/build_fixture.py`. It reads the
-   trace back through the door, gives every reconstructed reading it shows a
-   `known_at` no earlier than the end of its release day, refuses a reading the
-   calendar does not cover, and stages the draft under
-   `runtime/contract_staging/ca_price_next_week/` with its digest.
-3. **Review:** `poetry run python -m sis.contract_author review ca_price_next_week`
-   lists every file with its hash and the manifest digest.
-4. **Promote:** `poetry run python -m sis.contract_author promote ca_price_next_week
-   --digest <digest> --reason "..."`. It refuses a different digest or a file changed
-   since review, and audits to `runtime/operator_audit.jsonl`. Commit the new
-   `specs/` directory through a pull request.
-
-### A private fixture (OMNI-163)
-
-`ca_price_wholesale` shows the licensed LA spot price, so its episodes may not
-be committed. The steps are the same, with these differences:
-
-1. **The calendar is checked by CI** (OMNI-190). It also needs the spot
-   price's releases. The source copies it is drafted from are committed under
-   `scripts/data/release_calendar_sources/`, reduced to dates and pinned by
-   sha256 in `sources.json`; CI re-drafts the calendar from them and fails on
-   any difference (`draft_release_calendar.py check`), and `build_fixture.py`
-   checks a CI sign-off again before it builds. To extend it:
-   `python scripts/draft_release_calendar.py urls --sources DIR --last DATE`
-   prints what to save into `DIR` (`curl -sSL -o DIR/<name> '<url>'`; run it
-   again once the `*_vintages.html` files are saved, for the CSVs). Then
-   `save --sources DIR --last DATE` reduces them into the committed folder
-   (every CSV value becomes `x`: the spot prices are licensed), `draft
-   --sources scripts/data/release_calendar_sources --last DATE` writes the
-   calendar, and `sign` fills in `checked_by` (`CI, sources sha256:…`) and
-   `checked_on`. Commit all of it through a pull request. Keep the raw copies
-   out of git (the artifacts bucket); `sources.json` records each one's
-   sha256 as `raw_sha256`. The spot dates come from ALFRED's `DGASUSGULF`,
-   the Gulf Coast price from the same weekly EIA release, because ALFRED does
-   not carry the LA series; the retail dates from ALFRED's release list and
-   `GASREGW`'s vintages, the later where they differ.
-2. **Build:** `python scripts/build_fixture.py --fixture ca_price_wholesale`
-   builds every week from 6 January 2020 to the last the trace answers (about
-   350 episodes, about 40 MB). Once a `private.json` is promoted, a plain build
-   rebuilds exactly its weeks instead; new weeks come only by rotation (below). A fresh capture backfills its history as
-   reconstructed, which needs the calendar, so the build stops at the last
-   week the calendar covers and prints it, with the week the trace goes to.
-   To build further, extend the calendar (step 1). `--last
-   YYYY-MM-DD` sets the last week yourself; one past the calendar is refused. Each question is asked on Thursday at 17:00 ET,
-   a day after the retail price is out, when Monday's spot price is known.
-   The episodes are staged under `private/`, with `private.json` listing the
-   sha256 of each.
-3. **Review and promote** as above. `specs/ca_price_wholesale/private/` is
-   gitignored. Commit only `private.json`, `README.md` and the calendar.
-4. **Keep the private files in the artifacts bucket**, not in git:
-   `aws s3 sync specs/ca_price_wholesale/private/
-   s3://<artifacts bucket>/specs/ca_price_wholesale/private/`. On another
-   machine, sync them back into the same directory (`docs/AWS_RUN.md` step
-   5a has the commands; a scheduled AWS run fetches and checks them itself,
-   OMNI-177). The backtest gate checks
-   every file against `private.json` and refuses a missing or different one as
-   a `harness:` fault, so a verdict is only reached on the data a human
-   promoted.
-
-### Rotating the held-out weeks (OMNI-225)
-
-Each held-out fixture gives a limited number of judgements (`sis/holdout.py`).
-When they run out, or earlier, rotate: the weeks published after the current
-held-out set become the new one, and the old held-out weeks join the training
-split. Nothing already judged is judged again.
-
-1. **Capture** as every week (`scripts/capture_sensor.py`), and **extend the
-   release calendar** past the new weeks (step 1 above): the build covers only
-   what the calendar does.
-2. **Build:** `python scripts/build_fixture.py --fixture ca_price_wholesale
-   --rotate`. It needs at least `brakes.holdout_rotation_min_weeks` fresh weeks
-   after the committed set's last one; with fewer it refuses and names the week
-   that makes enough. It stages the new episodes, `private.json`, `README.md`,
-   the calendar and the new `training.json` as one draft.
-3. **Review and promote** that one digest, as above. The promotion overwrites
-   `private.json` and `training.json`; the old private files stay on disk,
-   unlisted, and no gate reads them.
-4. **Upload** `specs/ca_price_wholesale/private/` to the artifacts bucket (step
-   4 above; the new files sit beside the old ones) and open the pull request
-   with `private.json`, `training.json`, `README.md` and the calendar. After the
-   merge, `python -m sis.admin holdout` shows the new fixture at zero used.
-
-### A training split (OMNI-205)
-
-A contract judged on held-out history may also have a training split,
-`specs/<name>/training.json`: what was known just before the first held-out
-question, from a start date on, by the same replay rule and release calendar
-as an episode. The proposer sees it in its prompt as one table per series, so
-it can fit a model instead of guessing; no gate reads it. It shows public
-series only (the build drops a licensed one such as the LA spot price), and it
-is committed, so a prompt never holds more than git does.
-
-1. **Build:** `python scripts/build_fixture.py --fixture ca_price_wholesale
-   --training`. It starts at the first week the release calendar covers
-   (3 December 2018); `--first YYYY-MM-DD` starts elsewhere, and a reading the
-   calendar does not cover is refused, so extend the calendar back first for a
-   longer split.
-   Add `--events` to show the refinery-outage events too, as context (from
-   `runtime/sensor_traces/events.jsonl`, or `--events-trace PATH`).
-2. **Review and promote** as above (the draft holds only `training.json`).
-   Commit it through a pull request. The contract picks it up on the next
-   start; it refuses a split with any record from on or after the first
-   held-out week (`check_training`).
-
-## Generated scenarios
-
-Scenarios drive a twin into situations the record does not hold (OMNI-34). Each
-is a pure function of its kind and seed, so a failure it finds reproduces byte
-for byte:
-
-```python
-from sis import scenarios
-from sis.ports import TimeAxis
-
-generated = scenarios.generate("supply_shock", seed=7,
-                               data_events=("missing_week", "republished", "withdrawn"))
-sensor = generated.sensor()                    # a SimSensor, read like a trace
-at = generated.decision_times()[5]             # when a California price became known
+```bash
+poetry run python scripts/build_fixture.py
+poetry run python -m sis.contract_author review ca_price_next_week
+poetry run python -m sis.contract_author promote ca_price_next_week --digest <digest from review> --reason "..."
 ```
 
-The kinds are `supply_shock`, `outage`, `national_move` and `demand_shock`; the
-data events a missing week (stated `NA`), a value re-published a week later and
-a value withdrawn a week later (`W`). Stocks keep their Friday anchor and prices
-their Monday one, with the EIA sensor's reconstructed release times. Magnitudes
-stay inside what the real series have shown (`OBSERVED` in the generator)
-unless a caller passes `stress=True`, and the scenario then says so.
+Commit the new `specs/` directory through a pull request.
 
-The generator is `specs/scenarios.py`, the pinned copy the gauntlet uses: the
-invariant gate's `fuel_scenario_states` strategy draws a state shaped as a
-backtest fixture's argument. `runtime/scenarios.py` is the working copy the
-loop may improve; nothing reads it to judge anything (D7). Every scenario
-reading has source `sim`, and a backtest fixture holding one is refused:
-a scenario may reject a candidate, never be the evidence that promotes one (D4).
+### Private: `ca_price_wholesale`
+
+```bash
+poetry run python scripts/build_fixture.py --fixture ca_price_wholesale
+poetry run python -m sis.contract_author review ca_price_wholesale
+poetry run python -m sis.contract_author promote ca_price_wholesale --digest <digest from review> --reason "..."
+aws s3 sync specs/ca_price_wholesale/private s3://sis-first-run-artifacts-696644743351/specs/ca_price_wholesale/private/
+```
+
+- Commit only `private.json`, `README.md` and the calendar. `private/` is gitignored.
+- Once `private.json` is promoted, a plain build rebuilds exactly its weeks.
+  New weeks come only by rotation.
+- The build stops at the last week the release calendar covers and prints it.
+  `--last YYYY-MM-DD` picks an earlier end.
+- On another machine, sync the private files back (AWS_RUN.md step 5a). The
+  scheduled AWS run fetches and checks them itself. The backtest gate refuses
+  a missing or changed file as a `harness:` fault.
+
+### Rotate the held-out weeks (OMNI-225)
+
+When the held-out judgements run out (`python -m sis.admin holdout`), or earlier:
+
+1. Extend the release calendar past the new weeks (next section).
+2. Build, review and promote the one draft:
+   ```bash
+   poetry run python scripts/build_fixture.py --fixture ca_price_wholesale --rotate
+   ```
+   It needs at least `brakes.holdout_rotation_min_weeks` fresh weeks, and with
+   fewer it names the week that makes enough.
+3. Sync `private/` to the bucket (as above) and open a PR with `private.json`,
+   `training.json`, `README.md` and the calendar.
+
+The new weeks become the held-out set and the old ones join the training split.
+
+### Training split (OMNI-205)
+
+```bash
+poetry run python scripts/build_fixture.py --fixture ca_price_wholesale --training
+```
+
+Then review and promote as above and commit `training.json` through a PR.
+
+- Public series only. The LA spot price is dropped.
+- Starts at the calendar's first week (3 December 2018); `--first YYYY-MM-DD` changes it.
+- `--events` adds the refinery-outage flags as context.
+- The proposer sees it; no gate reads it. A split with a record on or after the
+  first held-out week is refused.
+
+### Extend the release calendar (OMNI-190)
+
+The calendar records when each period was really released. CI re-drafts it
+from committed source copies and signs it; an unsigned calendar refuses every
+build.
+
+```bash
+python scripts/draft_release_calendar.py urls --sources DIR --last YYYY-MM-DD
+# download each printed URL into DIR (curl -sSL -o DIR/<name> '<url>'), run again for the CSVs
+python scripts/draft_release_calendar.py save --sources DIR --last YYYY-MM-DD
+python scripts/draft_release_calendar.py draft --sources scripts/data/release_calendar_sources --last YYYY-MM-DD
+python scripts/draft_release_calendar.py sign
+```
+
+Commit the result through a PR. Keep the raw downloads out of git (bucket).
+`save` replaces every CSV value with `x`, because the spot prices are licensed.
 
 ## Prediction error
 
-How wrong a predictor is, week by week (OMNI-36), and how it compares with
-climatology (OMNI-195). Nothing acts on the number yet: an error budget and
-skill against climatology are Phase B's triggers (D9), and this starts no
-cycle.
-
-Climatology is the baseline the skill is measured against. At each question
-it forecasts the latest price plus the mean change from that ISO week to the
-next in the earlier years the predictor is shown, computed on the host from
-the same readings: the same as-of view, back to the same lookback. With the
-default 52 weeks that is last year alone, and nothing in the year after a
-53-week ISO year (2021, 2027), whose twin week is 53 weeks back. It learns a seasonal *change*, not a seasonal
-level, so a market that moved a dollar since last year is not forecast to
-move back. A week with no earlier year in view has no climatology. The
-summary line adds climatology's MAE and the skill, 1 − MAE(model) /
-MAE(climatology), over the weeks both were scored: above 0 the model beats
-climatology. On autumn 2022, persistence scored about −0.03 (MAE 0.179 against
-climatology's 0.173) while climatology still averaged up to five years; with
-one year it needs measuring again on the canonical trace.
+How wrong a predictor is, week by week, and its skill against climatology
+(1 − MAE(model) / MAE(climatology); above 0 beats climatology).
 
 ```bash
-poetry run python scripts/prediction_error.py                    # autumn 2022, from the EIA trace
+poetry run python scripts/prediction_error.py                    # autumn 2022
 poetry run python scripts/prediction_error.py --from 2022-06-01 --to 2023-01-01
 poetry run python scripts/prediction_error.py --scenario supply_shock --seed 7
-poetry run python scripts/prediction_error.py --scenario outage --seed 3 --events missing_week withdrawn
-```
-
-The question is the fixture builder's: at the moment California's price for a
-week first became known, given everything known then (`replay.as_of`), what is
-next week's price? So the predictor never sees a value before its `known_at`.
-Its answer is compared with next week's value as the trace holds it now, the
-latest vintage; a week whose next value is missing or withdrawn is skipped,
-never scored. The error is signed, predicted minus actual in $/gal, and the
-summary gives bias, MAE and RMSE. A persistence forecast in a rising market
-shows a negative bias.
-
-The predictor is `runtime/ca_price_persistence.py` once the loop has built it
-(the Class-2 contract `ca_price_persistence`), and until then the shipped
-persistence stub; `--predictor PATH` names another. It runs in the sandbox
-worker, never in the script's process. From code,
-`sis.prediction_error.publish(report, telemetry, ref=..., record=self_model.record.remote)`
-emits one `prediction.error` event per week and a `prediction.summary`, and
-records the summary in the SelfModel's provenance.
-
-A trace replay needs a capture first (`scripts/capture_sensor.py`); without
-one the script exits 1 and says so.
-
-### The error series, scored after each capture (OMNI-198)
-
-The report above replays a window and keeps nothing. Phase B's triggers need a
-history that survives a restart and a new box, so after each capture
-`scripts/capture_sensor.py` also scores the live predictor (the same one as
-above) on the weeks that became scorable, and appends one row per week to the
-episodic store's error series: `runtime/episodic_scored.jsonl` with the jsonl
-backend, the `scored_weeks` table with duckdb. `--no-score` skips it, and a
-scoring that fails is printed and leaves the capture in place. To score a
-trace captured elsewhere:
-
-```bash
-poetry run python scripts/score_capture.py                      # the EIA trace
+poetry run python scripts/score_capture.py                       # append to the error series
 poetry run python scripts/score_capture.py --trace PATH --from 2022-08-01
 ```
 
-- **Each week is scored once per predictor version** (the first 12 hex
-  digits of the predictor source's sha256). A week already in the series is
-  not asked again, so a second scoring after one capture adds nothing. A week
-  that cannot be scored yet (its next week not yet published, the predictor
-  failed) is not written and is tried again after the next capture. A week
-  whose next value was already known when it was asked (a catch-up capture)
-  is skipped, as in the report.
-- **Where it starts:** where the series already starts for that series, so a
-  new predictor version is scored over the same weeks as the one before it;
-  with no series yet, 13 weeks before the trace's last question. `--from` sets
-  it.
-- **A revision is a new row, never an overwrite.** When a later vintage of a
-  week's actual differs from the one its row saw, the week gets a row with
-  the next `revision`, the same prediction and the new actual and errors
-  (`note` `revised`); a withdrawn actual is a revision with no actual
-  (`withdrawn`). The latest revision of each week is the one that counts.
-- **Each row** carries the target, predictor version, the capture it was
-  scored after, the week, when it was asked, the forecast week, the
-  prediction, the actual and when that vintage became known, the model's and
-  climatology's errors, and the skill against climatology over the series up
-  to that week. Each new row is also emitted as `prediction.error` (with
-  `predictor`, `capture` and `revision`), and each scoring as
-  `prediction.scored`.
+- The question: when California's price for a week first became known, what
+  is next week's price? The predictor never sees a value before its `known_at`.
+- Error is predicted minus actual, in $/gal. The summary gives bias, MAE, RMSE.
+- Climatology is the latest price plus last year's change for that ISO week.
+- The predictor is `runtime/ca_price_persistence.py` (or the shipped stub);
+  `--predictor PATH` names another. It runs in the sandbox, never in-process.
+- The error series scores each week once per predictor version. A revised
+  actual adds a new row; it never overwrites. `main.py --loop --loop-trigger
+  model-error` acts on the series (OMNI-197).
 
-From code, `sis.error_series.score_trace` scores a trace and
-`sis.error_series.as_steps(store.scored(), target=..., predictor=...)` turns
-the series into the steps `sis.model_error`'s triggers judge. `main.py --loop
---loop-trigger model-error` acts on it (OMNI-197, docs/ENGINE_RULES.md): a
-sustained breach starts a cycle, and an error-budget one pages. The scheduled AWS
-run's artifact sync already uploads the file (`episodic*.jsonl`).
+## Scenarios
 
-## Times and historical limits
+Seeded, reproducible stress inputs (OMNI-34). They can reject a candidate,
+never promote one (D4).
 
-`event_time` places EIA's period date at midnight in `America/New_York`. That is
-an adapter convention, not an exact measurement instant supplied by EIA. Stock
-series describe a week ending Friday; retail-price series use Monday dates.
+```python
+from sis import scenarios
+generated = scenarios.generate("supply_shock", seed=7,
+                               data_events=("missing_week", "republished", "withdrawn"))
+sensor = generated.sensor()
+```
 
-The first capture of a series backfills its available history. Those values
-receive `reconstructed: true`, with `known_at` estimated from the series'
-publication schedule and capped at fetch time. The implementation uses Thursday
-17:00 Eastern for the prior Friday's stocks and Wednesday 17:00 Eastern for
-Monday retail prices. Retail prices came out on Monday in 2022 (Tuesday after a
-Monday holiday) and come out on Tuesday now (Wednesday after a government
-holiday), so Wednesday is after both; Tuesday was a day early in a holiday week
-(OMNI-161). These are assumptions covering regular releases and ordinary holiday
-shifts, not verified release timestamps.
+Kinds: `supply_shock`, `outage`, `national_move`, `demand_shock`.
+`stress=True` allows magnitudes beyond what the real series have shown.
+`specs/scenarios.py` is the pinned copy the gauntlet uses; `runtime/scenarios.py`
+is the loop's working copy and judges nothing.
 
-Irregular delays can still make reconstruction too early. The week ending
-2022-06-17 was released on 2022-06-29, for example. Also, a current bulk file
-cannot recover the original value of a historical observation revised before
-capture. Check the release archive and vintage evidence for every approved
-historical fixture; reconstructed times alone do not establish an unbiased replay.
+## Reading the trace from code
 
-Once a series has been observed, a new or changed value gets the timestamp of
-the fetch that first saw it, with `reconstructed: false`. This is a conservative
-availability bound, not its exact publication time. Earlier lines are retained.
-Disappearing historical periods are counted, not automatically withdrawn.
+```python
+from datetime import datetime, timezone
+from sis.adapters import make_sensor
+from sis.ports import TimeAxis
 
-## Trace format and trust boundary
+sensor = make_sensor("real")          # no download
+readings = sensor.read(datetime(2026, 10, 1, tzinfo=timezone.utc),
+                       datetime(2026, 10, 8, tzinfo=timezone.utc), by=TimeAxis.KNOWN)
+```
 
-Each append block has three possible record kinds:
+- Windows are `[start, end)` with timezones. `EVENT` = the period described,
+  `KNOWN` = when it became available.
+- A read returns every revision. `absent()` returns periods EIA stated no value
+  for, including withdrawn ones.
+- What a model may see at time `t` is `sis.replay.as_of(readings, absent, t)`:
+  per period, the latest vintage known by `t`, minus withdrawals.
 
-| Kind | Contents |
-|---|---|
-| `capture` | Capture identifier, source, fetch timestamp, provenance, per-series counts, bounded rejection details and missing-series list |
-| `reading` | Source, series, value, unit, event and known times, reconstruction flag and capture identifier |
-| `absent` | Source, series, marker, event and known times, reconstruction flag and capture identifier |
+## Times
 
-Provenance includes the bulk URL, SHA-256, byte count, member name, source update
-metadata and EIA attribution. Publisher values and units remain source content;
-derived sums, interpolations and model outputs must be separate artifacts.
+- `event_time` is EIA's period date at midnight New York time. Stocks are weeks
+  ending Friday; retail prices are Monday dates.
+- A first capture backfills history marked `reconstructed: true`, with
+  `known_at` estimated: Thursday 17:00 ET for stocks, Wednesday 17:00 ET for
+  retail, spot prices the first Thursday at least three days later at 17:00 ET.
+- Irregular delays can make an estimate too early (week ending 2022-06-17 came
+  out 2022-06-29). The release calendar is what fixtures trust, not these estimates.
+- After the first capture, a new or changed value is stamped with the fetch
+  that saw it (`reconstructed: false`).
 
-`sensor_input.sanitise` accepts declared series with the correct unit, plausible
-plain numeric values and timezone-aware times, or records explicit missing
-markers as `Absent`; markers are never zero. Wrong shapes, duplicate periods
-within a fetch and other refusals are counted. Free text uses `UntrustedText`.
+## When something goes wrong
 
-On replay the trace checks capture membership, appended counts and timestamp
-consistency, then sanitises value records again. These checks detect malformed
-or inconsistent records, not a forged capture that is internally consistent.
-The trace is staging, **not an authenticated exam**. Nothing here writes to
-`specs/`; domain fixtures require promotion through the contract-author path
-(human-approved today, OMNI-215).
+- **Capture refused because its time is not after the last capture:** check the
+  machine's clock against the last capture's `fetched_at`. Fix the clock and retry.
+- **Trace refused on read** (cut-off line, bad JSON, inconsistent block): there
+  is no automatic repair.
+  1. Stop captures and keep a byte-for-byte copy.
+  2. Restore the previous version from the bucket (S3 versioning keeps every write):
+     ```bash
+     aws s3api list-object-versions --bucket sis-first-run-artifacts-696644743351 --prefix traces/eia.jsonl
+     aws s3api get-object --bucket sis-first-run-artifacts-696644743351 --key traces/eia.jsonl --version-id <VersionId> eia-restored.jsonl
+     ```
+  3. Check it reads back through `sis.sensor_trace.read_back()` before using it.
+  4. A fresh backfill is the last resort: it loses every revision seen so far.
 
-## Failure and recovery
-
-Captures serialize with an exclusive file lock, and reads take a shared one, so
-a read never sees half a capture's block. Appends are synced; caught
-write failures roll back the attempted block. A capture is stamped while it
-holds that lock, and one whose fetch time is not after the trace's last capture
-is refused and appends nothing: two captures at one instant, or a clock that
-stepped back, would leave two revisions of a value that a replay could not
-order. If it is refused, compare the host clock with the last capture's
-`fetched_at`. A clock that is behind: correct it and capture again. A clock
-that is right now but was ahead when that capture was taken: captures resume
-once real time passes that `fetched_at`; the values it wrote carry a
-`known_at` in the future, which a replay would show late, not early. To
-capture sooner, move the trace aside (keeping it) and start a new one, which
-backfills with reconstructed times and loses the revisions observed so far. The writer refuses destinations
-inside `specs/`, symlinks at the opened path and multiply linked files. These
-checks do not justify treating runtime staging data as immutable evidence.
-
-An incomplete final line, invalid UTF-8/JSON, inconsistent capture block,
-captures out of fetch-time order or a record rejected on read causes a refusal. No reader silently skips that damage.
-To investigate:
-
-1. Stop captures and preserve a byte-for-byte copy of the affected trace.
-2. Inspect the reported block and source provenance. Determine whether the
-   problem is damaged storage, a source change, or changed sanitising rules.
-3. Restore a verified whole-trace backup where available. Keep the damaged copy
-   for diagnosis; do not silently truncate it or invent missing capture metadata.
-4. If a fresh capture is needed, retain the old trace separately. A new backfill
-   cannot recover previously observed revisions or their fetch timestamps.
-5. Revalidate the repaired/restored trace through `sensor_trace.read_back()`
-   before using it in a fixture. There is no automatic repair command.
-
-For implementation details, see `sis/sensor_trace.py`, `EIASensor` in
-`sis/adapters_real.py` and `scripts/capture_sensor.py`.
+Code: `sis/sensor_trace.py`, `EIASensor` in `sis/adapters_real.py`,
+`scripts/capture_sensor.py`, `sis/events.py`, `sis/error_series.py`.
