@@ -413,8 +413,9 @@ touch the code a rule is about. History (what changed when) belongs in
   - Every gate ends in a human PR. Generated code MUST be fully typed. What
     counts as correct/better is per-target — see `sis/contract.py`.
 - **Change-authorization policy (`sis/policy.py`) — what the loop may rewrite:**
-  - FORBIDDEN (never, no override): guardrail/safety code — the gauntlet and
-    its output canonicaliser (`sis/canonical.py`), the hot-deploy sandbox
+  - FORBIDDEN (never, no override): guardrail/safety code — the gauntlet,
+    what its refusals mean (`sis/verdict.py`, OMNI-208), its output
+    canonicaliser (`sis/canonical.py`), the hot-deploy sandbox
     worker (`sis/sandbox_worker.py`, `sis/sandbox_worker_main.py`), what `develop`'s
     blue serves (`sis/develop_platform.py`, OMNI-133), the agent's own review
     (`sis/review.py`, OMNI-131), the contract layer (`sis/contract.py`, `sis/backtest.py`, `sis/invariant.py`,
@@ -679,6 +680,19 @@ from outside the candidate's process (H2, M8), and the exam files are protected
 declares an SLO yet. The Serve canary serves its candidate from a sandbox
 worker (OMNI-48), but `--canary serve` is still refused with any non-stub
 proposer (OMNI-49, no override) until a human lifts that.
+
+**A refusal is typed, never read from its wording** (`sis/verdict.py`,
+OMNI-208). Every failure `gauntlet.validate` returns carries a `Verdict`:
+the gate (the episodic `reject_gate` name), the kind (`rejected`, `neutral`,
+`harness` or `error`, fixed by the gate) and the sentence for people. The
+roles carry it next to `reason` in their result dicts (`verdict.KEY`), and
+the probe decision, the neutral statuses, the breaker's gate, the bug's
+headline, the end of a feature and the episodic `reject_gate` all read its
+fields. A candidate's own text can therefore say "harness:" or "timed out"
+without changing whose failure it is (L27, L64). Only records written
+before typed verdicts (old episodic rows, stored feature rejections) are
+still parsed (`verdict.legacy`), and `tests/test_verdict.py` pins that no
+other code calls the parser.
 
 **Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L);
 its High, Medium and Low sections are the open list. Reference the IDs in

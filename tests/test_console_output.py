@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sis import org
+from sis import org, verdict
 from sis.loop import Tick, stop_summary
 from sis.org import cycle_summary
 
@@ -44,8 +44,8 @@ def test_a_cycle_without_a_reason_says_so() -> None:
 def test_a_qa_rejection_keeps_its_reason_and_gate() -> None:
     # OMNI-56 (M17): QA's re-run of the gauntlet used to file "QA rejected" with
     # no reason, and the CEO never saw which gate it was.
-    gate, summary = org.rejection_bug("STORY-2", "invariant violated in sandbox (seed=4): x",
-                                      pr_id="PR-7")
+    gate, summary = org.rejection_bug(
+        "STORY-2", verdict.legacy("invariant violated in sandbox (seed=4): x"), pr_id="PR-7")
     assert gate == "invariant"
     assert summary == "QA rejected STORY-2 (PR PR-7): invariant violated in sandbox (seed=4): x"
     line = _summary(status="qa_rejected", reason="invariant violated in sandbox (seed=4): x")
@@ -53,14 +53,14 @@ def test_a_qa_rejection_keeps_its_reason_and_gate() -> None:
 
 
 def test_a_harness_fault_at_qa_is_filed_as_one() -> None:
-    gate, summary = org.rejection_bug("STORY-2", "harness: the acceptance gate raised (OSError)",
-                                      pr_id="PR-7")
+    gate, summary = org.rejection_bug(
+        "STORY-2", verdict.legacy("harness: the acceptance gate raised (OSError)"), pr_id="PR-7")
     assert gate == "harness"
     assert summary.startswith("Infrastructure fault (sandbox) during QA of STORY-2 (PR PR-7)")
     # The SWE stage's wording is unchanged.
-    assert org.rejection_bug("STORY-2", "harness: x")[1].startswith(
+    assert org.rejection_bug("STORY-2", verdict.legacy("harness: x"))[1].startswith(
         "Infrastructure fault (sandbox) during STORY-2 — the candidate was not judged")
-    assert org.rejection_bug("STORY-2", "mypy --strict failed") == (
+    assert org.rejection_bug("STORY-2", verdict.legacy("mypy --strict failed")) == (
         "mypy", "Cycle failed for STORY-2: mypy --strict failed")
 
 
