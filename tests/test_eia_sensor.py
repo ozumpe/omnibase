@@ -115,7 +115,8 @@ def test_a_first_capture_backfills_every_value_with_a_reconstructed_known_at(
     report = sensor.capture()
     assert (report.appended, report.reconstructed, report.refused, report.missing) == (
         4, 4, 0, ("PET.EER_EPMRR_PF4_Y05LA_DPG.D", "PET.EMM_EPMRR_PTE_NUS_DPG.W",
-                  "PET.EMM_EPMRR_PTE_Y05LA_DPG.W", "PET.EMM_EPMRR_PTE_Y05SF_DPG.W"))
+                  "PET.EMM_EPMRR_PTE_Y05LA_DPG.W", "PET.EMM_EPMRR_PTE_Y05SF_DPG.W",
+                  "PET.W_NA_YUP_R50_PER.W"))
     lines = _lines(sensor)
     assert lines[0]["kind"] == "capture" and all(line["kind"] == "reading" for line in lines[1:])
     assert all(line["reconstructed"] is True for line in lines[1:])

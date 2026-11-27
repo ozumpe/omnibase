@@ -26,7 +26,7 @@ import signal
 import sys
 import threading
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
@@ -35,7 +35,9 @@ from sis.artifact_sync import ArtifactSync
 from sis.episodic import CONVERGED_STATUSES
 
 if TYPE_CHECKING:
+    from sis.model_error import BudgetRule, Decision, SkillRule
     from sis.ports import Cloud
+    from sis.prediction_error import Step
 
 
 class Action(str, Enum):
@@ -46,10 +48,17 @@ class Action(str, Enum):
 
 @dataclass(frozen=True)
 class Work:
-    """One unit of intake for a cycle — a proposal to refine and build."""
+    """One unit of intake for a cycle — a proposal to refine and build.
+
+    ``trigger`` names what started it (empty for a canned proposal) and
+    ``evidence`` the numbers behind it. The body says the same in words, so
+    the spec the cycle writes records why it ran.
+    """
 
     title: str
     body: str
+    trigger: str = ""
+    evidence: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -324,6 +333,128 @@ def breach_trigger(
         return None
 
     return _trigger
+
+
+# --------------------------------------------------------------------------
+# The model-error trigger: a sustained breach of a predictor's error (OMNI-197)
+# --------------------------------------------------------------------------
+
+
+def model_error_work(decisions: Sequence[Decision], *, title: str,
+                     body: str) -> Work | None:
+    """The cycle that the firing decisions start, or None if none fired. Pure.
+
+    One cycle whichever triggers fired: both ask for the same thing, a better
+    predictor. Its body ends with why it runs, and ``evidence`` carries each
+    fired trigger's window: the cycle's spec records the reason.
+    """
+    fired = [d for d in decisions if d.fire]
+    if not fired:
+        return None
+    evidence = {d.trigger.value: {"weeks": d.stats.weeks, "scored": d.stats.scored,
+                                  "mae": d.stats.mae, "paired": d.stats.paired,
+                                  "skill": d.stats.skill,
+                                  "through": (d.counted_through.date().isoformat()
+                                              if d.counted_through else None)}
+                for d in fired}
+    why = "\n".join(f"- {d.reason}" for d in fired)
+    return Work(title, f"{body}\n\nWhy this cycle runs (model-error trigger):\n{why}",
+                trigger="+".join(d.trigger.value for d in fired), evidence=evidence)
+
+
+def model_error_page(decisions: Sequence[Decision]) -> tuple[str, str] | None:
+    """The page an error-budget breach needs, as (title, body), or None. Pure.
+
+    Only the absolute budget pages (D9): the twin is unfit right now and a
+    human should stop trusting it. Skill decay is headroom, worth a cycle and
+    not a person's attention.
+    """
+    budget = next((d for d in decisions if d.fire and d.trigger.value == "error_budget"), None)
+    if budget is None:
+        return None
+    return ("model error over budget: the twin is unfit",
+            f"{budget.reason}. An improvement cycle starts; until a better predictor is "
+            "merged, treat its forecasts with less confidence.")
+
+
+def model_error_trigger(
+    read_steps: Callable[[], Sequence[Step]],
+    *,
+    budget: BudgetRule,
+    floor: SkillRule,
+    window_weeks: int,
+    title: str,
+    body: str,
+    page: Callable[[str, str], None] | None = None,
+) -> Callable[[], Work | None]:
+    """The model-error monitor, in the shape ``serve()``'s ``trigger`` expects.
+
+    Each tick reads the scored error series (*read_steps*) and judges it with
+    :func:`sis.model_error.replay`, so the streak is the series', not this
+    process's, and acts on each firing that still stands
+    (:func:`sis.model_error.standing`). A firing is acted on once: the window
+    that fired is remembered, and the same evidence read again starts
+    nothing. A restarted process acts once more on a firing that still
+    stands, since it cannot know an earlier process did. An error-budget
+    firing pages through *page* before the cycle starts.
+    """
+    from sis import model_error
+
+    acted: set[str] = set()
+
+    def _trigger() -> Work | None:
+        fired = [d for d in model_error.standing(model_error.replay(
+            read_steps(), budget, floor, window_weeks=window_weeks))
+            if f"{d.trigger.value}@{d.counted_through}" not in acted]
+        work = model_error_work(fired, title=title, body=body)
+        if work is None:
+            return None
+        acted.update(f"{d.trigger.value}@{d.counted_through}" for d in fired)
+        if page is not None and (alert := model_error_page(fired)) is not None:
+            page(*alert)
+        return work
+
+    return _trigger
+
+
+def model_error_rules(settings: Any) -> tuple[BudgetRule, SkillRule, int]:
+    """The two rules and the window size the ``model_error`` config section names.
+
+    ``breach_weeks`` (how long) becomes the number of windows in a row that
+    cover it; ``mae_budget`` (acceptable error) and ``skill_floor`` are the
+    thresholds. Raises ``ValueError`` for a setting the rules refuse.
+    """
+    from sis.model_error import BudgetRule, SkillRule, windows_for
+
+    window = int(settings.window_weeks)
+    minimum = int(settings.min_weeks)
+    if minimum > window:
+        raise ValueError(f"model_error.min_weeks ({minimum}) is more than "
+                         f"model_error.window_weeks ({window}): no window could breach")
+    windows = windows_for(int(settings.breach_weeks), window)
+    return (BudgetRule(mae_budget=float(settings.mae_budget), min_scored=minimum,
+                       windows=windows),
+            SkillRule(skill_floor=float(settings.skill_floor), min_paired=minimum,
+                      windows=windows),
+            window)
+
+
+def scored_steps(store: Any, predictor: Any) -> Callable[[], Sequence[Step]]:
+    """Reads the live predictor's scored series from the episodic *store*, each tick.
+
+    The predictor's version is taken from its source on every read, so once
+    a better predictor is merged, its own (fresh) series is judged, not the
+    one that started the cycle.
+    """
+    from sis import error_series
+    from sis.prediction_error import CALIFORNIA
+
+    def _read() -> Sequence[Step]:
+        source = predictor().read_text(encoding="utf-8")
+        return error_series.as_steps(store.scored(), target=CALIFORNIA,
+                                     predictor=error_series.version(source))
+
+    return _read
 
 
 def canary_in_flight(deployment: Mapping[str, Any]) -> str | None:

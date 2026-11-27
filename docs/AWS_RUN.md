@@ -23,7 +23,7 @@ This document has four parts:
 
 | | |
 |---|---|
-| Code | release tag **`v0.8.0`** (`var.repo_ref`), never a branch — see [Which code runs](#which-code-runs) |
+| Code | release tag **`v0.9.0`** (`var.repo_ref`), never a branch — see [Which code runs](#which-code-runs) |
 | Box | one `m7i.xlarge`, `us-east-1`, **no inbound ports**; shell via SSM only |
 | Contract | Class 1, one with room left: `sort` and `sum_of_divisors` have both converged, so re-seed a naive one on `ozumpe/testrun`'s `develop` first ([Before every run](#before-every-run-a-target-with-room-left)). Or Class 2: `roman` (built from its spec, no re-seed) or `ca_price_wholesale`, which the weekly scheduled run uses since `v0.6.0` (its private episodes must be in the artifacts bucket) |
 | Where artifacts land | Jira `TES`, GitHub `ozumpe/testrun` (PRs against `develop`) |
@@ -294,7 +294,8 @@ A scheduled run does this itself, and ends before any spend if it fails
 (OMNI-177).
 
 The holdout budget (OMNI-207) counts judgements across runs from the episodic
-logs, so fetch the earlier runs' logs too, or a fresh box counts from zero:
+logs, so fetch the earlier runs' logs too, or a fresh box counts from zero
+(and judges again what earlier runs rejected, OMNI-189):
 
 ```bash
 aws s3 sync "s3://$ARTIFACTS_BUCKET/runs/" runtime/history/ --exclude '*' \
@@ -404,9 +405,28 @@ the episodic log, its state, the operator audit and the console log
 `s3://<bucket>/runs/<start time>/` after every cycle
 (`loop.artifact_sync_every`), and once more when it stops for any reason:
 converged, breaker, `--loop-max-cycles`, Ctrl-C, or a crash. It ends with
-`[sis] artifacts synced to s3://… (episodic.jsonl, …)`. A killed process or a
-replaced box loses at most the cycle in flight. A slow or failing bucket prints
-`[sis] WARNING: artifacts not synced …` and the loop carries on.
+`[sis] artifacts synced to s3://… (episodic.jsonl, …, run.json)`. A killed
+process or a replaced box loses at most the cycle in flight. A slow or failing
+bucket prints `[sis] WARNING: artifacts not synced …` and the loop carries on.
+
+A run's folder holds the box's files whole: the log, the audit and
+`loop.log` are appended to by every process on the box, and the spend in
+`episodic_state.json` carries over by design. So a folder also holds every
+earlier run's records, and read as one run it double-counts. Its `run.json`
+(OMNI-144) says which part is this run's: `files.<name>.from_byte` is where
+this run's part of each appended file starts, and it names the run's
+`records`, `first_cycle_id`/`last_cycle_id`, `contracts`, `cost_usd`,
+`code_version`, and the carried spend at its start (`spent_usd_at_start`) and
+at the last sync (`spent_usd`). This run's records only:
+
+```bash
+run="s3://$ARTIFACTS_BUCKET/runs/<start time>"
+aws s3 cp "$run/run.json" . && aws s3 cp "$run/episodic.jsonl" .
+tail -c +$(( $(jq '.files["episodic.jsonl"].from_byte' run.json) + 1 )) episodic.jsonl
+```
+
+Folders from before the manifest have no `run.json`; slice those by
+`cycle_id` against the previous folder.
 
 By hand, for `v0.3.2` and earlier, for a single `main.py` run (only `--loop`
 syncs), or after a process was killed:
@@ -564,7 +584,11 @@ On either kind of box it waits for SSM, and starts step 5c's loop in a tmux
 session `sis` with one `ssm send-command`: the environment of step 5a, then
 the private fixtures of a contract that has them, fetched and checked as in
 step 5a (OMNI-177), then the earlier runs' episodic logs for the holdout
-budget (OMNI-207), then `check_connections.py --deep` (a failure of any
+budget (OMNI-207), then this week's EIA capture into the bucket's canonical
+trace (`traces/eia.jsonl`, OMNI-214; a capture that fails pages and leaves the
+trace as it was, and the run goes on: see
+[SENSOR_RUNBOOK.md](SENSOR_RUNBOOK.md#capture-eia-observations)), then
+`check_connections.py --deep` (a failure of any of the others
 ends the run before any spend; it checks the Anthropic key and model too,
 OMNI-82), then
 `main.py … --loop --loop-max-cycles 10`, teed to `runtime/loop.log` between a
@@ -722,7 +746,7 @@ human, one box: a remote state backend is ceremony this doesn't need yet.
 
 ### Which code runs
 
-The box runs the **release tag** in `var.repo_ref` — `v0.8.0` by default
+The box runs the **release tag** in `var.repo_ref` — `v0.9.0` by default
 (OMNI-63). A tag, not `develop`: a run's results are only worth something if
 they name the code that produced them, and a branch names whatever it pointed
 at when the box booted. `tofu plan` refuses a branch unless

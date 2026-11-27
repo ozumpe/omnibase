@@ -18,7 +18,7 @@ import hashlib
 import pathlib
 import sys
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
@@ -27,6 +27,7 @@ import ray
 from sis import config, contract, contract_author, episodic, gauntlet, policy, proposer
 from sis import feature as feature_mod
 from sis import review as review_mod
+from sis import verdict as verdict_mod
 from sis.canary import DEFAULT_MIN_CANARY_SAMPLES, CanaryMode, evaluate_canary
 from sis.paths import PROJECT_ROOT, TARGET_PATH
 from sis.ports import IssueStatus, IssueType, PullRequest, PullRequestNotFound
@@ -259,7 +260,7 @@ def _built(spec: contract.Contract, source: str) -> dict[str, Any]:
     """The SWE's result for a feature already built: neutral, no model called."""
     return {"passed": False, "no_gain": True, "pr_id": None, "cost_usd": 0.0,
             "candidate_sha": _sha(source), "contract": spec.name, "model": None,
-            "reason": f"already built: {spec.target_path} passes every gate"}
+            **verdict_mod.carried(f"already built: {spec.target_path} passes every gate", "built")}
 
 
 def pr_resolution(pr: PullRequest) -> Literal["hold", "promote", "release"]:
@@ -488,7 +489,7 @@ class CEO(Role):
         """Record real spend + outcome, then evaluate all three brakes.
 
         *reject_gate* is the gauntlet gate that rejected a failed cycle
-        (``episodic.gate_from_reason``). It only changes how much the failure
+        (its typed verdict's gate, OMNI-208). It only changes how much the failure
         counts: a correct-but-over-budget ``slo`` rejection adds
         ``brakes.slo_failure_weight`` to the streak, anything else adds 1.
 
@@ -804,11 +805,15 @@ class SWE(Role):
     def implement(
         self, story_id: str, contract_name: str | None = None,
         output_limit: int | None = None,
+        earlier: Sequence[Mapping[str, Any]] = (),
     ) -> dict[str, Any]:
         """One step of the story: propose, judge, commit, and open the PR when due.
 
         *output_limit* overrides ``proposer.output_limit`` for this step's
         proposal: the driver's one retry of a cut-off proposal (OMNI-219).
+        *earlier* is what earlier runs' logs say was rejected
+        (:func:`sis.feature.earlier_rejections`): a new box remembers it as if
+        it had judged it itself (OMNI-189).
 
         **What the proposal cost is never lost** (OMNI-55, M16). The cost is
         known only here, and the driver learns it from the return value. So
@@ -821,7 +826,7 @@ class SWE(Role):
         paid: dict[str, Any] = {}
         proposer.reset_last_usage()  # a step that asks for no proposal reports none
         try:
-            result = self._implement(story_id, contract_name, paid, output_limit)
+            result = self._implement(story_id, contract_name, paid, output_limit, earlier)
         except Exception as exc:  # noqa: BLE001 - reported with its cost, never lost
             if not paid:
                 raise
@@ -860,14 +865,14 @@ class SWE(Role):
         # earlier one's.
         cost = (proposer.last_cost_usd() if paid.get("proposing")
                 else float(paid.get("cost", 0.0)))
-        return {"passed": False, "reason": reason, "pr_id": None,
+        return {"passed": False, **verdict_mod.carried(reason, "error"), "pr_id": None,
                 "cost_usd": cost,
                 "candidate_sha": paid.get("candidate_sha"),
                 "contract": paid["contract"], "model": proposer.last_model()}
 
     def _implement(
         self, story_id: str, contract_name: str | None, paid: dict[str, Any],
-        output_limit: int | None = None,
+        output_limit: int | None = None, earlier: Sequence[Mapping[str, Any]] = (),
     ) -> dict[str, Any]:
         # What this target is judged by — reference, inputs, margin. Resolved
         # FIRST, before any artifact is touched: a bad contract name is a
@@ -943,6 +948,16 @@ class SWE(Role):
             feature = feature_mod.with_note(
                 feature_mod.new_feature(feature_mod.feature_branch(story_id), story_id),
                 f"the current module fails: {standing.reason}")
+        baseline_sha = _sha(judged_against)
+        if not revising and (feature is None or not feature["steps"]):
+            # A step from the base: what earlier runs rejected against this
+            # same base is remembered, though this process never judged it.
+            # An ephemeral box starts with an empty SelfModel (OMNI-189).
+            seeded = feature_mod.with_earlier_runs(
+                feature or feature_mod.new_feature(feature_mod.feature_branch(story_id), story_id),
+                earlier, spec.name, baseline_sha)
+            if feature is not None or seeded["rejected"]:
+                feature = seeded
         # sandboxed, not in-process
         baseline = (gauntlet.measure_baseline(judged_against, contract=spec)
                     if isinstance(spec, contract.OptimizationContract) else 0.0)
@@ -966,7 +981,7 @@ class SWE(Role):
             ray.get(self._sm.record.remote("outcome", story_id, passed=False, reason=reason))
             # "cut_off" tells the driver it may retry once at a larger limit
             # (OMNI-219); the limit this call had is in its usage.
-            return {"passed": False, "reason": reason, "pr_id": None,
+            return {"passed": False, **verdict_mod.carried(reason, "proposer"), "pr_id": None,
                     "cost_usd": proposer.last_cost_usd(), "candidate_sha": None,
                     "contract": spec.name, "model": proposer.last_model(),
                     "cut_off": True}
@@ -979,17 +994,18 @@ class SWE(Role):
         paid.update(candidate_sha=candidate_sha, cost=cost_usd)
         # The same code against the same baseline was judged already: its verdict
         # stands, without a second run (OMNI-127, L46). The proposal was paid for.
-        baseline_sha = _sha(judged_against)
-        earlier = feature_mod.rejected_before(feature, candidate_sha, baseline_sha)
+        judged_before = feature_mod.rejected_before(feature, candidate_sha, baseline_sha)
         if revising and candidate_sha == _sha(current_source):
             # The head the review sent back, unchanged: nothing was revised.
-            report = gauntlet.Result(
-                passed=False, reason="no change: the revision is identical to the head "
-                                     "the review sent back")
-        elif earlier is not None:
+            unchanged = verdict_mod.Verdict.of(
+                "noop", "no change: the revision is identical to the head the review sent back")
+            report = gauntlet.Result(passed=False, reason=unchanged.detail, verdict=unchanged)
+        elif judged_before is not None:
             ray.get(self._ws.emit.remote("candidate.resubmitted", story_id=story_id,
-                                         candidate_sha=candidate_sha, reason=earlier))
-            report = gauntlet.Result(passed=False, reason=feature_mod.resubmitted(earlier))
+                                         candidate_sha=candidate_sha,
+                                         reason=judged_before.detail))
+            again = feature_mod.resubmitted(judged_before)
+            report = gauntlet.Result(passed=False, reason=again.detail, verdict=again)
         else:
             # Benchmark the candidate against the source the cycle is based on (the
             # merged target), not the stale local file — see KNOWN_ISSUES.md H1.
@@ -997,6 +1013,7 @@ class SWE(Role):
                 candidate, baseline, baseline_source=judged_against or None, contract=spec)
 
         if not report.passed:
+            judged = verdict_mod.failure_of(report)
             ray.get(self._ws.transition.remote(
                 story_id, IssueStatus.TBD, f"Gauntlet failed: {report.reason}"))
             ray.get(self._sm.record.remote("outcome", story_id, passed=False, reason=report.reason))
@@ -1008,12 +1025,12 @@ class SWE(Role):
                 # code at the base, where nothing was remembered (OMNI-127).
                 feature = feature_mod.new_feature(
                     feature_mod.feature_branch(story_id), story_id)
-            feature = (feature_mod.with_note(feature, f"resubmitted, rejected again: {earlier}")
-                       if earlier is not None else
-                       feature_mod.with_rejection(feature, candidate_sha, baseline_sha,
-                                                  report.reason))
+            feature = (feature_mod.with_note(
+                           feature, f"resubmitted, rejected again: {judged_before.detail}")
+                       if judged_before is not None else
+                       feature_mod.with_rejection(feature, candidate_sha, baseline_sha, judged))
             if (feature["steps"] and not revising
-                    and feature_mod.ends_feature(report.reason)):
+                    and feature_mod.ends_feature(judged)):
                 # The head cannot be beaten: the feature is finished, and
                 # its PR carries the head, not this rejected candidate. Not
                 # while a review's changes are open: that head was sent back.
@@ -1021,11 +1038,14 @@ class SWE(Role):
                     story_id, spec, feature, current_source, candidate_sha,
                     f"no further gain ({report.reason})", paid, model=model)
             ray.get(self._sm.set_feature.remote(spec.name, feature))
-            return {"passed": False, "reason": report.reason, "pr_id": None,
-                    "cost_usd": cost_usd, "candidate_sha": candidate_sha,
+            return {"passed": False, "reason": report.reason, verdict_mod.KEY: judged.to_dict(),
+                    "pr_id": None, "cost_usd": cost_usd, "candidate_sha": candidate_sha,
                     "contract": spec.name, "model": model,
+                    # What it was judged against, for a later run on another box
+                    # (OMNI-189). Not a revision's: its verdict answered a review.
+                    "baseline_sha": None if revising else baseline_sha,
                     # Nothing beats the base: the target has converged (OMNI-138).
-                    "no_gain": feature_mod.finds_no_gain(started, report.reason)}
+                    "no_gain": feature_mod.finds_no_gain(started, judged)}
 
         # Change-authorization policy: the loop may only write paths its tier
         # permits. The target is SOFT (allowed once checks pass); a mis-pointed
@@ -1042,7 +1062,7 @@ class SWE(Role):
                 story_id, IssueStatus.TBD, f"Policy blocked: {decision.reason}"))
             ray.get(self._sm.record.remote(
                 "outcome", story_id, passed=False, reason=f"policy: {decision.reason}"))
-            return {"passed": False, "reason": f"policy: {decision.reason}",
+            return {"passed": False, **verdict_mod.carried(f"policy: {decision.reason}", "policy"),
                     "pr_id": None, "cost_usd": cost_usd, "candidate_sha": candidate_sha,
                     "contract": spec.name, "model": model}
 
@@ -1166,15 +1186,15 @@ class SWE(Role):
                 story_id, IssueStatus.IN_PROGRESS,
                 f"Review round {rounds} of {limit} asked for changes: {findings}"))
             return {**result, "review_requested": True,
-                    "reason": f"review requested: round {rounds} of {limit}, "
-                              f"{verdict.summary()}"}
+                    **verdict_mod.carried(f"review requested: round {rounds} of {limit}, "
+                                          f"{verdict.summary()}", "review_requested")}
         reason = f"review: not approved after {rounds} round(s), {verdict.summary()}"
         ray.get(self._sm.give_up_branch.remote(feature["branch"]))
         ray.get(self._sm.set_feature.remote(spec.name, None))
         ray.get(self._sm.set_plan.remote(spec.name, None))
         ray.get(self._ws.transition.remote(story_id, IssueStatus.TBD, reason))
         ray.get(self._sm.record.remote("outcome", story_id, passed=False, reason=reason))
-        return {**result, "reason": reason}
+        return {**result, **verdict_mod.carried(reason, "review")}
 
 
 @ray.remote
@@ -1186,13 +1206,14 @@ class QA(Role):
 
     def review(
         self, story_id: str, pr_id: str, contract_name: str | None = None
-    ) -> tuple[bool, str | None]:
-        """Verify the PR against its story; returns ``(approved, gauntlet_reason)``.
+    ) -> tuple[bool, str | None, dict[str, str] | None]:
+        """Verify the PR against its story: ``(approved, gauntlet_reason, verdict)``.
 
-        The reason is the re-run gauntlet's (``None`` if it never ran), so the
-        org can tell a real rejection from a neutral one — an *inconclusive*
-        benchmark (OMNI-41) is the same fact at QA as at the SWE stage and must
-        not become a bug and a breaker count just because QA re-measured.
+        The reason and its typed verdict (OMNI-208) are the re-run gauntlet's
+        (``None`` if it never ran or passed), so the org can tell a real
+        rejection from a neutral one — an *inconclusive* benchmark (OMNI-41) is
+        the same fact at QA as at the SWE stage and must not become a bug and a
+        breaker count just because QA re-measured.
         """
         issue = ray.get(self._ws.get_issue.remote(story_id))
         # Resolved before the PR is read: which file holds the candidate is a
@@ -1203,6 +1224,7 @@ class QA(Role):
         # artifact exists, matches the story, and re-runs the gauntlet.
         ok = bool(pr.artifact) and issue.status == IssueStatus.READY_FOR_REVIEW
         reason: str | None = None
+        judged: verdict_mod.Verdict | None = None
         if ok:
             # Re-run the gauntlet: the candidate executes ONLY inside its sandbox.
             # Benchmark against the same merged baseline the SWE used (the target
@@ -1219,12 +1241,13 @@ class QA(Role):
                 pr.artifact, 0.0, baseline_source=baseline_source, contract=spec)
             ok = report.passed
             reason = report.reason
+            judged = verdict_mod.of_result(report)
         if ok:
             ray.get(self._ws.transition.remote(story_id, IssueStatus.DONE, "QA verified"))
         else:
             ray.get(self._ws.transition.remote(story_id, IssueStatus.TBD, "QA found discrepancy"))
         ray.get(self._sm.record.remote("outcome", story_id, passed=ok, by="QA"))
-        return ok, reason
+        return ok, reason, judged.to_dict() if judged else None
 
 
 @ray.remote
@@ -1467,7 +1490,7 @@ class DevOps(Role):
                     "canary_rejected", version, pr=pr.id, reason=reason))
             return {"version": version, "slot": "green", "live": False,
                     "latency_seconds": candidate_latency, "canary_passed": False,
-                    "reason": reason}
+                    **verdict_mod.carried(reason, "error")}
 
     def _judge_live(
         self, pr: PullRequest, version: str, candidate_latency: float,
@@ -1497,14 +1520,14 @@ class DevOps(Role):
         if verdict.inconclusive:
             # The paired latency interval could not tell (OMNI-50, M20). Not a
             # rejection: no bug, and the cycle is neutral (org.run_cycle reads
-            # the reason through episodic.neutral_status). Green is retired all
+            # its typed verdict, OMNI-208). Green is retired all
             # the same, because nothing showed that it may serve.
             self.retire_canary(version, pr.id)
             ray.get(self._sm.record.remote(
                 "canary_inconclusive", version, pr=pr.id, reason=verdict.reason))
             return {"version": version, "slot": "green", "live": False,
                     "latency_seconds": candidate_latency, "canary_passed": False,
-                    "inconclusive": True, "reason": verdict.reason,
+                    "inconclusive": True, **verdict_mod.carried(verdict.reason, verdict.gate),
                     "verdict": asdict(verdict)}
 
         if not verdict.passed:
@@ -1515,7 +1538,8 @@ class DevOps(Role):
                 "canary_rejected", version, pr=pr.id, reason=verdict.reason))
             return {"version": version, "slot": "green", "live": False,
                     "latency_seconds": candidate_latency, "canary_passed": False,
-                    "reason": verdict.reason, "bug_id": bug_id, "verdict": asdict(verdict)}
+                    **verdict_mod.carried(verdict.reason, verdict.gate), "bug_id": bug_id,
+                    "verdict": asdict(verdict)}
 
         return {"version": version, "slot": record.slot, "live": record.live,
                 "latency_seconds": candidate_latency, "canary_passed": True,

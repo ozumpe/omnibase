@@ -515,6 +515,7 @@ def test_by_default_the_build_stops_where_the_release_calendar_ends(
 
     monkeypatch.setattr(contract_author, "CONTRACT_STAGING_DIR", tmp_path / "staging")
     script = _script()
+    monkeypatch.setattr(script, "SPECS", tmp_path / "specs")   # nothing promoted yet
     shipped = script.FIXTURES["ca_price_wholesale"]
     monkeypatch.setitem(script.FIXTURES, "ca_price_wholesale",
                         replace(shipped, question=replace(WHOLESALE, last=WHOLESALE.first)))

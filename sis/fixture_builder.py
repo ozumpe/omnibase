@@ -295,7 +295,9 @@ def build(lines: Sequence[Mapping[str, Any]], rules: SourceRules, calendar: Rele
 
 def build_training(lines: Sequence[Mapping[str, Any]], rules: SourceRules,
                    calendar: ReleaseCalendar, held_out: Question, *, first: datetime.date,
-                   name: str, spec_ref: str) -> ContractDraft:
+                   name: str, spec_ref: str,
+                   context: Sequence[tuple[Sequence[Mapping[str, Any]], SourceRules]] = (),
+                   ) -> ContractDraft:
     """The training split for the held-out fixture *held_out* asks (OMNI-205).
 
     What was known just before the first held-out question was asked, from
@@ -309,6 +311,12 @@ def build_training(lines: Sequence[Mapping[str, Any]], rules: SourceRules,
     series only: a licensed one refuses the build whatever *held_out* shows.
     Sending licensed values to a model API is a decision a human has not made
     (OMNI-205, D0).
+
+    *context* adds other sources' traces (each with its rules), shown in the
+    split only, never in an episode (OMNI-227, the refinery-outage events):
+    every series of each, read back through the door, from *first* on, as
+    known strictly before the same first question. Their ``known_at`` is the
+    trace's own, with no calendar check: no release calendar covers them.
     """
     if is_simulated(rules.source):
         raise FixtureRefused(f"source {SIMULATED_SOURCE!r} is a generated scenario; a "
@@ -345,9 +353,24 @@ def build_training(lines: Sequence[Mapping[str, Any]], rules: SourceRules,
     if not any(r.series == held_out.target for r in view.readings):
         raise FixtureRefused(f"{held_out.target}: no value from {first} on was known before "
                              "the first held-out question")
-    known = max([r.known_at for r in view.readings] + [a.known_at for a in view.absent])
+    shown_readings = list(view.readings)
+    for context_lines, context_rules in context:
+        if context_rules.source == rules.source:
+            raise FixtureRefused(f"source {context_rules.source!r} is the split's own")
+        if is_simulated(context_rules.source) or context_rules.licensed:
+            raise FixtureRefused(f"source {context_rules.source!r}: a training split's "
+                                 "context is recorded, public data only")
+        more, gone = read_back(context_lines, context_rules)
+        candidates: list[Reading | Absent] = [*more, *gone]
+        kept = [item for item in candidates if item.known_at < question_at
+                and first <= item.event_time.astimezone(calendar.timezone).date()
+                < held_out.first]
+        shown_readings += as_of([r for r in kept if isinstance(r, Reading)],
+                                [a for a in kept if isinstance(a, Absent)],
+                                question_at).readings
+    known = max([r.known_at for r in shown_readings] + [a.known_at for a in view.absent])
     state = {"as_of": known.isoformat(),
-             "readings": [r.as_record() for r in view.readings],
+             "readings": [r.as_record() for r in shown_readings],
              "absent": [_absent_record(a) for a in view.absent]}
     body = {"schema": TRAINING_SCHEMA, "target": held_out.target, "first": first.isoformat(),
             "held_out_from": held_out.first.isoformat(),

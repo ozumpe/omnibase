@@ -56,8 +56,7 @@ touch the code a rule is about. History (what changed when) belongs in
   one year, and none after a 53-week ISO year, whose week is 53 weeks back.
   The summary carries its MAE and the model's skill,
   1 − MAE(model)/MAE(climatology), over the weeks both were scored; a week with
-  no earlier year has no climatology and claims no skill. Nothing starts a
-  cycle from it yet. Phase B's two triggers (D9, epic OMNI-194) are decided
+  no earlier year has no climatology and claims no skill. Phase B's two triggers (D9, epic OMNI-194) are decided
   in `sis/model_error.py` (OMNI-196, pure): **error budget** (a window's MAE
   above the actor's budget: the twin is unfit) and **skill decay** (its skill
   against climatology below the actor's floor: headroom), each with its own
@@ -65,8 +64,31 @@ touch the code a rule is about. History (what changed when) belongs in
   that share no week, reset on firing: a window overlapping the last one
   counted, such as an outlier still inside it or an unchanged window ticked
   again, adds nothing, OMNI-221) and a minimum of scored weeks; skipped weeks never count,
-  and every threshold is an argument, per actor. Wiring them into `--loop`
-  is OMNI-197.
+  and every threshold is an argument, per actor. The series they judge is kept
+  after each capture (OMNI-198, `sis/error_series.py`, STRICT): each week
+  scored once per predictor version, appended to the episodic store, a later
+  vintage of an actual a revision row, never an overwrite; `as_steps` turns it
+  into their steps. **They start cycles in `--loop` only with
+  `--loop-trigger model-error`** (OMNI-197, off by default: `loop.trigger`
+  is `repeat`). Each tick, `loop.model_error_trigger` reads the live
+  predictor's series from the episodic store (its version from its source, so
+  a merged predictor is judged on its own fresh series), replays every window
+  in order (`model_error.replay`, so the streak is the series' and a restart
+  reaches the same verdict) and acts once on each firing that still stands
+  (`model_error.standing`: every later window still in breach). An error-budget
+  firing pages (WARNING) and starts a cycle; skill decay starts one without a
+  page; both at once start one. The cycle's body says which fired and why,
+  and `Work.evidence` carries the numbers. The brakes, spend cap, breaker and
+  holdout budget apply unchanged. The knobs are config (`model_error.*`,
+  STRICT): `mae_budget` (acceptable error) and `breach_weeks` (how long,
+  counted in whole windows of `window_weeks` that share no week), plus
+  `skill_floor` and `min_weeks`. **Refine often** while there is no good base:
+  a tight budget and a short breach, e.g. `--model-error-mae-budget 0.10
+  --model-error-breach-weeks 4 --model-error-window-weeks 2
+  --model-error-min-weeks 2`. **Leave it alone** once the model is good: a
+  loose budget and a long breach, e.g. `--model-error-mae-budget 0.30
+  --model-error-breach-weeks 12`. A restarted loop acts once more on a
+  firing that still stands, since it cannot know an earlier process did.
   **The real sensor is `EIASensor`** (OMNI-33, `sis/adapters_real.py`): EIA's
   bulk file `PET.zip` (no key), five weekly series (PADD 5 gasoline stocks;
   California, Los Angeles, San Francisco and US retail prices) and, since
@@ -124,7 +146,13 @@ touch the code a rule is about. History (what changed when) belongs in
   spec → diff → gauntlet verdict → outcome, incl. every rejected diff and the
   gate that caught it. Backends via `SIS_EPISODIC_STORE`: `jsonl` (default),
   `duckdb` (SQL analytics), `none`. This is the dataset the system learns from;
-  Postgres+pgvector can drop in later as another backend.
+  Postgres+pgvector can drop in later as another backend. A rejected step
+  records the `baseline_sha` it was judged against beside its `candidate_sha`.
+  Each step is handed every such rejection in this box's log and in
+  `runtime/history/` (`feature.earlier_rejections`, OMNI-189), so a step from
+  the base remembers what an earlier run, on another box, rejected against the
+  same base: an identical candidate is not judged again, and the prompt
+  carries the reason.
 - Control loop: monitor → budget/goal gate → propose Python on a branch → validation
   gauntlet → canary → promote/rollback → log → circuit breaker.
 
@@ -299,7 +327,14 @@ touch the code a rule is about. History (what changed when) belongs in
     a pass, a backtest rejection or anything after it counts; a rejection at an
     earlier gate, a harness fault at or before the backtest, a resubmission and
     a cycle with no candidate do not; a timeout, tampering or exception that
-    may have reached it counts (an over-count only stops sooner). The limit is
+    may have reached it counts (an over-count only stops sooner). Each
+    candidate (`candidate_sha`) counts once per fixture (`holdout.counts`,
+    OMNI-224): the same code on the same weeks gets the same verdict, so the
+    "already built" re-check of a merged module, run on every cycle after the
+    merge, uses no further judgement. New code counts the first time any gate
+    judges it, a re-check included. A contract's `holdout_count_repeats`
+    (else `brakes.holdout_count_repeats`, off) makes every repeat count, for
+    held-out data plentiful enough that the simpler count is wanted. The limit is
     the contract's `holdout_budget`, else `brakes.holdout_budget`. Before any
     spend, a cycle on a contract whose budget is spent is refused as
     `holdout_spent`: no reservation, no breaker count, a WARNING page, and
@@ -308,8 +343,34 @@ touch the code a rule is about. History (what changed when) belongs in
     AWS run fetches every earlier `runs/*/episodic.jsonl` into
     `runtime/history/` first and refuses to start if it cannot. `sis.admin
     holdout` shows each budget; raising one is a human's edit of the contract
-    or the config, which the loop cannot write. Rotation (D5's other half) is
-    not built.
+    or the config, which the loop cannot write.
+  - **Retraining that does not help stops, and pages "likely missing input"**
+    (`sis/futility.py`, OMNI-228). A model-error trigger (OMNI-197) records each
+    retrain it starts (`retrain_started`, with the window MAE that started it
+    and the contract's input *basis*) and asks `Guard.may_start` before the
+    next one. A retrain improved if the error after it (the MAE that started
+    the next, or the window's now) is at most `1 - brakes.futility_min_improvement`
+    of the error that started it. `brakes.futility_retrains` non-improving ones
+    in a row stop the trigger for that contract: a `futile_stopped` record, one
+    WARNING page naming the weeks with the largest errors, and no further
+    retrain, so no spend. An improving retrain resets the count; so does a new
+    basis (a new input) or `sis.admin reset-futility --contract <name> --reason
+    "..."`. It is not the breaker: it trips nothing, and the breaker still
+    applies. The records are read like the holdout budget's, so a new box
+    remembers a stop; none of them costs anything or is a holdout judgement.
+  - **A held-out set is replaced only by weeks no candidate has seen judged**
+    (`holdout.plan_rotation`, OMNI-225, D5's rotation). `scripts/build_fixture.py
+    --fixture <name> --rotate` takes the unbroken run of weeks after the
+    committed set's last one (`specs/<name>/private.json`) that the trace answers
+    and the release calendar covers, and stages them as the new held-out set
+    together with a training split that now runs up to them, over the old set.
+    One draft, so one review and one promotion move both; the new fixture's
+    digest starts its budget at zero. It refuses with fewer than
+    `brakes.holdout_rotation_min_weeks` fresh weeks and says which week makes
+    enough: a small held-out set lets a lucky candidate clear the skill margin.
+    A plain build or `--training` of a promoted private fixture keeps its
+    committed weeks, because adding fresh weeks to a judged set would give
+    judged weeks a new budget. The training split stays public series only.
   - **A forecasting proposer may run code on its training split, and on
     nothing else** (`sis/workbench.py`, OMNI-206). A real proposer building a
     feature that has a training split (OMNI-205) gets a bounded tool loop: it
@@ -385,8 +446,9 @@ touch the code a rule is about. History (what changed when) belongs in
   - Every gate ends in a human PR. Generated code MUST be fully typed. What
     counts as correct/better is per-target — see `sis/contract.py`.
 - **Change-authorization policy (`sis/policy.py`) — what the loop may rewrite:**
-  - FORBIDDEN (never, no override): guardrail/safety code — the gauntlet and
-    its output canonicaliser (`sis/canonical.py`), the hot-deploy sandbox
+  - FORBIDDEN (never, no override): guardrail/safety code — the gauntlet,
+    what its refusals mean (`sis/verdict.py`, OMNI-208), its output
+    canonicaliser (`sis/canonical.py`), the hot-deploy sandbox
     worker (`sis/sandbox_worker.py`, `sis/sandbox_worker_main.py`), what `develop`'s
     blue serves (`sis/develop_platform.py`, OMNI-133), the agent's own review
     (`sis/review.py`, OMNI-131), the contract layer (`sis/contract.py`, `sis/backtest.py`, `sis/invariant.py`,
@@ -651,6 +713,19 @@ from outside the candidate's process (H2, M8), and the exam files are protected
 declares an SLO yet. The Serve canary serves its candidate from a sandbox
 worker (OMNI-48), but `--canary serve` is still refused with any non-stub
 proposer (OMNI-49, no override) until a human lifts that.
+
+**A refusal is typed, never read from its wording** (`sis/verdict.py`,
+OMNI-208). Every failure `gauntlet.validate` returns carries a `Verdict`:
+the gate (the episodic `reject_gate` name), the kind (`rejected`, `neutral`,
+`harness` or `error`, fixed by the gate) and the sentence for people. The
+roles carry it next to `reason` in their result dicts (`verdict.KEY`), and
+the probe decision, the neutral statuses, the breaker's gate, the bug's
+headline, the end of a feature and the episodic `reject_gate` all read its
+fields. A candidate's own text can therefore say "harness:" or "timed out"
+without changing whose failure it is (L27, L64). Only records written
+before typed verdicts (old episodic rows, stored feature rejections) are
+still parsed (`verdict.legacy`), and `tests/test_verdict.py` pins that no
+other code calls the parser.
 
 **Known issues:** `docs/KNOWN_ISSUES.md` is the canonical, ID'd list (H/M/L);
 its High, Medium and Low sections are the open list. Reference the IDs in

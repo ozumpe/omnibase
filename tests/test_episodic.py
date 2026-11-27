@@ -240,6 +240,17 @@ def test_an_event_records_the_calls_token_counts() -> None:
     assert none.output_tokens is None and none.stop_reason is None
 
 
+def test_a_rejection_records_the_baseline_it_was_judged_against(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    # OMNI-189: with candidate_sha, what a later run on a new box matches on.
+    event = event_from_cycle_result({"status": "rolled_back", "candidate_sha": "c1",
+                                     "baseline_sha": "b1", "reason": "acceptance tests failed"})
+    assert (event.candidate_sha, event.baseline_sha) == ("c1", "b1")
+    assert event_from_cycle_result({"status": "paused"}).baseline_sha is None
+    store = JsonlEpisodicStore(tmp_path / "ep.jsonl")
+    store.append(event)
+    assert [e.baseline_sha for e in store.events()] == ["b1"]
+
+
 def test_a_count_that_is_not_a_whole_number_is_not_recorded() -> None:
     event = event_from_cycle_result(
         {"status": "rolled_back", "usage": {"output_tokens": "7570", "input_tokens": True}})

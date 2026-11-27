@@ -504,7 +504,9 @@ Decision:
 Go with the recommendation: budget + rotation, with burn measured from the episodic log.
 
 Built: the budget (OMNI-207, `sis/holdout.py`), counted per held-out fixture from the
-episodic log. Rotation is not built.
+episodic log, and rotation (OMNI-225, `scripts/build_fixture.py --rotate`): the weeks
+after the held-out set become the new one, the old set joins the training split, and
+both reach `specs/` by one human promotion (D12). Automating that promotion is OMNI-215.
 
 **D6 — Event time or wall-clock?**
 *Recommend event time behind a `Clock` port, with wall-clock as one adapter.* Backtest and
@@ -562,8 +564,13 @@ so one earlier year, or none after a 53-week ISO year. A lead built on history t
 never shown is not headroom a code change could capture.*
 → *The two decisions are built (OMNI-196, `sis/model_error.py`): an error budget on a
 window's MAE and a floor on its skill, separate rules and separate streaks, both sustained
-(over windows that share no week, OMNI-221) and both refusing to judge too few weeks.
-Wiring them to a cycle and a page is OMNI-197.*
+(over windows that share no week, OMNI-221) and both refusing to judge too few weeks.*
+→ *The error series they judge is kept (OMNI-198, `sis/error_series.py`): scored after each
+capture, each week once per predictor version, in the episodic store, a revised actual a new
+row, never an overwrite.*
+→ *Wired into `--loop` (OMNI-197, `--loop-trigger model-error`, off by default): a standing
+error-budget firing pages and starts a cycle, skill decay starts one; the knobs are config
+(`model_error.mae_budget` and `breach_weeks`), tight early and loose later (OMNI-213).*
 
 That's a decision to be made case by case, actor by actor and project by project. My opinion is to optimize the implementation
 of a model over time based on historic values/timelines. The situation for each actor can change suddenly and drastically - 

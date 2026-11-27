@@ -13,6 +13,101 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+## v0.9.0 — 2026-11-27
+
+Phase B (epic OMNI-194) reaches the box: the Friday run captures EIA's weekly
+data itself (OMNI-214), prediction error can start a cycle (OMNI-197), and
+two Phase B parts arrive unwired: the retrain stop rule (OMNI-228; the
+trigger does not call it yet) and the refinery-outage event signal
+(OMNI-227). Gate verdicts are typed (OMNI-208). Not in this release: the
+OMNI-199 demo and wiring OMNI-228 into the trigger.
+
+- OMNI-214: the weekly EIA capture runs unattended. The scheduled AWS run
+  fetches the canonical trace from the artifacts bucket (`traces/eia.jsonl`),
+  runs `scripts/capture_sensor.py`, reads the trace back and writes it back
+  with a conditional write (`--if-match`), before its preflight. Only line
+  counts reach the log; the licensed LA spot series stays in the bucket. A
+  failed, empty or raced capture leaves the bucket's trace as it was and
+  pages through SNS; the loop's run goes on. The bucket needs seeding once
+  (docs/SENSOR_RUNBOOK.md).
+- OMNI-197 (Phase B 3): prediction error can start a cycle. With
+  `--loop-trigger model-error` (`loop.trigger`, default `repeat`), `--loop`
+  reads the live predictor's scored error series each tick and replays the
+  two D9 triggers over it: a sustained error-budget breach pages (WARNING)
+  and starts a cycle, sustained skill decay starts one without a page, a
+  spike starts none. A firing starts one cycle; the cycle's body and
+  `Work.evidence` say which trigger fired and the numbers. New STRICT keys
+  `model_error.mae_budget` (acceptable error), `breach_weeks` (how long),
+  `skill_floor`, `window_weeks` and `min_weeks`; docs/ENGINE_RULES.md has a
+  tight "refine often" and a loose "leave it alone" setting.
+- OMNI-208: a rejection is typed, not read from its wording. Every failure
+  the gauntlet returns carries a `Verdict` (gate, kind, sentence;
+  `sis/verdict.py`, FORBIDDEN), and the SWE, QA, the canary, the review and
+  the cycle's own errors carry one next to their reason. The sandbox probe,
+  the neutral statuses, the breaker's gate, the bug headline, the end of a
+  feature and the episodic `reject_gate` read its fields, so a candidate's
+  text can no longer decide whose failure it was (the class of bug behind L27
+  and L64). Old episodic rows and stored rejections are still read by the
+  former parser, and only they. The benchmark's worker crashes are now
+  recorded as `benchmark_worker` (they had no gate before), and QA's
+  `review()` returns the verdict as a third value.
+- OMNI-228 (Phase B): retraining that does not help stops. `sis/futility.py`
+  (FORBIDDEN) decides, from the episodic records, whether the last
+  `brakes.futility_retrains` (3) retrains a model-error trigger started for a
+  contract each failed to cut the window's error by
+  `brakes.futility_min_improvement` (5%). If so, the trigger starts no more
+  retrains for it (no spend), records `futile_stopped`, and pages once
+  (WARNING, "likely missing input", with the weeks of largest error). A new
+  input (a new basis) or `python -m sis.admin reset-futility --contract <name>
+  --reason "..."` resets it; `sis.admin futility` shows where each contract
+  stands. The breaker is untouched. New episodic fields `trigger`,
+  `trigger_mae`, `trigger_basis`. OMNI-197 calls `Guard.may_start` and
+  `Guard.started` when it wires the triggers.
+- OMNI-227 (Phase B): a free event signal for price shocks. The EIA sensor
+  now also captures West Coast (PADD 5) refinery utilisation
+  (`PET.W_NA_YUP_R50_PER.W`, public domain, same release), and
+  `scripts/capture_sensor.py` derives from it a weekly refinery-outage flag (a
+  fall of 4 points or more) into its own append-only trace,
+  `runtime/sensor_traces/events.jsonl`, through the sanitising door, never
+  known before the values it rests on (`sis/events.py`, FORBIDDEN).
+  `scripts/build_fixture.py --training --events` shows it in a training split
+  as context; no gate reads it and no episode shows it. No recurring cost.
+- OMNI-189: a new box remembers what earlier runs rejected. A rejected step's
+  episodic record now carries `baseline_sha`, and each step is handed the
+  rejections in this box's log and in `runtime/history/`. A step from the same
+  base no longer re-judges a candidate an earlier run rejected (the
+  2026-11-06 run of `sort` paid to judge one again), and its prompt carries
+  the earlier reasons. Records from before this change have no
+  `baseline_sha` and are not matched.
+- OMNI-198 (Phase B 4): the predictor's error series is kept. After each
+  capture, `scripts/capture_sensor.py` scores the live predictor on the weeks
+  that became scorable (`--no-score` skips it; `scripts/score_capture.py`
+  scores a trace on its own) and appends one row per week to the episodic
+  store (`runtime/episodic_scored.jsonl`, or duckdb's `scored_weeks`), with
+  the predictor version, capture, errors and running skill. Each week is
+  scored once per predictor version; a later vintage of its actual is a
+  revision row, never an overwrite. `sis/error_series.py` (STRICT);
+  `as_steps` feeds `sis.model_error`. `capture_sensor.py --help` now prints
+  help instead of capturing.
+- OMNI-225 (D5): held-out rotation. `scripts/build_fixture.py --rotate` stages
+  the weeks after the held-out set as the new one and a training split that
+  now covers the old one, as one draft for one promotion; its budget starts at
+  zero. New config `brakes.holdout_rotation_min_weeks` (13). A plain rebuild
+  of a promoted private fixture now keeps its committed weeks.
+- OMNI-224 (M41): a candidate judged again on the same held-out fixture no
+  longer uses another holdout judgement. The "already built" check after a
+  merge re-judges the merged module every cycle; the 2026-11-21 run used 4 of
+  its 50 judgements where 1 was due. Each `candidate_sha` now counts once per
+  contract and fixture; new code still counts the first time it is judged.
+  A contract's `holdout_count_repeats` (else `brakes.holdout_count_repeats`,
+  off by default) brings back counting every repeat.
+- OMNI-144 (L49): every artifact sync now also uploads `run.json`, which says
+  which part of the box's cumulative files is this run's (byte offsets, first
+  and last `cycle_id`, contracts, cost, code version, carried spend at the start
+  and now). A run's S3 folder read as one run no longer double-counts.
+- Docs: `docs/KNOWN_ISSUES.md` listed M37 (OMNI-218) as open after #235 fixed
+  it; it is now a Resolved row.
+
 ## v0.8.0 — 2026-11-21
 
 Epic OMNI-204, the proposer's honest homework: a training split it may see

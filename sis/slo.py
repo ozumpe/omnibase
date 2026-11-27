@@ -144,9 +144,9 @@ class SloVerdict:
 def evaluate_slo(slo: DomainSLO, best_seconds: Sequence[float]) -> SloVerdict:
     """Judge per-input best times against the budget. Pure.
 
-    The reason wording is load-bearing: :func:`sis.episodic.gate_from_reason`
-    maps the ``slo exceeded`` prefix to the ``slo`` reject gate, and the CEO
-    weights that gate differently from a correctness failure.
+    The gauntlet files a failure here under the ``slo`` reject gate (a typed
+    verdict, OMNI-208), which the CEO weighs differently from a correctness
+    failure. The ``slo exceeded`` wording is what old records are read by.
     """
     observed = percentile_value(best_seconds, slo.percentile)
     budget = slo.budget_seconds

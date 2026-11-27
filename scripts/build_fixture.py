@@ -23,7 +23,23 @@ per week. Two fixtures:
 ``--training`` builds the fixture's training split instead (OMNI-205): the
 public series known just before its first held-out question, from the first
 week the calendar covers (or ``--first``), into ``training.json``. The
-proposer sees it; no gate reads it.
+proposer sees it; no gate reads it. With ``--events`` (OMNI-227) it also shows
+the refinery-outage event series from ``runtime/sensor_traces/events.jsonl``
+(``sis.events``; ``--events-trace`` for another path), in the split only.
+
+``--rotate`` replaces a private fixture's held-out set (OMNI-225, D5): the
+weeks after the committed set's last one become the new held-out episodes,
+and every week before them, the old held-out set included, goes into a new
+training split. Both are staged as one draft, so one review and one promotion
+move them together. It refuses until there are
+``brakes.holdout_rotation_min_weeks`` such weeks, and says when there will be.
+A new held-out fixture has a new digest, so its holdout budget starts at zero
+(``sis/holdout.py``); the old weeks are never judged again.
+
+Once a private fixture is promoted, a plain build or ``--training`` keeps its
+committed held-out weeks (``specs/<fixture>/private.json``) unless ``--last``
+says otherwise: adding fresh weeks to a judged set would restart its count on
+data the loop has seen judged, so only ``--rotate`` takes them.
 
 A calendar signed by CI (``checked_by`` ``CI, sources sha256:…``, OMNI-190) is
 checked again here, offline, against the saved sources it names
@@ -43,9 +59,11 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import json
 import pathlib
 import sys
 from dataclasses import dataclass, replace
+from typing import Any
 
 # Allow running as a plain script: put the repo root (parent of scripts/) on the
 # path, and scripts/ itself for the calendar check.
@@ -54,10 +72,15 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 import draft_release_calendar  # noqa: E402
 
-from sis import sensor_trace  # noqa: E402
+from sis import (  # noqa: E402
+    config,
+    holdout,
+    sensor_trace,  # noqa: E402
+)
 from sis.adapters_real import EIA_PUBLIC_SERIES, EIA_RULES, EIA_SERIES, EIA_TRACE  # noqa: E402
+from sis.backtest import PRIVATE_INDEX_SCHEMA, TRAINING_FILE  # noqa: E402
 from sis.clock import parse_event_time  # noqa: E402
-from sis.contract_author import stage  # noqa: E402
+from sis.contract_author import ContractDraft, stage  # noqa: E402
 from sis.fixture_builder import (  # noqa: E402
     FixtureRefused,
     Question,
@@ -65,6 +88,8 @@ from sis.fixture_builder import (  # noqa: E402
     build,
     build_training,
 )
+from sis.paths import SPECS_DIR  # noqa: E402
+from sis.sensor_input import SourceRules  # noqa: E402
 
 DATA = pathlib.Path(__file__).resolve().parent / "data"
 CALIFORNIA = "PET.EMM_EPMRR_PTE_SCA_DPG.W"
@@ -104,6 +129,26 @@ FIXTURES = {
 # calendar covers, since every reading shown is checked against it. Extend the
 # calendar back (draft_release_calendar.py) for a longer split, then pass --first.
 TRAINING_FIRST = {"ca_price_wholesale": datetime.date(2018, 12, 3)}
+
+
+# Where promoted fixtures are: a private one's held-out weeks are read from
+# its committed index (tests point this elsewhere).
+SPECS = SPECS_DIR
+
+
+def _committed_weeks(name: str) -> tuple[datetime.date, ...]:
+    """The held-out weeks *name*'s committed private index lists, or () if none."""
+    path = SPECS / name / "private.json"
+    if not path.exists():
+        return ()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        assert isinstance(data, dict) and data.get("schema") == PRIVATE_INDEX_SCHEMA
+        return tuple(sorted(datetime.date.fromisoformat(str(e["name"]))
+                            for e in data["episodes"]))
+    except (OSError, ValueError, KeyError, TypeError, AssertionError) as exc:
+        raise FixtureRefused(f"{path}: not a readable private index whose episodes are "
+                             f"named for their weeks ({type(exc).__name__})") from None
 
 
 def _answered(lines: list[dict[str, object]], target: str) -> list[datetime.date]:
@@ -153,8 +198,18 @@ def main(argv: list[str] | None = None) -> int:
                         help="build the fixture's training split instead (OMNI-205): public "
                              "series known before its first held-out question")
     parser.add_argument("--first", type=datetime.date.fromisoformat, default=None,
-                        help="with --training, the earliest period shown (default: the "
+                        help="with --training or --rotate, the earliest period shown (default: the "
                              "first week the release calendar covers)")
+    parser.add_argument("--events", action="store_true",
+                        help="with --training or --rotate, also show the refinery-outage "
+                             "event series in the training split (OMNI-227)")
+    parser.add_argument("--events-trace", type=pathlib.Path, default=None,
+                        help="the event trace --events reads (default: "
+                             "runtime/sensor_traces/events.jsonl)")
+    parser.add_argument("--rotate", action="store_true",
+                        help="replace a private fixture's held-out weeks with the fresh "
+                             "weeks after them, and move the old ones into its training "
+                             "split, as one draft (OMNI-225)")
     parser.add_argument("--last", type=datetime.date.fromisoformat, default=None,
                         help="the last week predicted (default: the fixture's own, or the "
                              "last week the trace answers that the release calendar "
@@ -174,6 +229,13 @@ def main(argv: list[str] | None = None) -> int:
             except draft_release_calendar.CalendarRefused as exc:
                 raise FixtureRefused(f"the release calendar claims CI's check, which it "
                                      f"does not pass: {exc}") from None
+        committed = _committed_weeks(args.fixture) if fixture.private else ()
+        if args.rotate:
+            return _stage_rotation(args, lines, calendar, fixture, committed)
+        if committed:
+            # The promoted split, not the one this file started with (OMNI-225).
+            fixture = replace(fixture, question=replace(fixture.question, first=committed[0]),
+                              last=fixture.last or committed[-1])
         if args.training:
             return _stage_training(args, lines, calendar, fixture)
         last, note = args.last or fixture.last, None
@@ -217,6 +279,74 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def _covered(lines: list[dict[str, object]], calendar: ReleaseCalendar,
+             question: Question) -> list[datetime.date]:
+    """Every week the trace answers that the release calendar still covers."""
+    weeks = _answered(lines, question.target)
+    beyond = _past_the_calendar(lines, calendar, question)
+    return [week for week in weeks if beyond is None or week < beyond]
+
+
+def _stage_rotation(args: argparse.Namespace, lines: list[dict[str, object]],
+                    calendar: ReleaseCalendar, fixture: Fixture,
+                    committed: tuple[datetime.date, ...]) -> int:
+    """Stage a new held-out set of fresh weeks and the training split before it (OMNI-225)."""
+    if not fixture.private:
+        raise FixtureRefused(f"{args.fixture} is public: only a private fixture's held-out "
+                             "set is budgeted and rotated")
+    first = args.first or TRAINING_FIRST.get(args.fixture)
+    if first is None:
+        raise FixtureRefused(f"{args.fixture} has no training split: pass --first")
+    if not committed:
+        raise FixtureRefused(f"no promoted held-out set for {args.fixture} "
+                             f"({SPECS / args.fixture / 'private.json'}): build and promote "
+                             "one first")
+    available = _covered(lines, calendar, fixture.question)
+    if args.last is not None:
+        available = [week for week in available if week <= args.last]
+    plan = holdout.plan_rotation(committed, available,
+                                 int(config.get("brakes.holdout_rotation_min_weeks")),
+                                 fixture.question.horizon)
+    if not plan.ready or plan.last is None:
+        raise FixtureRefused(plan.describe())
+    question = replace(fixture.question, first=plan.first, last=plan.last)
+    held = build(lines, EIA_RULES, calendar, question, name=args.fixture,
+                 spec_ref=fixture.spec_ref, private=True)
+    training = build_training(lines, EIA_RULES, calendar, question, first=first,
+                              name=args.fixture, spec_ref=fixture.spec_ref,
+                              context=_context(args))
+    clash = set(held.files) & set(training.files)
+    if clash:
+        raise FixtureRefused(f"the held-out and training drafts both write {sorted(clash)}")
+    staged = stage(ContractDraft(name=args.fixture, spec_ref=fixture.spec_ref,
+                                 files={**held.files, **training.files}))
+    built = sum(1 for name in staged.files if name.endswith("_fixture.json"))
+    print(plan.describe())
+    print(f"staged {staged.name}: {built} held-out episodes and the training split from "
+          f"{first}, in {staged.directory}")
+    print("After promotion the new fixture's holdout budget starts at zero; the old "
+          "held-out weeks are never judged again.")
+    print(f"private: after promotion, upload specs/{staged.name}/private/ to the artifacts "
+          f"bucket (docs/SENSOR_RUNBOOK.md); git keeps specs/{staged.name}/private.json, "
+          f"{TRAINING_FILE}, README.md and the calendar")
+    print(f"digest: {staged.digest}")
+    print(f"Review it: python -m sis.contract_author review {staged.name}")
+    return 0
+
+
+def _context(args: argparse.Namespace) -> list[tuple[list[dict[str, Any]], SourceRules]]:
+    """The other sources a training split shows (OMNI-227): the event trace with --events."""
+    if not args.events:
+        return []
+    from sis.events import EVENT_RULES, EVENTS_TRACE
+
+    path = args.events_trace or EVENTS_TRACE
+    lines = sensor_trace.load(path)
+    if not lines:
+        raise FixtureRefused(f"no event trace at {path}: run scripts/capture_sensor.py first")
+    return [(lines, EVENT_RULES)]
+
+
 def _stage_training(args: argparse.Namespace, lines: list[dict[str, object]],
                     calendar: ReleaseCalendar, fixture: Fixture) -> int:
     """Build, stage and report the training split *fixture*'s exam is held out from."""
@@ -224,7 +354,8 @@ def _stage_training(args: argparse.Namespace, lines: list[dict[str, object]],
     if first is None:
         raise FixtureRefused(f"{args.fixture} has no training split: pass --first")
     draft = build_training(lines, EIA_RULES, calendar, fixture.question, first=first,
-                           name=args.fixture, spec_ref=fixture.spec_ref)
+                           name=args.fixture, spec_ref=fixture.spec_ref,
+                           context=_context(args))
     staged = stage(draft)
     print(f"staged {staged.name}: training split from {first}, known before the first "
           f"held-out question ({fixture.question.first}), in {staged.directory}")

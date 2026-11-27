@@ -24,12 +24,34 @@ It extracts declared series, sanitises their records, and appends to
 Confluence credentials. Run captures explicitly; neither selecting the sensor
 backend nor starting `main.py` schedules them.
 
-**Today a person runs the capture once a week**, after EIA's Wednesday
-release, on the one machine that holds the canonical trace. A missed week is
-not lost (the next capture still records the values, known at its own fetch
-time), but the prediction-error report cannot score a week whose next value
-was already known when it was asked (M34). Scheduling the capture, with the
-trace kept in the artifacts bucket, is [OMNI-214](https://olafzumpe.atlassian.net/browse/OMNI-214).
+**The canonical trace is the artifacts bucket's** `traces/eia.jsonl`
+(OMNI-214), and the weekly scheduled AWS run captures into it, on Friday,
+after EIA's Wednesday release ([AWS_RUN.md](AWS_RUN.md#scheduled-runs-omni-168-omni-169)).
+Before its preflight the run fetches the trace with its ETag, runs
+`scripts/capture_sensor.py`, reads the trace back through the door, and writes
+it back only if the bucket still holds the version it read (`--if-match`), so
+two writers cannot interleave. The log shows line counts, never values. A
+capture that fails, appends nothing, or cannot be written back leaves the
+bucket's trace as it was and pages through the SNS topic; the loop's run goes
+on, since its contract judges on its own fixtures. A missed week is not lost
+(the next capture still records the values, known at its own fetch time), but
+the prediction-error report cannot score a week whose next value was already
+known when it was asked (M34).
+
+**Seed the bucket once**, from the machine that held the canonical trace until
+now, before the first scheduled capture (S3 versioning keeps every later
+write):
+
+```bash
+aws s3 cp runtime/sensor_traces/eia.jsonl \
+  "s3://$ARTIFACTS_BUCKET/traces/eia.jsonl" --if-none-match '*'
+```
+
+After that a local trace is a mirror: copy it down
+(`aws s3 cp "s3://$ARTIFACTS_BUCKET/traces/eia.jsonl" runtime/sensor_traces/eia.jsonl`)
+and don't capture into it by hand, or the bucket and the copy part ways. A
+capture you must run by hand goes through the bucket: fetch, capture, and
+upload with `aws s3api put-object … --if-match <the ETag you fetched>`.
 
 | Bulk-file series | Observation | Published unit |
 |---|---|---|
@@ -64,6 +86,30 @@ Exit code 0 means none of those problem conditions was reported. Exit code 1
 means a refusal, missing series or vanished period; **accepted values may still
 have been appended**. Inspect the report and its capture header before retrying.
 Fetch/format errors raise rather than producing a normal successful report.
+
+### The refinery-outage events (OMNI-227)
+
+A coarse event signal for price shocks stocks and prices cannot explain.
+
+- **Source:** EIA's weekly West Coast (PADD 5) refinery utilisation,
+  `PET.W_NA_YUP_R50_PER.W`, from the same bulk file and the same Wednesday
+  release (Weekly Petroleum Status Report) the capture above already fetches.
+  No extra download, no key, history from 2010.
+- **Licence:** EIA's own data, public domain (the bulk file says
+  `copyright: None`). It may be shown in public fixtures and prompts.
+  (EIA's "This Week in Petroleum" commentary, the other free candidate, stopped
+  in October 2025.)
+- **Event:** a week whose utilisation fell at least 4 percentage points from
+  the week before is 1, any other week 0 (`sis/events.py`). 2018 to 2026 has
+  about five such weeks a year, the September 2019 refinery outages among them.
+- **Refresh:** every capture. `scripts/capture_sensor.py` derives the flags
+  after appending the EIA values and appends what is new or changed to
+  `runtime/sensor_traces/events.jsonl` (`--no-events` skips it). The first run
+  backfills each flag known when the later of its two utilisation values was;
+  later, a new or revised flag is known at the capture that found it.
+- **Where it shows:** only in a training split built with `--events`
+  (below), marked to the proposer as context that an episode never shows. No
+  gate reads it.
 
 ## Check connectivity
 
@@ -171,7 +217,8 @@ be committed. The steps are the same, with these differences:
    `GASREGW`'s vintages, the later where they differ.
 2. **Build:** `python scripts/build_fixture.py --fixture ca_price_wholesale`
    builds every week from 6 January 2020 to the last the trace answers (about
-   350 episodes, about 40 MB). A fresh capture backfills its history as
+   350 episodes, about 40 MB). Once a `private.json` is promoted, a plain build
+   rebuilds exactly its weeks instead; new weeks come only by rotation (below). A fresh capture backfills its history as
    reconstructed, which needs the calendar, so the build stops at the last
    week the calendar covers and prints it, with the week the trace goes to.
    To build further, extend the calendar (step 1). `--last
@@ -191,6 +238,29 @@ be committed. The steps are the same, with these differences:
    a `harness:` fault, so a verdict is only reached on the data a human
    promoted.
 
+### Rotating the held-out weeks (OMNI-225)
+
+Each held-out fixture gives a limited number of judgements (`sis/holdout.py`).
+When they run out, or earlier, rotate: the weeks published after the current
+held-out set become the new one, and the old held-out weeks join the training
+split. Nothing already judged is judged again.
+
+1. **Capture** as every week (`scripts/capture_sensor.py`), and **extend the
+   release calendar** past the new weeks (step 1 above): the build covers only
+   what the calendar does.
+2. **Build:** `python scripts/build_fixture.py --fixture ca_price_wholesale
+   --rotate`. It needs at least `brakes.holdout_rotation_min_weeks` fresh weeks
+   after the committed set's last one; with fewer it refuses and names the week
+   that makes enough. It stages the new episodes, `private.json`, `README.md`,
+   the calendar and the new `training.json` as one draft.
+3. **Review and promote** that one digest, as above. The promotion overwrites
+   `private.json` and `training.json`; the old private files stay on disk,
+   unlisted, and no gate reads them.
+4. **Upload** `specs/ca_price_wholesale/private/` to the artifacts bucket (step
+   4 above; the new files sit beside the old ones) and open the pull request
+   with `private.json`, `training.json`, `README.md` and the calendar. After the
+   merge, `python -m sis.admin holdout` shows the new fixture at zero used.
+
 ### A training split (OMNI-205)
 
 A contract judged on held-out history may also have a training split,
@@ -206,6 +276,8 @@ is committed, so a prompt never holds more than git does.
    (3 December 2018); `--first YYYY-MM-DD` starts elsewhere, and a reading the
    calendar does not cover is refused, so extend the calendar back first for a
    longer split.
+   Add `--events` to show the refinery-outage events too, as context (from
+   `runtime/sensor_traces/events.jsonl`, or `--events-trace PATH`).
 2. **Review and promote** as above (the draft holds only `training.json`).
    Commit it through a pull request. The contract picks it up on the next
    start; it refuses a split with any record from on or after the first
@@ -288,6 +360,53 @@ records the summary in the SelfModel's provenance.
 
 A trace replay needs a capture first (`scripts/capture_sensor.py`); without
 one the script exits 1 and says so.
+
+### The error series, scored after each capture (OMNI-198)
+
+The report above replays a window and keeps nothing. Phase B's triggers need a
+history that survives a restart and a new box, so after each capture
+`scripts/capture_sensor.py` also scores the live predictor (the same one as
+above) on the weeks that became scorable, and appends one row per week to the
+episodic store's error series: `runtime/episodic_scored.jsonl` with the jsonl
+backend, the `scored_weeks` table with duckdb. `--no-score` skips it, and a
+scoring that fails is printed and leaves the capture in place. To score a
+trace captured elsewhere:
+
+```bash
+poetry run python scripts/score_capture.py                      # the EIA trace
+poetry run python scripts/score_capture.py --trace PATH --from 2022-08-01
+```
+
+- **Each week is scored once per predictor version** (the first 12 hex
+  digits of the predictor source's sha256). A week already in the series is
+  not asked again, so a second scoring after one capture adds nothing. A week
+  that cannot be scored yet (its next week not yet published, the predictor
+  failed) is not written and is tried again after the next capture. A week
+  whose next value was already known when it was asked (a catch-up capture)
+  is skipped, as in the report.
+- **Where it starts:** where the series already starts for that series, so a
+  new predictor version is scored over the same weeks as the one before it;
+  with no series yet, 13 weeks before the trace's last question. `--from` sets
+  it.
+- **A revision is a new row, never an overwrite.** When a later vintage of a
+  week's actual differs from the one its row saw, the week gets a row with
+  the next `revision`, the same prediction and the new actual and errors
+  (`note` `revised`); a withdrawn actual is a revision with no actual
+  (`withdrawn`). The latest revision of each week is the one that counts.
+- **Each row** carries the target, predictor version, the capture it was
+  scored after, the week, when it was asked, the forecast week, the
+  prediction, the actual and when that vintage became known, the model's and
+  climatology's errors, and the skill against climatology over the series up
+  to that week. Each new row is also emitted as `prediction.error` (with
+  `predictor`, `capture` and `revision`), and each scoring as
+  `prediction.scored`.
+
+From code, `sis.error_series.score_trace` scores a trace and
+`sis.error_series.as_steps(store.scored(), target=..., predictor=...)` turns
+the series into the steps `sis.model_error`'s triggers judge. `main.py --loop
+--loop-trigger model-error` acts on it (OMNI-197, docs/ENGINE_RULES.md): a
+sustained breach starts a cycle, and an error-budget one pages. The scheduled AWS
+run's artifact sync already uploads the file (`episodic*.jsonl`).
 
 ## Times and historical limits
 

@@ -48,6 +48,10 @@ class Justification(str, Enum):
 GUARDRAIL_PATHS: tuple[str, ...] = (
     "sis/policy.py",          # this policy itself
     "sis/gauntlet.py",        # the validation moat + sandbox + timeout
+    # What a refusal is (OMNI-208): which gates are neutral and which are the
+    # harness's. A loop able to edit it could call every rejection neutral and
+    # keep it off the breaker, or blame its failures on the sandbox.
+    "sis/verdict.py",
     # What every comparing gate reduces candidate output to before `==` (H4):
     # a loop able to loosen it could return a value with its own __eq__ again.
     "sis/canonical.py",
@@ -72,6 +76,9 @@ GUARDRAIL_PATHS: tuple[str, ...] = (
     # How many judgements a held-out fixture may give (OMNI-207, D5): a loop
     # able to edit the count could keep fitting the exam by selection.
     "sis/holdout.py",
+    # When retraining stops as futile (OMNI-228): a loop able to edit it could
+    # keep paying for retrains that cannot help.
+    "sis/futility.py",
     "sis/invariant.py",       # the domain-law gate + its in-sandbox script
     "sis/slo.py",             # the latency-budget gate + its in-sandbox script
     # The only write path into specs/. It holds the approval gate that stands
@@ -92,6 +99,9 @@ GUARDRAIL_PATHS: tuple[str, ...] = (
     # backfilled history. A loop able to edit it could shape what its own
     # models are later judged against.
     "sis/sensor_trace.py",
+    # The event signal derived from a trace, and its own trace (OMNI-227): a
+    # sensor like the others, so the loop may not shape what it is shown.
+    "sis/events.py",
     # What a model is shown at each moment of a replay, and the fixtures built
     # from it (OMNI-35): a loop able to edit either could choose its own exam.
     "sis/replay.py",

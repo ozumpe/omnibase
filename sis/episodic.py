@@ -28,10 +28,9 @@ from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import Any, Protocol
 
-from sis import config
+from sis import config, verdict
 from sis.atomic import write_text_atomic
 from sis.clock import Clock, now_iso
-from sis.gauntlet import is_harness_timeout
 from sis.paths import EPISODIC_DUCKDB, EPISODIC_JSONL
 
 # Outcomes that count as an accepted improvement (passed gauntlet + QA, in a PR).
@@ -41,19 +40,8 @@ ACCEPTED_OUTCOMES = frozenset({"verified_awaiting_human_merge", "promoted", "fea
 
 # Reject gates that are benign rather than failures, and the cycle status each
 # is recorded under: no bug filed, no breaker increment, spend still recorded.
-# "noop" — nothing to improve (KNOWN_ISSUES M3). "benchmark_inconclusive" — the
-# measurement could not separate the candidate from the margin (OMNI-41).
-NEUTRAL_OUTCOMES: dict[str, str] = {
-    "noop": "no_change",
-    "benchmark_inconclusive": "inconclusive",
-    # The live canary's paired latency interval could not tell (OMNI-50, M20):
-    # the same fact as an inconclusive benchmark, and the same status.
-    "canary_inconclusive": "inconclusive",
-    # The feature's own review asked for changes (OMNI-131): its head passed
-    # every gate, and the next cycle revises it. Not a failure, and not the
-    # target converging either.
-    "review_requested": "review_requested",
-}
+# Defined with the verdict that carries them (sis.verdict).
+NEUTRAL_OUTCOMES = verdict.NEUTRAL_OUTCOMES
 
 
 # A new feature's first step that finds no further gain (OMNI-138): nothing
@@ -74,12 +62,13 @@ CONVERGED_STATUSES = frozenset({NEUTRAL_OUTCOMES["noop"], NO_GAIN})
 
 
 def neutral_status(reason: str | None) -> str | None:
-    """The neutral cycle status a rejection reason maps to, or ``None``. Pure.
+    """The neutral cycle status an old record's reason maps to, or ``None``. Records only.
 
-    One definition for both places a verdict is read — the SWE's gauntlet run
-    and QA's re-run — so the two can never disagree about what is benign.
+    Live results carry a typed verdict whose ``neutral`` says this
+    (OMNI-208); this reads rows written before them.
     """
-    return NEUTRAL_OUTCOMES.get(gate_from_reason(reason) or "")
+    judged = verdict.legacy(reason)
+    return judged.neutral if judged else None
 
 
 @dataclass
@@ -102,6 +91,9 @@ class EpisodicEvent:
     # reject_gate: ast | noop | mypy | interface | acceptance | invariant
     #            | backtest | correctness | benchmark | benchmark_inconclusive
     #            | benchmark_unmeasurable | benchmark_malformed | policy | timeout
+    #            | benchmark_worker (the candidate's benchmark worker crashed,
+    #                         OMNI-208) | unknown (an untyped failure no
+    #                         record rule names)
     #            | pytest    (pre-OMNI-17 name for `acceptance`; still emitted
     #                         by nothing, still recognised for old rows)
     #            | harness   ("harness" = the gate could not run, not a verdict
@@ -139,6 +131,17 @@ class EpisodicEvent:
     # against. None for a contract with no held-out episodes, and for every
     # record that is not a cycle (a human's merge, a develop judgment).
     holdout_digest: str | None = None
+    # The short sha of the source a rejected candidate was judged against
+    # (OMNI-189): with candidate_sha, what lets a later run on a new box know
+    # the same code was already rejected against the same baseline. None for
+    # everything else.
+    baseline_sha: str | None = None
+    # A cycle a model-error trigger started (OMNI-228, sis.futility): which
+    # trigger, the window's error that started it, and the basis (the inputs
+    # the contract had) it ran on. None for every other record.
+    trigger: str | None = None
+    trigger_mae: float | None = None
+    trigger_basis: str | None = None
 
     @staticmethod
     def new_cycle_id() -> str:
@@ -163,6 +166,41 @@ def _now(clock: Clock | None = None) -> str:
 def _from_dict(data: dict[str, Any]) -> EpisodicEvent:
     """Build an event from a dict, ignoring unknown keys (schema-evolution safe)."""
     return EpisodicEvent(**{k: v for k, v in data.items() if k in set(_FIELD_NAMES)})
+
+
+@dataclass(frozen=True)
+class ScoredWeek:
+    """One week a predictor was scored on, as the error series keeps it (OMNI-198).
+
+    The series is append-only: a later vintage of the actual is a new row with
+    the next ``revision``, never an overwrite, so what the trigger saw at any
+    time can be read back. ``revision`` 0 is the first scoring; a row whose
+    ``actual`` is None is a withdrawal of that week's value.
+    """
+
+    target: str                      # the series predicted
+    predictor: str                   # the predictor's version: sha256 of its source, 12 hex
+    capture: str                     # the trace's last capture when this row was scored
+    week: str                        # ISO: the last week the predictor was shown
+    at: str                          # ISO: when it was asked (that week's first known_at)
+    next_week: str                   # ISO: the week it forecast
+    predicted: float
+    actual: float | None             # the next week's value, the vintage this row saw
+    actual_known_at: str | None      # when that vintage became known
+    error: float | None              # predicted - actual
+    climatology: float | None
+    climatology_error: float | None  # climatology - actual
+    skill: float | None              # skill over this predictor's series up to this row
+    revision: int = 0
+    note: str = ""
+    ts: str = ""                     # when it was scored (wall clock)
+
+
+_SCORED_FIELDS: tuple[str, ...] = tuple(f.name for f in fields(ScoredWeek))
+
+
+def _scored_from_dict(data: dict[str, Any]) -> ScoredWeek:
+    return ScoredWeek(**{k: v for k, v in data.items() if k in set(_SCORED_FIELDS)})
 
 
 def summarize(events: list[EpisodicEvent]) -> dict[str, Any]:
@@ -233,6 +271,9 @@ class EpisodicStore(Protocol):
     # False when it kept the saved state for that reason.
     def save_state(self, key: str, value: dict[str, Any]) -> bool: ...
     def load_state(self, key: str) -> dict[str, Any] | None: ...
+    # The prediction-error series (OMNI-198): append-only, in the order scored.
+    def append_scored(self, rows: list[ScoredWeek]) -> None: ...
+    def scored(self) -> list[ScoredWeek]: ...
 
 
 class NullEpisodicStore:
@@ -253,6 +294,12 @@ class NullEpisodicStore:
     def load_state(self, key: str) -> dict[str, Any] | None:
         return None
 
+    def append_scored(self, rows: list[ScoredWeek]) -> None:
+        return None
+
+    def scored(self) -> list[ScoredWeek]:
+        return []
+
 
 class JsonlEpisodicStore:
     """Append-only JSON lines — the durable, zero-dependency default."""
@@ -265,6 +312,8 @@ class JsonlEpisodicStore:
         # Held around each read-compare-write of that file, by every process
         # that saves (OMNI-158). Separate, since the state file is replaced.
         self._lock_path = path.with_name(f"{path.stem}_state.lock")
+        # The prediction-error series (OMNI-198), its own append-only file.
+        self.scored_path = path.with_name(f"{path.stem}_scored.jsonl")
 
     def append(self, event: EpisodicEvent) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -327,6 +376,28 @@ class JsonlEpisodicStore:
     def summary(self) -> dict[str, Any]:
         return summarize(self.events())
 
+    def append_scored(self, rows: list[ScoredWeek]) -> None:
+        if not rows:
+            return
+        self.scored_path.parent.mkdir(parents=True, exist_ok=True)
+        # One write for the batch, so a crash leaves at most one torn last
+        # line, which scored() skips.
+        with self.scored_path.open("a", encoding="utf-8") as fh:
+            fh.write("".join(json.dumps(asdict(row)) + "\n" for row in rows))
+
+    def scored(self) -> list[ScoredWeek]:
+        if not self.scored_path.exists():
+            return []
+        out: list[ScoredWeek] = []
+        for line in self.scored_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                out.append(_scored_from_dict(json.loads(line)))
+            except (json.JSONDecodeError, TypeError):
+                continue  # a torn last line, as events() skips one
+        return out
+
 
 # DuckDB column types, keyed by field name. Asserted to match the dataclass so
 # the schema can't silently drift.
@@ -340,8 +411,19 @@ _DUCK_TYPES: dict[str, str] = {
     "input_tokens": "BIGINT", "output_tokens": "BIGINT", "cache_creation_tokens": "BIGINT",
     "cache_read_tokens": "BIGINT", "output_limit": "BIGINT", "stop_reason": "VARCHAR",
     "holdout_digest": "VARCHAR",
+    "baseline_sha": "VARCHAR",
+    "trigger": "VARCHAR", "trigger_mae": "DOUBLE", "trigger_basis": "VARCHAR",
 }
 assert tuple(_DUCK_TYPES) == _FIELD_NAMES, "DuckDB schema drifted from EpisodicEvent"
+
+_DUCK_SCORED_TYPES: dict[str, str] = {
+    "target": "VARCHAR", "predictor": "VARCHAR", "capture": "VARCHAR", "week": "VARCHAR",
+    "at": "VARCHAR", "next_week": "VARCHAR", "predicted": "DOUBLE", "actual": "DOUBLE",
+    "actual_known_at": "VARCHAR", "error": "DOUBLE", "climatology": "DOUBLE",
+    "climatology_error": "DOUBLE", "skill": "DOUBLE", "revision": "BIGINT", "note": "VARCHAR",
+    "ts": "VARCHAR",
+}
+assert tuple(_DUCK_SCORED_TYPES) == _SCORED_FIELDS, "DuckDB schema drifted from ScoredWeek"
 
 
 class DuckDBEpisodicStore:
@@ -366,6 +448,11 @@ class DuckDBEpisodicStore:
         # Latest-wins key/value state (e.g. persisted CEO brake state, L9).
         self._con.execute(
             "CREATE TABLE IF NOT EXISTS kv_state (key VARCHAR PRIMARY KEY, value VARCHAR)")
+        # The prediction-error series (OMNI-198). ``seq`` keeps the order rows
+        # were scored in, which ``ts`` alone cannot when a batch shares it.
+        # Quoted: ``at`` is an SQL keyword.
+        scored = ", ".join(f'"{name}" {dtype}' for name, dtype in _DUCK_SCORED_TYPES.items())
+        self._con.execute(f"CREATE TABLE IF NOT EXISTS scored_weeks (seq BIGINT, {scored})")
 
     def append(self, event: EpisodicEvent) -> None:
         cols = ", ".join(_FIELD_NAMES)
@@ -422,6 +509,23 @@ class DuckDBEpisodicStore:
             raise StateUnreadable(f"duckdb kv_state[{key!r}]: not an object")
         return parsed
 
+    def append_scored(self, rows: list[ScoredWeek]) -> None:
+        if not rows:
+            return
+        row = self._con.execute("SELECT COALESCE(MAX(seq), -1) FROM scored_weeks").fetchone()
+        first = int(row[0]) + 1 if row is not None else 0
+        cols = ", ".join(f'"{name}"' for name in ("seq", *_SCORED_FIELDS))
+        placeholders = ", ".join("?" for _ in range(len(_SCORED_FIELDS) + 1))
+        self._con.executemany(
+            f"INSERT INTO scored_weeks ({cols}) VALUES ({placeholders})",
+            [[first + i, *(getattr(item, name) for name in _SCORED_FIELDS)]
+             for i, item in enumerate(rows)])
+
+    def scored(self) -> list[ScoredWeek]:
+        cols = ", ".join(f'"{name}"' for name in _SCORED_FIELDS)
+        rows = self._con.execute(f"SELECT {cols} FROM scored_weeks ORDER BY seq").fetchall()
+        return [ScoredWeek(*row) for row in rows]
+
     def sql(self, query: str) -> list[tuple[Any, ...]]:
         """Run an ad-hoc analytical query against the `episodes` table."""
         # Annotated local (not cast): duckdb is an optional dep, so its return
@@ -447,133 +551,12 @@ def get_episodic_store(kind: str | None = None) -> EpisodicStore:
 
 
 def gate_from_reason(reason: str | None) -> str | None:
-    """Best-effort: which gauntlet gate produced a rejection reason."""
-    if not reason:
-        return None
-    r = reason.lower()
-    # An exception raised inside the cycle (OMNI-55, M16), not a gate's verdict.
-    # First, because its message can hold any word the checks below look for:
-    # "error: ReadTimeout: the read timed out" is not a gate that timed out.
-    if r.startswith("error:"):
-        return "error"
-    # Timeout first: a timed-out gate's reason names the gate ("mypy gate timed
-    # out"), so this must win over the gate-name checks below (L12). Only the
-    # harness's own reasons, which start with it: further in, the words are
-    # what the candidate raised or returned, and a candidate that says "timed
-    # out" must not turn its failure into the harness's (L27, OMNI-73).
-    if is_harness_timeout(r):
-        return "timeout"
-    # Harness faults next: their reason names the gate that could not run
-    # ("... the pytest gate cannot run"), so this must win over the gate-name
-    # checks below — otherwise a broken harness is counted as a candidate that
-    # failed pytest, and the analytics blame the wrong side.
-    if r.startswith("harness:"):
-        return "harness"
-    # The proposer produced nothing to judge: its answer stopped at the token
-    # limit (L33). Neither the candidate's gate nor the sandbox's.
-    if r.startswith("proposer:"):
-        return "proposer"
-    # The feature's own review (OMNI-131): changes asked for, which the next
-    # cycle revises, or a review still unsatisfied after its last round. First
-    # among the candidate's gates, since a finding can name any of them.
-    if r.startswith("review requested:"):
-        return "review_requested"
-    if r.startswith("review:"):
-        return "review"
-    # A Class-2 feature already on the base branch that still passes every gate
-    # (OMNI-147): nothing to build, the target converging. Neutral because the
-    # SWE says so (no_gain), as for "no improvement" on a new Class-1 feature.
-    if r.startswith("already built"):
-        return "built"
-    # A candidate that changed the exam files a later gate trusts (OMNI-45, M9).
-    # Its own name: it is the candidate's doing, never the sandbox's, and it is
-    # worth counting separately from a wrong answer.
-    if r.startswith("tampered:"):
-        return "tampering"
-    # The contract's interface gate: the candidate has the wrong shape, which is
-    # a distinct failure from "its behaviour is wrong" (CLASS2_CONTRACT.md).
-    if r.startswith("interface:"):
-        return "interface"
-    # The backtest gate (sis/backtest.py): the candidate is well-formed and
-    # passes its acceptance tests, but does not reproduce a recorded episode.
-    # Distinct from "correctness" — that gate compares against a reference
-    # oracle evaluated on demand, this one against history that actually
-    # happened, and for a world-model the second is the evidence that counts.
-    if r.startswith("backtest failed"):
-        return "backtest"
-    # The SLO gate (sis/slo.py, OMNI-24): correct, but over the spec's latency
-    # budget. Its own name because the CEO weighs it below a correctness
-    # failure. A candidate that *raises* on the workload is a different fact —
-    # a wrong answer — and gets its own name so it is weighed in full.
-    if r.startswith("slo exceeded"):
-        return "slo"
-    if r.startswith("slo workload raised"):
-        return "slo_error"
-    # The offline invariant gate (sis/invariant.py). The reason says "in
-    # sandbox" specifically because the canary's own violation reason starts
-    # "invariant violated" too — the same predicates, applied to live traffic.
-    # A shared prefix here would shadow the canary rule below and silently
-    # report every live violation as an offline one, losing exactly the
-    # sandbox-vs-production distinction the canary exists to add.
-    if r.startswith("invariant violated in sandbox"):
-        return "invariant"
-    # The canary's own gates (sis/canary.py: evaluate_canary), each a live
-    # analogue of an offline concept but named distinctly — conflating a live
-    # regression with an offline "no improvement" (or a live invariant
-    # violation with the offline differential-correctness "correctness" gate)
-    # would make rejected_by_gate ambiguous about whether the sandbox or live
-    # traffic caught it, which is exactly the distinction the canary adds.
-    if r.startswith("insufficient evidence"):
-        return "canary_evidence"
-    if r.startswith("invariant violated"):
-        return "canary_invariant"
-    if r.startswith("response disagreement"):
-        return "canary_disagreement"
-    if r.startswith("live error rate"):  # green failed more often (OMNI-50, M21)
-        return "canary_errors"
-    if r.startswith("live latency inconclusive"):  # neutral (OMNI-50, M20)
-        return "canary_inconclusive"
-    if r.startswith("live "):  # "live latency/p95/p99 regression: ..."
-        return "canary_regression"
-    if "syntaxerror" in r:
-        return "ast"
-    if "no change" in r:  # candidate identical to the baseline (no-op)
-        return "noop"
-    if "mypy" in r:
-        return "mypy"
-    # The contract's trusted acceptance tests. Renamed from `pytest` in OMNI-17:
-    # the gate is named for what it checks (the spec's cases) rather than for
-    # the tool that happens to run them, which matters once a ToolchainAdapter
-    # can run junit or cargo test instead. Rows written before that rename still
-    # read `pytest`, and the rule below still recognises the old reason string,
-    # so `rejected_by_gate` shows both names across the transition rather than
-    # silently losing the older half.
-    if r.startswith("acceptance"):
-        return "acceptance"
-    if "pytest" in r:
-        return "pytest"
-    if "correctness mismatch" in r:
-        return "correctness"
-    # The benchmark gate's third verdict (OMNI-41). Must be tested before the
-    # "no improvement" rule below and kept a distinct name: "could not measure a
-    # difference" is not "measured, and it is no faster". Conflating them is what
-    # made a noisy machine look like a stream of bad candidates — the analytics
-    # would show a benchmark reject-rate that says nothing about the proposer.
-    # It is also what NEUTRAL_OUTCOMES keys on to keep it off the breaker.
-    if r.startswith("benchmark inconclusive"):
-        return "benchmark_inconclusive"
-    # Too few usable timings, or output the harness did not write in the shape
-    # it writes (KNOWN_ISSUES H2). Named so analytics can tell measurement
-    # failures from "measured, not faster"; neither is neutral.
-    if r.startswith("benchmark unmeasurable"):
-        return "benchmark_unmeasurable"
-    if r.startswith("benchmark output malformed"):
-        return "benchmark_malformed"
-    if "no improvement" in r:
-        return "benchmark"
-    if "policy" in r:
-        return "policy"
-    return None
+    """Which gate an old record's reason names. Records only (OMNI-208).
+
+    Live results carry a typed verdict (:mod:`sis.verdict`); this reads rows
+    and stored rejections written before them.
+    """
+    return verdict.legacy_gate(reason)
 
 
 def error_reason(exc: BaseException, where: str | None = None) -> str:
@@ -631,7 +614,7 @@ def event_from_cycle_result(
         pr_id=_opt_str(result.get("pr_id")),
         candidate_sha=_opt_str(result.get("candidate_sha")),
         gauntlet_passed=gauntlet_passed,
-        reject_gate=gate_from_reason(reason if isinstance(reason, str) else None),
+        reject_gate=judged.gate if (judged := verdict.read(result)) else None,
         reject_reason=reason if isinstance(reason, str) else None,
         baseline_latency=base if isinstance(base, int | float) else None,
         candidate_latency=cand if isinstance(cand, int | float) else None,
@@ -645,6 +628,7 @@ def event_from_cycle_result(
         output_limit=_opt_count(usage.get("output_limit")),
         stop_reason=_opt_str(usage.get("stop_reason")),
         holdout_digest=_opt_str(result.get("holdout_digest")),
+        baseline_sha=_opt_str(result.get("baseline_sha")),
     )
 
 

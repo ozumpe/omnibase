@@ -23,6 +23,9 @@ gracefully on SIGINT/SIGTERM (or after ``SIS_LOOP_MAX_CYCLES`` cycles).
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import Any
+
 import ray
 
 from sis import config, contract, episodic, gauntlet, loop, org, run_lock
@@ -110,6 +113,28 @@ def run_org_cycle(contract_name: str | None = None, canary_backend: str | None =
         raise SystemExit(1)
 
 
+def _trigger(handles: dict[str, Any], contract_name: str | None) -> Callable[[], loop.Work | None]:
+    """What starts each cycle in --loop mode: ``loop.trigger`` (OMNI-197)."""
+    settings = config.config()
+    title, body = _proposal(contract_name)
+    if settings.loop.trigger != "model-error":
+        return loop.repeat(title, body)
+    from sis import error_series
+    from sis.ports import Severity
+
+    budget, floor, window = loop.model_error_rules(settings.model_error)
+    store = episodic.get_episodic_store()
+    print(f"[main] model-error trigger: MAE budget {budget.mae_budget:g}, skill floor "
+          f"{floor.skill_floor:+g}, {budget.windows} window(s) of {window} week(s) in a row")
+
+    def page(alert_title: str, alert_body: str) -> None:
+        org.page(handles["Workspace"], store, Severity.WARNING, alert_title, alert_body)
+
+    return loop.model_error_trigger(
+        loop.scored_steps(store, error_series.live_predictor), budget=budget, floor=floor,
+        window_weeks=window, title=title, body=body, page=page)
+
+
 def run_server_loop(
     canary_backend: str | None = None, contract_name: str | None = None
 ) -> None:
@@ -123,7 +148,7 @@ def run_server_loop(
     # loop.serve prints each cycle's outcome and why it stopped (OMNI-123).
     loop.serve(
         handles,
-        loop.repeat(*_proposal(contract_name)),
+        _trigger(handles, contract_name),
         interval_s=pacing.interval_seconds,
         max_cycles=pacing.max_cycles,
         canary_backend=canary_backend,

@@ -16,14 +16,7 @@ None open.
 
 ## Medium
 
-- [OMNI-218] **M37** — The proposer's output limit is too small for its own
-  thinking *(found 2026-11-14 by the weekly AWS run on `ca_price_wholesale`)*.
-  `sis/proposer.py` sends `MAX_TOKENS = 8000`, and `sis/llm.py` asks for
-  adaptive thinking at high effort, which counts toward that limit. Two of
-  three cycles were cut off and thrown away unjudged, and the third used
-  about 95% of the limit; roughly two thirds of the run's spend bought
-  nothing. Fix: raise the limit and make it a config key, and check the
-  per-cycle spend reservation still covers a call at the new limit.
+None open.
 
 ## Low
 
@@ -101,16 +94,6 @@ None open.
   each identical but for one log line; `-2238` reads as a third run that never
   happened. Fix: keep the manual sync for a single `main.py` run only, or aim
   it at the folder the loop printed.
-- [OMNI-144] **L49** — A run's S3 folder carries every earlier run on the box
-  *(found 2026-09-29, same review)*. `sis/artifact_sync.py` uploads the
-  episodic log, its state and `loop.log` whole, and all three accumulate across
-  processes (carried spend is deliberate). Run #5's `sort` folder also holds
-  the six `sum_of_divisors` cycles, and its state reports both runs' spend and
-  acceptances. Nothing is lost, but reading a folder as one run double-counts.
-  Fix: a per-folder `run.json` manifest (start, code version, contract,
-  first/last `cycle_id`, spend at start and end), or upload this process's
-  slice alongside the cumulative files.
-
 - [OMNI-172] **L57** — The scheduled-run principal can reach every run
   secret and launch any instance size *(found 2026-10-26 by the weekly code
   review)*. `infra/aws/scheduled_runner_policy.json` grants
@@ -205,6 +188,7 @@ None open.
 
 ## Resolved (Low)
 
+- [OMNI-144] **L49** — a run's S3 folder carried every earlier run on the box, with nothing to say which part was its own
 - [OMNI-222] **L77** — climatology averaged up to five years of seasons while the predictor is shown 52 weeks, so its skill counted history no code change could use
 - [OMNI-166] **L55** — an atomic write left the file readable by its owner only (0600), so the first save made `config.yml` unreadable to another user
 - [OMNI-220] **L76** — a cycle recorded its cost but not the proposer's token counts, output limit or stop reason
@@ -244,6 +228,8 @@ None open.
 
 ## Resolved
 
+- [OMNI-224] **M41 — Each "already built" re-check of an unchanged, merged module used up a holdout judgement**
+- [OMNI-218] **M37 — The proposer's output limit was too small for its own thinking**
 - [OMNI-221] **M39 — One outlier week fired the "sustained" model-error trigger, because consecutive windows overlap**
 - [OMNI-219] **M38 — A cut-off proposal counted as a full breaker failure and was repeated with the same limit**
 - [OMNI-200] **M36 — develop blue/green judged the PR's head file, not what `develop` serves after the merge**
@@ -468,3 +454,4 @@ None open.
 [OMNI-220]: https://olafzumpe.atlassian.net/browse/OMNI-220
 [OMNI-221]: https://olafzumpe.atlassian.net/browse/OMNI-221
 [OMNI-222]: https://olafzumpe.atlassian.net/browse/OMNI-222
+[OMNI-224]: https://olafzumpe.atlassian.net/browse/OMNI-224

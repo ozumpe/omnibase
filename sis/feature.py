@@ -26,8 +26,9 @@ import re
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from sis import episodic
+from sis import episodic, verdict
 from sis.ports import BranchState, PullRequest
+from sis.verdict import Verdict
 
 # How many earlier attempts a proposer is shown. Enough to stop it repeating
 # itself (the second AWS run resubmitted byte-identical code, OMNI-127), few
@@ -41,6 +42,9 @@ MAX_REJECTED = 20
 # The verdicts that were not the candidate's: a broken sandbox or a machine too
 # loaded to finish. The same code deserves another run once the harness is well.
 _NOT_THE_CANDIDATES = frozenset({"harness", "timeout"})
+
+# What :func:`resubmitted` puts after a verdict it repeats.
+_RESUBMITTED = "[resubmitted:"
 
 
 BRANCH_PREFIX = "feature/"
@@ -82,19 +86,17 @@ def new_feature(branch: str, story_id: str) -> dict[str, Any]:
     return {"branch": branch, "story": story_id, "steps": [], "attempts": [], "rejected": []}
 
 
-def ends_feature(reason: str | None) -> bool:
+def ends_feature(judged: Verdict | None) -> bool:
     """Whether a rejection means the feature's head cannot be beaten.
 
     That is the feature's natural end, not a failure of it: nothing to
     improve (a no-op), no measurable gain (an inconclusive benchmark), or a
-    gain below the margin ("no improvement").
+    gain below the margin (the benchmark's "no improvement").
     """
-    if not reason:
-        return False
-    return episodic.neutral_status(reason) is not None or reason.startswith("no improvement")
+    return judged is not None and (judged.kind == "neutral" or judged.gate == "benchmark")
 
 
-def finds_no_gain(feature: dict[str, Any] | None, reason: str | None) -> bool:
+def finds_no_gain(feature: dict[str, Any] | None, judged: Verdict | None) -> bool:
     """Whether a rejected step says the *base* cannot be beaten (OMNI-138). Pure.
 
     With no feature in progress, a step starts from the base branch's head; a
@@ -105,7 +107,7 @@ def finds_no_gain(feature: dict[str, Any] | None, reason: str | None) -> bool:
     verdict ends the feature instead, and its PR opens. A feature with no step
     yet only holds notes (OMNI-127): its step started from the base too.
     """
-    return (feature is None or not feature["steps"]) and ends_feature(reason)
+    return (feature is None or not feature["steps"]) and ends_feature(judged)
 
 
 def is_full(feature: dict[str, Any], max_steps: int) -> bool:
@@ -128,46 +130,99 @@ def with_step(feature: dict[str, Any], story_id: str, baseline_s: float,
 
 
 def with_rejection(feature: dict[str, Any], candidate_sha: str, baseline_sha: str,
-                   reason: str) -> dict[str, Any]:
+                   judged: Verdict) -> dict[str, Any]:
     """*feature* remembering a rejected candidate (OMNI-127, L46). Pure.
 
     A note for the next prompt, and the candidate's sha against the baseline it
     was judged on, so :func:`rejected_before` can answer a resubmission without
     a second run. A verdict that was not the candidate's is only noted.
     """
-    noted = with_note(feature, f"rejected: {reason}")
-    if episodic.gate_from_reason(reason) in _NOT_THE_CANDIDATES:
+    noted = with_note(feature, f"rejected: {judged.detail}")
+    if judged.gate in _NOT_THE_CANDIDATES:
         return noted
-    entry = {"candidate": candidate_sha, "baseline": baseline_sha, "reason": reason}
+    entry = {"candidate": candidate_sha, "baseline": baseline_sha, "reason": judged.detail,
+             verdict.KEY: judged.to_dict()}
     return {**noted, "rejected": [*feature.get("rejected", []), entry][-MAX_REJECTED:]}
 
 
 def rejected_before(feature: Mapping[str, Any] | None, candidate_sha: str,
-                    baseline_sha: str) -> str | None:
+                    baseline_sha: str) -> Verdict | None:
     """Why this candidate was rejected against this baseline before, if it was. Pure.
 
     The second AWS run paid for, sandboxed and benchmarked byte-identical code
     twice, and rejected it twice for the same reason (OMNI-127). The proposal
     is paid for either way; the second run is not needed. A feature saved
-    before OMNI-127 has no record, and so no answer.
+    before OMNI-127 has no record, and so no answer. One saved before
+    OMNI-208 has no typed verdict, and its reason is read as a record.
     """
     for entry in reversed((feature or {}).get("rejected", [])):
         if entry["candidate"] == candidate_sha and entry["baseline"] == baseline_sha:
-            return str(entry["reason"])
+            return verdict.read(entry) or Verdict.of("unknown", str(entry["reason"]))
     return None
 
 
-def resubmitted(reason: str) -> str:
-    """The verdict for a resubmission of a candidate rejected for *reason*. Pure.
+def earlier_rejections(events: Iterable[episodic.EpisodicEvent]) -> list[dict[str, Any]]:
+    """The rejections a log recorded with the baseline they were judged on. Pure.
 
-    The same verdict, marked as such. The marker goes last, because the
-    reason's start is what classifies it (:func:`sis.episodic.gate_from_reason`,
-    :func:`sis.episodic.neutral_status`): a converged target that keeps
-    proposing the same module must still stop politely (OMNI-138), not trip
-    the breaker on duplicates.
+    What a new box needs from earlier runs' logs (OMNI-189): an ephemeral box
+    starts with an empty SelfModel, so the memory :func:`with_rejection` keeps
+    is gone, and a converged target would pay to judge last run's candidates
+    again.
+    Only a record with both shas and a verdict counts, the last
+    :data:`MAX_REJECTED` of each contract, oldest first. A verdict that was
+    not the candidate's is left out, as :func:`with_rejection` leaves it out,
+    and so is a resubmission: the record it repeats is already there.
     """
-    return (f"{reason} [resubmitted: identical to a candidate already rejected "
-            "against this baseline, not judged again]")
+    by_contract: dict[str, list[dict[str, str]]] = {}
+    for event in events:
+        reason = event.reject_reason
+        if not (event.contract and event.candidate_sha and event.baseline_sha and reason):
+            continue
+        # A record: its gate as the log wrote it, or as its reason reads.
+        gate = event.reject_gate or verdict.legacy_gate(reason)
+        if _RESUBMITTED in reason or gate in _NOT_THE_CANDIDATES:
+            continue
+        entry: dict[str, Any] = {"contract": event.contract, "candidate": event.candidate_sha,
+                                 "baseline": event.baseline_sha, "reason": reason}
+        if gate:
+            entry[verdict.KEY] = Verdict.of(gate, reason).to_dict()
+        by_contract.setdefault(event.contract, []).append(entry)
+    return [entry for entries in by_contract.values() for entry in entries[-MAX_REJECTED:]]
+
+
+def with_earlier_runs(feature: dict[str, Any], earlier: Iterable[Mapping[str, Any]],
+                      contract: str, baseline_sha: str) -> dict[str, Any]:
+    """*feature* remembering earlier runs' rejections of *contract* at this baseline. Pure.
+
+    Each one becomes a note the next prompt sees and an entry
+    :func:`rejected_before` answers from, as if this run had judged it
+    (OMNI-189). One the feature remembers already is not added twice: this
+    run's own log is among the records *earlier* is read from.
+    """
+    known = {(entry["candidate"], entry["baseline"]) for entry in feature.get("rejected", [])}
+    for entry in earlier:
+        key = (entry["candidate"], entry["baseline"])
+        if entry["contract"] != contract or entry["baseline"] != baseline_sha or key in known:
+            continue
+        known.add(key)
+        noted = with_note(feature, f"rejected in an earlier run: {entry['reason']}")
+        remembered = {"candidate": key[0], "baseline": key[1], "reason": entry["reason"]}
+        if verdict.KEY in entry:
+            remembered[verdict.KEY] = entry[verdict.KEY]
+        feature = {**noted,
+                   "rejected": [*feature.get("rejected", []), remembered][-MAX_REJECTED:]}
+    return feature
+
+
+def resubmitted(judged: Verdict) -> Verdict:
+    """The verdict for a resubmission of a candidate rejected with *judged*. Pure.
+
+    The same gate and kind, its sentence marked as a repeat: a converged
+    target that keeps proposing the same module must still stop politely
+    (OMNI-138), not trip the breaker on duplicates.
+    """
+    return Verdict.of(judged.gate, f"{judged.detail} {_RESUBMITTED} identical to a candidate "
+                                   "already rejected against this baseline, not judged again]")
 
 
 def review_state(feature: Mapping[str, Any] | None) -> dict[str, Any]:
