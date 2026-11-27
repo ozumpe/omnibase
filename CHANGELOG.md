@@ -13,6 +13,8 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+- OMNI-229: a public landing page (`site/`, GitHub Pages): scoreboard, what the loop tried, what it cost. Its data goes through `sis/site_export.py` (FORBIDDEN), which refuses a licensed series and never copies a gate's reason.
+
 ## v0.9.0 — 2026-11-27
 
 Phase B (epic OMNI-194) reaches the box: the Friday run captures EIA's weekly

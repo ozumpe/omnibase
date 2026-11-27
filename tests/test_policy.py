@@ -16,7 +16,7 @@ def test_guardrail_code_is_forbidden() -> None:
     for path in ("sis/gauntlet.py", "sis/policy.py", "sis/cost.py",
                  "sis/settings.py", "sis/adapters.py", "sis/adapters_real.py",
                  "Dockerfile.gauntlet", "sis/sandbox_worker.py",
-                 "sis/sandbox_worker_main.py"):
+                 "sis/sandbox_worker_main.py", "sis/site_export.py"):
         assert classify(path) is ChangeTier.FORBIDDEN, path
 
 

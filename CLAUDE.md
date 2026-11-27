@@ -59,7 +59,7 @@ Detail for each: `docs/ENGINE_RULES.md` § Hard rules.
 - **A broken sandbox is never blamed on the candidate** (`gauntlet.probe_sandbox`, `harness:` verdicts).
 - **No feature PR opens without the agent's own approving review** (`sis/review.py`).
 - **Policy (`sis/policy.py`):**
-  - FORBIDDEN (never, no override): gauntlet and its verdicts, canonicaliser, sandbox worker, review, contract layer, ports, sensor door and trace, event signal, replay, fixture builder, scenarios, prediction error, holdout budget, futility stop, workbench, contract author, `specs/`, cost, config, settings, adapters, `Dockerfile.gauntlet` and the policy itself.
+  - FORBIDDEN (never, no override): gauntlet and its verdicts, canonicaliser, sandbox worker, review, contract layer, ports, sensor door and trace, event signal, replay, fixture builder, scenarios, prediction error, holdout budget, futility stop, workbench, contract author, site export, `specs/`, cost, config, settings, adapters, `Dockerfile.gauntlet` and the policy itself.
   - STRICT: other engine code; needs an opt-in plus human approval.
   - SOFT: the `runtime/` targets.
   - The guardrail classification always wins.

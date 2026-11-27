@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OmniBase: a forecaster that writes its own code</title>
+  <meta name="description" content="OmniBase proposes code, history grades it, a human merges it. Live scoreboard, every idea it tried, and what it cost.">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="hero">
+    <p class="eyebrow">OmniBase, an open-source experiment</p>
+    <h1>A forecaster that writes its own code, and has to prove it on data it has never seen.</h1>
+    <p class="lede">Each week it reads public fuel prices, writes a new forecasting rule, and runs it through an exam it cannot see or change. If the rule beats the simple baseline, it opens a pull request. A human decides whether to merge.</p>
+    <p class="tagline">It proposes. History grades it. You merge.</p>
+  </header>
+
+  <main>
+    <section id="scoreboard" aria-labelledby="scoreboard-title">
+      <h2 id="scoreboard-title">The scoreboard</h2>
+      <p class="question" data-field="question">Loading…</p>
+      <div class="cards">
+        <div class="card"><span class="label">Its forecast</span><span class="value" data-field="predicted">–</span></div>
+        <div class="card"><span class="label">Baseline: same as this week</span><span class="value" data-field="baseline">–</span></div>
+        <div class="card"><span class="label">What actually happened</span><span class="value" data-field="actual">–</span></div>
+        <div class="card accent"><span class="label">Weeks in a row it beat the baseline</span><span class="value" data-field="streak">–</span></div>
+      </div>
+      <div id="chart" class="chart" role="img" aria-label="Forecast, baseline and actual price over the last weeks"></div>
+      <p class="note" id="exam-note"></p>
+    </section>
+
+    <section id="tried" aria-labelledby="tried-title">
+      <h2 id="tried-title">What it tried</h2>
+      <p class="sub">Every idea, including the ones that failed. The failures are what show the exam is real. A rejection names the gate that stopped it, never the exam's numbers.</p>
+      <ol class="feed" id="feed"></ol>
+    </section>
+
+    <section id="cost" aria-labelledby="cost-title">
+      <h2 id="cost-title">What it cost</h2>
+      <div class="cards">
+        <div class="card"><span class="label">Spent</span><span class="value" data-field="spent">–</span></div>
+        <div class="card"><span class="label">Weekly budget</span><span class="value" data-field="budget">–</span></div>
+        <div class="card"><span class="label">Per accepted improvement</span><span class="value" data-field="per_accepted">–</span></div>
+      </div>
+      <p class="sub">A hard spend cap and a circuit breaker stop the loop before it can overspend. A trip pages a human.</p>
+    </section>
+
+    <section id="loop" aria-labelledby="loop-title">
+      <h2 id="loop-title">The loop</h2>
+      <ol class="steps">
+        <li><strong>Propose</strong><span>A model writes a new rule on its own branch.</span></li>
+        <li><strong>Sandbox</strong><span>The code runs in a locked container, never in the engine itself.</span></li>
+        <li><strong>Exam</strong><span>It must beat the baseline by 10% on held-out history it was never shown.</span></li>
+        <li><strong>Pull request</strong><span>Only a rule that passes every gate opens one, after its own review.</span></li>
+        <li><strong>Human merge</strong><span>The engine cannot merge. Promotion follows only a merge it sees a person make.</span></li>
+      </ol>
+    </section>
+
+    <section id="doors" aria-labelledby="doors-title">
+      <h2 id="doors-title">Go deeper</h2>
+      <div class="doors">
+        <a class="door" data-href="README.md"><strong>Curious</strong><span>What it is and how to run one cycle.</span></a>
+        <a class="door" data-href="docs/RUNBOOK.md"><strong>Operating it</strong><span>Running the loop, the AWS box and the brakes.</span></a>
+        <a class="door" data-href="docs/ENGINE_RULES.md"><strong>Contributing</strong><span>Every rule the engine keeps, and why.</span></a>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p><strong>What it can't do yet:</strong> it forecasts one thing, one week ahead. The scoreboard starts filling only with weeks scored after the rule was merged, so it is short for now. Open defects are listed in <a data-href="docs/KNOWN_ISSUES.md">KNOWN_ISSUES</a>.</p>
+    <p class="small">Prices: U.S. Energy Information Administration, California weekly retail regular gasoline. Licensed data the engine uses for modelling is never shown here. Data updated <span data-field="generated_at">–</span> from <span data-field="code_version">–</span>. Apache 2.0.</p>
+  </footer>
+  <script src="app.js"></script>
+</body>
+</html>

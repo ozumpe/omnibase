@@ -1,0 +1,86 @@
+{
+  "generated_at": "2026-11-27T02:17:15+00:00",
+  "code_version": "v0.7.0 and v0.8.0",
+  "repo_url": "https://github.com/ozumpe/omnibase",
+  "test_repo_url": "https://github.com/ozumpe/testrun",
+  "contract": "ca_price_wholesale",
+  "question": "What will California's average retail gasoline price be next week?",
+  "baseline": "persistence: next week's price will be the same as this week's",
+  "margin_pct": 10,
+  "scoreboard": {
+    "weeks": [],
+    "streak": 0
+  },
+  "tried": [
+    {
+      "ts": "2026-11-20T15:42:20.202527+00:00",
+      "contract": "ca_price_wholesale",
+      "verdict": "rejected",
+      "why": "It did not beat the baseline on history it had never seen.",
+      "cost_usd": 0.14,
+      "pr": null
+    },
+    {
+      "ts": "2026-11-20T15:44:56.185800+00:00",
+      "contract": "ca_price_wholesale",
+      "verdict": "rejected",
+      "why": "It did not beat the baseline on history it had never seen.",
+      "cost_usd": 0.23,
+      "pr": null
+    },
+    {
+      "ts": "2026-11-20T15:47:33.749476+00:00",
+      "contract": "ca_price_wholesale",
+      "verdict": "rejected",
+      "why": "It did not beat the baseline on history it had never seen.",
+      "cost_usd": 0.23,
+      "pr": null
+    },
+    {
+      "ts": "2026-11-21T06:50:05.733303+00:00",
+      "contract": "ca_price_wholesale",
+      "verdict": "passed every gate",
+      "why": "It passed every gate and opened a pull request for a human to merge.",
+      "cost_usd": 0.35,
+      "pr": "24"
+    },
+    {
+      "ts": "2026-11-21T06:54:08.056990+00:00",
+      "contract": "ca_price_wholesale",
+      "verdict": "merged by a human",
+      "why": "A human read the pull request and merged it.",
+      "cost_usd": 0.0,
+      "pr": "24"
+    },
+    {
+      "ts": "2026-11-21T06:54:15.248723+00:00",
+      "contract": "ca_price_wholesale",
+      "verdict": "nothing to improve",
+      "why": "Nothing left to improve: the merged version already passes every gate.",
+      "cost_usd": 0.0,
+      "pr": null
+    },
+    {
+      "ts": "2026-11-21T06:54:52.608403+00:00",
+      "contract": "ca_price_wholesale",
+      "verdict": "nothing to improve",
+      "why": "Nothing left to improve: the merged version already passes every gate.",
+      "cost_usd": 0.0,
+      "pr": null
+    },
+    {
+      "ts": "2026-11-21T06:55:29.934576+00:00",
+      "contract": "ca_price_wholesale",
+      "verdict": "nothing to improve",
+      "why": "Nothing left to improve: the merged version already passes every gate.",
+      "cost_usd": 0.0,
+      "pr": null
+    }
+  ],
+  "cost": {
+    "spent_usd": 0.96,
+    "budget_usd": 2.5,
+    "accepted": 1,
+    "per_accepted_usd": 0.96
+  }
+}
