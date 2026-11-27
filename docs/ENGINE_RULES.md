@@ -344,6 +344,20 @@ touch the code a rule is about. History (what changed when) belongs in
     `runtime/history/` first and refuses to start if it cannot. `sis.admin
     holdout` shows each budget; raising one is a human's edit of the contract
     or the config, which the loop cannot write.
+  - **Retraining that does not help stops, and pages "likely missing input"**
+    (`sis/futility.py`, OMNI-228). A model-error trigger (OMNI-197) records each
+    retrain it starts (`retrain_started`, with the window MAE that started it
+    and the contract's input *basis*) and asks `Guard.may_start` before the
+    next one. A retrain improved if the error after it (the MAE that started
+    the next, or the window's now) is at most `1 - brakes.futility_min_improvement`
+    of the error that started it. `brakes.futility_retrains` non-improving ones
+    in a row stop the trigger for that contract: a `futile_stopped` record, one
+    WARNING page naming the weeks with the largest errors, and no further
+    retrain, so no spend. An improving retrain resets the count; so does a new
+    basis (a new input) or `sis.admin reset-futility --contract <name> --reason
+    "..."`. It is not the breaker: it trips nothing, and the breaker still
+    applies. The records are read like the holdout budget's, so a new box
+    remembers a stop; none of them costs anything or is a holdout judgement.
   - **A held-out set is replaced only by weeks no candidate has seen judged**
     (`holdout.plan_rotation`, OMNI-225, D5's rotation). `scripts/build_fixture.py
     --fixture <name> --rotate` takes the unbroken run of weeks after the

@@ -5,6 +5,8 @@
     python -m sis.admin resume        --reason "spike explained: one retried call"
     python -m sis.admin reset-breaker --reason "state file repaired; spend checked"
     python -m sis.admin holdout       # each contract's holdout budget; no loop needed
+    python -m sis.admin futility      # where each contract's retrain stop stands (OMNI-228)
+    python -m sis.admin reset-futility --contract ca_price_wholesale --reason "new input added"
 
 Before this, ``CEO.reset_breaker()`` had no caller outside the tests (KNOWN_ISSUES
 L23): clearing a tripped breaker meant editing state by hand or restarting —
@@ -35,7 +37,8 @@ from typing import Any
 
 from sis.operator import MIN_JUSTIFICATION_CHARS, OPERATOR_AUDIT_JSONL, AuditEntry, append_audit
 
-ACTIONS = ("status", "pause", "resume", "reset-breaker", "holdout")
+ACTIONS = ("status", "pause", "resume", "reset-breaker", "holdout", "futility",
+           "reset-futility")
 
 
 @dataclass(frozen=True)
@@ -61,13 +64,16 @@ def plan(action: str, snapshot: Mapping[str, Any], reason: str) -> Plan:
                     refused=True)
     if action == "status":
         return Plan(None, describe(snapshot))
-    if action == "holdout":
-        return Plan(None, "holdout budgets are read from the episodic records "
-                          "(holdout_lines); they change nothing in the CEO")
+    if action in ("holdout", "futility"):
+        return Plan(None, f"{action} is read from the episodic records; it changes "
+                          "nothing in the CEO")
     if len(reason.strip()) < MIN_JUSTIFICATION_CHARS:
         return Plan(None, f"{action} needs --reason of at least {MIN_JUSTIFICATION_CHARS} "
                           "characters: it is what the audit log will say about why",
                     refused=True)
+    if action == "reset-futility":
+        return Plan(None, "reset-futility writes the episodic records (reset_futility); "
+                          "it changes nothing in the CEO")
     paused = snapshot.get("paused")
     if action == "pause":
         verb = "re-paused" if paused else "paused"
@@ -125,6 +131,44 @@ def holdout_lines() -> list[str]:
     return lines or ["no registered contract has held-out backtests"]
 
 
+def futility_lines() -> list[str]:
+    """Where each registered contract's futility stop stands (OMNI-228). Read-only."""
+    from sis import episodic, futility, holdout
+    from sis.contract import REGISTERED_CONTRACTS
+
+    events = holdout.recorded_events(episodic.get_episodic_store())
+    return [futility.status(events, spec.name) for spec in REGISTERED_CONTRACTS]
+
+
+def reset_futility(contract: str, reason: str) -> tuple[int, str]:
+    """Record a human's reset of *contract*'s futility stop, and audit it (OMNI-228).
+
+    Written to the episodic records, where the trigger reads it, so no
+    running loop is needed. Refused without a contract or a written reason.
+    """
+    from sis import episodic, futility, holdout
+    from sis.contract import REGISTERED_CONTRACTS
+
+    names = {spec.name for spec in REGISTERED_CONTRACTS}
+    if contract not in names:
+        return 1, (f"reset-futility needs --contract, one of {', '.join(sorted(names))}; "
+                   f"got {contract!r}")
+    if len(reason.strip()) < MIN_JUSTIFICATION_CHARS:
+        return 1, (f"reset-futility needs --reason of at least {MIN_JUSTIFICATION_CHARS} "
+                   "characters: it is what the audit log will say about why")
+    store = episodic.get_episodic_store()
+    before = futility.status(holdout.recorded_events(store), contract)
+    futility.reset(store, contract, reason)
+    after = futility.status(holdout.recorded_events(store), contract)
+    append_audit([AuditEntry(
+        at=datetime.datetime.now(datetime.UTC).isoformat(),
+        path=f"futility.reset.{contract}", tier="admin",
+        before={"status": before}, after={"status": after},
+        justification=reason, note="sis.admin",
+    )], OPERATOR_AUDIT_JSONL)
+    return 0, f"futility reset for {contract}: its retrains count from zero. {after}"
+
+
 def _audit(action: str, before: Mapping[str, Any], after: Mapping[str, Any],
            reason: str) -> None:
     append_audit([AuditEntry(
@@ -140,10 +184,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("action", choices=ACTIONS)
     parser.add_argument("--reason", default="", help="why — recorded in the audit log")
+    parser.add_argument("--contract", default="", help="the contract reset-futility resets")
     args = parser.parse_args(argv)
     if args.action == "holdout":
         print("\n".join(holdout_lines()))
         return 0
+    if args.action == "futility":
+        print("\n".join(futility_lines()))
+        return 0
+    if args.action == "reset-futility":
+        code, message = reset_futility(args.contract, args.reason)
+        print(message, file=sys.stderr if code else sys.stdout)
+        return code
 
     import ray
 
