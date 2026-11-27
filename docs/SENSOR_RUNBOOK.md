@@ -408,6 +408,34 @@ the series into the steps `sis.model_error`'s triggers judge. `main.py --loop
 sustained breach starts a cycle, and an error-budget one pages. The scheduled AWS
 run's artifact sync already uploads the file (`episodic*.jsonl`).
 
+### The Phase B demo (OMNI-199)
+
+One command shows the trigger at work, with no credentials, no network and no
+LLM:
+
+```bash
+poetry run python scripts/phase_b_demo.py                       # shock, then a quiet market
+poetry run python scripts/phase_b_demo.py --model-error-mae-budget 0.30   # a looser budget
+poetry run python scripts/phase_b_demo.py --cycle               # also run the cycle (stub proposer, Ray)
+```
+
+It replays a seeded `supply_shock`, then a quiet `national_move`, one week at a
+time. Each week the live predictor (the shipped stub unless
+`runtime/ca_price_persistence.py` exists) is scored in the sandbox on the week
+that just became scorable, and the `--loop` trigger is ticked through
+`sis.loop.run_loop` on the series so far. The table shows each week's error,
+the window MAE and the trigger's verdict. It prints the `model_error.*`
+settings in force first; every one takes the same flag as in `main.py`.
+
+With the defaults, the shock's error stays near $0.22 for about eight weeks:
+two windows that share no week breach the budget, the page goes to the console
+and one error-budget cycle starts. The quiet market starts none. Scenarios
+have no earlier years, so the skill trigger has no climatology to judge and
+stays silent. The scenario only starts the cycle: the candidate is judged on
+the contract's own held-out history and promoted only after a human merge (D4).
+The command exits 0 when the shock started a cycle and the quiet market none,
+and `tests/test_phase_b_demo.py` pins that outcome for the fixed seed.
+
 ## Times and historical limits
 
 `event_time` places EIA's period date at midnight in `America/New_York`. That is
