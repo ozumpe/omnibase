@@ -452,7 +452,7 @@ aws s3 cp runtime/sensor_traces/eia.jsonl \
 ```
 
 On the laptop, fetch it into `runtime/sensor_traces/eia.jsonl` and build the
-fixture there ("From a trace to a fixture" in `docs/SENSOR_RUNBOOK.md`). The
+fixture there ("Build a fixture" in `docs/SENSOR_RUNBOOK.md`). The
 instance role may already write anywhere in the artifacts bucket.
 
 ### 6. While it runs (box, a second session)
@@ -587,7 +587,7 @@ step 5a (OMNI-177), then the earlier runs' episodic logs for the holdout
 budget (OMNI-207), then this week's EIA capture into the bucket's canonical
 trace (`traces/eia.jsonl`, OMNI-214; a capture that fails pages and leaves the
 trace as it was, and the run goes on: see
-[SENSOR_RUNBOOK.md](SENSOR_RUNBOOK.md#capture-eia-observations)), then
+[SENSOR_RUNBOOK.md](SENSOR_RUNBOOK.md#weekly-nothing-to-do)), then
 `check_connections.py --deep` (a failure of any of the others
 ends the run before any spend; it checks the Anthropic key and model too,
 OMNI-82), then
