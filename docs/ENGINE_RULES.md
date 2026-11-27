@@ -56,8 +56,7 @@ touch the code a rule is about. History (what changed when) belongs in
   one year, and none after a 53-week ISO year, whose week is 53 weeks back.
   The summary carries its MAE and the model's skill,
   1 − MAE(model)/MAE(climatology), over the weeks both were scored; a week with
-  no earlier year has no climatology and claims no skill. Nothing starts a
-  cycle from it yet. Phase B's two triggers (D9, epic OMNI-194) are decided
+  no earlier year has no climatology and claims no skill. Phase B's two triggers (D9, epic OMNI-194) are decided
   in `sis/model_error.py` (OMNI-196, pure): **error budget** (a window's MAE
   above the actor's budget: the twin is unfit) and **skill decay** (its skill
   against climatology below the actor's floor: headroom), each with its own
@@ -69,7 +68,27 @@ touch the code a rule is about. History (what changed when) belongs in
   after each capture (OMNI-198, `sis/error_series.py`, STRICT): each week
   scored once per predictor version, appended to the episodic store, a later
   vintage of an actual a revision row, never an overwrite; `as_steps` turns it
-  into their steps. Wiring them into `--loop` is OMNI-197.
+  into their steps. **They start cycles in `--loop` only with
+  `--loop-trigger model-error`** (OMNI-197, off by default: `loop.trigger`
+  is `repeat`). Each tick, `loop.model_error_trigger` reads the live
+  predictor's series from the episodic store (its version from its source, so
+  a merged predictor is judged on its own fresh series), replays every window
+  in order (`model_error.replay`, so the streak is the series' and a restart
+  reaches the same verdict) and acts once on each firing that still stands
+  (`model_error.standing`: every later window still in breach). An error-budget
+  firing pages (WARNING) and starts a cycle; skill decay starts one without a
+  page; both at once start one. The cycle's body says which fired and why,
+  and `Work.evidence` carries the numbers. The brakes, spend cap, breaker and
+  holdout budget apply unchanged. The knobs are config (`model_error.*`,
+  STRICT): `mae_budget` (acceptable error) and `breach_weeks` (how long,
+  counted in whole windows of `window_weeks` that share no week), plus
+  `skill_floor` and `min_weeks`. **Refine often** while there is no good base:
+  a tight budget and a short breach, e.g. `--model-error-mae-budget 0.10
+  --model-error-breach-weeks 4 --model-error-window-weeks 2
+  --model-error-min-weeks 2`. **Leave it alone** once the model is good: a
+  loose budget and a long breach, e.g. `--model-error-mae-budget 0.30
+  --model-error-breach-weeks 12`. A restarted loop acts once more on a
+  firing that still stands, since it cannot know an earlier process did.
   **The real sensor is `EIASensor`** (OMNI-33, `sis/adapters_real.py`): EIA's
   bulk file `PET.zip` (no key), five weekly series (PADD 5 gasoline stocks;
   California, Los Angeles, San Francisco and US retail prices) and, since
@@ -325,6 +344,20 @@ touch the code a rule is about. History (what changed when) belongs in
     `runtime/history/` first and refuses to start if it cannot. `sis.admin
     holdout` shows each budget; raising one is a human's edit of the contract
     or the config, which the loop cannot write.
+  - **Retraining that does not help stops, and pages "likely missing input"**
+    (`sis/futility.py`, OMNI-228). A model-error trigger (OMNI-197) records each
+    retrain it starts (`retrain_started`, with the window MAE that started it
+    and the contract's input *basis*) and asks `Guard.may_start` before the
+    next one. A retrain improved if the error after it (the MAE that started
+    the next, or the window's now) is at most `1 - brakes.futility_min_improvement`
+    of the error that started it. `brakes.futility_retrains` non-improving ones
+    in a row stop the trigger for that contract: a `futile_stopped` record, one
+    WARNING page naming the weeks with the largest errors, and no further
+    retrain, so no spend. An improving retrain resets the count; so does a new
+    basis (a new input) or `sis.admin reset-futility --contract <name> --reason
+    "..."`. It is not the breaker: it trips nothing, and the breaker still
+    applies. The records are read like the holdout budget's, so a new box
+    remembers a stop; none of them costs anything or is a holdout judgement.
   - **A held-out set is replaced only by weeks no candidate has seen judged**
     (`holdout.plan_rotation`, OMNI-225, D5's rotation). `scripts/build_fixture.py
     --fixture <name> --rotate` takes the unbroken run of weeks after the

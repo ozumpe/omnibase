@@ -24,12 +24,34 @@ It extracts declared series, sanitises their records, and appends to
 Confluence credentials. Run captures explicitly; neither selecting the sensor
 backend nor starting `main.py` schedules them.
 
-**Today a person runs the capture once a week**, after EIA's Wednesday
-release, on the one machine that holds the canonical trace. A missed week is
-not lost (the next capture still records the values, known at its own fetch
-time), but the prediction-error report cannot score a week whose next value
-was already known when it was asked (M34). Scheduling the capture, with the
-trace kept in the artifacts bucket, is [OMNI-214](https://olafzumpe.atlassian.net/browse/OMNI-214).
+**The canonical trace is the artifacts bucket's** `traces/eia.jsonl`
+(OMNI-214), and the weekly scheduled AWS run captures into it, on Friday,
+after EIA's Wednesday release ([AWS_RUN.md](AWS_RUN.md#scheduled-runs-omni-168-omni-169)).
+Before its preflight the run fetches the trace with its ETag, runs
+`scripts/capture_sensor.py`, reads the trace back through the door, and writes
+it back only if the bucket still holds the version it read (`--if-match`), so
+two writers cannot interleave. The log shows line counts, never values. A
+capture that fails, appends nothing, or cannot be written back leaves the
+bucket's trace as it was and pages through the SNS topic; the loop's run goes
+on, since its contract judges on its own fixtures. A missed week is not lost
+(the next capture still records the values, known at its own fetch time), but
+the prediction-error report cannot score a week whose next value was already
+known when it was asked (M34).
+
+**Seed the bucket once**, from the machine that held the canonical trace until
+now, before the first scheduled capture (S3 versioning keeps every later
+write):
+
+```bash
+aws s3 cp runtime/sensor_traces/eia.jsonl \
+  "s3://$ARTIFACTS_BUCKET/traces/eia.jsonl" --if-none-match '*'
+```
+
+After that a local trace is a mirror: copy it down
+(`aws s3 cp "s3://$ARTIFACTS_BUCKET/traces/eia.jsonl" runtime/sensor_traces/eia.jsonl`)
+and don't capture into it by hand, or the bucket and the copy part ways. A
+capture you must run by hand goes through the bucket: fetch, capture, and
+upload with `aws s3api put-object … --if-match <the ETag you fetched>`.
 
 | Bulk-file series | Observation | Published unit |
 |---|---|---|
@@ -64,6 +86,30 @@ Exit code 0 means none of those problem conditions was reported. Exit code 1
 means a refusal, missing series or vanished period; **accepted values may still
 have been appended**. Inspect the report and its capture header before retrying.
 Fetch/format errors raise rather than producing a normal successful report.
+
+### The refinery-outage events (OMNI-227)
+
+A coarse event signal for price shocks stocks and prices cannot explain.
+
+- **Source:** EIA's weekly West Coast (PADD 5) refinery utilisation,
+  `PET.W_NA_YUP_R50_PER.W`, from the same bulk file and the same Wednesday
+  release (Weekly Petroleum Status Report) the capture above already fetches.
+  No extra download, no key, history from 2010.
+- **Licence:** EIA's own data, public domain (the bulk file says
+  `copyright: None`). It may be shown in public fixtures and prompts.
+  (EIA's "This Week in Petroleum" commentary, the other free candidate, stopped
+  in October 2025.)
+- **Event:** a week whose utilisation fell at least 4 percentage points from
+  the week before is 1, any other week 0 (`sis/events.py`). 2018 to 2026 has
+  about five such weeks a year, the September 2019 refinery outages among them.
+- **Refresh:** every capture. `scripts/capture_sensor.py` derives the flags
+  after appending the EIA values and appends what is new or changed to
+  `runtime/sensor_traces/events.jsonl` (`--no-events` skips it). The first run
+  backfills each flag known when the later of its two utilisation values was;
+  later, a new or revised flag is known at the capture that found it.
+- **Where it shows:** only in a training split built with `--events`
+  (below), marked to the proposer as context that an episode never shows. No
+  gate reads it.
 
 ## Check connectivity
 
@@ -230,6 +276,8 @@ is committed, so a prompt never holds more than git does.
    (3 December 2018); `--first YYYY-MM-DD` starts elsewhere, and a reading the
    calendar does not cover is refused, so extend the calendar back first for a
    longer split.
+   Add `--events` to show the refinery-outage events too, as context (from
+   `runtime/sensor_traces/events.jsonl`, or `--events-trace PATH`).
 2. **Review and promote** as above (the draft holds only `training.json`).
    Commit it through a pull request. The contract picks it up on the next
    start; it refuses a split with any record from on or after the first
@@ -355,8 +403,9 @@ poetry run python scripts/score_capture.py --trace PATH --from 2022-08-01
 
 From code, `sis.error_series.score_trace` scores a trace and
 `sis.error_series.as_steps(store.scored(), target=..., predictor=...)` turns
-the series into the steps `sis.model_error`'s triggers judge. Nothing acts on
-the series yet: wiring it to a cycle and a page is OMNI-197. The scheduled AWS
+the series into the steps `sis.model_error`'s triggers judge. `main.py --loop
+--loop-trigger model-error` acts on it (OMNI-197, docs/ENGINE_RULES.md): a
+sustained breach starts a cycle, and an error-budget one pages. The scheduled AWS
 run's artifact sync already uploads the file (`episodic*.jsonl`).
 
 ## Times and historical limits

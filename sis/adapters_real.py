@@ -790,6 +790,14 @@ def _weekly_stocks() -> EIASeries:
                                 period=datetime.timedelta(days=7)), 6, datetime.time(17))
 
 
+def _weekly_utilisation() -> EIASeries:
+    # Refinery utilisation, the same Weekly Petroleum Status Report as the
+    # stocks and the same release. A percentage of operable capacity; above 100
+    # happens when capacity is restated late, so the range allows some room.
+    return EIASeries(SeriesRule("Percent", 20.0, 115.0, period=datetime.timedelta(days=7)),
+                     6, datetime.time(17))
+
+
 def _weekly_retail() -> EIASeries:
     # Gasoline and Diesel Fuel Update: Monday's price. In 2022 it was out on
     # Monday, or Tuesday after a Monday holiday (ALFRED's vintage dates, release
@@ -817,6 +825,9 @@ def _daily_spot() -> EIASeries:
 # its range and its release; one the adapter did not declare is refused.
 EIA_SERIES: Mapping[str, EIASeries] = {
     "PET.WGTSTP51.W": _weekly_stocks(),                 # West Coast (PADD 5) total gasoline stocks
+    # West Coast (PADD 5) refinery utilisation: what the refinery-outage events
+    # are made from (sis.events, OMNI-227).
+    "PET.W_NA_YUP_R50_PER.W": _weekly_utilisation(),
     "PET.EMM_EPMRR_PTE_SCA_DPG.W": _weekly_retail(),    # California, regular reformulated, retail
     "PET.EMM_EPMRR_PTE_Y05LA_DPG.W": _weekly_retail(),  # Los Angeles
     "PET.EMM_EPMRR_PTE_Y05SF_DPG.W": _weekly_retail(),  # San Francisco

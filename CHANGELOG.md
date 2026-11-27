@@ -13,6 +13,24 @@ release renames that heading to the new tag.
 
 ## Unreleased
 
+- OMNI-214: the weekly EIA capture runs unattended. The scheduled AWS run
+  fetches the canonical trace from the artifacts bucket (`traces/eia.jsonl`),
+  runs `scripts/capture_sensor.py`, reads the trace back and writes it back
+  with a conditional write (`--if-match`), before its preflight. Only line
+  counts reach the log; the licensed LA spot series stays in the bucket. A
+  failed, empty or raced capture leaves the bucket's trace as it was and
+  pages through SNS; the loop's run goes on. The bucket needs seeding once
+  (docs/SENSOR_RUNBOOK.md).
+- OMNI-197 (Phase B 3): prediction error can start a cycle. With
+  `--loop-trigger model-error` (`loop.trigger`, default `repeat`), `--loop`
+  reads the live predictor's scored error series each tick and replays the
+  two D9 triggers over it: a sustained error-budget breach pages (WARNING)
+  and starts a cycle, sustained skill decay starts one without a page, a
+  spike starts none. A firing starts one cycle; the cycle's body and
+  `Work.evidence` say which trigger fired and the numbers. New STRICT keys
+  `model_error.mae_budget` (acceptable error), `breach_weeks` (how long),
+  `skill_floor`, `window_weeks` and `min_weeks`; docs/ENGINE_RULES.md has a
+  tight "refine often" and a loose "leave it alone" setting.
 - OMNI-208: a rejection is typed, not read from its wording. Every failure
   the gauntlet returns carries a `Verdict` (gate, kind, sentence;
   `sis/verdict.py`, FORBIDDEN), and the SWE, QA, the canary, the review and
@@ -24,6 +42,27 @@ release renames that heading to the new tag.
   former parser, and only they. The benchmark's worker crashes are now
   recorded as `benchmark_worker` (they had no gate before), and QA's
   `review()` returns the verdict as a third value.
+- OMNI-228 (Phase B): retraining that does not help stops. `sis/futility.py`
+  (FORBIDDEN) decides, from the episodic records, whether the last
+  `brakes.futility_retrains` (3) retrains a model-error trigger started for a
+  contract each failed to cut the window's error by
+  `brakes.futility_min_improvement` (5%). If so, the trigger starts no more
+  retrains for it (no spend), records `futile_stopped`, and pages once
+  (WARNING, "likely missing input", with the weeks of largest error). A new
+  input (a new basis) or `python -m sis.admin reset-futility --contract <name>
+  --reason "..."` resets it; `sis.admin futility` shows where each contract
+  stands. The breaker is untouched. New episodic fields `trigger`,
+  `trigger_mae`, `trigger_basis`. OMNI-197 calls `Guard.may_start` and
+  `Guard.started` when it wires the triggers.
+- OMNI-227 (Phase B): a free event signal for price shocks. The EIA sensor
+  now also captures West Coast (PADD 5) refinery utilisation
+  (`PET.W_NA_YUP_R50_PER.W`, public domain, same release), and
+  `scripts/capture_sensor.py` derives from it a weekly refinery-outage flag (a
+  fall of 4 points or more) into its own append-only trace,
+  `runtime/sensor_traces/events.jsonl`, through the sanitising door, never
+  known before the values it rests on (`sis/events.py`, FORBIDDEN).
+  `scripts/build_fixture.py --training --events` shows it in a training split
+  as context; no gate reads it and no episode shows it. No recurring cost.
 - OMNI-189: a new box remembers what earlier runs rejected. A rejected step's
   episodic record now carries `baseline_sha`, and each step is handed the
   rejections in this box's log and in `runtime/history/`. A step from the same

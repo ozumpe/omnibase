@@ -48,6 +48,17 @@ brakes:
   # is free.
   # env: SIS_HOLDOUT_COUNT_REPEATS   flag: --brakes-holdout-count-repeats
   forbidden_holdout_count_repeats: false
+  # Retrains in a row that a model-error trigger may start for one contract without the
+  # error improving, before it stops starting them and pages 'likely missing input'
+  # (OMNI-228). Reset by `sis.admin reset-futility`, or by a change of the contract's
+  # inputs.
+  # env: SIS_FUTILITY_RETRAINS   flag: --brakes-futility-retrains
+  forbidden_futility_retrains: 3
+  # The fraction a retrain must cut the window's error by to count as an improvement
+  # (OMNI-228): 0.05 means the error after it is at most 95% of the error that started
+  # it. In [0, 1).
+  # env: SIS_FUTILITY_MIN_IMPROVEMENT   flag: --brakes-futility-min-improvement
+  forbidden_futility_min_improvement: 0.05
 
 sandbox:
   # Isolation for generated code: 'subprocess' (soft) or 'docker' (kernel-enforced,
@@ -195,6 +206,35 @@ loop:
   # many. 0 syncs only when the loop stops (OMNI-140).
   # env: SIS_LOOP_ARTIFACT_SYNC_EVERY   flag: --loop-artifact-sync-every
   soft_artifact_sync_every: 1
+  # What starts a cycle in --loop mode: 'repeat' runs the contract's canned proposal
+  # every interval; 'model-error' runs one only when the predictor's scored error series
+  # is in sustained breach of model_error.* (OMNI-197). The brakes, spend cap and
+  # breaker apply either way.
+  # env: SIS_LOOP_TRIGGER   flag: --loop-trigger
+  strict_trigger: "repeat"
+
+model_error:
+  # Acceptable error: a window's mean absolute error above this, in the series' unit
+  # (dollars per gallon for the California price), is an error-budget breach. A
+  # sustained one pages and starts a cycle.
+  # env: SIS_MODEL_ERROR_MAE_BUDGET   flag: --model-error-mae-budget
+  strict_mae_budget: 0.15
+  # How long: weeks the error may stay out of bounds before a cycle starts, counted in
+  # whole windows that share no week (a spike never starts one).
+  # env: SIS_MODEL_ERROR_BREACH_WEEKS   flag: --model-error-breach-weeks
+  strict_breach_weeks: 8
+  # Skill against climatology below this, sustained for breach_weeks, starts a cycle
+  # without a page: headroom a code change could recover. 0 means no better than
+  # climatology; below 1.
+  # env: SIS_MODEL_ERROR_SKILL_FLOOR   flag: --model-error-skill-floor
+  strict_skill_floor: 0.0
+  # Weeks in one judged window, skipped weeks included.
+  # env: SIS_MODEL_ERROR_WINDOW_WEEKS   flag: --model-error-window-weeks
+  strict_window_weeks: 4
+  # Scored weeks a window needs before it can be in breach; fewer is never a breach. At
+  # most window_weeks.
+  # env: SIS_MODEL_ERROR_MIN_WEEKS   flag: --model-error-min-weeks
+  strict_min_weeks: 3
 
 sensor:
   # 'sim' replays a canned trace, with no network; 'real' reads EIA's petroleum data as

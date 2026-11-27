@@ -34,10 +34,11 @@ gauntlet → canary → human merge → promote/rollback → log → circuit bre
 - **Sensor:** a `Reading` has a unit, `event_time` and `known_at`; every read names its `TimeAxis`. A replay never shows a value before its `known_at`.
 - **Sensor input is untrusted.** It enters only through `sensor_input.sanitise`; a real adapter builds no `Reading` itself.
 - `EIASensor` captures EIA's bulk file into an append-only trace (`scripts/capture_sensor.py`, `runtime/sensor_traces/eia.jsonl`).
+- `sis/events.py` derives a weekly refinery-outage flag from PADD 5 utilisation into `runtime/sensor_traces/events.jsonl` (OMNI-227); training splits may show it as context (`--events`), no gate reads it.
 - **The LA spot price is licensed** (Thomson Reuters via EIA): model it, never redistribute it. Fixtures that need it are private (`specs/<name>/private/`, gitignored, sha256 in `private.json`).
 - A forecasting contract may have a training split (`specs/<name>/training.json`, OMNI-205): public history known before its first held-out question. The proposer sees it; no gate reads it.
 - Scenarios (`specs/scenarios.py`) are seeded and can only refute a candidate, never promote one (D4).
-- Prediction error and skill against climatology are computed and reported, never acted on (`sis/prediction_error.py`). Each capture appends the scored weeks to the episodic store (`sis/error_series.py`). Phase B's two triggers are decided in `sis/model_error.py`, not yet wired.
+- Prediction error and skill against climatology are computed and reported by `sis/prediction_error.py`, which acts on nothing. Each capture appends the scored weeks to the episodic store (`sis/error_series.py`). Phase B's two triggers are decided in `sis/model_error.py` and start cycles only with `--loop-trigger model-error`.
 - Episodic store (`sis/episodic.py`) records every cycle: spec → diff → verdict → outcome. Backends: jsonl (default), duckdb, none.
 
 ## Hard rules
@@ -58,7 +59,7 @@ Detail for each: `docs/ENGINE_RULES.md` § Hard rules.
 - **A broken sandbox is never blamed on the candidate** (`gauntlet.probe_sandbox`, `harness:` verdicts).
 - **No feature PR opens without the agent's own approving review** (`sis/review.py`).
 - **Policy (`sis/policy.py`):**
-  - FORBIDDEN (never, no override): gauntlet and its verdicts, canonicaliser, sandbox worker, review, contract layer, ports, sensor door and trace, replay, fixture builder, scenarios, prediction error, holdout budget, workbench, contract author, `specs/`, cost, config, settings, adapters, `Dockerfile.gauntlet` and the policy itself.
+  - FORBIDDEN (never, no override): gauntlet and its verdicts, canonicaliser, sandbox worker, review, contract layer, ports, sensor door and trace, event signal, replay, fixture builder, scenarios, prediction error, holdout budget, futility stop, workbench, contract author, `specs/`, cost, config, settings, adapters, `Dockerfile.gauntlet` and the policy itself.
   - STRICT: other engine code; needs an opt-in plus human approval.
   - SOFT: the `runtime/` targets.
   - The guardrail classification always wins.
@@ -69,6 +70,7 @@ Detail for each: `docs/ENGINE_RULES.md` § Hard rules.
   - An exception inside a cycle is a charged outcome.
   - One loop per box (`runtime/loop.lock`).
   - A trip pages a human through SNS.
+  - Retraining that stops improving stops (`sis/futility.py`, OMNI-228): N retrains in a row without a cut in error pages "likely missing input" and starts no more until a new input or `sis.admin reset-futility`.
 - **Secrets** live in `secrets.local.yml` (gitignored) or AWS Secrets Manager. Never commit tokens.
 
 ## Repo & GitHub workflow
