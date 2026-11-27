@@ -260,6 +260,10 @@ can find is a weaker test. Signing it reuses the tamper-evidence work of
 actors run where candidates run now: in a sandbox with no network, no credentials and a
 spend limit.
 
+How the loop would take a whole Jira ticket (an extension or a new twin) as its
+exam, with a plan a human approves first, is designed in
+[DELIVERY_CONTRACT.md](DELIVERY_CONTRACT.md); nothing of it is built.
+
 Phases A–C are the minimum that proves the thesis on one modelled actor. That is the
 milestone worth aiming at before scoping the rest.
 
